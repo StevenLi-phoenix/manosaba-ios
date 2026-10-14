@@ -267,7 +267,7 @@ NVN(nvnTextureBuilderSetLevels, void, NVNtextureBuilder *b, int v) { TB(b)->d.le
 NVN(nvnTextureBuilderSetFormat, void, NVNtextureBuilder *b, NVNformat f) { TB(b)->d.format = f; }
 NVN(nvnTextureBuilderSetSamples, void, NVNtextureBuilder *b, int s) { TB(b)->d.samples = s; }
 NVN(nvnTextureBuilderSetStride, void, NVNtextureBuilder *b, ptrdiff_t s) { TB(b)->d.stride = (uint32_t)s; }
-NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, ptrdiff_t off) { TB(b)->pool = (pool_t *)p; TB(b)->off = off; }
+NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, ptrdiff_t off) { { uint64_t lr = (uint64_t)__builtin_return_address(0); module_t *m = module_of((void *)lr); OLOG("TextureBuilderSetStorage b=%p pool=%p off=%#llx lr=%s+%#llx", (void *)b, (void *)p, (long long)off, m ? m->name : "?", m ? lr - (uint64_t)m->base : lr); } TB(b)->pool = (pool_t *)p; TB(b)->off = off; }
 NVN(nvnTextureBuilderSetPackagedTextureLayout, void, NVNtextureBuilder *b, const NVNpackagedTextureLayout *l) {
     TB(b)->has_layout = l != NULL; if (l) memcpy(TB(b)->layout, l->layout, 8);
     TB(b)->d.pkg_block_h = l ? l->layout[0] + 1 : 0;
@@ -289,9 +289,17 @@ NVN(nvnTextureBuilderGetSwizzle, void, const NVNtextureBuilder *b, NVNtextureSwi
 NVN(nvnTextureBuilderGetDepthStencilMode, NVNtextureDepthStencilMode, const NVNtextureBuilder *b) { return (NVNtextureDepthStencilMode)CTB(b)->ds_mode; }
 NVN(nvnTextureBuilderGetStride, ptrdiff_t, const NVNtextureBuilder *b) { return (ptrdiff_t)CTB(b)->stride; }
 NVN(nvnTextureBuilderGetMemoryOffset, ptrdiff_t, const NVNtextureBuilder *b) { return ((const tex_builder_t *)b)->off; }
-// ZCull（深度剔除硬件的压缩存储）：Metal 没有对应，宿主不分配也不保存，大小报 0；Save / RestoreZCullData 为空实现
-// ZCull (compressed storage of the depth-culling hardware): no Metal equivalent; the host neither allocates nor saves it and reports size 0; Save / RestoreZCullData are empty implementations
-NVN(nvnTextureBuilderGetZCullStorageSize, size_t, const NVNtextureBuilder *b) { (void)b; return 0; }
+// ZCull（深度剔除硬件的压缩存储）：Metal 没有对应，宿主从不读写这块缓冲（Save / RestoreZCullData 为空实现），大小只影响游戏自己的内存账。
+// 不能报 0：Unity 按「贴图大小之和 + ZCull 大小」建池，再用自己的分配器分（main+0x99d6c0），大小 0 按 1 字节分配（csinc），
+// 于是在深度贴图之后占 1 字节、把后面的交换链贴图挤后 0x200 对齐空档，第 3 张分不到（偏移 -1）。报 0x1000：正数、是 ZCull 分配对齐（0x1000）的倍数，分配不留空档。
+// 真机的确切值未核（与贴图尺寸有关），宿主不用这块内存，取能让账目自洽的最小粒度。
+// ZCull (compressed storage of the depth-culling hardware): no Metal equivalent; the host never reads or writes this buffer (Save / RestoreZCullData are empty implementations), the size only affects the game's own memory accounting.
+// It must not be 0: Unity builds the pool from "sum of texture sizes + ZCull size" and carves it with its own allocator (main+0x99d6c0), which allocates size 0 as 1 byte (csinc),
+// so it takes 1 byte after the depth texture, pushes the following swapchain textures out by the 0x200 alignment gap, and the third one gets no space (offset -1). Report 0x1000: positive and a multiple of the ZCull allocation alignment (0x1000), leaving no gap.
+// The real device's exact value is unverified (it depends on the texture size); the host does not use this memory, so the smallest granularity that keeps the accounting consistent is taken.
+#define ZCULL_SIZE 0x1000
+NVN(nvnTextureBuilderGetZCullStorageSize, size_t, const NVNtextureBuilder *b) { (void)b; return ZCULL_SIZE; }
+#define CTB_(b) (&((const tex_builder_t *)(b))->d)
 static uint64_t g_layout_logged;
 static void log_layout(const tex_builder_t *b, const nvn_texlayout *L) {
     if (b->has_layout && g_layout_logged++ < 16)
@@ -303,32 +311,37 @@ NVN(nvnTextureBuilderGetStorageSize, size_t, const NVNtextureBuilder *b) {
     nvn_texlayout L; nvn_tex_layout(&((const tex_builder_t *)b)->d, &L);
     if (!L.bpb) LOG("【红】TextureBuilderGetStorageSize 未知格式 %#x", ((const tex_builder_t *)b)->d.format);
     log_layout((const tex_builder_t *)b, &L);
+    OLOG("TextureBuilderGetStorageSize b=%p %ux%u fmt %#x flags %#x → %#llx", (const void *)b, CTB_(b)->width, CTB_(b)->height, CTB_(b)->format, CTB_(b)->flags, L.size);
     return L.size;
 }
 NVN(nvnTextureBuilderGetStorageAlignment, size_t, const NVNtextureBuilder *b) {
-    nvn_texlayout L; nvn_tex_layout(&((const tex_builder_t *)b)->d, &L); return L.align;
+    nvn_texlayout L; nvn_tex_layout(&((const tex_builder_t *)b)->d, &L);
+    OLOG("TextureBuilderGetStorageAlignment b=%p %ux%u fmt %#x → %#x", (const void *)b, CTB_(b)->width, CTB_(b)->height, CTB_(b)->format, L.align);
+    return L.align;
 }
 #define TX(t) ((tex_t *)(t))
 #define CTX(t) ((const tex_t *)(t))
 NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
+    OLOG("TextureInitialize t=%p b=%p builder.off=%#llx", (void *)t, (const void *)b, (long long)s->off);
     { static int red; if (s->d.ds_mode && !red++) LOG("【红】TextureInitialize 深度模板贴图按模板采样（ds_mode=%d）：Metal 模板视图未实现，仍按深度采样", s->d.ds_mode); }
     memset(o, 0, sizeof *o);
     o->magic = MAGIC('T', 'E', 'X', 0); o->d = s->d; o->pool = s->pool; o->off = s->off;
     o->has_layout = s->has_layout; memcpy(o->layout, s->layout, 8);
-    nvn_tex_layout(&o->d, &o->L);
+    { nvn_texlayout L; nvn_tex_layout(&o->d, &L); o->size = (uint32_t)L.size; o->layer_size = (uint32_t)L.layer_size; if (L.size >> 32) LOG("【红】TextureInitialize 存储 %#llx 超过 4 GB", L.size); }
     o->mem = s->pool && s->pool->mem ? s->pool->mem + s->off : NULL;
     o->serial = nvn_new_serial();
-    OLOG("Texture %p %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx", (void *)t, o->d.width, o->d.height, o->d.depth,
-         o->d.levels, o->d.format, o->d.target, o->d.flags, o->L.size);
+    if (g_log && o->d.width == 1920 && o->d.height == 1080) { const uint8_t *q = (const uint8_t *)t; char hx[0xC0 * 2 + 1]; for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] Texture %p 0xC0 字节：%s", (void *)t, hx); }
+    OLOG("Texture %p ser %llu %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx mem=%p", (void *)t, o->serial, o->d.width, o->d.height, o->d.depth,
+         o->d.levels, o->d.format, o->d.target, o->d.flags, o->size, (void *)o->mem);
     return 1;
 }
-NVN(nvnTextureFinalize, void, NVNtexture *t) { mtl_tex_release(TX(t)); TX(t)->magic = 0; }
+NVN(nvnTextureFinalize, void, NVNtexture *t) { OLOG("TextureFinalize %p ser %llu", (void *)t, TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->d.flags; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->d.width; }
 NVN(nvnTextureGetHeight, int, const NVNtexture *t) { return (int)CTX(t)->d.height; }
 NVN(nvnTextureGetDepth, int, const NVNtexture *t) { return (int)CTX(t)->d.depth; }
-NVN(nvnTextureGetStorageSize, int, const NVNtexture *t) { return (int)CTX(t)->L.size; }
+NVN(nvnTextureGetStorageSize, int, const NVNtexture *t) { return (int)CTX(t)->size; }
 NVN(nvnTextureGetTarget, NVNtextureTarget, const NVNtexture *t) { return (NVNtextureTarget)CTX(t)->d.target; }
 NVN(nvnTextureGetLevels, int, const NVNtexture *t) { return (int)CTX(t)->d.levels; }
 NVN(nvnTextureGetFormat, NVNformat, const NVNtexture *t) { return (NVNformat)CTX(t)->d.format; }
@@ -343,7 +356,7 @@ NVN(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { return CTX(t)->
 // not an indirect result pointer, and the returned x0 is passed straight to nvnMemoryPoolMap as the pool pointer
 NVN_NOPROTO(nvnTextureGetMemoryPool, const NVNmemoryPool *, const NVNtexture *t) { return (const NVNmemoryPool *)CTX(t)->pool; }
 NVN(nvnTextureGetDebugID, uint64_t, const NVNtexture *t) { return CTX(t)->serial; }
-NVN(nvnTextureGetZCullStorageSize, size_t, const NVNtexture *t) { (void)t; return 0; }
+NVN(nvnTextureGetZCullStorageSize, size_t, const NVNtexture *t) { (void)t; return ZCULL_SIZE; }
 NVN(nvnTextureCompare, NVNboolean, const NVNtexture *a, const NVNtexture *b) {
     const tex_t *x = CTX(a), *y = CTX(b);
     return !memcmp(&x->d, &y->d, sizeof x->d) && x->mem == y->mem;
@@ -364,7 +377,7 @@ NVN(nvnTextureGetViewOffset, ptrdiff_t, const NVNtexture *t, const NVNtextureVie
     const tex_t *o = CTX(t); const view_t *w = (const view_t *)v;
     if (!w) return 0;
     uint64_t off = w->set_levels ? nvn_tex_level_offset(&o->d, (unsigned)w->base_level) : 0;
-    if (w->set_layers) off += (uint64_t)w->min_layer * o->L.layer_size;
+    if (w->set_layers) off += (uint64_t)w->min_layer * o->layer_size;
     return (ptrdiff_t)off;
 }
 // CPU 读贴图（NVN ReadTexels）：预排布贴图以池内存为真值（解排布直读），GPU 写出的贴图从 MTLTexture 读回（nvn_mtl.m）
@@ -459,7 +472,7 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     prog_t *o = (prog_t *)p;
     if (n < 0 || n > 6) { LOG("【红】ProgramSetShaders 阶段数 %d", n); return 0; }
     for (int i = 0; i < n; i++) shdump(&sd[i]);
-    mtl_prog_release(o); o->nstage = n; memcpy(o->sd, sd, n * sizeof *sd); o->serial = nvn_new_serial();
+    mtl_prog_release(o); o->nstage = n; o->serial = nvn_new_serial();
     for (int i = 0; i < n; i++) { uint8_t md[32]; CC_SHA256(sd[i].control, 0x880, md); memcpy(o->key[i], md, 8); }
     OLOG("ProgramSetShaders %p n=%d data0=%#llx", (void *)p, n, n ? (unsigned long long)sd[0].data : 0ull);
     return 1;
@@ -668,6 +681,15 @@ static void copy_view(view_t *dst, uint8_t *has, const NVNtextureView *v) { *has
 NVN(nvnCommandBufferSetRenderTargets, void, NVNcommandBuffer *c, int n, const NVNtexture *const *ct, const NVNtextureView *const *cv,
     const NVNtexture *dt, const NVNtextureView *dv) {
     if (n < 0 || n > 8) { LOG("【红】SetRenderTargets 数量 %d", n); n = n < 0 ? 0 : 8; }
+    { static int rl = -1; if (rl < 0) { const char *e = getenv("DM_RTLOG"); rl = e ? atoi(e) : 0; }   // 诊断：前 N 次 SetRenderTargets 的参数 | Diagnostics: arguments of the first N SetRenderTargets calls
+      if (rl > 0) { rl--; char b[512]; int k = snprintf(b, sizeof b, "SetRT n=%d", n);
+        for (int i = 0; i < n && k < 400; i++) { const tex_t *t = ct ? (const tex_t *)ct[i] : NULL;
+            k += snprintf(b + k, sizeof b - k, " c%d=%p", i, (const void *)t); if (t) k += snprintf(b + k, sizeof b - k, "(ser %llu %ux%u fmt %#x mg %#x mem %p pool %p off %#llx)", t->serial, t->d.width, t->d.height, t->d.format, t->magic, (void *)t->mem, (void *)t->pool, (long long)t->off); }
+        const tex_t *d = (const tex_t *)dt; k += snprintf(b + k, sizeof b - k, " d=%p", (const void *)d); if (d) snprintf(b + k, sizeof b - k, "(ser %llu %ux%u fmt %#x)", d->serial, d->d.width, d->d.height, d->d.format);
+        LOG("[nvn] %s", b);
+        if (n > 0 && ct && ct[0] && !((const tex_t *)ct[0])->serial) { static int dumped; if (!dumped++) { const uint8_t *q = (const uint8_t *)ct[0]; char hx[0xC0 * 2 + 1];
+            for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] SetRT 序号 0 的颜色对象 0xC0 字节：%s", hx); } } } }
+
     p_set_rt *r = REC(c, OP_SET_RT, p_set_rt); r->n = n;
     for (int i = 0; i < n; i++) { r->color[i] = ct ? (const tex_t *)ct[i] : NULL; copy_view(&r->cview[i], &r->has_cview[i], cv ? cv[i] : NULL); }
     r->depth = (const tex_t *)dt; copy_view(&r->dview, &r->has_dview, dv);

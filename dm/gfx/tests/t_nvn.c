@@ -318,12 +318,12 @@ int main(void) {
         char path[1024]; snprintf(path, sizeof path, "%s/t_nvn_rd_XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "."); int fd = mkstemp(path);   // 每用户临时目录，不写 /tmp | per-user temp directory, do not write to /tmp
         FILLPAT(2); uint8_t tmpst[sizeof lin * 4]; memset(tmpst, 0, sizeof tmpst);
         static uint8_t full[0x10000]; memcpy(full, store, sizeof full);   // 现有存储内容（块线性），把第 2 版写进副本再存文件 | existing storage contents (block-linear); write version 2 into a copy and then save it to a file
-        nvn_swizzle(&dd, 0, 0, lin, 64, full); if (write(fd, full, ((tex_t *)&tw)->L.size) < 0) g_fail++;
-        ssize_t r0 = pread(fd, store, ((tex_t *)&tw)->L.size, 0); int e0 = errno;
+        nvn_swizzle(&dd, 0, 0, lin, 64, full); if (write(fd, full, ((tex_t *)&tw)->size) < 0) g_fail++;
+        ssize_t r0 = pread(fd, store, ((tex_t *)&tw)->size, 0); int e0 = errno;
         EXPECT("不 prepare：read() 进受保护页返回 -1 且 EFAULT", 1, r0 == -1 && e0 == EFAULT);
-        dm_guest_write_prepare(store, ((tex_t *)&tw)->L.size);
-        ssize_t r1 = pread(fd, store, ((tex_t *)&tw)->L.size, 0);
-        EXPECT("prepare 后 read() 成功", (long long)((tex_t *)&tw)->L.size, r1);
+        dm_guest_write_prepare(store, ((tex_t *)&tw)->size);
+        ssize_t r1 = pread(fd, store, ((tex_t *)&tw)->size, 0);
+        EXPECT("prepare 后 read() 成功", (long long)((tex_t *)&tw)->size, r1);
         close(fd); unlink(path);
         GPU_READ_EQ(2, "宿主写后重传：GPU 侧内容 = 第 2 版");
         mtl_pkg_stats(&up, &re); EXPECT("宿主写触发重传，累计 2", 2, re - re0);

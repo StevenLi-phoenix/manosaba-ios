@@ -35,10 +35,18 @@ typedef struct {
     NVNdevice *dev; nvn_texdesc d; pool_t *pool; int64_t off;
     uint8_t has_layout, layout[8];
 } tex_builder_t;                                                                             FITS(tex_builder_t, NVNtextureBuilder);
+// 贴图对象须放进 0x80 字节：本 SDK 的 NVNtexture 实际 0x80（Unity 的交换链贴图数组步长 0x80；Unity 按值复制贴图对象只复制 0x80 字节，
+// 其后紧跟它自己的字段），nvn.h（DWARF 重建，NVN 53）写的 0xC0 偏大。序号必须落在前 0x80 字节内，复制出的对象才带着同一序号（= 同一张贴图）。
+// 布局只存回放层要的两项（总存储 / 每层字节，u32 足够）；其余按 d 现算（nvn_tex_layout）。
+// The texture object must fit in 0x80 bytes: this SDK's NVNtexture is really 0x80 (Unity's swapchain texture array has a 0x80 stride; Unity copies texture objects by value, only 0x80 bytes,
+// followed directly by its own fields); the 0xC0 in nvn.h (DWARF reconstruction, NVN 53) is too large. The serial must lie within the first 0x80 bytes so a copied object carries the same serial (= the same texture).
+// Of the layout only the two values the replay layer needs are stored (total storage / bytes per layer, u32 is enough); the rest is recomputed from d (nvn_tex_layout).
 typedef struct {
-    uint32_t magic; nvn_texdesc d; nvn_texlayout L; uint8_t *mem; pool_t *pool; int64_t off; uint8_t has_layout, layout[8];
+    uint32_t magic; nvn_texdesc d; uint32_t size, layer_size; uint8_t has_layout, layout[8];
+    uint8_t *mem; pool_t *pool; int64_t off;
     uint64_t serial;                     // 初始化序号：回放层按它在宿主表里找 MTLTexture（游戏可能按值拷贝对象，不能存对象指针） | Initialization serial: the replay layer uses it to find the MTLTexture in the host table (the game may copy the object by value, so object pointers cannot be stored)
 } tex_t;                                                                                     FITS(tex_t, NVNtexture);
+_Static_assert(sizeof(tex_t) <= 0x80, "tex_t 超出本 SDK NVNtexture 实际大小 0x80");
 typedef struct { uint8_t set_levels, set_layers, set_format, set_target; int32_t base_level, nlevels, min_layer, nlayers, format, target; } view_t;
 FITS(view_t, NVNtextureView);
 
@@ -52,7 +60,7 @@ typedef struct { uint32_t magic; samp_par p; } samp_t;                          
 // 回放层到绘制时再读会读到别的数据（D2R 的控制段一直在着色器包里，所以以前碰巧没事）
 // key[i]: first 8 bytes of the sha256 of stage i's control section, computed at SetShaders -- NVN only requires the control section to be valid during the SetShaders call; Unity frees / reuses that memory right after,
 // so reading it later at draw time in the replay layer reads other data (D2R's control sections stay in its shader package, which is why this used to happen to work)
-typedef struct { uint32_t magic, nstage; NVNshaderData sd[6]; uint64_t serial; uint8_t key[6][8]; } prog_t;     FITS(prog_t, NVNprogram);   // serial：回放层解析结果的表键 | serial: table key for the replay layer's resolved result
+typedef struct { uint32_t magic, nstage; uint64_t serial; uint8_t key[6][8]; } prog_t;     FITS(prog_t, NVNprogram);   // 只存回放层要的：阶段数、序号、各阶段控制段键（0x40 字节，NVNprogram 实际大小未核，越小越安全） | Only what the replay layer needs: stage count, serial, each stage's control section key (0x40 bytes; the real NVNprogram size is unverified, so smaller is safer)   // serial：回放层解析结果的表键 | serial: table key for the replay layer's resolved result
 
 typedef struct { uint32_t magic, fenced; uint64_t fence; } sync_t;                            FITS(sync_t, NVNsync);
 typedef struct { const pool_t *pool; int64_t off; } ev_builder_t;                             FITS(ev_builder_t, NVNeventBuilder);
