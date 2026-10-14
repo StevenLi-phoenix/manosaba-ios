@@ -41,6 +41,7 @@ static void mq_push(uint32_t m) {
     if (g_mqn == MQ) die("oe 通知队列溢出（游戏没在取？）");
     g_mq[(g_mqh + g_mqn++) % MQ] = m;
     pthread_mutex_unlock(&g_mq_lock);
+    void oe_msg_event_signal(void); oe_msg_event_signal();
 }
 void dm_oe_res_changed(void) { if (getenv("DM_TEST_OE_FOCUS_FIRST")) mq_push(MSG_FOCUS);   /* 测试：让 31 排在一条焦点通知后面（iOS 包启动时的顺序） | Test: queue 31 behind a focus notification (the order at iOS app startup) */
     if (g_ntf_perfmode) mq_push(MSG_PERFMODE); else LOG("【红】分辨率要切，但游戏没打开性能模式变化通知"); }   // 出图分辨率该变了（dm_uiscreen.c）：让游戏重读参数位 | the render resolution should change (dm_uiscreen.c): make the game re-read the parameter bits
@@ -217,6 +218,7 @@ void dm_3d_scale_hot(int hot) { (void)hot; }   // 过热不再直接降档（改
 static _Atomic float g_scale3d_cur = 1.0f;
 float dm_3d_scale_cur(void) { return atomic_load(&g_scale3d_cur); }
 static void scale3d_tick(void) {
+    if (!dm_is_d2r()) return;   // the renderer pointer and resize entry are fixed D2R main offsets
     static float want_cfg = -1, cur = 1.0f; static module_t *main;
     if (want_cfg < 0) {
         const char *e = getenv("DM_3D_SCALE"); want_cfg = TARGET_OS_IPHONE ? 0.75f : 1.0f;
@@ -252,8 +254,45 @@ HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前�
     if (ok) for (int i = 0; i < 2; i++) if (g_keyres[i]) pthread_setspecific(g_keyres[i], (void *)dm_game_res(i));
     if (ok && *msg == MSG_PERFMODE) dm_uiscreen_res_reread();
     if (ok) LOG("oe 通知被游戏取走：%u", *msg);   // 状态变化很少，逐条打不刷屏 | state changes are rare, printing each one does not flood the log
+    void oe_msg_event_clear_if_empty(void); oe_msg_event_clear_if_empty();
     return ok;
 }
+
+// ---------- Notification message event (games that wait for messages instead of polling every frame, e.g. Unity) ----------
+// Real device: the event stays signaled while messages are pending. Here: manual clear, signaled on every push, cleared by the game's own TryPop once the queue is empty.
+static uint8_t g_msg_ev[0x80] __attribute__((aligned(16)));   // nn::os::SystemEvent handed to the game
+static _Atomic int g_msg_ev_bound;
+void oe_msg_event_signal(void) { if (atomic_load(&g_msg_ev_bound)) hle_signal_system_event(g_msg_ev); }
+void oe_msg_event_clear_if_empty(void) {
+    if (!atomic_load(&g_msg_ev_bound)) return;
+    pthread_mutex_lock(&g_mq_lock); int n = g_mqn; pthread_mutex_unlock(&g_mq_lock);
+    static void (*clear)(void *); if (!clear) clear = guest_sym("_ZN2nn2os16ClearSystemEventEPNS0_15SystemEventTypeE");
+    if (!n) clear(g_msg_ev);   // TryPop runs on a guest thread
+}
+HLE_FORCE_OPT("_ZN2nn2oe27GetNotificationMessageEventEv", "通知消息事件：绑内核事件，队列非空时触发", void *, h_oe_GetMsgEv, void) {
+    pthread_once(&g_oe_once, oe_script_start);
+    if (!atomic_load(&g_msg_ev_bound)) { hle_bind_system_event(g_msg_ev, 0); atomic_store(&g_msg_ev_bound, 1); }
+    pthread_mutex_lock(&g_mq_lock); int n = g_mqn; pthread_mutex_unlock(&g_mq_lock);
+    if (n) hle_signal_system_event(g_msg_ev);
+    return g_msg_ev;
+}
+// Health and safety notice shown by the system before the game: none on the host, so the "disappeared" event is signaled from the start
+static uint8_t g_health_ev[0x80] __attribute__((aligned(16)));
+HLE_FORCE_OPT("_ZN2nn2oe38GetHealthWarningDisappearedSystemEventEv", "健康警告消失事件：宿主没有健康警告，一开始就触发", void *, h_oe_HealthEv, void) {
+    static int once; if (!once++) { hle_bind_system_event(g_health_ev, 0); hle_signal_system_event(g_health_ev); }
+    return g_health_ev;
+}
+HLE_FORCE_OPT("_ZN2nn2oe15SetCpuBoostModeENS0_12CpuBoostModeE", "CPU 加速模式；宿主不调频", void, h_oe_CpuBoost, int mode) { (void)mode; }
+HLE_FORCE_OPT("_ZN2nn2oe27SetPerformanceConfigurationEi", "设 CPU/GPU 频率档（单参数版）；宿主不调频", void, h_oe_SetPerfCfg1, int cfg) { (void)cfg; }
+HLE_FORCE_OPT("_ZN2nn2oe17EnableCrashReportEv", "崩溃报告开关；宿主无系统崩溃报告", void, h_oe_EnableCrash, void) {}
+HLE_FORCE_OPT("_ZN2nn2oe18DisableCrashReportEv", "崩溃报告开关；宿主无系统崩溃报告", void, h_oe_DisableCrash, void) {}
+HLE_FORCE_OPT("_ZN2nn2oe31EnterExitRequestHandlingSectionEv", "退出请求处理区；宿主退出走自己的流程", void, h_oe_EnterExitSec, void) {}
+HLE_FORCE_OPT("_ZN2nn2oe31LeaveExitRequestHandlingSectionEv", "退出请求处理区；宿主退出走自己的流程", void, h_oe_LeaveExitSec, void) {}
+HLE_FORCE_OPT("_ZN2nn2oe27GetDefaultDisplayResolutionEPiS1_", "默认显示分辨率：掌机 1280x720 / 主机 1920x1080（随运行模式）", void, h_oe_DefRes, int *w, int *h) {
+    if (dm_opmode()) { *w = 1920; *h = 1080; } else { *w = 1280; *h = 720; }
+}
+HLE_FORCE_OPT("_ZN2nn2oe38GetDefaultDisplayResolutionChangeEventEPNS_2os11SystemEventE", "默认显示分辨率变化事件：绑内核事件（运行模式不变则不触发）", void, h_oe_DefResEv, void *ev) { hle_bind_system_event(ev, 0); }
+HLE_FORCE_OPT("_ZN2nn2oe25GetProgramTotalActiveTimeEv", "程序累计活跃时间（nn::TimeSpan，纳秒）：取客体时钟", int64_t, h_oe_ActiveTime, void) { return (int64_t)guest_ns(); }
 // bool 参数：Switch 调用方不扩展，声明成 unsigned 只看低 8 位
 // bool arguments: Switch callers do not extend them, declared as unsigned and only the low 8 bits are looked at
 HLE_FORCE("_ZN2nn2oe28SetResumeNotificationEnabledEb", "恢复通知开关；宿主的恢复以焦点通知 15 表达", void, h_oe_SetResumeNtf, unsigned on) { (void)on; }

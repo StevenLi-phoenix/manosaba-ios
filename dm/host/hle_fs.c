@@ -21,6 +21,7 @@
 #include <stdatomic.h>
 #include <sys/clonefile.h>
 #include <sys/xattr.h>
+#include <sys/statvfs.h>
 
 #define RES_PATH_NOT_FOUND 0x202u      // fs 模块 2，描述 1 | fs module 2, description 1
 #define RES_PATH_EXISTS    0x402u      // fs 模块 2，描述 2 | fs module 2, description 2
@@ -381,14 +382,16 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv；存档 �
     const char *d = getenv("DM_SAVE");
     if (!d) die("未设 DM_SAVE：请指向一份存档目录的可写副本");
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;   // 去掉结尾斜杠（.work / .new 拼在同级） | strip trailing slashes (.work / .new are appended at the same level)
-    stash_seed(dd);
-    low_vision_off(dd);
-    settings_seed(dd); settings_lang_apply(dd);
+    if (dm_is_d2r()) {   // D2R save files (shared stash, Settings.json): another game's save directory is left as the game wrote it
+        stash_seed(dd);
+        low_vision_off(dd);
+        settings_seed(dd); settings_lang_apply(dd);
+    }
     // 掉落过滤的规则文件（原版启动时载入，dm_lootfilter.c 用构造函数登记这个钩子；只链 hle_fs.c 的单测里它是空的）。与 settings_seed 同一个开关：
     // iOS 上缺省写；Mac 宿主的对拍闸门（存档要和真机真值逐文件相同）不写
     // Rule files for the loot filter (the game loads them at startup; dm_lootfilter.c registers this hook from a constructor; it is null in unit tests that link only hle_fs.c). Same switch as settings_seed:
     // written by default on iOS; not written under the Mac host's parity gate (saves must match the device ground truth file by file)
-    { const char *e = getenv("DM_TOUCH_DEFAULTS"); if (g_dm_mount_seed_hook && (e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE)) g_dm_mount_seed_hook(dd); }
+    { const char *e = getenv("DM_TOUCH_DEFAULTS"); if (dm_is_d2r() && g_dm_mount_seed_hook && (e ? strcmp(e, "0") != 0 : TARGET_OS_IPHONE)) g_dm_mount_seed_hook(dd); }
     return mount_ex(name, dd, 0, 1);
 }
 void (*g_dm_pre_commit_hook[4])(const char *workdir);   // 提交前调（工作目录）：宿主旁路文件按工作目录里的存档内容核对后再写（[0] 个人仓库多页 dm_pages.c、[2] 百宝囊 dm_pouch.c、[1] 编年史仓库 dm_vault.c、[3] 秘境进度 dm_rift.c） | called before commit (working directory): host side files are checked against the save contents in the working directory before being written ([0] personal stash pages dm_pages.c, [2] pouch dm_pouch.c, [1] chronicle vault dm_vault.c, [3] rift progress dm_rift.c)
@@ -695,4 +698,84 @@ HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandl
 }
 HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → closedir(3)", void, h_fs_CloseDirectory, uint64_t hh) {
     dirh_t *h = (dirh_t *)hh; closedir(h->d); if (h->od) closedir(h->od); free(h->snap); free(h);
+}
+
+// ---------- APIs other games use (Unity: RAM disk, read-without-count, directory counts, add-on content probing ...) ----------
+// Same mount table and host paths as above; D2R references none of them (HLE_FORCE_OPT)
+HLE_FORCE_OPT("_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", "fs 库内部分配器：宿主实现不在客体堆上分配，忽略（原实现会先连 fsp-srv 查访问日志）", void, h_fs_SetAllocator, void *a, void *f) { (void)a; (void)f; }
+HLE_FORCE_OPT("_ZN2nn2fs25EnableGlobalFileDataCacheEPvm", "全局文件数据缓存：宿主读走页缓存，忽略", void, h_fs_GlobalCache, void *buf, size_t sz) { (void)buf; (void)sz; }
+HLE_FORCE_OPT("_ZN2nn2fs20GetRamDiskBufferSizeEm", "RAM 盘：内容放宿主临时目录，客体缓冲只给最小值", size_t, h_fs_RamDiskBufSize, size_t sz) { (void)sz; return 0x1000; }
+HLE_FORCE_OPT("_ZN2nn2fs12MountRamDiskEPKcPvm", "RAM 盘 → 宿主临时目录下的子目录（每次挂载清空，同真机断电即失）", Result, h_fs_MountRamDisk, const char *name, void *buf, size_t sz) {
+    (void)buf; (void)sz; char b[1024], d[1100];
+    snprintf(d, sizeof d, "%s/ramdisk_%s", envdir("DM_TEMP", "run/platform/temp", b, sizeof b), name);
+    if (!access(d, F_OK) && rm_tree(d)) LOG("【红】RAM 盘清不掉上次的内容：%s", d);
+    mkdir(envdir("DM_TEMP", "run/platform/temp", b, sizeof b), 0755);
+    return mount(name, d, 0);
+}
+HLE_FORCE_OPT("_ZN2nn2fs9IsMountedEPKc", "挂载表查询（返回 bool）", unsigned, h_fs_IsMounted, const char *name) {
+    pthread_mutex_lock(&g_lock); int hit = 0;
+    for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name)) hit = 1;
+    pthread_mutex_unlock(&g_lock); return hit;
+}
+HLE_FORCE_OPT("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "追加内容：缓存只给最小值", Result, h_fs_QueryAocCache, size_t *out, int idx) { (void)idx; *out = 0x1000; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn2fs17MountAddOnContentEPKciPvm", "追加内容，排除范围：没有可挂载的追加内容", Result, h_fs_MountAoc, const char *name, int idx, void *buf, size_t sz) {
+    (void)buf; (void)sz; LOG("fs MountAddOnContent %s #%d：宿主没有追加内容", name, idx); return RES_PATH_NOT_FOUND;
+}
+// bool results: Switch callers read only w0's low byte
+HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "存档是否存在：宿主存档目录在挂载时建，恒在", unsigned, h_fs_SaveExists, const void *uid) { (void)uid; return 1; }
+HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", "存档是否存在（指定应用）：同上", unsigned, h_fs_SaveExistsApp, uint64_t app, const void *uid) { (void)app; (void)uid; return 1; }
+HLE_FORCE_OPT("_ZN2nn2fs21MountSaveDataReadOnlyEPKcNS_13ApplicationIdERKNS_7account3UidE", "只读挂本应用存档 → 同一宿主存档目录（已提交版，只读）", Result, h_fs_MountSaveRo, const char *name, uint64_t app, const void *uid) {
+    (void)uid; const char *d = getenv("DM_SAVE"); if (!d) die("未设 DM_SAVE：请指向一份存档目录的可写副本");
+    LOG("fs MountSaveDataReadOnly %s 应用 %#llx", name, (unsigned long long)app);
+    return mount(name, d, 1);
+}
+HLE_FORCE_OPT("_ZN2nn2fs6CommitEPKPKci", "多挂载一起提交：逐个按单挂载 Commit 做（各自原子）", Result, h_fs_CommitN, const char *const *names, int n) {
+    Result r = RES_OK;
+    for (int i = 0; i < n; i++) { Result ri = h_fs_Commit(names[i]); if (ri && !r) r = ri; }
+    return r;
+}
+static Result read_exact(uint64_t h, int64_t off, void *buf, size_t sz) {
+    size_t got = 0; Result r = h_fs_ReadFile(&got, h, off, buf, sz);
+    if (r == RES_OK && got != sz) { LOG("【红】fs ReadFile（不回读数）读到 %zu / %zu 字节：fd %d 偏移 %#llx 越过文件尾", got, sz, (int)h, (long long)off); return RES_FAIL; }
+    return r;
+}
+HLE_FORCE_OPT("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm", "fsp-srv → pread(2)；不回读数的版本要读满", Result, h_fs_ReadFileN, uint64_t h, int64_t off, void *buf, size_t sz) { return read_exact(h, off, buf, sz); }
+HLE_FORCE_OPT("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvmRKNS0_10ReadOptionE", "fsp-srv → pread(2)；不回读数的版本要读满", Result, h_fs_ReadFileNO, uint64_t h, int64_t off, void *buf, size_t sz, const void *opt) { (void)opt; return read_exact(h, off, buf, sz); }
+HLE_FORCE_OPT("_ZN2nn2fs15DeleteDirectoryEPKc", "fsp-srv → rmdir(2)", Result, h_fs_DeleteDir, const char *path) { HP(path); RW(); return rmdir(hp) ? err_res("rmdir", hp) : RES_OK; }
+HLE_FORCE_OPT("_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", "fsp-srv → 清空目录内容、保留目录本身", Result, h_fs_CleanDir, const char *path) {
+    HP(path); RW(); DIR *d = opendir(hp); if (!d) return err_res("opendir", hp);
+    struct dirent *e; char c[1280]; int rc = 0;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        snprintf(c, sizeof c, "%s/%s", hp, e->d_name);
+        rc |= e->d_type == DT_DIR ? rm_tree(c) : unlink(c);
+    }
+    closedir(d);
+    return rc ? err_res("clean", hp) : RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn2fs15RenameDirectoryEPKcS2_", "fsp-srv → rename(2)（目录）", Result, h_fs_RenameDir, const char *from, const char *to) {
+    HP(from); RW(); char hp2[1024];
+    if (!host_path_ex(to, hp2, sizeof hp2, NULL, 1)) return err_res("rename path", to);
+    if (!access(hp2, F_OK)) return RES_PATH_EXISTS;
+    if (rename(hp, hp2)) return err_res("rename", hp);
+    if (set_guest_name(hp2, to)) { int e = errno; if (rename(hp2, hp)) die("fs 改名元数据失败且回退失败 errno=%d", errno); errno = e; return err_res("rename name", hp2); }
+    return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn2fs16GetFreeSpaceSizeEPlPKc", "fsp-srv → statvfs(3)：宿主卷剩余空间", Result, h_fs_FreeSpace, int64_t *out, const char *path) {
+    HP(path); struct statvfs st; if (statvfs(hp, &st)) return err_res("statvfs", hp);
+    *out = (int64_t)st.f_bavail * (int64_t)st.f_frsize; return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE", "fsp-srv：按打开时的模式数目录项（与 ReadDirectory 同一口径）", Result, h_fs_DirCount, int64_t *out, uint64_t hh) {
+    PATH_LOCK(); dirh_t *h = (dirh_t *)hh; int64_t n = 0;
+    if (h->snap) { for (int64_t i = 0; i < h->nsnap; i++) if (h->mode & (h->snap[i].type == ENT_DIR ? DIRMODE_DIR : DIRMODE_FILE)) n++; *out = n; return RES_OK; }
+    DIR *d = opendir(h->path); if (!d) return err_res("opendir", h->path);
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        { size_t dl = strlen(e->d_name); if (dl > 6 && !strcmp(e->d_name + dl - 6, ".holes")) continue; }
+        char c[1280]; snprintf(c, sizeof c, "%s/%s", h->path, e->d_name);
+        struct stat st; if (stat(c, &st)) continue;
+        if (h->mode & (S_ISDIR(st.st_mode) ? DIRMODE_DIR : DIRMODE_FILE)) n++;
+    }
+    closedir(d); *out = n; return RES_OK;
 }

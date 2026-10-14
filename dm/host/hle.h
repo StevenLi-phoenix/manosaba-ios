@@ -36,10 +36,15 @@ void guest_clock_freeze_for(int reason, int on);   // 按原因冻结（1 后台
 // Forced takeover: even if the SDK module has a definition, all references to that symbol at load time (JUMP_SLOT/GLOB_DAT/ABS64) are resolved to the host implementation.
 // Used only for the service-layer nn:: (service clients of fs/oe/aoc/pctl...); the SDK's libc++ and nn::os internals do not go into this table.
 // Every entry must state the reason for the takeover; an entry in the table that no module references makes loading report a failure and abort (a wrong list must fail loudly).
-typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
+typedef struct { const char *name; void *fn; const char *why; int optional; } hle_force_ent;
 #define HLE_FORCE(mangled, why, ret, cname, ...)                                                   \
     static ret cname(__VA_ARGS__);                                                                \
-    __attribute__((used, section("__DATA,swforce"))) static const hle_force_ent hle_force_##cname = {mangled, (void *)cname, why}; \
+    __attribute__((used, section("__DATA,swforce"))) static const hle_force_ent hle_force_##cname = {mangled, (void *)cname, why, 0}; \
+    static ret cname(__VA_ARGS__)
+// Same, for SDK APIs another game needs and D2R may not reference: an unreferenced entry is not an error, in any game
+#define HLE_FORCE_OPT(mangled, why, ret, cname, ...)                                               \
+    static ret cname(__VA_ARGS__);                                                                \
+    __attribute__((used, section("__DATA,swforce"))) static const hle_force_ent hle_force_##cname = {mangled, (void *)cname, why, 1}; \
     static ret cname(__VA_ARGS__)
 
 // 运行模式（0 掌机 / 1 主机）：hle_oe.c 持有，hid 的手柄样式跟它走；前端可在运行中切换

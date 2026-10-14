@@ -313,9 +313,11 @@ void uimsg_emit(const char *cat, const char *act, const char *arg) {
     for (int k = 0, n = atomic_load(&g_nui_sub); k < n; k++) g_ui_sub[k](cat, act, arg);
 }
 void uimsg_subscribe(void (*fn)(const char *cat, const char *act, const char *arg)) {
-    if (!gate_obs_present(OBS_UIMSG)) die("产物没有 UI 观测门 OBS_UIMSG（需 r6 起的产物）：UI 消息订阅无法工作");
+    int have = gate_obs_present(OBS_UIMSG);
+    if (!have && dm_is_d2r()) die("产物没有 UI 观测门 OBS_UIMSG（需 r6 起的产物）：UI 消息订阅无法工作");
     int k = atomic_load(&g_nui_sub); if (k == 8) die("UI 消息订阅者超过 8 个");
-    g_ui_sub[k] = fn; atomic_store(&g_nui_sub, k + 1); gate_obs_set(OBS_UIMSG, uimsg_print);
+    g_ui_sub[k] = fn; atomic_store(&g_nui_sub, k + 1);
+    if (have) gate_obs_set(OBS_UIMSG, uimsg_print);   // other games have no D2R UI bus gate: the subscriber is kept but never called
 }
 
 // 怪物血条名字后标抗性（按当前难度、读这只怪身上的属性，连随机词缀的抗性都对；全 0 不显示、≥100 标「免」）。

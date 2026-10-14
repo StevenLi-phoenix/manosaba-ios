@@ -369,8 +369,26 @@ static void receipt(const NpadState *s, uint32_t id, uint32_t style, uint64_t km
 }
 
 void (*dm_pad_hook)(uint64_t, uint64_t *, int32_t *, int32_t *, int32_t *, int32_t *);
+// Games other than D2R: the controller state is only front end + key script + gamepad; none of the D2R UI layers (cursor, world taps, panels ...) run
+static void fill_plain(NpadState *s, uint32_t id, uint32_t style) {
+    uint64_t read_start_ns = g_receipt_file ? now_ns() : 0;
+    memset(s, 0, sizeof *s);
+    s->sampling = ++g_sampling;
+    if (!(style_of(id) & style)) { receipt(s, id, style, 0, read_start_ns); return; }
+    uint64_t km = keys_now();
+    s->buttons = (g_in.buttons | atomic_exchange(&g_press_latch, 0)) | (km & ~(uint64_t)PK_MASK) | atomic_load(&g_pad_btn) | atomic_exchange(&g_pad_latch, 0);
+    s->lx = g_in.lx; s->ly = g_in.ly; s->rx = g_in.rx; s->ry = g_in.ry;
+    { uint64_t ax = atomic_load(&g_pad_axes); int16_t plx = (int16_t)ax, ply = (int16_t)(ax >> 16), prx = (int16_t)(ax >> 32), pry = (int16_t)(ax >> 48);
+      if (!(s->lx || s->ly) && (plx || ply)) { s->lx = plx; s->ly = ply; } if (!(s->rx || s->ry) && (prx || pry)) { s->rx = prx; s->ry = pry; } }
+    if (km & PK_LSL) s->lx = -32767; if (km & PK_LSR) s->lx = 32767;
+    if (km & PK_LSU) s->ly = 32767;  if (km & PK_LSD) s->ly = -32767;
+    s->attributes = ATTR_CONNECTED;
+    atomic_store_explicit(&g_sampled_right, (uint32_t)s->rx | ((uint64_t)(uint32_t)s->ry << 32), memory_order_release);
+    receipt(s, id, style, km, read_start_ns);
+}
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     pthread_once(&g_receipt_once, receipt_init);
+    if (!dm_is_d2r()) { fill_plain(s, id, style); return; }
     ui_taps_step();
     dm_ui_frontend_pump();
     { void dm_textinput_pump(void); dm_textinput_pump(); }   // 文本框补「弹键盘」那一下、数量框设值（dm_textinput.c） | the extra "bring up keyboard" press for text boxes, setting the value of quantity boxes (dm_textinput.c)

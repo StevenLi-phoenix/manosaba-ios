@@ -109,3 +109,25 @@ SSC("nnsslConnectionSetNextAlpnProto", h_nssl_SetAlpn) SSC("nnsslConnectionSetOp
 SSC("nnsslConnectionSetSessionCacheMode", h_nssl_SetCache) SSC("nnsslConnectionSetSocketDescriptor", h_nssl_SetSock)
 SSC("nnsslConnectionSetVerifyOption", h_nssl_SetVerify) SSC("nnsslConnectionWrite", h_nssl_Write)
 SSC("nnsslContextDestroy", h_nssl_CtxDestroy) SSC("nnsslContextGetContextId", h_nssl_CtxGetId)
+
+// ---------- APIs other games use (Unity's player networking at startup); same offline answers as above ----------
+#include <arpa/inet.h>
+HLE_FORCE_OPT("_ZN2nn6socket10InitializeEPvmmi", "连 bsd 套接字服务（缓冲区版）；离线，不建会话（剪）", Result, h_socket_InitBuf, void *buf, unsigned long sz, unsigned long bufsz, int conc) {
+    (void)buf; (void)sz; (void)bufsz; (void)conc; return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn6socket8ShutdownEiNS0_14ShutdownMethodE", "bsd 套接字服务（剪）", int, h_sk_Shutdown, int s, int how) { (void)s; (void)how; return sk_fail(); }
+// u16 argument: Switch callers do not extend it
+HLE_FORCE_OPT("_ZN2nn6socket9InetHtonsEt", "纯计算：主机序 → 网络序", unsigned, h_sk_Htons, unsigned v) { return htons((uint16_t)v); }
+HLE_FORCE_OPT("_ZN2nn6socket8InetPtonENS0_6FamilyEPKcPv", "纯计算：文本地址 → 二进制（只认 IPv4，Family 2 与宿主 AF_INET 同值）", int, h_sk_Pton, int fam, const char *src, void *dst) {
+    if (fam != 2) { t_skerr = 47; return -1; }   // EAFNOSUPPORT (FreeBSD)
+    return inet_pton(AF_INET, src, dst);
+}
+HLE_FORCE_OPT("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr", "离线：无 IP（in_addr 版）", Result, h_nifm_GetIp2, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
+HLE_FORCE_OPT("_ZN2nn4nifm19SetLocalNetworkModeEb", "本地通信模式开关；离线，忽略", void, h_nifm_LocalMode, unsigned on) { (void)on; }
+HLE_FORCE_OPT("_ZN2nn3ssl7Context15ImportClientPkiEPmPKcS4_jj", "ssl 服务（剪）", Result, h_ssl_ImpClient, void *self, uint64_t *id, const char *a, const char *b, unsigned na, unsigned nb) {
+    (void)self; (void)id; (void)a; (void)b; (void)na; (void)nb; return RES_FAIL;
+}
+HLE_FORCE_OPT("_ZN2nn3ssl7Context15ImportServerPkiEPmPKcjNS0_17CertificateFormatE", "ssl 服务（剪）", Result, h_ssl_ImpServer, void *self, uint64_t *id, const char *a, unsigned n, int fmt) {
+    (void)self; (void)id; (void)a; (void)n; (void)fmt; return RES_FAIL;
+}
+HLE_FORCE_OPT("_ZN2nn3ssl7Context9ImportCrlEPmPKcj", "ssl 服务（剪）", Result, h_ssl_ImpCrl, void *self, uint64_t *id, const char *a, unsigned n) { (void)self; (void)id; (void)a; (void)n; return RES_FAIL; }

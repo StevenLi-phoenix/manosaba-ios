@@ -58,6 +58,7 @@ static double target_logk(int *why, int *area, int *I, double *ang) {
 }
 
 float dm_bright_k(void) {   // 图形层每帧调（单线程：出图 / 回放线程） | called every frame by the graphics layer (single thread: the present / replay thread)
+    if (!dm_is_d2r()) return 1.0f;   // the area / environment reads below are D2R main offsets; k = 1 leaves the picture as the game drew it
     static int fixed = -2; static float kf;
     if (fixed == -2) { const char *e = getenv("DM_BRIGHT_K"); fixed = e != NULL; if (e) { kf = (float)atof(e); LOG("DM_BRIGHT_K=%g：3D 画面曝光由测试开关固定", kf); } }
     if (fixed) return kf;

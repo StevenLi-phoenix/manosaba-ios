@@ -45,6 +45,8 @@ extern pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 extern pthread_key_t g_keyres[2], g_keyaspect, g_keyaspectui;
 
 void load_modules(const char *dir, const char **names, int n);
+int dm_is_d2r(void);             // main 是 D2R 3.3.94012 的构建：D2R 专用功能（固定偏移读写）只在此时启用 | main is the D2R 3.3.94012 build: D2R-only features (fixed offset reads / writes) run only then
+const char *dm_main_build(void); // main 的 NSO 构建号（16 字节 hex） | main's NSO build ID (16 bytes hex)
 void run_module_inits(void);
 void *module_sym(module_t *m, const char *name);
 void *guest_sym(const char *name);

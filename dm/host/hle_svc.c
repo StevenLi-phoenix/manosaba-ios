@@ -6,6 +6,7 @@
 #include "hle.h"
 #include <stdatomic.h>
 #include <sys/mman.h>
+#include <TargetConditionals.h>
 #include <errno.h>
 #include <unistd.h>
 #include <unistd.h>
@@ -22,7 +23,8 @@
 // about 4.2 GB in total; on iOS without the "extended virtual addressing" entitlement a single reservation can be at most 6 GB
 // (read on a real device: 6 GB succeeds, 7 GB fails), so it cannot be made any wider --
 // with an 8 GB reservation, builds from developer accounts that cannot sign that entitlement (free accounts) would exit at this step.
-#define RESERVE (5ull << 30)
+static size_t g_reserve = 5ull << 30;   // D2R: 5 GB as described above; other games: see mem_init
+#define RESERVE g_reserve
 static uint8_t *g_as;              // ASLR 区基址 = 整块 | ASLR region base = the whole block
 static uint8_t *g_heap; static size_t g_heap_cur, g_heap_cap; static int g_heap_rejects;
 // 地址段整个落在客体堆当前已开放（可读写）的范围内：这种读不用陷内核核对，直接 memcpy（diag.c tk_rd 等每拍读客体内存的地方用）
@@ -33,13 +35,23 @@ static uint8_t *g_stack; static size_t g_stack_cap;
 
 static void mem_init(void) {
     if (g_as) return;
+    size_t alias_cap = 0x20000000;
+    if (!dm_is_d2r()) {
+        // The SDK's VammManager (nn::os::AllocateAddressRegion / AllocateMemoryPages, used by Unity) keeps the first 0x3fe00000 of the alias region
+        // for its own node heap and hands out only the rest (sdk VammManager tree init); with D2R's 512 MB alias every request fails with 0x1803.
+        // A real 39-bit process has a 64 GB alias region. Other games: alias 4 GB on Mac (1 GB node heap + 3 GB for the game); iOS stays within
+        // the 6 GB single-reservation limit noted above (alias 3 GB). DM_GUEST_AS_GB overrides the total.
+        alias_cap = TARGET_OS_IPHONE ? 0xC0000000ull : 0x100000000ull;
+        g_reserve = TARGET_OS_IPHONE ? 6ull << 30 : 12ull << 30;
+        const char *e = getenv("DM_GUEST_AS_GB"); if (e && atoi(e) >= 6) g_reserve = (size_t)atoi(e) << 30;
+    }
     g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (g_as == MAP_FAILED) die("reserve guest AS");
-    // 固定划分（都在预留块内）：alias 512MB、stack 256MB、heap 其余从 2GB 处起
-    // Fixed partition (all inside the reserved block): alias 512MB, stack 256MB, heap the rest starting at 2GB
-    g_alias = g_as + 0x10000000; g_alias_cap = 0x20000000;
-    g_stack = g_as + 0x30000000; g_stack_cap = 0x10000000;
-    g_heap  = g_as + 0x40000000; g_heap_cap  = RESERVE - 0x40000000;   // 4 GB，容得下游戏那一整块约 3.2 GB 的堆 | 4 GB, enough to hold the game's single heap block of about 3.2 GB
+    if (g_as == MAP_FAILED) die("reserve guest AS %#zx", RESERVE);
+    // 固定划分（都在预留块内）：alias（D2R 512MB）、stack 256MB、heap 其余（D2R 从 2GB 处起）
+    // Fixed partition (all inside the reserved block): alias (D2R 512MB), stack 256MB, heap the rest (D2R: starting at 2GB)
+    g_alias = g_as + 0x10000000; g_alias_cap = alias_cap;
+    g_stack = g_alias + g_alias_cap; g_stack_cap = 0x10000000;
+    g_heap  = g_stack + g_stack_cap; g_heap_cap  = RESERVE - (size_t)(g_heap - g_as);   // D2R: 4 GB，容得下游戏那一整块约 3.2 GB 的堆 | D2R: 4 GB, enough to hold the game's single heap block of about 3.2 GB
     LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)RESERVE, g_heap, g_alias, g_stack);
 }
 
@@ -76,7 +88,7 @@ static size_t image_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++)
 static module_t *mod_named(const char *n) { for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, n)) return &g_mod[i]; return NULL; }
 static _Atomic unsigned long long g_gheap_last[3];
 int dm_guest_heap_stat(unsigned long long *total_mb, unsigned long long *free_mb, unsigned long long *maxblk_kb) {
-    module_t *mm = mod_named("main"), *ms = mod_named("sdk"); if (!mm || !ms || !g_heap_cur) return 0;
+    module_t *mm = mod_named("main"), *ms = mod_named("sdk"); if (!mm || !ms || !g_heap_cur || !dm_is_d2r()) return 0;   // allocator location and query entries are D2R build offsets
     uint8_t *al = mm->base + 0x32137a0; if (!al[0]) return 0;   // 首字节 = 已初始化（sdk+0x2f9898 写） | First byte = initialized (written by sdk+0x2f9898)
     uint64_t fr = ((uint64_t (*)(void *))(ms->base + 0x2f9d78))(al), mx = ((uint64_t (*)(void *))(ms->base + 0x2f9dbc))(al);
     *total_mb = g_heap_cur >> 20; *free_mb = fr >> 20; *maxblk_kb = mx >> 10;
@@ -86,7 +98,9 @@ int dm_guest_heap_stat(unsigned long long *total_mb, unsigned long long *free_mb
 // The last main-heap readout (total MB, free MB, largest allocatable block KB; all 0 if never read). Callable from any thread - does not enter the allocator (the iOS shell uses it on the main thread for the memory-warning log line)
 void dm_guest_heap_last(unsigned long long v[3]) { for (int i = 0; i < 3; i++) v[i] = atomic_load(&g_gheap_last[i]); }
 HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEmm", "照原版分配，只在返回空时报红（原版调用方多处不判空）", void *, hle_stdalloc_allocate, void *self, size_t size, size_t align) {
-    static void *(*orig)(void *, size_t, size_t); if (!orig) { module_t *ms = mod_named("sdk"); orig = (void *(*)(void *, size_t, size_t))(ms->base + 0x2f9974); }
+    // the SDK's own definition, found by name (was sdk+0x2f9974 in the D2R build)
+    static void *(*orig)(void *, size_t, size_t);
+    if (!orig) { orig = (void *(*)(void *, size_t, size_t))module_sym(mod_named("sdk"), "_ZN2nn3mem17StandardAllocator8AllocateEmm"); if (!orig) die("sdk 里找不到 StandardAllocator::Allocate"); }
     void *p = orig(self, size, align);
     if (!p && size) { static _Atomic int n; if (atomic_fetch_add(&n, 1) < 8) LOG("【红】游戏堆分配返回空：申请 %zu 字节（对齐 %zu），分配器 %p；上次读数 主堆 %llu MB、余量 %llu MB、最大可分配块 %llu KB", size, align, self,
         (unsigned long long)g_gheap_last[0], (unsigned long long)g_gheap_last[1], (unsigned long long)g_gheap_last[2]); }
@@ -100,7 +114,8 @@ void svc_guest_range(uint8_t **base, size_t *size) { *base = g_as; *size = RESER
 enum { I_CoreMask=0, I_PriorityMask=1, I_AliasAddr=2, I_AliasSize=3, I_HeapAddr=4, I_HeapSize=5,
        I_TotalMem=6, I_UsedMem=7, I_DebuggerAttached=8, I_ResourceLimit=9, I_IdleTick=10, I_RandomEntropy=11,
        I_AslrAddr=12, I_AslrSize=13, I_StackAddr=14, I_StackSize=15, I_SysResTotal=16, I_SysResUsed=17,
-       I_ProgramId=18, I_InitProcIdRange=19, I_UserExcAddr=20, I_TotalNonSys=21, I_UsedNonSys=22, I_IsApplication=23 };
+       I_ProgramId=18, I_InitProcIdRange=19, I_UserExcAddr=20, I_TotalNonSys=21, I_UsedNonSys=22, I_IsApplication=23,
+       I_FreeThreadCount=24, I_AliasExtraSize=28 };
 
 static uint8_t g_seen[256];
 
@@ -241,6 +256,10 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         case I_ProgramId: v = 0x0100726014352000ull; break;
         case I_IsApplication: v = 1; break;
         case I_UserExcAddr: v = 0; break;
+        // Threads the process may still create (Unity checks this before starting each worker and silently skips the thread at 0, then waits
+        // forever for it). The host has no real limit besides its handle table; 128 is a generous cap of the host's own choosing
+        case I_FreeThreadCount: { void thr_counts(int *, int *, int *); int nh, nl, no; thr_counts(&nh, &nl, &no); v = nl < 128 ? (uint64_t)(128 - nl) : 0; break; }
+        case I_AliasExtraSize: v = 0; break;   // FW 18+: part of the alias region the kernel keeps for itself; none here
         default: v = 0; break;
         }
         regs[0] = 0; regs[1] = v; return 0;

@@ -64,6 +64,7 @@ static void app_quit(const char *why) {
     static int once; if (once++) return;
     { uint64_t dm_audio_render_calls(void); LOG("窗口：退出（%s）；声卡回调累计 %llu（0 = 这次没出声）", why, (unsigned long long)dm_audio_render_calls()); }
     int dm_ingame_now(void); int dm_request_save(void); int dm_unpause_for_exit(void); uint64_t dm_fs_commit_count(void); uint64_t now_ns(void);
+    if (!dm_is_d2r()) { LOG("窗口：退出"); dm_host_shutdown(why); return; }   // the in-run / save-wait logic below reads D2R state
     if (!dm_ingame_now() && !dm_uiscreen_ingame()) { LOG("窗口：退出（不在局内，没有待存的进度）"); dm_host_shutdown(why); return; }
     uint64_t c0 = dm_fs_commit_count(), t0 = now_ns(), last = c0, last_t = 0; int asked = 0, paused = 0;
     for (;;) {

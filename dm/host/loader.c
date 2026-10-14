@@ -139,12 +139,29 @@ static void *force_lookup(const char *name) {
         }
     return NULL;
 }
+// Which game is loaded: main's NSO build ID from main.cuts.tsv ("# BUILD_ID\t<hex>", written by patch_nso.py). Host code that reads or writes
+// fixed D2R offsets (dm_*.c, render scale, heap readout ...) runs only for the D2R build; other games get the generic SDK layer only.
+#define D2R_MAIN_BUILD "db0507f36b84200ac05f75d76ed5026f"
+static char g_main_build[64]; static int g_is_d2r;
+static void read_main_build(const char *dir) {
+    char path[1024]; snprintf(path, sizeof path, "%s/main.cuts.tsv", dir);
+    FILE *f = fopen(path, "r"); if (!f) die("%s: 缺 main.cuts.tsv（读不到 main 的构建号）", path);
+    if (fscanf(f, "# BUILD_ID %63s", g_main_build) != 1) die("%s: 首行不是 # BUILD_ID", path);
+    fclose(f);
+    g_is_d2r = !strcmp(g_main_build, D2R_MAIN_BUILD);
+    LOG("main 构建号 %s（%s）", g_main_build, g_is_d2r ? "D2R" : "非 D2R：只启用通用 SDK 接管层，D2R 专用功能全部关闭");
+}
+int dm_is_d2r(void) { return g_is_d2r; }
+const char *dm_main_build(void) { return g_main_build; }
+
 static void force_check(void) {
     int bad = 0;
     for (unsigned i = 0; i < g_nforce; i++)
-        if (!g_force_hits[i]) { LOG("强制接管条目无任何引用：%s", g_force[i].name); bad = 1; }
-    if (bad) die("强制接管清单有误");
-    LOG("force: %u 条全部命中", g_nforce);
+        if (!g_force_hits[i] && !g_force[i].optional) { if (g_is_d2r || g_flag.imports) LOG("强制接管条目无任何引用：%s", g_force[i].name); bad++; }
+    // The table was written for D2R: there an unreferenced entry is a wrong list. Another game simply does not call every SDK API D2R does
+    if (bad && g_is_d2r) die("强制接管清单有误");
+    if (bad) LOG("force: %u 条中 %d 条本游戏没引用（DM_IMPORTS=1 列出）", g_nforce, bad);
+    else LOG("force: %u 条全部命中", g_nforce);
 }
 
 // 读改写器表头（段边界、槽号）；表头以外有任何行即旧版产物（装载期改代码），拒绝
@@ -199,6 +216,26 @@ static void register_gates(module_t *m, const char *dir) {
     LOG("%s: gates %d patch_off %#llx keys %lu/%lu/%lu/%lu", m->name, ng, m->patch_off, g_key18, g_keytls, g_keytlr, g_keygate);
 }
 
+// DT_RELR (packed RELATIVE relocations, gABI; newer SDK toolchains emit them, the D2R build has none): an even word is the offset of one slot and
+// starts a run; an odd word is a bitmap whose bit i (i = 1..63) marks the slot (i − 1) words after the run position, which then moves on 63 words.
+// Each slot holds its link-time address (implicit addend): the loaded value is base + slot.
+enum { DT_RELRSZ_ = 35, DT_RELR_ = 36 };
+static void relr_each(const module_t *m, void (*fn)(const module_t *, uint64_t off, void *), void *ctx) {
+    uint64_t relr = 0, relrsz = 0;
+    for (const Elf64_Dyn *d = m->dyn; d->d_tag; d++) {
+        if (d->d_tag == DT_RELR_) relr = d->d_un.d_ptr;
+        if (d->d_tag == DT_RELRSZ_) relrsz = d->d_un.d_val;
+    }
+    const uint64_t *e = (const uint64_t *)(m->base + relr); uint64_t at = 0;
+    for (uint64_t i = 0; relr && i < relrsz / 8; i++) {
+        uint64_t w = e[i];
+        if (!(w & 1)) { fn(m, w, ctx); at = w + 8; continue; }
+        for (unsigned b = 0; (w >>= 1); b++) if (w & 1) fn(m, at + 8ull * b, ctx);
+        at += 63 * 8;
+    }
+}
+static void relr_apply(const module_t *m, uint64_t off, void *ctx) { *(uint64_t *)(m->base + off) += (uint64_t)m->base; ++*(int *)ctx; }
+
 static void relocate(module_t *m) {
     uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0;
     for (const Elf64_Dyn *d = m->dyn; d->d_tag; d++) switch (d->d_tag) {
@@ -222,7 +259,8 @@ static void relocate(module_t *m) {
             if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
             else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
         }
-    LOG("%s: reloc relative=%d abs/glob=%d jump=%d", m->name, cnt[0], cnt[1], cnt[2]);
+    int nrelr = 0; relr_each(m, relr_apply, &nrelr);
+    LOG("%s: reloc relative=%d relr=%d abs/glob=%d jump=%d", m->name, cnt[0], nrelr, cnt[1], cnt[2]);
 }
 
 // DM_LOADHASH=1（诊断）：装载完逐模块出地址无关 sha256，证「提前起跑 / 不提前」装载结果逐字节相同。
@@ -232,6 +270,13 @@ static void relocate(module_t *m) {
 // Module base addresses and host ASLR differ every run, and only the values of the relocation slots change with them: copy the image and, using the same relocation table, replace every slot with an address-independent token --
 // RELATIVE → (0, addend); symbol target falls in some module → (1 + module number, offset within the module); otherwise (host forced take-over / host symbol) → (name FNV, addend); all other bytes as is.
 #include <CommonCrypto/CommonDigest.h>
+struct relr_tok { uint8_t *cp; uint64_t *tail; unsigned n, cap; };
+static void relr_token(const module_t *m, uint64_t off, void *ctx) {
+    struct relr_tok *rt = ctx;
+    if (rt->n == rt->cap) { rt->cap = rt->cap ? rt->cap * 2 : 4096; rt->tail = realloc(rt->tail, 8ull * rt->cap); }
+    rt->tail[rt->n++] = *(const uint64_t *)(m->base + off) - (uint64_t)m->base;
+    memset(rt->cp + off, 0, 8);
+}
 void loader_hash_log(void) {
     if (!getenv("DM_LOADHASH")) return;
     for (int k = 0; k < g_nmod; k++) {
@@ -256,7 +301,10 @@ void loader_hash_log(void) {
                 memcpy(cp + r->r_offset, &tok[0], 8);                // 槽 8 字节换成记号头；记号尾在下面按槽序追加 | The 8 slot bytes are replaced by the token head; the token tail is appended below in slot order
                 nslot++;
             }
+        struct relr_tok rt = {cp, NULL, 0, 0};
+        relr_each(m, relr_token, &rt); nslot += rt.n;            // RELR slots: token 0 like RELATIVE, tail = module-relative value
         CC_SHA256_CTX c; CC_SHA256_Init(&c); CC_SHA256_Update(&c, cp, (CC_LONG)m->size);
+        CC_SHA256_Update(&c, rt.tail, (CC_LONG)(8 * rt.n)); free(rt.tail);
         for (int t = 0; t < 2; t++)                                // 记号尾（加数 / 偏移）按槽序追加，与槽头一起唯一确定槽值 | Token tails (addend / offset) are appended in slot order, and together with the slot head uniquely determine the slot value
             for (uint64_t i = 0; i < sizes[t] / sizeof(Elf64_Rela); i++) {
                 const Elf64_Rela *r = &tabs[t][i]; uint64_t tail = (uint64_t)r->r_addend;
@@ -363,6 +411,7 @@ void load_modules(const char *dir, const char **names, int n) {
         strlcpy(m->name, names[i], sizeof m->name);
         read_layout(m, dir);
     }
+    read_main_build(dir);
     create_keys();
     for (int i = 0; i < n; i++) {
         module_t *m = &g_mod[i];
