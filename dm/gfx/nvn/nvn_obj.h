@@ -12,6 +12,14 @@
 
 #define MAGIC(a, b, c, d) ((uint32_t)(a) | (uint32_t)(b) << 8 | (uint32_t)(c) << 16 | (uint32_t)(d) << 24)
 #define FITS(T, H) _Static_assert(sizeof(T) <= sizeof(H), #T " 超出 " #H " 的保留大小")
+// nvn.h's sizes come from an older NVN and are not upper bounds for this SDK (NVNtexture is 0x80, NVNtextureView at most 0x10, both smaller than
+// nvn.h). Upper bounds read from manosaba 2.0.4b's Unity code — the room it leaves for each object: the next stack local or struct field after it,
+// or its allocation size — which every host struct here stays within:
+//   TextureView 0x10, Texture 0x80, TextureBuilder 0x80, Buffer 0x30, BufferBuilder 0x40, MemoryPool 0x100, MemoryPoolBuilder 0x40,
+//   TexturePool / SamplerPool 0x20, Sampler 0x40, SamplerBuilder 0x40, Program 0x1a0, CommandBuffer 0xa0, Sync 0x48, Queue 0x2000,
+//   QueueBuilder 0x80, Window 0x180, WindowBuilder 0x40, DeviceBuilder 0x40, BlendState 8, ColorState 4, ChannelMaskState 4,
+//   MultisampleState 0x1c, PolygonState 4, VertexAttribState 4, VertexStreamState 0x10.
+// A host struct must not grow past these: the game keeps other data right after the object.
 
 typedef struct { uint32_t flags; } dev_builder_t;                       FITS(dev_builder_t, NVNdeviceBuilder);
 typedef struct { uint32_t magic, flags, origin, depth_mode; void *dbg_cb, *dbg_data; } dev_t_;  FITS(dev_t_, NVNdevice);
