@@ -47,13 +47,25 @@ def bad(msg):
     fails.append(msg)
     if len(fails) <= 30: print('FAIL', msg)
 
+def elf_wrap(blob, path):
+    """Same layout as `llvm-objcopy -I binary -O elf64-littleaarch64 --rename-section .data=.text,code`: one executable .text at address 0.
+    Used when only Xcode's llvm-objdump is available (Xcode ships no llvm-objcopy)."""
+    shstr = b'\0.text\0.shstrtab\0'
+    text_off = 64; str_off = text_off + len(blob); sh_off = (str_off + len(shstr) + 7) & ~7
+    ehdr = b'\x7fELF' + bytes([2, 1, 1]) + bytes(9) + struct.pack('<HHIQQQIHHHHHH', 1, 183, 1, 0, 0, sh_off, 0, 64, 0, 0, 64, 3, 2)
+    sh = lambda name, typ, flags, off, size, align: struct.pack('<IIQQQQIIQQ', name, typ, flags, 0, off, size, 0, 0, align, 0)
+    with open(path, 'wb') as f:
+        f.write(ehdr + blob + shstr + bytes(sh_off - str_off - len(shstr)))
+        f.write(bytes(64) + sh(1, 1, 6, text_off, len(blob), 4) + sh(7, 3, 0, str_off, len(shstr), 1))
 def llvm_dis(blob, base):
     """按原始字节反汇编，返回相关行 {偏移: 小写指令文本}。 | Disassemble from raw bytes and return the relevant lines {offset: lowercase instruction text}."""
     with tempfile.TemporaryDirectory() as td:
         b, e = os.path.join(td, 'x.bin'), os.path.join(td, 'x.elf')
         open(b, 'wb').write(blob)
-        subprocess.run([f'{LLVM}/llvm-objcopy', '-I', 'binary', '-O', 'elf64-littleaarch64',
-                        '--rename-section', '.data=.text,code', b, e], check=True)
+        if os.path.exists(f'{LLVM}/llvm-objcopy'):
+            subprocess.run([f'{LLVM}/llvm-objcopy', '-I', 'binary', '-O', 'elf64-littleaarch64',
+                            '--rename-section', '.data=.text,code', b, e], check=True)
+        else: elf_wrap(blob, e)
         # 只留可能相关的行（x18/w18、tpidr、svc、cnt?ct），几百万行的筛选交给 grep
         # Keep only potentially relevant lines (x18/w18, tpidr, svc, cnt?ct); filtering millions of lines is left to grep
         od = subprocess.Popen([f'{LLVM}/llvm-objdump', '-d', '--no-show-raw-insn', e], stdout=subprocess.PIPE)
@@ -76,10 +88,11 @@ def sysk(t):
     return None
 
 # ---- sites.tsv ----
-sites = {}; wins = []; jumps = 0
+sites = {}; wins = []; jumps = 0; fnptr = 0
 for l in open(f'{out_dir}/{mod}.sites.tsv'):
     f = l.split(); a = int(f[0], 16)
     if f[1] == 'J': jumps += 1; continue
+    if f[1] == 'T': fnptr += 1; continue   # br / blr x18 through a function pointer: annotation of an x18 site, which has its own row
     if f[1] == 'W': wins.append((a, int(f[2], 16))); sites[a] = 'W'
     else: sites[a] = f[1]
 inwin = set(o for lo, hi in wins for o in range(lo, hi, 4))
@@ -468,9 +481,21 @@ static_entries = [(a, set()) for a in sites]
 for a, b, r, _ in params:
     static_entries.append((a, {f'x{r}'}))
 static_seen = 0
+# mov sp, x18 (stackalloc) blocks reload x16 / x17 through x17 = old sp, which the red-zone pairing below cannot see: check them word for word instead
+def _movsp_ok(a, s):
+    q = list(_md.disasm(bytes(pat[s:s + 48]), s)); ks = keyseq(s + 8)
+    return (len(q) == 12 and W(pat, s) == 0xF81F03F0 and W(pat, s + 4) == 0xF81E83F1                # stur x16,[sp,#-16]; stur x17,[sp,#-24]
+            and q[2].op_str == 'x16, tpidrro_el0' and ks is not None and ks[1] == KEY['K18']
+            and f'{q[6].mnemonic} {q[6].op_str}' == 'ldr x16, [x16]'
+            and [f'{x.mnemonic} {x.op_str}' for x in q[7:]] == ['mov x17, sp', 'mov sp, x16', 'ldur x16, [x17, #-0x10]', 'ldur x17, [x17, #-0x18]', f'b #{a + 4:#x}'])
+n_movsp = 0
 for a, allowed in static_entries:
     s = btarget(a)
     if s is None: continue
+    if next(_md.disasm(orig[a:a + 4], a), None) is not None and W(orig, a) == 0x9100025F:          # mov sp, x18
+        static_seen += 1; n_movsp += 1
+        if not _movsp_ok(a, s): bad(f'mov sp, x18 块 {a:#x} 不是模板')
+        continue
     block = _block(s); static_seen += 1
     if not allowed:
         end = next((hi for lo, hi in wins if lo == a), a + 4)
@@ -499,7 +524,7 @@ for a, allowed in static_entries:
         ok = dead or any(sd == rd and si < min(wi, default=10**9) and ri > max(wi, default=-1)
                  for sd, si in saved.get(reg, []) for rd, ri in restored.get(reg, []))
         if not ok: bad(f'临时寄存器 {a:#x}：块写 {reg}，原目的寄存器外且无同偏移存取配对')
-print(f'STATIC {mod} scanned={static_seen} violations={sum(1 for x in fails if x.startswith("临时寄存器"))}')
+print(f'STATIC {mod} scanned={static_seen} violations={sum(1 for x in fails if x.startswith("临时寄存器"))} mov_sp_template={n_movsp}')
 
 # ⑩ 跳板出口（切掌机崩溃：参数门跳板回到 B+4，越过 A、B 之间未改的原指令和另一个跳板头）：
 #   text 里每条跳进补丁区的 b（跳板头 a）沿补丁块走遍全部回 text 的出口（顺序 b 与条件分支，bl 视为返回，ret / br 不算回 text）。
@@ -552,7 +577,7 @@ print(f'EXITS {mod} 跳板头={len(_heads)} 出口={nexit} 已登记剪口改控
 cnt = {}
 if _hostcall: print(f'剪口引入宿主调用门 {len(_hostcall)} 个：' + ', '.join(f"{a:#x}=svc#{n:#x}" for a, n in _hostcall.items()))
 for k in sites.values(): cnt[k] = cnt.get(k, 0) + 1
-print(f'STRUCT {mod} {"OK" if not fails else "FAIL"} 改写点={len(sites)} {cnt} 跳转表={jumps} 窗口内x18引用={nwin_ref} '
+print(f'STRUCT {mod} {"OK" if not fails else "FAIL"} 改写点={len(sites)} {cnt} 跳转表={jumps} 函数指针跳转={fnptr} 窗口内x18引用={nwin_ref} '
       f'已登记剪口={len(cuts)}(代码{ncut_code}/数据{ncut_data}) 观测门={len(obs)} 参数门={len(params)} '
       f'独立分母={len(ind)} text改动字={len(diff)} 门={len(gsites)} 槽访问={nk} 失败项={len(fails)}')
 sys.exit(1 if fails else 0)

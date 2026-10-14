@@ -3,3 +3,11 @@
 .iosdd_mac/
 .iosdd_*/
 .DS_Store
+
+# manosaba port: game data, keys and console backups never go into git
+/dump/
+/keys/
+/extracted/
+/sd_backup_*/
+/work/
+/analysis/**/*.bin

@@ -64,11 +64,12 @@ orig, _ = deexcl(orig); pat, _ = deexcl(pat)
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
-sites = []; winend = {}; brinfo = {}; ngate = 0
+sites = []; winend = {}; brinfo = {}; fnptr = {}; ngate = 0
 for l in open(f'{DIR}/{MOD}.sites.tsv'):
     f = l.split(); a = int(f[0], 16)
     if f[1] == 'W': winend[a] = int(f[2], 16); sites.append(a)
     elif f[1] == 'J': brinfo[a] = (int(f[2], 16), int(f[3]))
+    elif f[1] == 'T': fnptr[a] = int(f[2])                   # br / blr x18 through a function pointer (the site itself has its own x18 row)
     elif f[1] in ('svc', 'cntpct', 'cntvct'): ngate += 1      # 宿主门：语义由宿主定，只做结构核对 | Host gate: semantics are defined by the host, only a structural check is done
     else: sites.append(a)
 
@@ -160,7 +161,7 @@ def state(u, st, patched):
     tp = u.reg_read(UC_ARM64_REG_TPIDR_EL0)
     if patched: g[18] = struct.unpack('<Q', u.mem_read(TSD + 8 * SLOT18, 8))[0]; tp = struct.unpack('<Q', u.mem_read(TSD + 8 * SLOTTLS, 8))[0]
     g = g + [tp]
-    w = [x for x in st['w'] if not (patched and TSD <= x[0] < TSD + 0x10000)]
+    w = list(st['w'])   # patched-side slot writes are dropped in trial(), only where the original wrote nothing (a random address can land in the TSD area)
     return g, u.reg_read(UC_ARM64_REG_SP), u.reg_read(UC_ARM64_REG_NZCV), [u.reg_read(r) for r in VR], w, st['fault']
 
 def run(u, st, start, patched, init):
@@ -204,20 +205,24 @@ def run(u, st, start, patched, init):
     s = state(u, st, patched)
     return s + (end['pc'],)
 
-def init_state(rng, kind, site_br=None):
+TEXT_END = hdr['TEXT_END']
+def init_state(rng, kind, site_br=None, fn_target=False):
     g = []
     for i in range(31):
         if kind == 0: g.append(rng.randrange(0, 0x10000) & ~7)
         elif kind == 1: g.append(rng.randrange(0, ARENA_SZ - 0x10000))
         else: g.append(rng.getrandbits(64))
     if site_br: g[18] = IB + site_br[0] + 4 * rng.randrange(site_br[1])
+    if fn_target: g[18] = IB + 4 * rng.randrange(TEXT_END // 4)    # function pointer: any text address, so both sides land on mapped code
     return {'g': g, 'v': [rng.getrandbits(128) for _ in range(32)], 'nzcv': rng.randrange(16) << 28, 'tls': rng.randrange(0, 0x100000) & ~15, 'tlr': rng.randrange(0x100000, 0x200000) & ~15}
 
 def trial(UO, SO, UP, SP, a, init):
     so = run(UO, SO, IB + a, False, init)
     sp_ = run(UP, SP, IB + a, True, init)
+    if a in fnptr:   # the function pointer block leaves the target in x17 (IP1, not preserved across a call / tail call by AAPCS64)
+        g = list(sp_[0]); g[17] = so[0][17]; sp_ = (g,) + sp_[1:]
     ow = {x[0] for x in so[4]}
-    sp_ = sp_[:4] + ([x for x in sp_[4] if not (SP0 - 128 <= x[0] < SP0 and x[0] not in ow)],) + sp_[5:]
+    sp_ = sp_[:4] + ([x for x in sp_[4] if not ((SP0 - 128 <= x[0] < SP0 or TSD <= x[0] < TSD + 0x10000) and x[0] not in ow)],) + sp_[5:]
     both = bool(so[5] and sp_[5])
     same = (so[5] == sp_[5]) if (so[5] or sp_[5]) else (so == sp_)
     return same, both, [k for k, (x, y) in enumerate(zip(so, sp_)) if x != y]
@@ -235,7 +240,7 @@ def work(job):
         while kinds or (eff < A.min_eff and extra < A.max_extra):
             if kinds: kind = kinds.pop(0)
             else: kind = (1, 0)[extra % 2]; extra += 1
-            same, both, fl = trial(UO, SO, UP, SP, a, init_state(rng, kind, brinfo.get(a)))
+            same, both, fl = trial(UO, SO, UP, SP, a, init_state(rng, kind, brinfo.get(a), a in fnptr))
             n += 1; eff += not both
             if not same: diffs.append((kind, fl))
             if mutated and diffs: break

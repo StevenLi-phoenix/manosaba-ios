@@ -388,6 +388,47 @@ def site_br(ins, base, count):
         emit(B(here(), base + 4 * i))
     return start
 
+def site_xbranch(ins, link):
+    """br / blr x18 through a function pointer (not a jump table): IL2CPP invokers use x18 as the only free scratch register.
+    The target goes to x17 (IP1: a linker veneer may clobber it on any call, so the callee cannot rely on it at entry); x16 is borrowed through the red zone.
+    blr: x30 = original site + 4, so the callee returns straight into the original code and unwinding sees the original FDE, not the patch area."""
+    start = here()
+    emit(STUR(16, 31, -16))
+    emit(MRS_TPIDRRO(17)); emit_slot_addr(17, 16, 'K18'); emit(LDRX(17, 17)); emit(LDUR(16, 31, -16))
+    if link:
+        ret = ins.address + 4
+        emit(ADRP(30, here(), ret)); emit(ADDI(30, 30, ret & 0xFFF))
+    emit(BR(17))
+    return start
+
+MOV_X17_SP, MOV_SP_X16 = 0x910003F1, 0x9100021F    # add x17, sp, #0 / add sp, x16, #0
+def site_mov_sp(ins):
+    """mov sp, x18 after `mov xA, sp; sub x18, xA, xB` (IL2CPP stackalloc: x18 holds the new, lower sp). x16 / x17 are borrowed through the
+    red zone of the old sp and reloaded through x17 = old sp after sp moves: the old red zone now lies inside the allocation, above the new sp."""
+    start = here()
+    emit(STUR(16, 31, -16)); emit(STUR(17, 31, -24))
+    emit(MRS_TPIDRRO(16)); emit_slot_addr(16, 17, 'K18'); emit(LDRX(16, 16))
+    emit(MOV_X17_SP); emit(MOV_SP_X16)
+    emit(LDUR(16, 17, -16)); emit(LDUR(17, 17, -24))
+    emit(B(here(), ins.address + 4))
+    return start
+
+def alloca_shape(a):
+    """True when the x18 that `mov sp, x18` at a installs was computed as (a register copied from sp) minus something, in the same straight-line block."""
+    insl = list(md.disasm(IMG0[max(0, a - 0x40):a], max(0, a - 0x40)))
+    sub_src = None
+    for p in reversed(insl):
+        if p.mnemonic in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') or p.mnemonic.startswith('b.'): return False
+        _, wr = regset(p)
+        if sub_src is None:
+            if wr & {'x18', 'w18'}:
+                m = re.fullmatch(r'x18, (x\d+), x\d+', p.op_str)
+                if p.mnemonic != 'sub' or not m: return False
+                sub_src = m.group(1)
+        elif sub_src in wr:
+            return p.mnemonic == 'mov' and p.op_str == f'{sub_src}, sp'
+    return False
+
 def site_sysreg_read(ins, kind):
     """mrs xN, tpidr_el0 / tpidrro_el0 → xN = 线程槽值。 | mrs xN, tpidr_el0 / tpidrro_el0 → xN = thread slot value."""
     N = ins.bytes[0] & 31
@@ -547,7 +588,14 @@ import bisect
 def func_of(a):
     i = bisect.bisect_right(starts, a) - 1
     return (starts[i], starts[i + 1] if i + 1 < len(starts) else TEXT_END) if i >= 0 else (a, a + 4)
-done = set(); windows = []; jumps = {}
+done = set(); windows = []; jumps = {}; xbranch = {}
+def x18_fnptr(insl, j):
+    """The instruction that last wrote x18 before insl[j], within the same straight-line block: must be `ldr x18, [...]` (a function pointer)."""
+    for p in reversed(insl[:j]):
+        if p.mnemonic in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') or p.mnemonic.startswith('b.'): return False
+        _, wr = regset(p)
+        if wr & {'x18', 'w18'}: return p.mnemonic == 'ldr' and p.op_str.startswith('x18, [')
+    return False
 funcs = sorted({func_of(a) for a, (k, _) in kinds.items() if k == 'x18'})
 for fa, fb in funcs:
     insl = list(md.disasm(bytes(IMG[fa:fb]), fa))
@@ -555,7 +603,12 @@ for fa, fb in funcs:
     for wseg in ws:
         windows.append(wseg); done |= {x.address for x in wseg}
     for j, ins in enumerate(insl):
+        if ins.mnemonic == 'blr' and ins.op_str == 'x18':
+            assert x18_fnptr(insl, j), f'blr x18 without a function pointer load {ins.address:x}'
+            xbranch[ins.address] = 1
         if ins.mnemonic == 'br' and ins.op_str == 'x18':
+            if not any(p.mnemonic == 'adr' and p.op_str.startswith('x18,') for p in insl[max(0, j - 8):j]) and x18_fnptr(insl, j):
+                xbranch[ins.address] = 0; continue
             base = width = None
             ctx = insl[max(0, j - 8):j]
             for p in reversed(ctx):
@@ -578,6 +631,7 @@ for fa, fb in funcs:
             t = x.operands[-1].imm
             assert not (t in inwin and t not in heads), f'branch into window {x.address:x}'
 
+IMG0 = bytes(IMG)   # text before any site is replaced by a branch (alloca_shape looks back across earlier sites)
 def put_branch(at, to): struct.pack_into('<I', IMG, at, B(at, to))
 for wseg in windows:
     st, lo, hi = site_window(wseg); stat('window'); put_branch(lo, st)
@@ -587,9 +641,13 @@ for a in sorted(kinds):
     ins = dis(struct.unpack_from('<I', IMG, a)[0], a)
     if k == 'x18':
         m = ins.mnemonic
-        if m == 'br': st = site_br(ins, *jumps[a]); stat('br')
+        if a in xbranch: st = site_xbranch(ins, xbranch[a]); stat('blr_fnptr' if xbranch[a] else 'br_fnptr')
+        elif m == 'br': st = site_br(ins, *jumps[a]); stat('br')
         elif m in ('cbz', 'cbnz', 'tbz', 'tbnz'): st = site_cond(ins); stat('cond')
         elif m in ('adr', 'adrp'): st = site_pcrel(ins); stat('pcrel')
+        elif m == 'mov' and ins.op_str == 'sp, x18':
+            assert alloca_shape(a), f'mov sp, x18 that is not a stackalloc {a:x}'
+            st = site_mov_sp(ins); stat('mov_sp')
         elif m in ('blr', 'ret', 'b', 'bl') or (m == 'ldr' and '[' not in ins.op_str): raise RuntimeError(f'{a:x} {m} {ins.op_str}')
         else: st = site_plain(ins); stat('plain')
     elif k == 'tpidr_r': st = site_sysreg_read(ins, 'KTLS'); stat(k)
@@ -861,6 +919,7 @@ with open(P('sites.tsv'), 'w') as f:
         if a not in done: f.write(f'{a:#x}\t{kinds[a][0]}\n')
     for wseg in windows: f.write(f'{wseg[0].address:#x}\tW\t{wseg[-1].address + 4:#x}\n')
     for a, (b, c) in jumps.items(): f.write(f'{a:#x}\tJ\t{b:#x}\t{c}\n')
+    for a, link in sorted(xbranch.items()): f.write(f'{a:#x}\tT\t{link}\n')   # br / blr x18 through a function pointer: 1 = blr
 with open(P('cuts.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, ob, nb, why, scope in cuts: f.write(f'{off:#x}\t{ob}\t{nb}\t{scope}\t{why}\n')   # 列：偏移 原字节 新字节 作用域 理由 | Columns: offset, original bytes, new bytes, scope, reason
