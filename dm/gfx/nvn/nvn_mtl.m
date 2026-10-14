@@ -2493,6 +2493,36 @@ static struct {
     p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp; int depth_clamp;
     float blend_color[4]; int64_t copy_stride;
 } S;
+// BindProgram 按阶段位挂程序（NVN 语义：只替换 stages 里的阶段，其余阶段保持原绑定；程序里没有该阶段的着色器 = 该阶段解绑）。
+// Unity 每个程序只含一个阶段，顶点 / 像素分两次绑；D2R 一次绑全部阶段，所以以前整个替换也碰巧对。
+// 回放层各处以单个 prog_t 表示当前程序：这里把各阶段的键拼成一个合成 prog_t（按 6 个阶段的键去重、常驻、自有序号），prog_get 照常解析。
+// BindProgram attaches a program per stage bit (NVN semantics: only the stages in stages are replaced, the others keep their binding; a program without a shader for that stage = that stage is unbound).
+// Unity's programs each contain a single stage and vertex / pixel are bound in two calls; D2R binds all stages at once, which is why replacing the whole program used to happen to work.
+// The replay layer represents the current program everywhere as a single prog_t: the per-stage keys are combined here into a composite prog_t (deduplicated by the 6 stage keys, kept alive, with its own serial), and prog_get resolves it as usual.
+static const prog_t *prog_bind(const prog_t *cur, const prog_t *np, int stages) {
+    if (np && !np->nstage) return np;   // 没有键的程序（单测直接往序号表登记 NvProg 的对象）：整体替换，同旧行为 | a program without keys (unit-test objects that register an NvProg straight into the serial table): replaced as a whole, as before
+    uint8_t k[6][8] = {{0}}; uint8_t have[6] = {0};
+    if (cur) for (unsigned i = 0; i < cur->nstage && i < 6; i++) { unsigned st = cur->kstage[i]; if (st < 6 && !(stages & (1 << st))) { memcpy(k[st], cur->key[i], 8); have[st] = 1; } }
+    if (np) for (unsigned i = 0; i < np->nstage && i < 6; i++) { unsigned st = np->kstage[i]; if (st < 6 && (stages & (1 << st))) { memcpy(k[st], np->key[i], 8); have[st] = 1; } }
+    if (np) {   // 合成结果恰好就是 np 自己的键集合（一次绑齐它的全部阶段、别的阶段都空）：直接用 np，与 D2R 的整体绑定同一对象 | the composite is exactly np's own key set (all its stages bound at once, other stages empty): use np itself, the same object as D2R's whole-program bind
+        int same = 1; unsigned cnt = 0; for (unsigned st = 0; st < 6; st++) cnt += have[st];
+        if (cnt != np->nstage) same = 0;
+        for (unsigned i = 0; same && i < np->nstage; i++) { unsigned st = np->kstage[i]; if (st >= 6 || !have[st] || memcmp(k[st], np->key[i], 8)) same = 0; }
+        if (same) return np;
+    }
+    uint8_t hk[6 * 8 + 6]; memcpy(hk, k, 48); memcpy(hk + 48, have, 6);
+    static nvn_hmap cache; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    if (!cache.klen) nvn_hm_init(&cache, sizeof hk);
+    prog_t *c = nvn_hm_get(&cache, hk);
+    if (!c) {
+        static uint64_t nc; c = calloc(1, sizeof *c); c->magic = MAGIC('P', 'R', 'G', 'C'); c->serial = (1ull << 62) | ++nc;   // 合成程序自有序号区（最高位段），不与 nvn_new_serial 的贴图 / 程序序号相撞 | composite programs have their own serial range (top bits), never colliding with the texture / program serials from nvn_new_serial
+        for (unsigned st = 0; st < 6; st++) if (have[st]) { memcpy(c->key[c->nstage], k[st], 8); c->kstage[c->nstage] = (uint8_t)st; c->nstage++; }
+        nvn_hm_put(&cache, hk, c);
+    }
+    pthread_mutex_unlock(&mu);
+    return c->nstage ? c : NULL;
+}
 static void udc_note_draw(NvProg *pr) {
     if (R.has_rt) for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i]) { zskip_del(R.rt.color[i]->serial); g_zskip_cand_ok[i] = 0; }   // 零源集合：真画了就不再是全零 | Zero-source set: once really drawn it is no longer all zeros
     if (pr) for (int st = 0; st < 6; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh) continue; for (int i = 0; i < sh->rf.nb; i++) if (sh->rf.b[i].kind == NVN_RB_IMG) { zskip_clear(); break; } }   // 图像槽可写：保守清空 | Image slots are writable: conservatively clear
@@ -3271,7 +3301,7 @@ static int first_draw_covers(int i, id<MTLTexture> t, NSUInteger level) {
 static int state_op(uint32_t op, const void *a) {
     switch (op) {
         case OP_SCISSOR: R.sc = *(const p_scissor *)a; R.has_sc = 1; break;
-        case OP_BIND_PROGRAM: { const prog_t *np = ((const p_bind_program *)a)->prog; if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } break; }
+        case OP_BIND_PROGRAM: { const p_bind_program *b = a; const prog_t *np = prog_bind(S.prog, b->prog, b->stages); if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } break; }
         case OP_BIND_STATE: {
             const p_bind_state *b = a; void *dst = NULL; size_t n = 0;
             blend_st bs;
@@ -3581,7 +3611,7 @@ static void sdx_walk(const uint8_t *p, int depth) {
             case OP_BIND_TEX: case OP_BIND_IMG: { const p_bind_handles *b = a; int base = h.op == OP_BIND_IMG ? 128 : 0, lim = h.op == OP_BIND_IMG ? 32 : 128;
                 if (b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) g_pp_slot[b->stage][base + b->first + k] = h_ser(b->h[k]);
                 break; }
-            case OP_BIND_PROGRAM: g_pp_prog = ((const p_bind_program *)a)->prog; break;
+            case OP_BIND_PROGRAM: g_pp_prog = prog_bind(g_pp_prog, ((const p_bind_program *)a)->prog, ((const p_bind_program *)a)->stages); break;
             case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: {
                 if (h.op != OP_DISPATCH) seq_push(&g_drx_seq, &g_drx_n, &g_drx_cap, seq);
                 __unsafe_unretained NvProg *pr = g_pp_prog ? prog_get(g_pp_prog) : nil;
@@ -3982,7 +4012,7 @@ static void defer_try(const p_draw *dw, const p_draw_idx *di) {
             case OP_END: { const uint8_t *nx = defer_cont(&ci); if (!nx) { g_defer.reason = 1; goto fail; } p = nx; continue; }
             case OP_CALL: g_defer.reason = 2; goto fail;
             case OP_JUMP: memcpy(&p, a, 8); continue;
-            case OP_BIND_PROGRAM: pg = ((const p_bind_program *)a)->prog; break;
+            case OP_BIND_PROGRAM: pg = prog_bind(pg, ((const p_bind_program *)a)->prog, ((const p_bind_program *)a)->stages); break;
             case OP_BIND_TEX: case OP_BIND_IMG: { const p_bind_handles *b = a; int lim = h.op == OP_BIND_IMG ? 32 : 128;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } break; }
             case OP_BIND_STATE: { const p_bind_state *b = a; if (b->kind == 5) memcpy(&ds, b->bytes, sizeof ds); break; }

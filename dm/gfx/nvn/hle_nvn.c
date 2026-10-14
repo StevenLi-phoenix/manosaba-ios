@@ -468,12 +468,25 @@ static void shdump(const NVNshaderData *sd) {
     snprintf(p, sizeof p, "%s/%s.data", dir, key);
     if ((f = fopen(p, "wb"))) { fwrite((const void *)sd->data, 1, 0x30 + (size_t)len + 0x100, f); fclose(f); }
 }
+// 着色器阶段：图形代码区以 78563412 标记 + 0x30 头开头，其后 SPH 首字类型位 0–4（1 = VTG，2 = 像素）、着色器类型位 10–13（1 = 顶点，5 = 像素）；
+// 无此标记 = 计算（data 直接是指令）。与离线 mano_shmap.py / dmsh_build.py 取样模式同一判法。BindProgram 按阶段位挂程序时要用（见 nvn_mtl.m prog_bind）
+// Shader stage: a graphics code area starts with the 78563412 marker + 0x30 header, then the first SPH word has type bits 0–4 (1 = VTG, 2 = pixel) and shader type bits 10–13 (1 = vertex, 5 = pixel);
+// no marker = compute (data is bare instructions). Same test as offline mano_shmap.py / dmsh_build.py capture mode. Needed when BindProgram attaches a program per stage bit (see nvn_mtl.m prog_bind)
+static uint8_t shader_stage(const NVNshaderData *sd) {
+    const uint8_t *d = (const uint8_t *)sd->data; if (!d) return 0xff;
+    if (*(const uint32_t *)d != 0x12345678u) return 5;
+    uint32_t w0 = *(const uint32_t *)(d + 0x30);
+    if ((w0 & 0x1f) == 1 && ((w0 >> 10) & 0xf) == 1) return 0;
+    if ((w0 & 0x1f) == 2 && ((w0 >> 10) & 0xf) == 5) return 1;
+    static int red; if (!red++) LOG("【红】ProgramSetShaders：SPH 首字 %#x 不是顶点 / 像素（曲面细分 / 几何着色器未支持）", w0);
+    return 0xff;
+}
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *sd) {
     prog_t *o = (prog_t *)p;
     if (n < 0 || n > 6) { LOG("【红】ProgramSetShaders 阶段数 %d", n); return 0; }
     for (int i = 0; i < n; i++) shdump(&sd[i]);
     mtl_prog_release(o); o->nstage = n; o->serial = nvn_new_serial();
-    for (int i = 0; i < n; i++) { uint8_t md[32]; CC_SHA256(sd[i].control, 0x880, md); memcpy(o->key[i], md, 8); }
+    for (int i = 0; i < n; i++) { uint8_t md[32]; CC_SHA256(sd[i].control, 0x880, md); memcpy(o->key[i], md, 8); o->kstage[i] = shader_stage(&sd[i]); }
     OLOG("ProgramSetShaders %p n=%d data0=%#llx", (void *)p, n, n ? (unsigned long long)sd[0].data : 0ull);
     return 1;
 }

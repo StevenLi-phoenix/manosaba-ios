@@ -60,7 +60,7 @@ typedef struct { uint32_t magic; samp_par p; } samp_t;                          
 // 回放层到绘制时再读会读到别的数据（D2R 的控制段一直在着色器包里，所以以前碰巧没事）
 // key[i]: first 8 bytes of the sha256 of stage i's control section, computed at SetShaders -- NVN only requires the control section to be valid during the SetShaders call; Unity frees / reuses that memory right after,
 // so reading it later at draw time in the replay layer reads other data (D2R's control sections stay in its shader package, which is why this used to happen to work)
-typedef struct { uint32_t magic, nstage; uint64_t serial; uint8_t key[6][8]; } prog_t;     FITS(prog_t, NVNprogram);   // 只存回放层要的：阶段数、序号、各阶段控制段键（0x40 字节，NVNprogram 实际大小未核，越小越安全） | Only what the replay layer needs: stage count, serial, each stage's control section key (0x40 bytes; the real NVNprogram size is unverified, so smaller is safer)   // serial：回放层解析结果的表键 | serial: table key for the replay layer's resolved result
+typedef struct { uint32_t magic, nstage; uint64_t serial; uint8_t key[6][8]; uint8_t kstage[6]; } prog_t;     FITS(prog_t, NVNprogram);   // 只存回放层要的：阶段数、序号、各阶段控制段键（0x40 字节，NVNprogram 实际大小未核，越小越安全） | Only what the replay layer needs: stage count, serial, each stage's control section key (0x40 bytes; the real NVNprogram size is unverified, so smaller is safer)   // serial：回放层解析结果的表键 | serial: table key for the replay layer's resolved result
 
 typedef struct { uint32_t magic, fenced; uint64_t fence; } sync_t;                            FITS(sync_t, NVNsync);
 typedef struct { const pool_t *pool; int64_t off; } ev_builder_t;                             FITS(ev_builder_t, NVNeventBuilder);
