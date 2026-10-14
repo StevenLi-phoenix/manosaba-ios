@@ -236,6 +236,31 @@ for ln in open(MAP + '.conflicts.tsv'):
     c = ln.rstrip('\n').split('\t')
     if len(c) > 1 and not ln.startswith('#') and not ln.startswith('dm_') and c[0] in pc_of: pc_of[c[0]] = c[1]
 
+# 取样目录输入（SHCAPTURE=目录，宿主 DM_SHDUMP 写出）：<键>.ctl = 控制段 0x880，<键>.data = 游戏交给 nvnProgramSetShaders 的 data 起的字节。
+# 记录按包内布局合成：0x38 字节空 + 代码区（控制段 +0x704 所记长度；图形 = 0x30 头 + SPH + 指令，计算 = 指令）+ 控制段。
+# 阶段：图形读 SPH 首字（+0x30）——类型位 0–4（1 = VTG，2 = 像素），着色器类型位 10–13（1 = 顶点，5 = 像素）；data 不以代码区标记 78563412 开头的是计算。
+# 取样目录模式下不用 D2R 的映射表：loc / stage_of / pc_of 全由取样目录给出。
+# Capture directory input (SHCAPTURE=dir, written by the host's DM_SHDUMP): <key>.ctl = 0x880-byte control section, <key>.data = bytes from the data address the game passed to nvnProgramSetShaders.
+# Records are synthesized in the package layout: 0x38 empty bytes + code area (length recorded at control +0x704; graphics = 0x30 header + SPH + instructions, compute = instructions) + control section.
+# Stage: graphics read the first SPH word (+0x30) -- type bits 0–4 (1 = VTG, 2 = pixel), shader type bits 10–13 (1 = vertex, 5 = pixel); data not starting with the code area marker 78563412 is compute.
+# In capture mode the D2R mapping table is not used: loc / stage_of / pc_of all come from the capture directory.
+SHCAPTURE = os.environ.get('SHCAPTURE')
+CAP_RECS = {}
+if SHCAPTURE:
+    pc_of, loc, stage_of = {}, {}, {}
+    for fn in sorted(os.listdir(SHCAPTURE)):
+        if not fn.endswith('.ctl'): continue
+        key = fn[:-4]; ctl = open(os.path.join(SHCAPTURE, fn), 'rb').read(); data = open(os.path.join(SHCAPTURE, key + '.data'), 'rb').read()
+        if len(ctl) != 0x880 or ctl[:4] != bytes.fromhex('34127698') or hashlib.sha256(ctl).hexdigest()[:16] != key: sys.exit(f'【红】取样 {key}：控制段不对（长 {len(ctl):#x}）')
+        total = struct.unpack_from('<I', ctl, 0x704)[0]
+        if data[:4] == bytes.fromhex('78563412'):
+            w0 = struct.unpack_from('<I', data, 0x30)[0]; st = {(1, 1): 'vs', (2, 5): 'ps'}.get((w0 & 0x1f, (w0 >> 10) & 0xf))
+            if not st: sys.exit(f'【红】取样 {key}：SPH 首字 {w0:#x} 既不是顶点也不是像素（曲面细分 / 几何着色器未支持）')
+        else: st = 'cs'
+        if len(data) < total: sys.exit(f'【红】取样 {key}：data 只有 {len(data):#x} 字节，代码区要 {total:#x}')
+        CAP_RECS[key] = bytes(0x38) + data[:total] + ctl
+        loc[key] = ('capture', key); stage_of[key] = st; pc_of[key] = None
+
 def main_rec(mi, o):
     """内嵌着色器 → 与包内记录同布局的字节：包内记录 +0x38 起是代码区（0x30 头 + SPH + 指令，标记 78563412），紧接控制段（34127698）；
     内嵌的代码区紧贴在控制段之前（核对 5 个：代码区长 0x100–0x300、c1 均为空，与同名包内记录布局一致）
@@ -246,7 +271,7 @@ def main_rec(mi, o):
     return bytes(0x38) + mi[g:o + 0x880]
 
 def job_for(key, name, rec, w):
-    ci = rec.find(bytes.fromhex('34127698')); code = rec[0x38:ci]; stage = stage_of.get(key, name[:2])
+    ci = len(rec) - 0x880 if name == 'capture' else rec.find(bytes.fromhex('34127698')); code = rec[0x38:ci]; stage = stage_of.get(key, name[:2])
     c1o, c1t = struct.unpack_from('<2I', rec, ci + 0x700)   # 控制段 +0x700：c1 相对指令区起点、+0x704：指令区总长（c1 = 两者之间；全库长度 0 / 256 / 512 / 768） | control segment +0x700: c1 relative to the start of the instruction area, +0x704: total length of the instruction area (c1 = what lies between the two; lengths across the whole library are 0 / 256 / 512 / 768)
     c1 = rec[0x38 + c1o:0x38 + c1t]
     if stage != 'cs': code = code[0x30:]
@@ -431,6 +456,7 @@ for key in keys:
             packs['main'] = nsoimg.load(MAIN)
         rec = main_rec(packs['main'], k)
         if hashlib.sha256(rec[rec.find(bytes.fromhex('34127698')):][:0x880]).hexdigest()[:16] != key: sys.exit(f'【红】{name} 控制段哈希与映射表键 {key} 不符（MAIN={MAIN}）')
+    elif name == 'capture': rec = CAP_RECS[key]
     else:
         if name not in packs: packs[name] = records(open(os.path.join(dm_dir, name), 'rb').read())
         rec = packs[name][k]

@@ -438,10 +438,29 @@ NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
     (void)d; memset(p, 0, sizeof(prog_t)); ((prog_t *)p)->magic = MAGIC('P', 'R', 'O', 'G'); return 1;
 }
 NVN(nvnProgramFinalize, void, NVNprogram *p) { mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; }
+// DM_SHDUMP=目录（离线翻译取样用）：每个新着色器写 <键>.ctl（控制段 0x880 字节）与 <键>.data（data 起 0x30 + 控制段 +0x704 所记长度 + 0x100 字节）。
+// 键 = 控制段 sha256 前 16 个十六进制字（与回放层查库同键）。
+// DM_SHDUMP=directory (sampling for offline translation): for each new shader write <key>.ctl (the 0x880-byte control section) and <key>.data (from data: 0x30 + the length recorded at control +0x704 + 0x100 bytes).
+// Key = first 16 hex digits of the control section's sha256 (the same key the replay layer looks libraries up by).
+#include <CommonCrypto/CommonDigest.h>
+#include <sys/stat.h>
+static void shdump(const NVNshaderData *sd) {
+    static const char *dir; static int init; if (!init) { dir = getenv("DM_SHDUMP"); init = 1; if (dir) mkdir(dir, 0755); }
+    if (!dir || !sd->control) return;
+    uint8_t md[32]; CC_SHA256(sd->control, 0x880, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
+    char p[1200]; snprintf(p, sizeof p, "%s/%s.ctl", dir, key);
+    if (!access(p, F_OK)) return;
+    uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
+    FILE *f = fopen(p, "wb"); if (!f) return; fwrite(sd->control, 1, 0x880, f); fclose(f);
+    snprintf(p, sizeof p, "%s/%s.data", dir, key);
+    if ((f = fopen(p, "wb"))) { fwrite((const void *)sd->data, 1, 0x30 + (size_t)len + 0x100, f); fclose(f); }
+}
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *sd) {
     prog_t *o = (prog_t *)p;
     if (n < 0 || n > 6) { LOG("【红】ProgramSetShaders 阶段数 %d", n); return 0; }
+    for (int i = 0; i < n; i++) shdump(&sd[i]);
     mtl_prog_release(o); o->nstage = n; memcpy(o->sd, sd, n * sizeof *sd); o->serial = nvn_new_serial();
+    for (int i = 0; i < n; i++) { uint8_t md[32]; CC_SHA256(sd[i].control, 0x880, md); memcpy(o->key[i], md, 8); }
     OLOG("ProgramSetShaders %p n=%d data0=%#llx", (void *)p, n, n ? (unsigned long long)sd[0].data : 0ull);
     return 1;
 }
