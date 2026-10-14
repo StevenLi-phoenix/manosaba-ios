@@ -278,7 +278,12 @@ def job_for(key, name, rec, w):
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(),
          'debug': os.environ.get('XLATE_DEBUG', '1') != '0', 'reduced': os.environ.get('XLATE_REDUCED', '1') == '1'}   # 翻译选项（见 dmsh_xlate/Program.cs）；放宽精度缺省开（GPU 浮点末位误差不进游戏状态，mini 整帧 −26%）   # c1：翻译器读间接跳转表用 | translation options (see dmsh_xlate/Program.cs); relaxed precision is on by default (GPU float last-bit error does not enter game state, whole frame −26% on the second Mac)   # c1: used by the translator to read indirect jump tables
+    # 计算线程组大小：控制段 +0x748 / +0x74c / +0x750（u32 x / y / z；manosaba 67 个 ComputeShader 内核与 Unity 元数据 threadGroupSize 全等，内嵌 3D 降采样核 4×4×4 与机器码一致）
+    # Compute thread group size: control segment +0x748 / +0x74c / +0x750 (u32 x / y / z; all 67 manosaba ComputeShader kernels equal Unity's threadGroupSize metadata, the embedded 3D downsample kernel's 4×4×4 matches its machine code)
+    local = list(struct.unpack_from('<3I', rec, ci + 0x748)) if stage == 'cs' else None
+    if local is not None: j['local'] = local
     if key not in FACTS: j['pc_missing'] = True; return j, c1   # 作答表里没有：查询按缺省（汇总里单列） | not in the answer table: queries use defaults (listed separately in the summary)
+    if local is not None and FACTS[key].get('local', local) != local: sys.exit(f'【红】{key}：作答表线程组 {FACTS[key]["local"]} 与控制段 {local} 不符')
     j.update(FACTS[key])
     return j, c1
 
@@ -342,6 +347,29 @@ def decode_tex(name):
     t = next((slot(x, TEX_BASE, tb) for x in words if slot(x, TEX_BASE, tb) is not None and x * 4 < SAMP_BASE), None)
     s = next((slot(x, SAMP_BASE, sb) for x in words if x * 4 >= SAMP_BASE and slot(x, SAMP_BASE, sb) is not None), None)
     return t, s, ty
+
+def img_size_queries(src):
+    """图像句柄上的尺寸查询：TXQ 立即句柄落在 c[2] 图像表（IMG_BASE..TEX_BASE），Ryujinx 为它另建一个贴图参数 <段>_t_tcb_<句柄>（加采样器 …Smplr），
+    宿主没有「把图像当贴图」的绑定。查的是同一描述符，本着色器又以同句柄访问图像（<段>_i_cb2_<句柄>_…）时，把查询改到该图像参数上、删掉多出的贴图 / 采样器成员。
+    只改只用于 get_width / get_height / get_depth / get_num_mip_levels 的贴图参数；返回 (新 MSL, 改了的成员名列表)
+    Size queries on an image handle: a TXQ immediate handle falling in c[2]'s image table (IMG_BASE..TEX_BASE) gets its own texture argument <seg>_t_tcb_<handle> (plus a ...Smplr sampler) from Ryujinx,
+    and the host has no "image as texture" binding. They query the same descriptor, so when this shader also accesses the image through the same handle (<seg>_i_cb2_<handle>_...), point the queries at that image argument and drop the extra texture / sampler members.
+    Only texture arguments used solely for get_width / get_height / get_depth / get_num_mip_levels are changed; returns (new MSL, list of changed member names)"""
+    body = re.search(r'struct spvDescriptorSetBuffer0\s*\{(.*?)\};', src, re.S)
+    if not body: return src, []
+    members = re.findall(r'^\s*.+?\s+(\w+)\s*\[\[id\(\d+\)\]\];', body.group(1), re.M)
+    done = []
+    for nm in members:
+        m = re.fullmatch(r'([a-z]+)_t_tcb_([0-9A-F]+)', nm)
+        if not m or not (IMG_BASE <= int(m.group(2), 16) * 4 < TEX_BASE): continue
+        img = [x for x in members if re.fullmatch(r'%s_i_cb2_%s_\w*' % (m.group(1), m.group(2)), x)]
+        uses = re.findall(r'spvDescriptorSet0\.%s\b(\.\w+\()?' % nm, src)
+        if len(img) != 1 or not uses or any(u not in ('.get_width(', '.get_height(', '.get_depth(', '.get_num_mip_levels(') for u in uses): continue
+        if re.search(r'spvDescriptorSet0\.%sSmplr\b' % nm, src): continue
+        src = re.sub(r'spvDescriptorSet0\.%s\.' % nm, 'spvDescriptorSet0.%s.' % img[0], src)
+        src = re.sub(r'^\s*.+?\s+%s(Smplr)?\s*\[\[id\(\d+\)\]\];\n' % nm, '', src, flags=re.M)
+        done.append(nm)
+    return src, done
 
 def reflect(key, stage, msl, res):
     """MSL 参数缓冲结构体成员 → 回放反射：kind（同 nvn_refl.h）+ NVN 槽号 + 参数缓冲成员号 | MSL argument buffer struct member → replay reflection: kind (same as nvn_refl.h) + NVN slot number + argument buffer member index"""
@@ -419,7 +447,8 @@ def finish(key, w, j, c1):
     msl = os.path.join(w, key + '.metal'); air = msl[:-6] + '.air'; lib = os.path.join(out, key + '_b.metallib')
     r = subprocess.run(['spirv-cross', *XC, os.path.join(w, key + '.spv'), '--output', msl], capture_output=True, text=True)
     if r.returncode: return 'MSL 失败', r.stderr.strip()[:160], None
-    src = open(msl).read()
+    src, iq = img_size_queries(open(msl).read())
+    if iq: open(msl, 'w').write(src); res['notes'].append('图像尺寸查询改到图像参数：' + ' '.join(iq))
     try:
         subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', msl, '-o', air], check=True)
         tmp_lib = lib + '.tmp-' + str(os.getpid())

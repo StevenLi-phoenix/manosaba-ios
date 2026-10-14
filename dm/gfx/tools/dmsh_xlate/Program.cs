@@ -29,12 +29,16 @@ using System.Text.Json.Nodes;
 static class SwshXlate
 {
     const int TexBase = 0x168, SampBase = 0x568;   // NVN 分离贴图 / 采样器句柄在 c[2] 的字节基址（每槽 8 字节；dm/gfx/tools/maxwell_refs.py 全量实测） | byte base of NVN separate texture / sampler handles in c[2] (8 bytes per slot; full measurement in dm/gfx/tools/maxwell_refs.py)
+    const int ImgBase = 0x120;   // NVN 图像句柄在 c[2] 的字节基址（8 槽 × 8 字节，紧接贴图表之前；同 dmsh_build.py IMG_BASE） | byte base of NVN image handles in c[2] (8 slots × 8 bytes, right before the texture table; same as dmsh_build.py IMG_BASE)
 
     sealed class Accessor : IGpuAccessor
     {
         readonly byte[] _code; readonly JsonObject _job; int _binding = 1; public readonly List<string> Notes = new();
         readonly byte[] _c1;
-        public Accessor(byte[] code, JsonObject job) { _code = code; _job = job; _c1 = job["c1"] is JsonNode h ? Convert.FromHexString((string)h) : Array.Empty<byte>(); }
+        // 图像句柄上的尺寸查询（TXQ 立即句柄落在 c[2] 图像表）：指令本身不带维度。作答来源依次为作业 img 表、上一趟翻译里同句柄图像的类型（SUST / SULD 指令带维度）
+        // Size queries on an image handle (TXQ immediate handle falling in c[2]'s image table): the instruction carries no dimension. Answered from the job's img table, then from the type of the image with the same handle in the previous translation pass (SUST / SULD carry the dimension)
+        readonly Dictionary<int, SamplerType> _imgByWord; public bool ImgQueryDefaulted;
+        public Accessor(byte[] code, JsonObject job, Dictionary<int, SamplerType> imgByWord = null) { _code = code; _job = job; _imgByWord = imgByWord; _c1 = job["c1"] is JsonNode h ? Convert.FromHexString((string)h) : Array.Empty<byte>(); }
         // c1 常数段（着色器包控制段前 0x100 字节）：间接跳转 BRX 的跳转表在这里（LDC c[1]）；不提供时翻译器解不出跳转目标、控制流出错（粒子着色器死循环）
         // c1 constant segment (the 0x100 bytes before the control segment in the shader package): the jump table of indirect jump BRX lives here (LDC c[1]); without it the translator cannot resolve jump targets and control flow goes wrong (particle shaders loop forever)
         public uint ConstantBuffer1Read(int offset) { if (offset >= 0 && offset + 4 <= _c1.Length) return BitConverter.ToUInt32(_c1, offset); Notes.Add($"c1 读越界 +{offset:X}（c1 长 {_c1.Length}）"); return 0; }
@@ -56,11 +60,29 @@ static class SwshXlate
             int bytes = off0 * 4;
             return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= TexBase && bytes < SampBase && (bytes - TexBase) % 8 == 0 ? (bytes - TexBase) / 8 : -1;
         }
+        int ImgSlot(int handle, int cbufSlot)
+        {
+            (int off0, _, _) = TextureHandle.UnpackOffsets(handle);
+            int bytes = off0 * 4;
+            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= ImgBase && bytes < TexBase && (bytes - ImgBase) % 8 == 0 ? (bytes - ImgBase) / 8 : -1;
+        }
         public SamplerType QuerySamplerType(int handle, int cbufSlot = -1)
         {
+            int islot = ImgSlot(handle, cbufSlot);
+            if (islot >= 0 && Get("img", islot) == null)
+            {
+                (int w, _, _) = TextureHandle.UnpackOffsets(handle);
+                if (_imgByWord != null && _imgByWord.TryGetValue(w, out SamplerType it)) { Notes.Add($"贴图句柄 {handle:X} = 图像槽 {islot}，类型取同句柄图像 {it}"); return it; }
+                ImgQueryDefaulted = true; Notes.Add($"贴图句柄 {handle:X} = 图像槽 {islot}，无类型，按 2D"); return SamplerType.Texture2D;
+            }
+            if (islot >= 0) return Parse(Get("img", islot));
             int slot = TexSlot(handle, cbufSlot);
             string t = slot >= 0 ? Get("tex", slot) ?? Get("img", slot) : null;
             if (t == null) { Notes.Add($"贴图句柄 {handle:X}（常量段 {cbufSlot}，槽 {slot}）无 PC 类型，按 2D"); return SamplerType.Texture2D; }
+            return Parse(t);
+        }
+        static SamplerType Parse(string t)
+        {
             return t switch
             {
                 "1d" => SamplerType.Texture1D, "1darray" => SamplerType.Texture1D | SamplerType.Array,
@@ -121,6 +143,18 @@ static class SwshXlate
                 var flags = (job["debug"] is JsonNode dbg && !(bool)dbg ? 0 : TranslationFlags.DebugMode) | ((string)job["stage"] == "cs" ? TranslationFlags.Compute : 0);
                 var ctx = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags));
                 ShaderProgram p = ctx.Translate();
+                // 第二趟：图像句柄上的尺寸查询按缺省作答过，而本着色器以同句柄访问过图像（c[2] 字偏移相同）→ 用该图像的类型重翻
+                // Second pass: a size query on an image handle was answered with the default, and this shader accessed an image through the same handle (same c[2] word offset) → retranslate with that image's type
+                if (acc.ImgQueryDefaulted)
+                {
+                    var byWord = new Dictionary<int, SamplerType>();
+                    foreach (var t in p.Info.Images) if (t.CbufSlot == 2) byWord[t.HandleIndex] = t.Type & (SamplerType.Mask | SamplerType.Array | SamplerType.Multisample);
+                    if (byWord.Count != 0)
+                    {
+                        acc = new Accessor(code, job, byWord);
+                        p = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags)).Translate();
+                    }
+                }
                 File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), p.BinaryCode);
                 var res = new JsonObject
                 {
