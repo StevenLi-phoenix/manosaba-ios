@@ -1030,6 +1030,7 @@ NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
     win_t *o = (win_t *)w; int v[4] = {x, y, ww, hh};
     if (memcmp(o->crop, v, sizeof v)) LOG("[nvn] WindowCrop %d,%d %dx%d", x, y, ww, hh);
     memcpy(o->crop, v, sizeof v);
+    dm_touch_screen(ww, hh);
 }
 static void trow(uint64_t f, const char *name, double v);
 static void set_time_constraint(uint64_t period_ns);

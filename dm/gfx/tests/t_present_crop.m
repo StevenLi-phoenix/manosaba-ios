@@ -3,6 +3,7 @@
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/hle_nvn.c"
 uint64_t g_t0_ns;   // 宿主 main.c 的进程起点（hle_nvn 逐帧 @t_s 用），单测替身 | process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
+void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // 宿主 hle_touch.c 的触点坐标空间（hle_nvn WindowSetCrop 调），单测替身 | touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;

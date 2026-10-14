@@ -146,6 +146,15 @@ CUTS = {'db0507f36b84200ac05f75d76ed5026f': [
     (0x5d8040, 'a005fe97', '411100d4', '玩家进局取出生点调用点 bl 0x5596c0 → svc #0x8a：宿主原样代调，进局在城镇时出生点换成小站旁（hle.h SVC_HOST_JOIN_SPAWN）', '仅宿主'),
     (0x5d8400, 'b004fe97', '611100d4', '进局给尸体取落点调用点 bl 0x5596c0 → svc #0x8b：同上，尸体与人取同一个点（hle.h SVC_HOST_JOIN_CORPSE）', '仅宿主'),
     (0x11f0914, '77100094', '811000d4', '段读取 0x11f07d0 逐块解码 bl 0x11f4af0(ctx, 块, 长度) → svc #0x84：同上（hle.h SVC_HOST_GRANNY_B）', '仅宿主'),
+],
+# manosaba 2.0.4b main（Unity 6000.0.72f1）：Unity 把 Switch 播放器设置编成 main 开头的一排常数函数（0x10 起，每个 mov w0, #常数; ret）。
+# 输入初始化 0x9d6240 按 [设置 +0x468]（1 / 2 = Input System）建 Input System 后端 0x9d5920(对象, 0x50() 手柄样式, 0x60() 手柄数, 0x20() 触屏, 0x70())，
+# 第 4 参为 1 时（0x9d5a2c）才建触屏设备对象 0x9d5d40（其虚表 0x486abf8 里 0x9d6070 每帧读 nn::hid::GetTouchScreenStates<16>）。0x20 原样返回 0：原版不用触屏
+# manosaba 2.0.4b main (Unity 6000.0.72f1): Unity compiles the Switch player settings into a row of constant functions at the start of main (from 0x10, each mov w0, #constant; ret).
+# Input init 0x9d6240, by [settings +0x468] (1 / 2 = Input System), builds the Input System backend 0x9d5920(object, 0x50() controller styles, 0x60() controller count, 0x20() touchscreen, 0x70()),
+# and only when the 4th argument is 1 (0x9d5a2c) does it build the touchscreen device object 0x9d5d40 (0x9d6070 in its vtable 0x486abf8 reads nn::hid::GetTouchScreenStates<16> every frame). 0x20 returns 0 as shipped: the original game does not use the touchscreen
+'d81467ff90dcee10ab82759d16731cc1': [
+    (0x20, 'e0031f2a', '20008052', '播放器设置「触屏」0x20：mov w0, wzr → mov w0, #1，Input System 后端建触屏设备（iPhone 用原生触控点游戏界面）', '仅宿主'),
 ]}
 # ---- 已登记观测门：{NSO 构建号: [(偏移, 编号, 原指令字, 理由)]}。编号与宿主 hle.h 的 OBS_* 一致；
 # 原指令须与位置无关（不得 PC 相对 / 分支 / 涉 x18·tpidr），离线断言；宿主未挂回调时门块进出一次即返回 ----

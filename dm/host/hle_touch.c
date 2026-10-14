@@ -17,6 +17,7 @@
 #include "dm.h"
 #include "front.h"
 #include <pthread.h>
+#include <stdatomic.h>
 enum { F_EMPTY, F_DOWN, F_LIFTED };
 static struct { int st, reported, again; float x, y, ax, ay; } g_f[16];   // again/ax/ay：End 还没报出去时同 id 又按下（下次读先报 End 再报新 Start） | again/ax/ay: the same id was pressed again before End went out (the next read reports End first, then the new Start)
 static pthread_mutex_t g_tl = PTHREAD_MUTEX_INITIALIZER;
@@ -40,6 +41,19 @@ void dm_touch_set(const dm_touch *t, int n) {
     pthread_mutex_unlock(&g_tl);
 }
 
+// 触点坐标空间（宽 × 高）：D2R 按面板坐标 1280x720 读（见文件头）；其它游戏（Unity：main+0x9d2c9c 一带 x 原样、y = 屏高 − y，
+// 即把触点当屏幕像素，真机只有掌机 1280x720 时屏幕与面板一致）跟游戏画面尺寸走（nvnWindowSetCrop → dm_touch_screen）。DM_TOUCH_SPACE=宽x高 强制
+// Touch coordinate space (width × height): D2R reads panel coordinates 1280x720 (see the file header); other games (Unity: around main+0x9d2c9c x as is, y = screen height − y,
+// i.e. touch points are screen pixels; on the real device the screen equals the panel only in handheld 1280x720) follow the game picture size (nvnWindowSetCrop → dm_touch_screen). DM_TOUCH_SPACE=WxH forces it
+static _Atomic int g_sw, g_sh;
+void dm_touch_screen(int w, int h) { if (w > 0 && h > 0) { g_sw = w; g_sh = h; } }
+static void touch_space(int *w, int *h) {
+    static int fw = -1, fh;
+    if (fw < 0) { const char *e = getenv("DM_TOUCH_SPACE"); if (!e || sscanf(e, "%dx%d", &fw, &fh) != 2 || fw <= 0 || fh <= 0) fw = 0; }
+    if (fw) { *w = fw; *h = fh; return; }
+    if (!dm_is_d2r() && g_sw) { *w = g_sw; *h = g_sh; return; }
+    *w = 1280; *h = 720;
+}
 static int32_t clampi(float v, int hi) { int32_t r = (int32_t)(v * (float)(hi + 1)); return r < 0 ? 0 : r > hi ? hi : r; }
 // 填一份 TouchScreenState<16>（out 按 0x290 字节）；now_ns 用于 delta_time。返回写入的触点数
 // Fill one TouchScreenState<16> (out is 0x290 bytes); now_ns is used for delta_time. Returns the number of touch points written
@@ -47,6 +61,7 @@ int touch_fill(void *out, uint64_t now_ns) {
     uint8_t *o = out; memset(o, 0, 0x290);
     pthread_mutex_lock(&g_tl);
     int64_t samp = ++g_tsamp; int64_t dt = g_tlast_ns ? (int64_t)(now_ns - g_tlast_ns) : 0; g_tlast_ns = now_ns;
+    int tw, th; touch_space(&tw, &th);
     int k = 0;
     for (int id = 0; id < 16; id++) {
         if (g_f[id].st == F_EMPTY) continue;
@@ -54,7 +69,7 @@ int touch_fill(void *out, uint64_t now_ns) {
         if (!g_f[id].reported) { attr |= 1; g_f[id].reported = 1; }          // Start（本次第一次报） | Start (reported for the first time this time)
         else if (g_f[id].st == F_LIFTED) attr |= 2;                         // End（已报过 Start、已抬起） | End (Start already reported, already lifted)
         uint8_t *s = o + 0x10 + 0x28 * k++;
-        int32_t x = clampi(g_f[id].x, 1279), y = clampi(g_f[id].y, 719), d = 30, zero = 0, fid = id;
+        int32_t x = clampi(g_f[id].x, tw - 1), y = clampi(g_f[id].y, th - 1), d = 30, zero = 0, fid = id;
         memcpy(s + 0x00, &dt, 8); memcpy(s + 0x08, &attr, 4); memcpy(s + 0x0c, &fid, 4);
         memcpy(s + 0x10, &x, 4); memcpy(s + 0x14, &y, 4); memcpy(s + 0x18, &d, 4); memcpy(s + 0x1c, &d, 4); memcpy(s + 0x20, &zero, 4);
         if (attr & 2) {                                                      // End 报过：释放；若期间同 id 又按下，转成新的按下 | End has been reported: release; if the same id was pressed again in the meantime, turn it into a new press
