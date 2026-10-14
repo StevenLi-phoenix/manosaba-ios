@@ -1,14 +1,16 @@
     .arch_extension lse
 // 未实现 NVN 函数的公共入口：跳板进来时 x16 = 本函数的槽地址（nvn_slot[i]）。
-// 调 nvn_unimpl_c(slot, x0, x1, x2) 报红记名，返回 0。
+// 调 nvn_unimpl_c(slot, x0, x1, x2, lr, x8) 报红记名（附调用点与间接返回指针 x8），返回 0。
 // Common entry for unimplemented NVN functions: when the thunk comes in, x16 = this function's slot address (nvn_slot[i]).
-// Calls nvn_unimpl_c(slot, x0, x1, x2) to report a failure and log the name, returns 0.
+// Calls nvn_unimpl_c(slot, x0, x1, x2, lr, x8) to report a failure and log the name (with the call site and the indirect result pointer x8), returns 0.
     .text
     .globl _nvn_unimpl_entry
     .p2align 2
 _nvn_unimpl_entry:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
+    mov x5, x8
+    mov x4, x30
     mov x3, x2
     mov x2, x1
     mov x1, x0

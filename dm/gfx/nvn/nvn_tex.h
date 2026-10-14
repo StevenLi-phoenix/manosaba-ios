@@ -7,6 +7,8 @@ typedef struct {
     int target, format, flags, samples;   // NVNtextureTarget / NVNformat / NVNtextureFlags / 采样数（0 或 1 = 单采样） | NVNtextureTarget / NVNformat / NVNtextureFlags / sample count (0 or 1 = single-sampled)
     uint32_t width, height, depth, levels, stride;
     int pkg_block_h;                      // 预排布贴图布局参数第 0 字节（块高 log2）+ 1；0 = 按自动算法 | Byte 0 of the packaged texture layout parameters (log2 of block height) + 1; 0 = use the automatic algorithm
+    uint8_t swz_set, swz[4];              // 贴图 swizzle（NVNtextureSwizzle，数值与 MTLTextureSwizzle 相同）；swz_set = 0 视为恒等 | Texture swizzle (NVNtextureSwizzle, same numeric values as MTLTextureSwizzle); swz_set = 0 means identity
+    uint8_t ds_mode;                      // 深度模板贴图的采样内容：0 深度 1 模板（NVNtextureDepthStencilMode） | What a depth-stencil texture samples: 0 depth, 1 stencil (NVNtextureDepthStencilMode)
 } nvn_texdesc;
 
 typedef struct {

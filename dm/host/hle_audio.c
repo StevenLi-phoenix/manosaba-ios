@@ -205,6 +205,12 @@ HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKN
     if (real_audio()) au_open(a);   // 开不了就 a->au 为空，开始播放时走静音接收端 | if it cannot be opened, a->au is null, and playback goes to the silent sink when it starts
     return RES_OK;
 }
+// 默认输出设备版本（Unity）：同 OpenAudioOut 不指定设备名；无事件的重载由游戏轮询 GetReleasedAudioOutBuffer
+// Default output device variants (Unity): same as OpenAudioOut with no device name; the overload without an event has the game poll GetReleasedAudioOutBuffer
+HLE_FORCE_OPT("_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventERKNS0_17AudioOutParameterE", "连 audout 服务（默认设备）；宿主 AudioUnit / 静音接收端",
+              Result, h_au_OpenDef, void *g, void *ev, const uint8_t *param) { return h_au_Open(g, ev, NULL, param); }
+HLE_FORCE_OPT("_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutERKNS0_17AudioOutParameterE", "连 audout 服务（默认设备、无释放事件）；宿主 AudioUnit / 静音接收端",
+              Result, h_au_OpenDefNoEv, void *g, const uint8_t *param) { return h_au_Open(g, NULL, NULL, param); }
 HLE_FORCE("_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE", "开始播放", Result, h_au_Start, void *g) {
     aout *a = ao(g);
     pthread_mutex_lock(&a->m); int was = atomic_load_explicit(&a->state, memory_order_relaxed); atomic_store_explicit(&a->state, STATE_STARTED, memory_order_release); pthread_mutex_unlock(&a->m);

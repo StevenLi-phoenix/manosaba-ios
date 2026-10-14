@@ -26,7 +26,9 @@ uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
 // Per module, one cache of symbol number → resolved address
 static uint64_t g_cache[MAX_MOD][8192];
 
-uint64_t resolve_import(module_t *m, const char *name) {
+// weak：未定义弱符号（STB_WEAK）。真机 rtld 找不到定义时填 0，调用方据此跳过（如 thread_local 的初始化函数 _ZTH*）；宿主同样填 0，不分桩。
+// weak: undefined weak symbol (STB_WEAK). The real rtld fills in 0 when no definition is found, and callers skip on that (e.g. the thread_local init function _ZTH*); the host fills in 0 too and allocates no stub.
+uint64_t resolve_import(module_t *m, const char *name, int weak) {
     static const hle_ent *sec; static unsigned long secsz;
     if (!sec) sec = (const hle_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swhle", &secsz);
     for (unsigned i = 0; i < secsz / sizeof(hle_ent); i++)
@@ -34,6 +36,7 @@ uint64_t resolve_import(module_t *m, const char *name) {
             if (g_flag.imports) { Dl_info di; dladdr(sec[i].fn, &di); LOG("import %s -> %s", name, di.dli_sname); }
             void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("HLE", name, sec[i].fn);   // DM_HLECOUNT 时为计数桩（含 libc 直通表） | With DM_HLECOUNT it is a counting stub (including the libc passthrough table)
         }
+    if (weak) { if (g_flag.imports) LOG("import %s：未定义弱符号，填 0", name); return 0; }
     // 已为同名分过桩就复用
     // Reuse the stub if one was already allocated for the same name
     void *hlecount_wrap(const char *, const char *, void *);

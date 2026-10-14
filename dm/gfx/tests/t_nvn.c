@@ -79,6 +79,44 @@ int main(void) {
     P(nvnMemoryPoolBuilderSetStorage)(&pb, poolmem, sizeof poolmem); P(nvnMemoryPoolBuilderSetFlags)(&pb, 0x24);
     EXPECT("MemoryPoolInitialize 成功", 1, P(nvnMemoryPoolInitialize)(&pool, &pb));
     EXPECT("池 GPU 地址 = 存储地址", (long long)(uintptr_t)poolmem, P(nvnMemoryPoolGetBufferAddress)(&pool));
+    EXPECT("池映射 = 存储地址", (long long)(uintptr_t)poolmem, (uintptr_t)P(nvnMemoryPoolMap)(&pool));
+    EXPECT("池标志原样读回", 0x24, P(nvnMemoryPoolGetFlags)(&pool));
+    EXPECT("池大小原样读回", (long long)sizeof poolmem, P(nvnMemoryPoolGetSize)(&pool));
+
+    // 3b. 缓冲：地址 / 映射 = 池存储 + 偏移；越出池的缓冲初始化失败（Unity 先 SetDevice 再 SetDefaults，设备须保留）
+    // 3b. Buffers: address / mapping = pool storage + offset; a buffer past the end of the pool fails to initialize (Unity calls SetDevice before SetDefaults, so the device must be kept)
+    {
+        NVNbufferBuilder bb; NVNbuffer buf;
+        P(nvnBufferBuilderSetDevice)(&bb, &dev); P(nvnBufferBuilderSetDefaults)(&bb);
+        EXPECT("BufferBuilderSetDefaults 保留设备", (long long)(uintptr_t)&dev, (uintptr_t)((buf_builder_t *)&bb)->dev);
+        P(nvnBufferBuilderSetStorage)(&bb, &pool, 0x200, 0x400);
+        EXPECT("BufferInitialize 成功", 1, P(nvnBufferInitialize)(&buf, &bb));
+        EXPECT("缓冲地址 = 池 + 偏移", (long long)(uintptr_t)(poolmem + 0x200), P(nvnBufferGetAddress)(&buf));
+        EXPECT("缓冲映射 = 池 + 偏移", (long long)(uintptr_t)(poolmem + 0x200), (uintptr_t)P(nvnBufferMap)(&buf));
+        EXPECT("缓冲大小", 0x400, P(nvnBufferGetSize)(&buf));
+        EXPECT("缓冲所在池", (long long)(uintptr_t)&pool, (uintptr_t)P(nvnBufferGetMemoryPool)(&buf));
+        P(nvnBufferBuilderSetStorage)(&bb, &pool, sizeof poolmem - 0x100, 0x200);
+        EXPECT("越出池的缓冲初始化失败", 0, P(nvnBufferInitialize)(&buf, &bb));
+    }
+
+    // 3c. 贴图描述：SetSize2D / Swizzle / 深度模板模式读回；恒等 swizzle 不置 swz_set（回放层不建 swizzle 视图）
+    // 3c. Texture description: SetSize2D / Swizzle / depth-stencil mode read back; an identity swizzle does not set swz_set (the replay layer builds no swizzle view)
+    {
+        NVNtextureBuilder tb2; P(nvnTextureBuilderSetDevice)(&tb2, &dev); P(nvnTextureBuilderSetDefaults)(&tb2);
+        P(nvnTextureBuilderSetSize2D)(&tb2, 1920, 1080);
+        EXPECT("SetSize2D 宽", 1920, P(nvnTextureBuilderGetWidth)(&tb2));
+        EXPECT("SetSize2D 高", 1080, P(nvnTextureBuilderGetHeight)(&tb2));
+        EXPECT("SetSize2D 深 = 1", 1, P(nvnTextureBuilderGetDepth)(&tb2));
+        P(nvnTextureBuilderSetSwizzle)(&tb2, NVN_TEXTURE_SWIZZLE_R, NVN_TEXTURE_SWIZZLE_G, NVN_TEXTURE_SWIZZLE_B, NVN_TEXTURE_SWIZZLE_A);
+        EXPECT("恒等 swizzle 不置位", 0, ((tex_builder_t *)&tb2)->d.swz_set);
+        P(nvnTextureBuilderSetSwizzle)(&tb2, NVN_TEXTURE_SWIZZLE_ONE, NVN_TEXTURE_SWIZZLE_ONE, NVN_TEXTURE_SWIZZLE_ONE, NVN_TEXTURE_SWIZZLE_R);
+        NVNtextureSwizzle s0, s1, s2, s3; P(nvnTextureBuilderGetSwizzle)(&tb2, &s0, &s1, &s2, &s3);
+        EXPECT("swizzle 读回 a = R", NVN_TEXTURE_SWIZZLE_R, s3);
+        EXPECT("swizzle 读回 r = ONE", NVN_TEXTURE_SWIZZLE_ONE, s0);
+        EXPECT("非恒等 swizzle 置位", 1, ((tex_builder_t *)&tb2)->d.swz_set);
+        P(nvnTextureBuilderSetDepthStencilMode)(&tb2, NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL);
+        EXPECT("深度模板模式读回", NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL, P(nvnTextureBuilderGetDepthStencilMode)(&tb2));
+    }
 
     // 4. 贴图存储尺寸（块线性：GOB = 64 B × 8 行；块高按「高×1.5」取 GOB 数 ≥16→16、≥8→8 …）
     //    256×256 RGBA8：每行 1024 B = 16 GOB；高 256 行 = 32 GOB 行，块高 16 GOB → 2 块；16×2×(512×16) = 262144
@@ -361,8 +399,11 @@ int main(void) {
 
     // 7. 未实现函数：返回 0、报红、只报一次
     // 7. Unimplemented functions: return 0, report a failure, report only once
-    unsigned ui = 0; while (strcmp(nvn_names[ui], "nvnBufferBuilderSetDefaults")) ui++;
-    ((void (*)(void *))proc("nvnBufferBuilderSetDefaults"))(NULL); ((void (*)(void *))proc("nvnBufferBuilderSetDefaults"))(NULL);
+    // 取名字表里第一个仍接未实现桩、且尚未被调过的名字（实现逐步补齐，不写死某个名字）
+    // Take the first name in the table that is still wired to the unimplemented stub and has not been called yet (implementations are filled in over time, so no name is hard-coded)
+    unsigned ui = 0; while (ui < NVN_NFUNC && (nvn_slot[ui].fn != (void *)nvn_unimpl_entry || nvn_slot[ui].cnt)) ui++;
+    EXPECT("名字表里还有未实现的函数", 1, ui < NVN_NFUNC);
+    if (ui < NVN_NFUNC) { ((void (*)(void *))proc(nvn_names[ui]))(NULL); ((void (*)(void *))proc(nvn_names[ui]))(NULL); }
     EXPECT("未实现函数被调用后记为已报红", 1, g_unimpl_seen[ui] > 0);
     EXPECT("未实现函数计数 2", 2, nvn_slot[ui].cnt);
 

@@ -898,7 +898,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); mtl_init
 // ================= 渲染回放 =================
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[64];
+static int g_red_once[96];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("【红】" __VA_ARGS__); } while (0)
 
 // ---------- 贴图 → MTLTexture ----------
@@ -2397,7 +2397,8 @@ static id<MTLTexture> tex_by_id(int tid) {   // 调用方持 g_rmu | Caller hold
     id<MTLTexture> base = tex_mtl(&rp->t);
     if (!base) return nil;
     v = base;
-    if (r.has_v && (r.v.set_format || r.v.set_levels || r.v.set_layers || r.v.set_target)) {
+    int tswz = r.t.d.swz_set;   // 贴图 swizzle：建带 swizzle 的视图（NVN 与 Metal 的 swizzle 枚举数值相同） | Texture swizzle: build a view with swizzle (NVN and Metal swizzle enums have the same numeric values)
+    if ((r.has_v && (r.v.set_format || r.v.set_levels || r.v.set_layers || r.v.set_target)) || tswz) {
         uint32_t pf = (uint32_t)base.pixelFormat; uint8_t swz[4];
         if (r.v.set_format && !(nvn_fmt_to_mtl(r.v.format, &pf, swz) && pf)) pf = (uint32_t)base.pixelFormat;
         { uint32_t upf; int ubpp; if (r.v.set_format && bc_unpack(r.v.format, &upf, &ubpp)) pf = upf; }   // 无 BC：BC 视图跟底图一样换成解压后的格式 | No BC: a BC view is switched to the decompressed format just like the base texture
@@ -2410,7 +2411,9 @@ static id<MTLTexture> tex_by_id(int tid) {   // 调用方持 g_rmu | Caller hold
         NSUInteger ns = base.textureType == MTLTextureType3D ? 1 : (r.v.set_layers && r.v.nlayers ? r.v.nlayers : base.arrayLength * (base.textureType == MTLTextureTypeCube || base.textureType == MTLTextureTypeCubeArray ? 6 : 1) - s0);
         MTLTextureType tt = r.v.set_target ? ttype(r.v.target, base.textureType) : base.textureType;
         if (tt == MTLTextureType2D && ns > 1) ns = 1;
-        v = [base newTextureViewWithPixelFormat:(MTLPixelFormat)pf textureType:tt levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns)];
+        if (tswz) v = [base newTextureViewWithPixelFormat:(MTLPixelFormat)pf textureType:tt levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns)
+                                                 swizzle:MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)r.t.d.swz[0], (MTLTextureSwizzle)r.t.d.swz[1], (MTLTextureSwizzle)r.t.d.swz[2], (MTLTextureSwizzle)r.t.d.swz[3])];
+        else v = [base newTextureViewWithPixelFormat:(MTLPixelFormat)pf textureType:tt levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns)];
         if (!v) { RED_ONCE(11, "贴图视图建不出 id %d", tid); v = base; }
     }
     rp->view = (void *)CFBridgingRetain(v); rp->view_rid = v.gpuResourceID._impl; rp->view_ser = sg; rp->view_dirty = dg;
@@ -4916,6 +4919,41 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
                 sourceSize:MTLSizeMake(r->width, r->height, 1) toBuffer:buf destinationOffset:z * wb * hb destinationBytesPerRow:wb destinationBytesPerImage:wb * hb];
     enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
     for (int z = 0; z < nz; z++) for (size_t y = 0; y < hb; y++) memcpy(dst + z * img + y * row, (uint8_t *)buf.contents + z * wb * hb + y * wb, wb);
+}
+// CPU 写贴图（WriteTexels）：预排布贴图以池内存为真值——本级本层解排布、改区域、再排布写回，池写入由脏页跟踪触发重传；
+// 其余经共享暂存缓冲 blit 进 MTLTexture，同步提交（之后的提交在同一队列上排在它后面）
+// CPU texture write (WriteTexels): for packaged textures the pool memory is the ground truth -- deswizzle this level / layer, patch the region, swizzle back; the pool write triggers a re-upload through dirty-page tracking;
+// the rest are blitted into the MTLTexture through a shared staging buffer, committed synchronously (later submissions are queued after it on the same queue)
+void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img) {
+    int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
+    if (!bpb) { RED_ONCE(64, "WriteTexels 未知格式 %#x", t->d.format); return; }
+    size_t wb = (size_t)((r->width + bw - 1) / bw) * bpb, hb = (r->height + bh - 1) / bh, x0 = (size_t)(r->xoffset / bw) * bpb, y0 = r->yoffset / bh;
+    int nz = r->depth ? r->depth : 1, is3d = t->d.target == 2;
+    if (t->has_layout && t->mem) {
+        uint32_t lw = MAX(t->d.width >> level, 1u), lh = MAX(t->d.height >> level, 1u), lz = is3d ? MAX(t->d.depth >> level, 1u) : 1;
+        size_t lp = (size_t)((lw + bw - 1) / bw) * bpb, lr = (lh + bh - 1) / bh;
+        uint8_t *lin = malloc(lp * lr * lz);
+        for (int z = 0; z < nz; z++) {
+            unsigned layer = is3d ? 0 : layer0 + r->zoffset + z;
+            if ((is3d && z == 0) || !is3d) if (nvn_deswizzle(&t->d, level, layer, t->mem, lin, lp)) { RED_ONCE(65, "WriteTexels 解排布失败 格式 %#x 目标 %d", t->d.format, t->d.target); free(lin); return; }
+            uint8_t *dst = lin + (is3d ? (size_t)(r->zoffset + z) * lp * lr : 0);
+            for (size_t y = 0; y < hb; y++) memcpy(dst + (y0 + y) * lp + x0, src + z * img + y * row, wb);
+            if ((is3d && z == nz - 1) || !is3d) if (nvn_swizzle(&t->d, level, layer, lin, lp, t->mem)) { RED_ONCE(65, "WriteTexels 排布失败 格式 %#x 目标 %d", t->d.format, t->d.target); free(lin); return; }
+        }
+        free(lin);
+        return;
+    }
+    uint32_t upf; int ubpp;
+    if (bc_unpack(t->d.format, &upf, &ubpp)) { RED_ONCE(66, "WriteTexels：无 BC 设备上的压缩格式 %#x 未实现", t->d.format); return; }
+    id<MTLTexture> mt = tex_mtl(t);
+    if (!mt) return;
+    id<MTLBuffer> buf = [g_dev newBufferWithLength:wb * hb * nz options:MTLResourceStorageModeShared];
+    for (int z = 0; z < nz; z++) for (size_t y = 0; y < hb; y++) memcpy((uint8_t *)buf.contents + z * wb * hb + y * wb, src + z * img + y * row, wb);
+    id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
+    for (int z = 0; z < nz; z++)
+        [b copyFromBuffer:buf sourceOffset:z * wb * hb sourceBytesPerRow:wb sourceBytesPerImage:wb * hb sourceSize:MTLSizeMake(r->width, r->height, 1)
+                toTexture:mt destinationSlice:is3d ? 0 : layer0 + r->zoffset + z destinationLevel:level destinationOrigin:MTLOriginMake(r->xoffset, r->yoffset, is3d ? r->zoffset + z : 0)];
+    enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
 }
 static void copy_b2t(const p_copy_b2t *c) {
     if (c->tex) zskip_del(c->tex->serial);

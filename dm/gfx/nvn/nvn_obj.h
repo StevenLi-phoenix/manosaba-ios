@@ -23,6 +23,11 @@ typedef struct { uint32_t magic; NVNdevice *dev; uint64_t submits; } queue_t;   
 typedef struct { NVNdevice *dev; void *mem; uint64_t size; uint32_t flags; } pool_builder_t;  FITS(pool_builder_t, NVNmemoryPoolBuilder);
 typedef struct { uint32_t magic, flags; uint8_t *mem; uint64_t size; } pool_t;                FITS(pool_t, NVNmemoryPool);
 
+// 缓冲：GPU 地址 = 所在池的内存 + 偏移（池内存即 CPU 地址）；serial 作调试号
+// Buffer: GPU address = memory of its pool + offset (pool memory is the CPU address); serial serves as the debug ID
+typedef struct { NVNdevice *dev; pool_t *pool; int64_t off; uint64_t size; } buf_builder_t;  FITS(buf_builder_t, NVNbufferBuilder);
+typedef struct { uint32_t magic; pool_t *pool; int64_t off; uint64_t size; uint8_t *mem; uint64_t serial; } buf_t;  FITS(buf_t, NVNbuffer);
+
 typedef struct { const pool_t *pool; int64_t off; int32_t n; } dpool_t;                       // 贴图 / 采样器描述符池 | Texture / sampler descriptor pool
 FITS(dpool_t, NVNtexturePool); FITS(dpool_t, NVNsamplerPool);
 
@@ -49,11 +54,11 @@ typedef struct { uint32_t magic, fenced; uint64_t fence; } sync_t;              
 typedef struct { const pool_t *pool; int64_t off; } ev_builder_t;                             FITS(ev_builder_t, NVNeventBuilder);
 typedef struct { uint32_t magic; volatile uint32_t *val; } ev_t;                              FITS(ev_t, NVNevent);
 
-typedef struct { NVNdevice *dev; void *native; int32_t ntex, interval; NVNtexture *tex[4]; } win_builder_t;
+typedef struct { NVNdevice *dev; void *native; int32_t ntex, interval; NVNtexture *tex[4]; int32_t nactive; } win_builder_t;   // nactive：轮流取用的前几张（0 = 全部） | nactive: how many leading textures are cycled through (0 = all)
 FITS(win_builder_t, NVNwindowBuilder);
 // avail[i]：交换链第 i 张可再次获取的时刻（ns，单调时钟）= 它的显示时刻 + 一个出图周期；pace：本窗口的出图节拍器目标时刻
 // avail[i]: time at which swapchain image i can be acquired again (ns, monotonic clock) = its display time + one present period; pace: target time of this window's present pacer
-typedef struct { uint32_t magic; void *native; int32_t ntex, interval, next, crop[4]; NVNtexture *tex[4]; uint64_t presents, avail[4], pace, ticket[4]; } win_t;   // ticket[i]：第 i 张最近一次出图的票号 | ticket[i]: ticket of the most recent present of image i
+typedef struct { uint32_t magic; void *native; int32_t ntex, interval, next, crop[4]; NVNtexture *tex[4]; uint64_t presents, avail[4], pace, ticket[4]; int32_t nactive; } win_t;   // ticket[i]：第 i 张最近一次出图的票号 | ticket[i]: ticket of the most recent present of image i
 FITS(win_t, NVNwindow);
 
 // 命令缓冲：命令写进游戏给的命令内存（AddCommandMemory），句柄 = 段首地址；用完回调游戏补内存
@@ -166,6 +171,9 @@ void mtl_create_stats(uint64_t *lib, uint64_t *pso);   // 累计：提交线程�
 // CPU 读贴图：level / layer0 起，按 row / img 字节步长写进 dst
 // CPU texture read: starting at level / layer0, written into dst with row / img byte strides
 void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img);
+// CPU 写贴图：从 src（row / img 字节步长）写进 level / layer0 起的区域
+// CPU texture write: write from src (row / img byte strides) into the region starting at level / layer0
+void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img);
 // 描述符池登记（贴图号 / 采样器号 → 对象快照）、程序释放
 // Descriptor pool registration (texture ID / sampler ID → object snapshot), program release
 void mtl_reg_tex(int id, const tex_t *t, const view_t *v);

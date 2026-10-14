@@ -27,3 +27,24 @@ HLE_FORCE_OPT("_ZN2nn2ro12LookupSymbolEPmPKc", "按名找符号：在已装载�
 HLE_FORCE_OPT("_ZN2nn2ro18LookupModuleSymbolEPmPKNS0_6ModuleEPKc", "在指定 NRO 里找符号：宿主没载过 NRO", Result, h_ro_LookupMod, uint64_t *out, const void *mod, const char *name) {
     (void)out; (void)mod; LOG("nn::ro::LookupModuleSymbol %s：没有载入的 NRO", name); return RES_FAIL;
 }
+
+// C++ 例外回溯（sdk 的 libunwind）按 pc 取所在模块的 eh_frame_hdr：真机经 svc QueryMemory 找出 pc 所在的代码块与其后的数据块，
+// 再读模块的 MOD0 头。宿主模块不在 Horizon 内存块里，sdk 的实现会中止；这里直接按已装载模块给出同样的结果。
+// ExceptionInfo（sdk+0x15a850 写、libunwind sdk+0x668e64 读）= { uint64 模块首址; uint64 模块大小; uint64 eh_frame_hdr 相对首址偏移; uint64 eh_frame_hdr 字节数 }，
+// eh_frame_hdr 起止 = MOD0 + MOD0[+0x10] / MOD0 + MOD0[+0x14]（有符号 32 位，相对 MOD0）。pc 不在任何模块里返回 false。
+// 改写器让补丁区里的调用以原调用点 +4 为返回地址（patch_nso.py site_xbranch），回溯只经过原代码，原 FDE 照用。
+// C++ exception unwinding (the sdk's libunwind) fetches the eh_frame_hdr of the module containing pc: the real device uses svc QueryMemory to find the code block containing pc and the data blocks after it,
+// then reads the module's MOD0 header. Host modules are not in Horizon memory blocks, so the sdk implementation aborts; here the same result is given directly from the loaded modules.
+// ExceptionInfo (written by sdk+0x15a850, read by libunwind at sdk+0x668e64) = { uint64 module start; uint64 module size; uint64 eh_frame_hdr offset from start; uint64 eh_frame_hdr bytes },
+// eh_frame_hdr start / end = MOD0 + MOD0[+0x10] / MOD0 + MOD0[+0x14] (signed 32-bit, relative to MOD0). Returns false when pc is in no module.
+// The rewriter makes calls from the patch area return to the original call site + 4 (patch_nso.py site_xbranch), so unwinding only passes through original code and the original FDEs apply.
+HLE_FORCE_OPT("_ZN2nn2ro6detail16GetExceptionInfoEPNS1_13ExceptionInfoEm", "例外回溯取 eh_frame_hdr：按宿主已装载模块的 MOD0 头", uint32_t, h_ro_ExcInfo, uint64_t *info, uint64_t pc) {
+    module_t *m = module_of((const void *)pc);
+    if (!m) return 0;
+    const uint8_t *mod0 = m->base + *(const uint32_t *)(m->base + 4);
+    if (memcmp(mod0, "MOD0", 4)) { LOG("【红】GetExceptionInfo：%s 的 MOD0 头不在原位", m->name); return 0; }
+    int32_t hs = *(const int32_t *)(mod0 + 0x10), he = *(const int32_t *)(mod0 + 0x14);
+    info[0] = (uint64_t)m->base; info[1] = m->size;
+    info[2] = (uint64_t)(mod0 + hs - m->base); info[3] = (uint64_t)(he - hs);
+    return 1;
+}

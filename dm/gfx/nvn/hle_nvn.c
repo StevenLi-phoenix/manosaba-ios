@@ -56,9 +56,13 @@ void *nvn_real[NVN_NFUNC];               // DM_NVN_PROF：计时包装调用的�
 _Atomic uint64_t nvn_prof_ticks[NVN_NFUNC]; // DM_NVN_PROF：各函数累计耗时（cntvct 计数） | DM_NVN_PROF: cumulative time of each function (cntvct counts)
 static uint8_t g_unimpl_seen[NVN_NFUNC];
 
-uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2) {
+uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2, uint64_t lr, uint64_t x8) {
     unsigned i = (unsigned)(slot - nvn_slot);
-    if (!g_unimpl_seen[i]++) LOG("【红】NVN 未实现被调用：%s (x0=%#llx x1=%#llx x2=%#llx)", nvn_names[i], x0, x1, x2);
+    if (!g_unimpl_seen[i]++) {
+        module_t *m = module_of((void *)lr);
+        LOG("【红】NVN 未实现被调用：%s (x0=%#llx x1=%#llx x2=%#llx x8=%#llx) 调用点 %s+%#llx", nvn_names[i], x0, x1, x2, x8,
+            m ? m->name : "?", m ? lr - (uint64_t)m->base : lr);
+    }
     return 0;
 }
 
@@ -185,6 +189,41 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { if (((pool_t *)p)->mem) { nvn_dirty_remove_range(((pool_t *)p)->mem); mtl_pool_del(((pool_t *)p)->mem); } ((pool_t *)p)->magic = 0; }
 NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
 NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { return (NVNbufferAddress)((const pool_t *)p)->mem; }
+// 池内存就是游戏给的真内存（CPU 与 GPU 同址），映射即原指针；缓存维护无事可做
+// Pool memory is the real memory given by the game (same address for CPU and GPU), so mapping returns the original pointer; cache maintenance has nothing to do
+NVN(nvnMemoryPoolMap, void *, const NVNmemoryPool *p) { return ((const pool_t *)p)->mem; }
+NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
+NVN(nvnMemoryPoolGetSize, size_t, const NVNmemoryPool *p) { return ((const pool_t *)p)->size; }
+NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { return (NVNmemoryPoolFlags)((const pool_t *)p)->flags; }
+NVN(nvnMemoryPoolBuilderGetSize, size_t, const NVNmemoryPoolBuilder *b) { return ((const pool_builder_t *)b)->size; }
+NVN(nvnMemoryPoolBuilderGetFlags, NVNmemoryPoolFlags, const NVNmemoryPoolBuilder *b) { return (NVNmemoryPoolFlags)((const pool_builder_t *)b)->flags; }
+
+// ---------- 缓冲：池内一段，地址 = 池内存 + 偏移 ----------
+// ---------- Buffers: a range inside a pool, address = pool memory + offset ----------
+#define BB(b) ((buf_builder_t *)(b))
+#define BF(b) ((const buf_t *)(b))
+NVN(nvnBufferBuilderSetDefaults, void, NVNbufferBuilder *b) { NVNdevice *d = BB(b)->dev; memset(b, 0, sizeof(buf_builder_t)); BB(b)->dev = d; }
+NVN(nvnBufferBuilderSetDevice, void, NVNbufferBuilder *b, NVNdevice *d) { BB(b)->dev = d; }
+NVN(nvnBufferBuilderSetStorage, void, NVNbufferBuilder *b, NVNmemoryPool *p, ptrdiff_t off, size_t n) { BB(b)->pool = (pool_t *)p; BB(b)->off = off; BB(b)->size = n; }
+NVN(nvnBufferBuilderGetMemoryOffset, ptrdiff_t, const NVNbufferBuilder *b) { return ((const buf_builder_t *)b)->off; }
+NVN(nvnBufferBuilderGetSize, size_t, const NVNbufferBuilder *b) { return ((const buf_builder_t *)b)->size; }
+NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *b, const NVNbufferBuilder *bb) {
+    const buf_builder_t *s = (const buf_builder_t *)bb; buf_t *o = (buf_t *)b;
+    if (!s->pool || !s->pool->mem) { LOG("【红】BufferInitialize 池 %p 没有存储（虚拟池未支持）off=%#llx size=%#llx", (void *)s->pool, (long long)s->off, s->size); return 0; }
+    if ((uint64_t)s->off + s->size > s->pool->size) { LOG("【红】BufferInitialize 越出池：off=%#llx size=%#llx 池大小=%#llx", (long long)s->off, s->size, s->pool->size); return 0; }
+    *o = (buf_t){MAGIC('B', 'U', 'F', 0), s->pool, s->off, s->size, s->pool->mem + s->off, nvn_new_serial()};
+    OLOG("Buffer %p pool=%p off=%#llx size=%#llx", (void *)b, (void *)s->pool, (long long)s->off, s->size);
+    return 1;
+}
+NVN(nvnBufferFinalize, void, NVNbuffer *b) { ((buf_t *)b)->magic = 0; }
+NVN(nvnBufferMap, void *, const NVNbuffer *b) { return BF(b)->mem; }
+NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *b) { return (NVNbufferAddress)BF(b)->mem; }
+NVN(nvnBufferFlushMappedRange, void, const NVNbuffer *b, ptrdiff_t off, size_t n) { (void)b; (void)off; (void)n; }
+NVN(nvnBufferInvalidateMappedRange, void, const NVNbuffer *b, ptrdiff_t off, size_t n) { (void)b; (void)off; (void)n; }
+NVN(nvnBufferGetMemoryPool, NVNmemoryPool *, const NVNbuffer *b) { return (NVNmemoryPool *)BF(b)->pool; }
+NVN(nvnBufferGetMemoryOffset, ptrdiff_t, const NVNbuffer *b) { return BF(b)->off; }
+NVN(nvnBufferGetSize, size_t, const NVNbuffer *b) { return BF(b)->size; }
+NVN(nvnBufferGetDebugID, uint64_t, const NVNbuffer *b) { return BF(b)->serial; }
 
 // ---------- 描述符池 ----------
 // ---------- Descriptor pools ----------
@@ -213,6 +252,13 @@ NVN(nvnTextureBuilderSetWidth, void, NVNtextureBuilder *b, int v) { TB(b)->d.wid
 NVN(nvnTextureBuilderSetHeight, void, NVNtextureBuilder *b, int v) { TB(b)->d.height = v; }
 NVN(nvnTextureBuilderSetDepth, void, NVNtextureBuilder *b, int v) { TB(b)->d.depth = v; }
 NVN(nvnTextureBuilderSetSize1D, void, NVNtextureBuilder *b, int w) { TB(b)->d.width = w; TB(b)->d.height = TB(b)->d.depth = 1; }
+NVN(nvnTextureBuilderSetSize2D, void, NVNtextureBuilder *b, int w, int h) { TB(b)->d.width = w; TB(b)->d.height = h; TB(b)->d.depth = 1; }
+NVN(nvnTextureBuilderSetSize3D, void, NVNtextureBuilder *b, int w, int h, int d) { TB(b)->d.width = w; TB(b)->d.height = h; TB(b)->d.depth = d; }
+NVN(nvnTextureBuilderSetSwizzle, void, NVNtextureBuilder *b, NVNtextureSwizzle r, NVNtextureSwizzle g, NVNtextureSwizzle bl, NVNtextureSwizzle a) {
+    nvn_texdesc *d = &TB(b)->d; d->swz[0] = (uint8_t)r; d->swz[1] = (uint8_t)g; d->swz[2] = (uint8_t)bl; d->swz[3] = (uint8_t)a;
+    d->swz_set = !(r == NVN_TEXTURE_SWIZZLE_R && g == NVN_TEXTURE_SWIZZLE_G && bl == NVN_TEXTURE_SWIZZLE_B && a == NVN_TEXTURE_SWIZZLE_A);
+}
+NVN(nvnTextureBuilderSetDepthStencilMode, void, NVNtextureBuilder *b, NVNtextureDepthStencilMode m) { TB(b)->d.ds_mode = (uint8_t)m; }
 NVN(nvnTextureBuilderSetLevels, void, NVNtextureBuilder *b, int v) { TB(b)->d.levels = v; }
 NVN(nvnTextureBuilderSetFormat, void, NVNtextureBuilder *b, NVNformat f) { TB(b)->d.format = f; }
 NVN(nvnTextureBuilderSetSamples, void, NVNtextureBuilder *b, int s) { TB(b)->d.samples = s; }
@@ -223,6 +269,25 @@ NVN(nvnTextureBuilderSetPackagedTextureLayout, void, NVNtextureBuilder *b, const
     TB(b)->d.pkg_block_h = l ? l->layout[0] + 1 : 0;
 }
 NVN(nvnTextureBuilderGetFlags, NVNtextureFlags, const NVNtextureBuilder *b) { return (NVNtextureFlags)((const tex_builder_t *)b)->d.flags; }
+#define CTB(b) (&((const tex_builder_t *)(b))->d)
+static void get_swz(const nvn_texdesc *d, NVNtextureSwizzle *r, NVNtextureSwizzle *g, NVNtextureSwizzle *b, NVNtextureSwizzle *a) {
+    *r = d->swz_set ? (NVNtextureSwizzle)d->swz[0] : NVN_TEXTURE_SWIZZLE_R; *g = d->swz_set ? (NVNtextureSwizzle)d->swz[1] : NVN_TEXTURE_SWIZZLE_G;
+    *b = d->swz_set ? (NVNtextureSwizzle)d->swz[2] : NVN_TEXTURE_SWIZZLE_B; *a = d->swz_set ? (NVNtextureSwizzle)d->swz[3] : NVN_TEXTURE_SWIZZLE_A;
+}
+NVN(nvnTextureBuilderGetTarget, NVNtextureTarget, const NVNtextureBuilder *b) { return (NVNtextureTarget)CTB(b)->target; }
+NVN(nvnTextureBuilderGetWidth, int, const NVNtextureBuilder *b) { return (int)CTB(b)->width; }
+NVN(nvnTextureBuilderGetHeight, int, const NVNtextureBuilder *b) { return (int)CTB(b)->height; }
+NVN(nvnTextureBuilderGetDepth, int, const NVNtextureBuilder *b) { return (int)CTB(b)->depth; }
+NVN(nvnTextureBuilderGetLevels, int, const NVNtextureBuilder *b) { return (int)CTB(b)->levels; }
+NVN(nvnTextureBuilderGetFormat, NVNformat, const NVNtextureBuilder *b) { return (NVNformat)CTB(b)->format; }
+NVN(nvnTextureBuilderGetSamples, int, const NVNtextureBuilder *b) { return CTB(b)->samples; }
+NVN(nvnTextureBuilderGetSwizzle, void, const NVNtextureBuilder *b, NVNtextureSwizzle *r, NVNtextureSwizzle *g, NVNtextureSwizzle *bl, NVNtextureSwizzle *a) { get_swz(CTB(b), r, g, bl, a); }
+NVN(nvnTextureBuilderGetDepthStencilMode, NVNtextureDepthStencilMode, const NVNtextureBuilder *b) { return (NVNtextureDepthStencilMode)CTB(b)->ds_mode; }
+NVN(nvnTextureBuilderGetStride, ptrdiff_t, const NVNtextureBuilder *b) { return (ptrdiff_t)CTB(b)->stride; }
+NVN(nvnTextureBuilderGetMemoryOffset, ptrdiff_t, const NVNtextureBuilder *b) { return ((const tex_builder_t *)b)->off; }
+// ZCull（深度剔除硬件的压缩存储）：Metal 没有对应，宿主不分配也不保存，大小报 0；Save / RestoreZCullData 为空实现
+// ZCull (compressed storage of the depth-culling hardware): no Metal equivalent; the host neither allocates nor saves it and reports size 0; Save / RestoreZCullData are empty implementations
+NVN(nvnTextureBuilderGetZCullStorageSize, size_t, const NVNtextureBuilder *b) { (void)b; return 0; }
 static uint64_t g_layout_logged;
 static void log_layout(const tex_builder_t *b, const nvn_texlayout *L) {
     if (b->has_layout && g_layout_logged++ < 16)
@@ -243,6 +308,7 @@ NVN(nvnTextureBuilderGetStorageAlignment, size_t, const NVNtextureBuilder *b) {
 #define CTX(t) ((const tex_t *)(t))
 NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
+    { static int red; if (s->d.ds_mode && !red++) LOG("【红】TextureInitialize 深度模板贴图按模板采样（ds_mode=%d）：Metal 模板视图未实现，仍按深度采样", s->d.ds_mode); }
     memset(o, 0, sizeof *o);
     o->magic = MAGIC('T', 'E', 'X', 0); o->d = s->d; o->pool = s->pool; o->off = s->off;
     o->has_layout = s->has_layout; memcpy(o->layout, s->layout, 8);
@@ -259,6 +325,21 @@ NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->d.width;
 NVN(nvnTextureGetHeight, int, const NVNtexture *t) { return (int)CTX(t)->d.height; }
 NVN(nvnTextureGetDepth, int, const NVNtexture *t) { return (int)CTX(t)->d.depth; }
 NVN(nvnTextureGetStorageSize, int, const NVNtexture *t) { return (int)CTX(t)->L.size; }
+NVN(nvnTextureGetTarget, NVNtextureTarget, const NVNtexture *t) { return (NVNtextureTarget)CTX(t)->d.target; }
+NVN(nvnTextureGetLevels, int, const NVNtexture *t) { return (int)CTX(t)->d.levels; }
+NVN(nvnTextureGetFormat, NVNformat, const NVNtexture *t) { return (NVNformat)CTX(t)->d.format; }
+NVN(nvnTextureGetSamples, int, const NVNtexture *t) { return CTX(t)->d.samples; }
+NVN(nvnTextureGetSwizzle, void, const NVNtexture *t, NVNtextureSwizzle *r, NVNtextureSwizzle *g, NVNtextureSwizzle *b, NVNtextureSwizzle *a) { get_swz(&CTX(t)->d, r, g, b, a); }
+NVN(nvnTextureGetDepthStencilMode, NVNtextureDepthStencilMode, const NVNtexture *t) { return (NVNtextureDepthStencilMode)CTX(t)->d.ds_mode; }
+NVN(nvnTextureGetStride, ptrdiff_t, const NVNtexture *t) { return (ptrdiff_t)CTX(t)->d.stride; }
+NVN(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { return CTX(t)->off; }
+// nvn.h 的原型写成按值返回 NVNmemoryPool（DWARF 重建有误），实际返回指针：调用点 main+0x9c07c4（2.0.4b）调用前 x8 装的是函数地址、
+// 不是间接返回指针，返回的 x0 直接作为池指针传给 nvnMemoryPoolMap
+// nvn.h declares a by-value NVNmemoryPool return (a DWARF reconstruction error); it actually returns a pointer: at call site main+0x9c07c4 (2.0.4b) x8 holds the function address before the call,
+// not an indirect result pointer, and the returned x0 is passed straight to nvnMemoryPoolMap as the pool pointer
+NVN_NOPROTO(nvnTextureGetMemoryPool, const NVNmemoryPool *, const NVNtexture *t) { return (const NVNmemoryPool *)CTX(t)->pool; }
+NVN(nvnTextureGetDebugID, uint64_t, const NVNtexture *t) { return CTX(t)->serial; }
+NVN(nvnTextureGetZCullStorageSize, size_t, const NVNtexture *t) { (void)t; return 0; }
 NVN(nvnTextureCompare, NVNboolean, const NVNtexture *a, const NVNtexture *b) {
     const tex_t *x = CTX(a), *y = CTX(b);
     return !memcmp(&x->d, &y->d, sizeof x->d) && x->mem == y->mem;
@@ -299,6 +380,23 @@ NVN(nvnTextureReadTexelsStrided, void, const NVNtexture *t, const NVNtextureView
     read_texels(CTX(t), (const view_t *)v, r, dst, row, img);
 }
 NVN(nvnTextureInvalidateTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }
+// CPU 写贴图（NVN WriteTexels）：步长 0 = 紧排（同 ReadTexels）
+// CPU texture write (NVN WriteTexels): stride 0 = tightly packed (same as ReadTexels)
+static void write_texels(const tex_t *o, const view_t *v, const NVNcopyRegion *r, const uint8_t *src, ptrdiff_t row, ptrdiff_t img) {
+    int bw, bh, bpb = nvn_fmt_bpb(o->d.format, &bw, &bh);
+    uint32_t wb = (uint32_t)((r->width + bw - 1) / bw) * bpb, hb = (uint32_t)(r->height + bh - 1) / bh;
+    if (!row) row = wb;
+    if (!img) img = row * hb;
+    unsigned level = v && v->set_levels ? (unsigned)v->base_level : 0, layer0 = v && v->set_layers ? (unsigned)v->min_layer : 0;
+    mtl_write_texels(o, level, layer0, r, src, (size_t)row, (size_t)img);
+}
+NVN(nvnTextureWriteTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const void *src) {
+    write_texels(CTX(t), (const view_t *)v, r, src, 0, 0);
+}
+NVN(nvnTextureWriteTexelsStrided, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const void *src, ptrdiff_t row, ptrdiff_t img) {
+    write_texels(CTX(t), (const view_t *)v, r, src, row, img);
+}
+NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }
 
 // ---------- 采样器 ----------
 // ---------- Samplers ----------
@@ -400,6 +498,9 @@ NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *in
     (void)q; if (info) memset(info, 0, sizeof *info); return NVN_QUEUE_GET_ERROR_RESULT_GPU_NO_ERROR;
 }
 NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
+// 队列在 GPU 上等同步对象：宿主只有一条 Metal 队列、按提交顺序执行，栅栏来自更早的提交，等待天然成立
+// The queue waits on a sync object on the GPU: the host has a single Metal queue executing in submit order and the fence comes from an earlier submission, so the wait holds by construction
+NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) { (void)q; (void)s; return 1; }
 NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; mtl_finish(); }
 
 // ---------- 命令缓冲：录进游戏的命令内存，提交时执行 CPU 可见副作用 ----------
@@ -667,6 +768,16 @@ NVN(nvnBlendStateSetBlendFunc, void, NVNblendState *s, NVNblendFunc sr, NVNblend
 }
 NVN(nvnBlendStateSetBlendEquation, void, NVNblendState *s, NVNblendEquation er, NVNblendEquation ea) { ST(blend_st, s)->eq_rgb = er; ST(blend_st, s)->eq_a = ea; }
 NVN(nvnColorStateSetDefaults, void, NVNcolorState *s) { *ST(color_st, s) = (color_st){0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS}; }
+// 逻辑运算 / alpha 测试：Metal 都没有（alpha 测试要靠着色器 discard）。照存；设成非默认值时报红，待翻译链与回放层补上
+// Logic ops / alpha test: Metal has neither (alpha test needs shader discard). Stored as given; a non-default value is reported red until the translation chain and replay layer handle it
+NVN(nvnColorStateSetLogicOp, void, NVNcolorState *s, NVNlogicOp op) {
+    ST(color_st, s)->logic_op = op;
+    static int red; if (op != NVN_LOGIC_OP_COPY && !red++) LOG("【红】ColorStateSetLogicOp %d：Metal 无逻辑运算，回放未实现", (int)op);
+}
+NVN(nvnColorStateSetAlphaTest, void, NVNcolorState *s, NVNalphaFunc f) {
+    ST(color_st, s)->alpha_func = f;
+    static int red; if (f != NVN_ALPHA_FUNC_ALWAYS && !red++) LOG("【红】ColorStateSetAlphaTest %d：Metal 无 alpha 测试，回放未实现", (int)f);
+}
 NVN(nvnColorStateSetBlendEnable, void, NVNcolorState *s, int i, uint32_t en) {
     color_st *o = ST(color_st, s); if (i < 0 || i > 7) return;
     o->blend_en = B(en) ? (o->blend_en | 1u << i) : (o->blend_en & ~(1u << i));
@@ -784,6 +895,12 @@ static const char *const g_nops[] = {
     "nvnCommandBufferInsertDebugMarkerDynamic",
     "nvnCommandBufferWaitEvent",
     "nvnWindowFinalize",
+    "nvnCommandBufferSaveZCullData", "nvnCommandBufferRestoreZCullData",   // ZCull 见贴图节 | ZCull: see the textures section
+    "nvnCommandBufferSetPointSize",   // 点大小由着色器 [[point_size]] 输出（翻译链负责） | Point size comes from the shader's [[point_size]] output (handled by the translation chain)
+    // 调试标签：只供图形调试器显示 | Debug labels: only shown by graphics debuggers
+    "nvnDeviceSetDebugLabel", "nvnQueueSetDebugLabel", "nvnWindowSetDebugLabel", "nvnProgramSetDebugLabel",
+    "nvnMemoryPoolSetDebugLabel", "nvnTexturePoolSetDebugLabel", "nvnSamplerPoolSetDebugLabel", "nvnBufferSetDebugLabel",
+    "nvnTextureSetDebugLabel", "nvnSamplerSetDebugLabel", "nvnCommandBufferSetDebugLabel", "nvnSyncSetDebugLabel",
 };
 __attribute__((constructor)) static void nvn_nops_register(void) {
     // 空实现在槽表初始化后覆盖未实现桩；名字写错（不在 main 名字表里）启动即报红中止
@@ -817,15 +934,21 @@ NVN(nvnWindowBuilderSetTextures, void, NVNwindowBuilder *b, int n, NVNtexture *c
     WB(b)->ntex = n; for (int i = 0; i < n; i++) WB(b)->tex[i] = t[i];
 }
 NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int v) { WB(b)->interval = v; }
+// 头文件无原型。签名取自调用点 main+0x9c9218（2.0.4b）：x0 = builder，w1 = 张数（ldr w1），返回值不用
+// No prototype in the header. Signature from the call site main+0x9c9218 (2.0.4b): x0 = builder, w1 = count (ldr w1), return value unused
+NVN_NOPROTO(nvnWindowBuilderSetNumActiveTextures, void, NVNwindowBuilder *b, int n) { WB(b)->nactive = n; }
 NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     const win_builder_t *s = (const win_builder_t *)b; win_t *o = (win_t *)w;
     memset(o, 0, sizeof *o); o->magic = MAGIC('W', 'I', 'N', 'D'); o->native = s->native; o->ntex = s->ntex; o->interval = s->interval;
+    o->nactive = s->nactive > 0 && s->nactive <= s->ntex ? s->nactive : 0;
+    if (s->nactive && !o->nactive) LOG("【红】WindowInitialize 活动张数 %d 超出交换链 %d 张，按全部", s->nactive, s->ntex);
     memcpy(o->tex, s->tex, sizeof o->tex);
     for (int i = 0; i < o->ntex; i++) if (o->tex[i]) mtl_xv_window_tex(CTX(o->tex[i])->serial);
     LOG("[nvn] WindowInitialize 交换链 %d 张 间隔 %d 首张 %dx%d 格式 %#x", o->ntex, o->interval,
         o->ntex ? (int)CTX(o->tex[0])->d.width : 0, o->ntex ? (int)CTX(o->tex[0])->d.height : 0, o->ntex ? CTX(o->tex[0])->d.format : 0);
     return 1;
 }
+NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return ((const win_t *)w)->interval; }
 NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) { if (((win_t *)w)->interval != v) LOG("[nvn] 游戏设出图间隔 %d → %d", ((win_t *)w)->interval, v); ((win_t *)w)->interval = v; }
 NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
     win_t *o = (win_t *)w; int v[4] = {x, y, ww, hh};
@@ -848,7 +971,8 @@ uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // 宿主进程起点（main.c；UIMSG 时间戳同基） | Host process start point (main.c; same base as the UIMSG timestamps)
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     win_t *o = (win_t *)w;
-    *idx = o->ntex ? o->next++ % o->ntex : 0;
+    int nuse = o->nactive ? o->nactive : o->ntex;
+    *idx = nuse ? o->next++ % nuse : 0;
     // 垂直同步阻塞在这里（真机 NVN：交换链里的贴图都在等显示时，等下一张被释放），不在出图里——游戏常持锁调出图
     // Vsync blocks here (real-device NVN: when all textures in the swapchain are waiting for display, wait for the next one to be released), not in present -- the game often calls present while holding a lock
     uint64_t at = *idx < 4 ? o->avail[*idx] : 0, now = dm_detclock_enabled() ? guest_ns() : now_ns(), wait = at > now ? at - now : 0;

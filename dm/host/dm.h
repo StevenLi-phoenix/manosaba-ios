@@ -17,6 +17,8 @@ typedef struct { uint64_t r_offset, r_info; int64_t r_addend; } Elf64_Rela;
 typedef struct { uint8_t *d; size_t n; } dm_blob;   // 整份读进内存的一个原版存档文件（dm_pages.c dm_save_blobs） | One save file of the original game read whole into memory (dm_pages.c dm_save_blobs)
 #define ELF64_R_SYM(i) ((i) >> 32)
 #define ELF64_R_TYPE(i) ((i) & 0xffffffff)
+#define ELF64_ST_BIND(i) ((i) >> 4)
+enum { STB_WEAK = 2 };
 enum { DT_INIT = 12, DT_RELA = 7, DT_RELASZ = 8, DT_JMPREL = 23, DT_PLTRELSZ = 2, DT_SYMTAB = 6, DT_STRTAB = 5,
        DT_INIT_ARRAY = 25, DT_INIT_ARRAYSZ = 27 };
 enum { R_AARCH64_ABS64 = 257, R_AARCH64_GLOB_DAT = 1025, R_AARCH64_JUMP_SLOT = 1026, R_AARCH64_RELATIVE = 1027 };
