@@ -23,3 +23,7 @@ int nvn_fmt_bpb(int format, int *bw, int *bh);   // 每块字节（0 = 未知格
 // 第 level 级实际使用的块高 / 块深（log2 GOB 数）：贴图级块高按该级行数（块行）收缩，解排布逐级用它
 // Block height / block depth actually used by level `level` (log2 of the GOB count): the per-level block height shrinks with that level's row count (block rows), and deswizzling uses it level by level
 void nvn_tex_level_tiles(const nvn_texdesc *d, unsigned level, unsigned *tileH, unsigned *tileD);
+// Whether Metal can create a texture with this description. Limits from Apple's Metal Feature Set Tables (Apple3–Apple9; Apple10 allows 32768 for 1D / 2D / cube,
+// so 16384 is the conservative value): 1D / 2D / cube width and height 16384, 3D width / height / depth 2048, array layers 2048 (MTLTextureDescriptor.arrayLength: 1–2048).
+// Returns NULL when it fits, otherwise a short reason. Array layers follow tex_desc in nvn_mtl.m: 1D array = height, 2D / multisample / cube array = depth.
+const char *nvn_texdesc_metal_check(const nvn_texdesc *d);

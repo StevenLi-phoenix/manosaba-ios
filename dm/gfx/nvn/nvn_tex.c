@@ -9,6 +9,7 @@
 // The game's packaged textures (SetPackagedTextureLayout) carry 8 bytes of layout parameters: byte 0 = log2 of the block height (derived by comparing 16 cases from the real game,
 // 4 of which differ from the automatic algorithm); when present it takes precedence.
 #include "nvn_tex.h"
+#include <stddef.h>
 
 typedef struct { uint8_t bpb, bw, bh; } fmt_t;   // 每块字节、块宽、块高（非压缩格式块宽高 = 1） | Bytes per block, block width, block height (for uncompressed formats block width and height = 1)
 
@@ -136,4 +137,17 @@ void nvn_tex_level_tiles(const nvn_texdesc *d, unsigned level, unsigned *tileH, 
     uint32_t ld = dpl >= 3 ? mip(z, level) : 1;
     *tileH = adj_tile(L.tileH, 8, lh);
     *tileD = adj_tile(L.tileD, 1, ld);
+}
+
+const char *nvn_texdesc_metal_check(const nvn_texdesc *d) {
+    enum { MAX_2D = 16384, MAX_3D = 2048, MAX_LAYERS = 2048 };
+    switch (d->target) {
+        case 0: return d->width > MAX_2D ? "1D width over 16384" : NULL;
+        case 2: return d->width > MAX_3D || d->height > MAX_3D || d->depth > MAX_3D ? "3D size over 2048" : NULL;
+        case 3: return d->width > MAX_2D ? "1D array width over 16384" : d->height > MAX_LAYERS ? "1D array layers over 2048" : NULL;
+        case 4: case 6: case 9:
+            return d->width > MAX_2D || d->height > MAX_2D ? "array width / height over 16384" : d->depth > MAX_LAYERS ? "array layers over 2048" : NULL;
+        case 10: return NULL;   // buffer texture: created from a buffer, not through tex_desc
+        default: return d->width > MAX_2D || d->height > MAX_2D ? "width / height over 16384" : NULL;
+    }
 }

@@ -960,6 +960,17 @@ static int bc_unpack(uint32_t nvn_fmt, uint32_t *pf, int *bpp) { return no_bc() 
 static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "贴图格式 %#x Metal 无对应（首例）", t->d.format); return nil; }
+    // Over Metal's size limits: newTextureWithDescriptor would abort the process (failed assertion in MTLTextureDescriptor validation),
+    // so the texture is not created and reads as unbound. Logged with every field (first 16) to find where such a description comes from.
+    const char *bad = nvn_texdesc_metal_check(&t->d);
+    if (bad) {
+        static _Atomic int n;
+        if (atomic_fetch_add(&n, 1) < 16)
+            MLOG("[red] texture not created (%s): ser %llu magic %#x target %d format %#x flags %#x samples %d size %ux%ux%u levels %u layout %d mem %p",
+                 bad, t->serial, t->magic, t->d.target, t->d.format, t->d.flags, t->d.samples, t->d.width, t->d.height, t->d.depth, t->d.levels,
+                 t->has_layout, (void *)t->mem);
+        return nil;
+    }
     int unp = 0; { uint32_t upf; int ubpp; if (bc_unpack(t->d.format, &upf, &ubpp)) { pf = upf; unp = 1; } }
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
     d.pixelFormat = (MTLPixelFormat)pf;

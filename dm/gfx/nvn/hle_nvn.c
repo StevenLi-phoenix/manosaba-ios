@@ -232,10 +232,28 @@ NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *tp, const NVNmemoryPoo
     *(dpool_t *)tp = (dpool_t){(const pool_t *)p, off, n}; OLOG("TexturePool n=%d", n); mtl_set_tex_pool_n(n); return 1;
 }
 NVN(nvnTexturePoolFinalize, void, NVNtexturePool *tp) { (void)tp; }
-NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) { (void)tp; mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v); }
+// Textures Metal cannot create are skipped at replay (nvn_mtl.m tex_desc), and objects registered without being initialized textures hold no valid description:
+// log them with the game's call site (first 32) to find which code builds them.
+static void tex_diag(const char *what, int id, const tex_t *o, const char *why, uint64_t lr) {
+    static _Atomic int n; if (atomic_fetch_add(&n, 1) >= 32) return;
+    module_t *m = module_of((void *)lr);
+    LOG("[nvn] [red] %s: %s: id %d ser %llu magic %#x target %d format %#x flags %#x samples %d size %ux%ux%u levels %u, call site %s+%#llx",
+        what, why, id, o->serial, o->magic, o->d.target, o->d.format, o->d.flags, o->d.samples, o->d.width, o->d.height, o->d.depth, o->d.levels,
+        m ? m->name : "?", m ? lr - (uint64_t)m->base : lr);
+}
+static void tex_reg_check(const char *what, int id, const NVNtexture *t, uint64_t lr) {
+    const tex_t *o = (const tex_t *)t; if (!o) return;
+    const char *why = o->magic != MAGIC('T', 'E', 'X', 0) ? "not an initialized texture" : nvn_texdesc_metal_check(&o->d);
+    if (why) tex_diag(what, id, o, why, lr);
+}
+NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
+    (void)tp; tex_reg_check("RegisterTexture", id, t, (uint64_t)__builtin_return_address(0)); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
+}
 // 图像描述符与贴图描述符同在贴图池、同一编号空间（回放层的图像槽按同一张登记表取贴图，见 nvn_mtl.m NVN_RB_IMG）
 // Image descriptors live in the texture pool alongside texture descriptors, in the same ID space (the replay layer's image slots fetch textures from the same registration table, see nvn_mtl.m NVN_RB_IMG)
-NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) { (void)tp; mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v); }
+NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
+    (void)tp; tex_reg_check("RegisterImage", id, t, (uint64_t)__builtin_return_address(0)); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
+}
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
     *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); return 1;
 }
@@ -331,6 +349,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     { nvn_texlayout L; nvn_tex_layout(&o->d, &L); o->size = (uint32_t)L.size; o->layer_size = (uint32_t)L.layer_size; if (L.size >> 32) LOG("【红】TextureInitialize 存储 %#llx 超过 4 GB", L.size); }
     o->mem = s->pool && s->pool->mem ? s->pool->mem + s->off : NULL;
     o->serial = nvn_new_serial();
+    { const char *why = !o->d.format ? "format 0" : nvn_texdesc_metal_check(&o->d); if (why) tex_diag("TextureInitialize", -1, o, why, (uint64_t)__builtin_return_address(0)); }
     if (g_log && o->d.width == 1920 && o->d.height == 1080) { const uint8_t *q = (const uint8_t *)t; char hx[0xC0 * 2 + 1]; for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] Texture %p 0xC0 字节：%s", (void *)t, hx); }
     OLOG("Texture %p ser %llu %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx mem=%p", (void *)t, o->serial, o->d.width, o->d.height, o->d.depth,
          o->d.levels, o->d.format, o->d.target, o->d.flags, o->size, (void *)o->mem);
