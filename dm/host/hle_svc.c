@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <sys/mman.h>
 #include <TargetConditionals.h>
+#include <mach/mach.h>
 #include <errno.h>
 #include <unistd.h>
 #include <unistd.h>
@@ -32,6 +33,27 @@ static uint8_t *g_heap; static size_t g_heap_cur, g_heap_cap; static int g_heap_
 int dm_guest_heap_readable(uint64_t a, size_t n) { uint64_t b = (uint64_t)(uintptr_t)g_heap; size_t cur = g_heap_cur; return g_heap && a >= b && n <= cur && a - b <= cur - n; }
 static uint8_t *g_alias; static size_t g_alias_cap;
 static uint8_t *g_stack; static size_t g_stack_cap;
+
+// Physical memory in the alias region (SDK VammManager): Horizon maps it in 4 KB pages, the host page is 16 KB on Apple silicon. A host page is
+// accessible while any of its 4 KB subpages is mapped. An unmapped subpage is zeroed while its host page stays in use; a host page with no mapped
+// subpage left is replaced by a fresh anonymous PROT_NONE page, so a later map always reads zero (fresh physical memory on the real device).
+static uint8_t *g_alias_bits; static pthread_mutex_t g_alias_lock = PTHREAD_MUTEX_INITIALIZER;   // one bit per 4 KB page of the alias region
+static int alias_bit(size_t i) { return g_alias_bits[i >> 3] >> (i & 7) & 1; }
+static void alias_phys(uint8_t *a, size_t size, int map) {
+    size_t hp = vm_page_size, sub = hp / 0x1000;
+    pthread_mutex_lock(&g_alias_lock);
+    if (!g_alias_bits && !(g_alias_bits = calloc(g_alias_cap / 0x1000 / 8 + 1, 1))) die("alias 位图分配失败");
+    size_t first = (size_t)(a - g_alias) / 0x1000, n = size / 0x1000;
+    for (size_t i = first; i < first + n; i++) if (map) g_alias_bits[i >> 3] |= 1 << (i & 7); else g_alias_bits[i >> 3] &= ~(1 << (i & 7));
+    for (size_t h = first / sub * sub; h < first + n; h += sub) {   // every host page the range touches
+        int used = 0; for (size_t k = h; k < h + sub; k++) used |= alias_bit(k);
+        uint8_t *hpage = g_alias + h * 0x1000;
+        if (map) { if (mprotect(hpage, hp, PROT_READ | PROT_WRITE)) die("MapPhysicalMemory mprotect %p errno=%d", hpage, errno); }
+        else if (used) { for (size_t k = h; k < h + sub; k++) if (k >= first && k < first + n) memset(g_alias + k * 0x1000, 0, 0x1000); }
+        else if (mmap(hpage, hp, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == MAP_FAILED) die("UnmapPhysicalMemory 换新页 %p errno=%d", hpage, errno);
+    }
+    pthread_mutex_unlock(&g_alias_lock);
+}
 
 static void mem_init(void) {
     if (g_as) return;
@@ -217,9 +239,8 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     case 0x2C: case 0x2D: {  // MapPhysicalMemory / UnmapPhysicalMemory(addr, size)：只许在 alias 区内（SDK 的 VammManager 用） | MapPhysicalMemory / UnmapPhysicalMemory(addr, size): only allowed inside the alias region (used by the SDK's VammManager)
         uint8_t *a = (uint8_t *)regs[0]; size_t size = regs[1];
         if (a < g_alias || a + size > g_alias + g_alias_cap) { LOG("SVC %#x 越出 alias 区 %p+%#zx", num, a, size); regs[0] = 0xD401; return 0; }
-        int rc = num == 0x2C ? mprotect(a, size, PROT_READ | PROT_WRITE)
-                             : (madvise(a, size, MADV_FREE), mprotect(a, size, PROT_NONE));
-        if (rc) die("SVC %#x mprotect %p+%#zx errno=%d", num, a, size, errno);
+        if (((uintptr_t)a | size) & 0xfff) die("SVC %#x 地址 / 长度不是 4 KB 对齐 %p+%#zx（SDK 不会这样调）", num, a, size);
+        alias_phys(a, size, num == 0x2C);
         if (g_flag.svc) LOG("%sPhysicalMemory %p+%#zx", num == 0x2C ? "Map" : "Unmap", a, size);
         regs[0] = 0; return 0;
     }

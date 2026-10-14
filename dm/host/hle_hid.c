@@ -469,3 +469,90 @@ HLE_FORCE("_ZN2nn3hid20GetTouchScreenStatesILm16EEEiPNS0_16TouchScreenStateIXT_E
     touch_fill(out, guest_ns());
     return 1;
 }
+
+// ---------- nn::hid APIs other games use (Unity's input module links the whole set) ----------
+// Npad state variants share fill(): a style the host does not connect (Joy-Con dual / left / right) reads as not connected.
+// Touch: TouchScreenState<N> = { int64 sampling; int32 count; int32 _r; TouchState touches[N] } (0x28 each, same as <16> above);
+// filled through a 16-slot scratch and cut to N, so a smaller array is never overrun.
+static void touch_fill_n(void *out, unsigned n) {
+    TouchState16 t; touch_fill(&t, guest_ns());
+    if (t.count > (int32_t)n) t.count = (int32_t)n;
+    memcpy(out, &t, 16 + (size_t)n * 0x28);
+}
+#define TOUCH_N(n) \
+    HLE_FORCE_OPT("_ZN2nn3hid20GetTouchScreenStatesILm" #n "EEEiPNS0_16TouchScreenStateIXT_EEEi", "触屏状态<" #n ">：前端触点", int, h_hid_GetTouchs##n, void *out, int cnt) { if (cnt < 1) return 0; touch_fill_n(out, n); return 1; } \
+    HLE_FORCE_OPT("_ZN2nn3hid19GetTouchScreenStateILm" #n "EEEvPNS0_16TouchScreenStateIXT_EEE", "触屏状态<" #n ">（单份）：前端触点", void, h_hid_GetTouch1_##n, void *out) { touch_fill_n(out, n); }
+TOUCH_N(1) TOUCH_N(2) TOUCH_N(3) TOUCH_N(4) TOUCH_N(5) TOUCH_N(6) TOUCH_N(7) TOUCH_N(8) TOUCH_N(9) TOUCH_N(10) TOUCH_N(11) TOUCH_N(12) TOUCH_N(13) TOUCH_N(14) TOUCH_N(15)
+HLE_FORCE_OPT("_ZN2nn3hid19GetTouchScreenStateILm16EEEvPNS0_16TouchScreenStateIXT_EEE", "触屏状态<16>（单份）：前端触点", void, h_hid_GetTouch1_16, void *out) { touch_fill_n(out, 16); }
+
+enum { STYLE_JOYDUAL = 1u << 2, STYLE_JOYLEFT = 1u << 3, STYLE_JOYRIGHT = 1u << 4 };
+#define NPAD_ONE(mangled, style, cname) HLE_FORCE_OPT(mangled, "手柄状态（单份）；取 dm_input", void, cname, NpadState *s, const uint32_t *id) { fill(s, *id, style); }
+#define NPAD_MANY(mangled, style, cname) HLE_FORCE_OPT(mangled, "手柄状态（多份，只写第 0 份）；取 dm_input", int, cname, NpadState *s, int n, const uint32_t *id) { if (n < 1) return 0; fill(s, *id, style); return 1; }
+NPAD_ONE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj", STYLE_JOYDUAL, h_hid_GetJoyDual)
+NPAD_ONE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj", STYLE_JOYLEFT, h_hid_GetJoyLeft)
+NPAD_ONE("_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj", STYLE_JOYRIGHT, h_hid_GetJoyRight)
+NPAD_MANY("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadFullKeyStateEiRKj", STYLE_FULLKEY, h_hid_GetFullKeyN)
+NPAD_MANY("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadHandheldStateEiRKj", STYLE_HANDHELD, h_hid_GetHandheldN)
+NPAD_MANY("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyDualStateEiRKj", STYLE_JOYDUAL, h_hid_GetJoyDualN)
+NPAD_MANY("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyLeftStateEiRKj", STYLE_JOYLEFT, h_hid_GetJoyLeftN)
+NPAD_MANY("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", STYLE_JOYRIGHT, h_hid_GetJoyRightN)
+
+static _Atomic int g_hold_type = 1, g_comm_mode;   // NpadJoyHoldType 1 = horizontal (system default)
+HLE_FORCE_OPT("_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", "Joy-Con 握法：宿主记住，查询时原样返回", void, h_hid_SetHold, int t) { atomic_store(&g_hold_type, t); }
+HLE_FORCE_OPT("_ZN2nn3hid18GetNpadJoyHoldTypeEv", "Joy-Con 握法：返回游戏设过的值", int, h_hid_GetHold, void) { return atomic_load(&g_hold_type); }
+HLE_FORCE_OPT("_ZN2nn3hid24SetNpadCommunicationModeENS0_21NpadCommunicationModeE", "手柄通信模式：宿主记住", void, h_hid_SetComm, int m) { atomic_store(&g_comm_mode, m); }
+HLE_FORCE_OPT("_ZN2nn3hid24GetNpadCommunicationModeEv", "手柄通信模式：返回游戏设过的值", int, h_hid_GetComm, void) { return atomic_load(&g_comm_mode); }
+HLE_FORCE_OPT("_ZN2nn3hid29GetNpadHandheldActivationModeEv", "掌机手柄激活方式：宿主固定 0", int, h_hid_GetHhMode, void) { return 0; }
+HLE_FORCE_OPT("_ZN2nn3hid24GetSupportedNpadStyleSetEv", "支持的手柄样式：宿主接的就是全键 + 掌机", uint32_t, h_hid_GetSupStyles, void) { return STYLE_FULLKEY | STYLE_HANDHELD; }
+HLE_FORCE_OPT("_ZN2nn3hid20GetNpadJoyAssignmentERKj", "Joy-Con 分配方式：0 = 双手", int, h_hid_GetAssign, const uint32_t *id) { (void)id; return 0; }
+HLE_FORCE_OPT("_ZN2nn3hid19GetPlayerLedPatternERKj", "玩家灯样式：1 号灯", uint32_t, h_hid_LedPattern, const uint32_t *id) { (void)id; return 1; }
+// Result: the caller checks it, nothing is written
+HLE_FORCE_OPT("_ZN2nn3hid22GetNpadControllerColorEPNS0_19NpadControllerColorERKj", "手柄颜色：宿主没有，返回失败、不写", Result, h_hid_Color1, void *c, const uint32_t *id) { (void)c; (void)id; return RES_FAIL; }
+HLE_FORCE_OPT("_ZN2nn3hid22GetNpadControllerColorEPNS0_19NpadControllerColorES2_RKj", "手柄颜色（左右）：宿主没有，返回失败、不写", Result, h_hid_Color2, void *l, void *r, const uint32_t *id) { (void)l; (void)r; (void)id; return RES_FAIL; }
+// Style set update event: bound once per caller-provided event, never signaled (the host's controller style only changes with the operation mode)
+HLE_FORCE_OPT("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS3_14EventClearModeE", "手柄样式变化事件：绑内核事件，不触发", void, h_hid_BindStyleEv, const uint32_t *id, void *ev, int mode) {
+    (void)id; hle_bind_system_event(ev, mode == 1);
+}
+
+// Stubs: logged once, return 0, write nothing (structure sizes not established yet; see the log for which ones the game calls)
+#define HID_STUB(mangled, cname, label) HLE_FORCE_OPT(mangled, "hid 桩：记一次、返回 0、不写", uint64_t, cname, void) { static int once; if (!once++) LOG("hid 桩被调用：%s", label); return 0; }
+HID_STUB("_ZN2nn3hid13GetMouseStateEPNS0_10MouseStateERKNS0_11MouseHandleE", h_hid_stub1, "nn::hid::GetMouseState(nn::hid::MouseState*, nn::hid::MouseHandle const&)")
+HID_STUB("_ZN2nn3hid14DisconnectNpadERKj", h_hid_stub2, "nn::hid::DisconnectNpad(unsigned int const&)")
+HID_STUB("_ZN2nn3hid14GetMouseHandleEv", h_hid_stub3, "nn::hid::GetMouseHandle()")
+HID_STUB("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEiRKNS0_11MouseHandleE", h_hid_stub4, "nn::hid::GetMouseStates(nn::hid::MouseState*, int, nn::hid::MouseHandle const&)")
+HID_STUB("_ZN2nn3hid15InitializeMouseERKNS0_11MouseHandleE", h_hid_stub5, "nn::hid::InitializeMouse(nn::hid::MouseHandle const&)")
+HID_STUB("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", h_hid_stub6, "nn::hid::GetGestureStates(nn::hid::GestureState*, int)")
+HID_STUB("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", h_hid_stub7, "nn::hid::GetKeyboardState(nn::hid::KeyboardState*)")
+HID_STUB("_ZN2nn3hid17InitializeGestureEii", h_hid_stub8, "nn::hid::InitializeGesture(int, int)")
+HID_STUB("_ZN2nn3hid17InitializeGestureEv", h_hid_stub9, "nn::hid::InitializeGesture()")
+HID_STUB("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub10, "nn::hid::StopSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid18InitializeKeyboardEv", h_hid_stub11, "nn::hid::InitializeKeyboard()")
+HID_STUB("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub12, "nn::hid::StartSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid18SwapNpadAssignmentERKjS2_", h_hid_stub13, "nn::hid::SwapNpadAssignment(unsigned int const&, unsigned int const&)")
+HID_STUB("_ZN2nn3hid19GetDebugMouseHandleEv", h_hid_stub14, "nn::hid::GetDebugMouseHandle()")
+HID_STUB("_ZN2nn3hid20StopLrAssignmentModeEv", h_hid_stub15, "nn::hid::StopLrAssignmentMode()")
+HID_STUB("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", h_hid_stub16, "nn::hid::GetSixAxisSensorState(nn::hid::SixAxisSensorState*, nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid21InitializeTouchScreenEii", h_hid_stub17, "nn::hid::InitializeTouchScreen(int, int)")
+HID_STUB("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", h_hid_stub18, "nn::hid::IsSixAxisSensorAtRest(nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", h_hid_stub19, "nn::hid::ShowControllerSupport(nn::hid::ControllerSupportResultInfo*, nn::hid::ControllerSupportArg const&)")
+HID_STUB("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", h_hid_stub20, "nn::hid::ShowControllerSupport(nn::hid::ControllerSupportArg const&)")
+HID_STUB("_ZN2nn3hid21StartLrAssignmentModeEv", h_hid_stub21, "nn::hid::StartLrAssignmentMode()")
+HID_STUB("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", h_hid_stub22, "nn::hid::GetSixAxisSensorStates(nn::hid::SixAxisSensorState*, int, nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", h_hid_stub23, "nn::hid::GetVibrationDeviceInfo(nn::hid::VibrationDeviceInfo*, nn::hid::VibrationDeviceHandle const&)")
+HID_STUB("_ZN2nn3hid23GetActualVibrationValueEPNS0_14VibrationValueERKNS0_21VibrationDeviceHandleE", h_hid_stub24, "nn::hid::GetActualVibrationValue(nn::hid::VibrationValue*, nn::hid::VibrationDeviceHandle const&)")
+HID_STUB("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", h_hid_stub25, "nn::hid::GetSixAxisSensorHandles(nn::hid::SixAxisSensorHandle*, int, unsigned int const&, nn::util::BitFlagSet<32, nn::hid::NpadStyleTag>)")
+HID_STUB("_ZN2nn3hid23MergeSingleJoyAsDualJoyERKjS2_", h_hid_stub26, "nn::hid::MergeSingleJoyAsDualJoy(unsigned int const&, unsigned int const&)")
+HID_STUB("_ZN2nn3hid24ShowControllerStrapGuideEv", h_hid_stub27, "nn::hid::ShowControllerStrapGuide()")
+HID_STUB("_ZN2nn3hid25EnableSixAxisSensorFusionERKNS0_19SixAxisSensorHandleEb", h_hid_stub28, "nn::hid::EnableSixAxisSensorFusion(nn::hid::SixAxisSensorHandle const&, bool)")
+HID_STUB("_ZN2nn3hid25GetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleE", h_hid_stub29, "nn::hid::GetGyroscopeZeroDriftMode(nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE", h_hid_stub30, "nn::hid::SetGyroscopeZeroDriftMode(nn::hid::SixAxisSensorHandle const&, nn::hid::GyroscopeZeroDriftMode const&)")
+HID_STUB("_ZN2nn3hid28IsSixAxisSensorFusionEnabledERKNS0_19SixAxisSensorHandleE", h_hid_stub31, "nn::hid::IsSixAxisSensorFusionEnabled(nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid28SetNpadJoyAssignmentModeDualERKj", h_hid_stub32, "nn::hid::SetNpadJoyAssignmentModeDual(unsigned int const&)")
+HID_STUB("_ZN2nn3hid28ShowControllerFirmwareUpdateERKNS0_27ControllerFirmwareUpdateArgE", h_hid_stub33, "nn::hid::ShowControllerFirmwareUpdate(nn::hid::ControllerFirmwareUpdateArg const&)")
+HID_STUB("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleEPjRKjNS0_17NpadJoyDeviceTypeE", h_hid_stub34, "nn::hid::SetNpadJoyAssignmentModeSingle(unsigned int*, unsigned int const&, nn::hid::NpadJoyDeviceType)")
+HID_STUB("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKj", h_hid_stub35, "nn::hid::SetNpadJoyAssignmentModeSingle(unsigned int const&)")
+HID_STUB("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKjNS0_17NpadJoyDeviceTypeE", h_hid_stub36, "nn::hid::SetNpadJoyAssignmentModeSingle(unsigned int const&, nn::hid::NpadJoyDeviceType)")
+HID_STUB("_ZN2nn3hid32GetSixAxisSensorFusionParametersEPfS1_RKNS0_19SixAxisSensorHandleE", h_hid_stub37, "nn::hid::GetSixAxisSensorFusionParameters(float*, float*, nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid32SetSixAxisSensorFusionParametersERKNS0_19SixAxisSensorHandleEff", h_hid_stub38, "nn::hid::SetSixAxisSensorFusionParameters(nn::hid::SixAxisSensorHandle const&, float, float)")
+HID_STUB("_ZN2nn3hid34ResetSixAxisSensorFusionParametersERKNS0_19SixAxisSensorHandleE", h_hid_stub39, "nn::hid::ResetSixAxisSensorFusionParameters(nn::hid::SixAxisSensorHandle const&)")
+HID_STUB("_ZN2nn3hid41IsFirmwareUpdateAvailableForSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub40, "nn::hid::IsFirmwareUpdateAvailableForSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")
