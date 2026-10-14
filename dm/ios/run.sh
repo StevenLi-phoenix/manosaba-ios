@@ -105,10 +105,17 @@ if [ "$1" = build ]; then
     python3 tools/project_m3.py $SPEC project_m3.yml $FREE || { rm -f project_free.yml; t "🔴 DM_IOS_M3：老接口版的工程描述没生成（见上）"; exit 1; }
     SPEC=project_m3.yml
   fi
+  if [ "$GAME_ID" != d2r ]; then   # 按游戏换显示名与图标（tools/project_game.py）；图标取本机 $DM_ROOT/data/<游戏>/AppIcon1024.png（1024²、不透明），游戏美术不进仓库 | per-game display name and icon (tools/project_game.py); the icon comes from the local $DM_ROOT/data/<game>/AppIcon1024.png (1024², opaque), game art is not committed
+    ICON=${DM_ROOT:-$HOME/dm-work}/data/$GAME_ID/AppIcon1024.png
+    [ -f "$ICON" ] || { rm -f project_free.yml project_m3.yml; t "🔴 缺 App 图标 $ICON（1024x1024、不透明 PNG）"; exit 1; }
+    rm -rf Gen/AppAssets.xcassets && cp -R Assets.xcassets Gen/AppAssets.xcassets && cp "$ICON" Gen/AppAssets.xcassets/AppIcon.appiconset/AppIcon1024.png
+    python3 tools/project_game.py $SPEC project_game.yml $GAME_ID || { rm -f project_free.yml project_m3.yml; t "🔴 按游戏的工程描述没生成（见上）"; exit 1; }
+    SPEC=project_game.yml
+  fi
   if [ $SPEC = project.yml ]; then
   xcodegen generate -q >/dev/null || { t "🔴 xcodegen 失败"; exit 1; }
   else
-    xcodegen generate -q --spec $SPEC >/dev/null; XG=$?; rm -f project_free.yml project_m3.yml; [ $XG = 0 ] || { t "🔴 xcodegen 失败"; exit 1; }
+    xcodegen generate -q --spec $SPEC >/dev/null; XG=$?; rm -f project_free.yml project_m3.yml project_game.yml; [ $XG = 0 ] || { t "🔴 xcodegen 失败"; exit 1; }
     [ -z "$FREE" ] || t "按免费账号生成：不带 iCloud / 持续执行 / 增加内存上限 / 扩展虚拟寻址，也不带资源下载扩展（只占一个应用标识）"
     [ "${DM_IOS_M3:-0}" != 1 ] || t "按老接口版生成：部署目标 iOS 18.0、图形后端不用 Metal 4"
   fi

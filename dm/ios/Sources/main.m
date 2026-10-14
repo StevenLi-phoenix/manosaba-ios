@@ -619,11 +619,8 @@ static void boot_prepare(void) {
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
 #ifdef DM_GAME_manosaba
     // 系统共享字体（玩家自己主机导出的 BFTTF，hle_pl.c）：和 RomFS 一样由开发机推到 Application Support/sysfont
-    // 画面：游戏自己按 1920x1080（主机模式）出图，前端的游戏视图按 16:9 居中（front_game_res → letterbox_rect），触点归一化坐标才落在画面上
     // System shared fonts (BFTTF exported from the player's own console, hle_pl.c): pushed to Application Support/sysfont from the dev machine, like the RomFS
-    // Picture: the game itself outputs 1920x1080 (docked mode); the front end's game view is 16:9 centered (front_game_res → letterbox_rect), so normalized touch coordinates land on the picture
-    setenv("DM_SYSFONT", [support stringByAppendingPathComponent:@"sysfont"].fileSystemRepresentation, 0);
-    setenv("DM_GAME_RES", "1920x1080", 0);
+    setenv("DM_SYSFONT", [support stringByAppendingPathComponent:@"sysfont"].fileSystemRepresentation, 0);   // 画面比例（DM_GAME_RES）在 main() 开头设 | the picture aspect ratio (DM_GAME_RES) is set at the start of main()
 #endif
 #ifndef DM_GAME_manosaba   // manosaba 没有 RomFS 覆盖层 | manosaba has no RomFS overlay
     NSString *bundledOverlay = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:g_astc_dir ? @"romfs_overlay_astc" : @"romfs_overlay"];   // 老机型补充包：贴图指向补充包的那套 | Legacy Device Pack: the set whose textures point to the Legacy Device Pack
@@ -1135,6 +1132,13 @@ static void bg_relaunch_test(void) {
 
 int main(int argc, char *argv[]) {
     g_T[2] = since_start();
+#ifdef DM_GAME_manosaba
+    // 游戏画面比例要在建游戏视图（场景连接，front_ios_view → front_game_res 第一次调用即定死）之前就位，boot_prepare 在那之后才跑：
+    // 晚了游戏视图就铺满整窗，而画面按 16:9 居中留边出，触点按整窗归一化就偏（越往两侧越歪）
+    // The game picture aspect ratio must be in place before the game view is built (scene connection; front_ios_view → front_game_res fixes it on its first call), and boot_prepare runs only after that:
+    // too late and the game view fills the whole window while the picture is output 16:9 centered with margins, so touches normalized to the whole window are off (more so towards the sides)
+    setenv("DM_GAME_RES", "1920x1080", 0);
+#endif
     // 文件描述符上限：iOS 进程缺省软上限 256，而游戏进局后常开约 255 个（数据文件、存档、日志、Metal 缓存…），差一个就满——
     // 满了以后任何 open 都失败：存档读不出（首页变成建角页）、Documents 里的文件读不到（NSPOSIXErrorDomain 24 Too many open files）。
     // 之前没撞上是因为从 devicectl 启动时系统有时给 2560。启动第一件事把软上限提到 4096（不超过硬上限）

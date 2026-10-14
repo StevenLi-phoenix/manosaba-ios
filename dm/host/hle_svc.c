@@ -44,6 +44,12 @@ static void alias_phys(uint8_t *a, size_t size, int map) {
     pthread_mutex_lock(&g_alias_lock);
     if (!g_alias_bits && !(g_alias_bits = calloc(g_alias_cap / 0x1000 / 8 + 1, 1))) die("alias 位图分配失败");
     size_t first = (size_t)(a - g_alias) / 0x1000, n = size / 0x1000;
+    // 用量读数：已映射 4 KB 页数、峰值、用到的最高偏移；峰值每过 128 MB 记一行（定 alias 区要留多大，iOS 预留有上限）
+    // Usage readout: mapped 4 KB pages, peak, highest offset used; one log line each time the peak passes another 128 MB (sizes the alias region; the iOS reservation has a ceiling)
+    static size_t mapped, peak, top, logged;
+    for (size_t i = first; i < first + n; i++) { int was = alias_bit(i); if (map && !was) mapped++; else if (!map && was) mapped--; }
+    if (map && first + n > top) top = first + n;
+    if (mapped > peak) { peak = mapped; if ((peak >> 15) > logged) { logged = peak >> 15; LOG("alias 区用量峰值 %zu MB（最高偏移 %zu MB，区大小 %zu MB）", peak >> 8, top >> 8, g_alias_cap >> 20); } }
     for (size_t i = first; i < first + n; i++) if (map) g_alias_bits[i >> 3] |= 1 << (i & 7); else g_alias_bits[i >> 3] &= ~(1 << (i & 7));
     for (size_t h = first / sub * sub; h < first + n; h += sub) {   // every host page the range touches
         int used = 0; for (size_t k = h; k < h + sub; k++) used |= alias_bit(k);
@@ -66,8 +72,27 @@ static void mem_init(void) {
         alias_cap = TARGET_OS_IPHONE ? 0xC0000000ull : 0x100000000ull;
         g_reserve = TARGET_OS_IPHONE ? 6ull << 30 : 12ull << 30;
         const char *e = getenv("DM_GUEST_AS_GB"); if (e && atoi(e) >= 6) g_reserve = (size_t)atoi(e) << 30;
+#if TARGET_OS_IPHONE
+        // iOS 不带扩展虚拟寻址（免费账号签不了）时，一次能预留多大因机型 / 系统而异：iPhone 17 Pro（iOS 26.4）上 6 GB 已失败。
+        // manosaba（Unity）从不 SetHeapSize，内存全走 alias 区（VammManager：开头约 1 GB 是它的节点堆，Mac 上剧情 90 秒用量峰值 1166 MB、最高偏移 2460 MB）。
+        // 所以从 6 GB 起每次减 256 MB 试到成功为止：开头 256 MB、栈 256 MB、堆 256 MB 之外全给 alias；alias 不足 1.5 GB 就报出拿到多少后退出
+        // On iOS without extended virtual addressing (a free account cannot sign it) how much can be reserved at once varies by device / OS: 6 GB already fails on an iPhone 17 Pro (iOS 26.4).
+        // manosaba (Unity) never calls SetHeapSize; all its memory goes through the alias region (VammManager: the first ~1 GB is its node heap; on the Mac a 90 s story run peaks at 1166 MB used, highest offset 2460 MB).
+        // So try from 6 GB downward in 256 MB steps until it succeeds: everything except the 256 MB prefix, 256 MB stack and 256 MB heap goes to the alias region; with less than 1.5 GB of alias, report what was obtained and exit
+        if (!e) {
+            for (size_t r = g_reserve; r >= 0x80000000ull; r -= 0x10000000ull) {
+                g_as = mmap(NULL, r, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+                if (g_as != MAP_FAILED) { g_reserve = r; break; }
+                g_as = NULL;
+            }
+            if (!g_as) die("reserve guest AS：2 GB 也预留不了");
+            alias_cap = g_reserve - 0x30000000ull;
+            LOG("客体地址空间：iOS 一次预留到 %zu MB（alias %zu MB）", g_reserve >> 20, alias_cap >> 20);
+            if (alias_cap < 0x60000000ull) die("reserve guest AS：只预留到 %zu MB，alias 区 %zu MB 不够（VammManager 自留约 1 GB）", g_reserve >> 20, alias_cap >> 20);
+        }
+#endif
     }
-    g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (!g_as) g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (g_as == MAP_FAILED) die("reserve guest AS %#zx", RESERVE);
     // 固定划分（都在预留块内）：alias（D2R 512MB）、stack 256MB、heap 其余（D2R 从 2GB 处起）
     // Fixed partition (all inside the reserved block): alias (D2R 512MB), stack 256MB, heap the rest (D2R: starting at 2GB)
