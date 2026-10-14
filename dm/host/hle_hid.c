@@ -522,7 +522,13 @@ HID_STUB("_ZN2nn3hid14GetMouseHandleEv", h_hid_stub3, "nn::hid::GetMouseHandle()
 HID_STUB("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEiRKNS0_11MouseHandleE", h_hid_stub4, "nn::hid::GetMouseStates(nn::hid::MouseState*, int, nn::hid::MouseHandle const&)")
 HID_STUB("_ZN2nn3hid15InitializeMouseERKNS0_11MouseHandleE", h_hid_stub5, "nn::hid::InitializeMouse(nn::hid::MouseHandle const&)")
 HID_STUB("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", h_hid_stub6, "nn::hid::GetGestureStates(nn::hid::GestureState*, int)")
-HID_STUB("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", h_hid_stub7, "nn::hid::GetKeyboardState(nn::hid::KeyboardState*)")
+// KeyboardState = 0x30 字节（sdk 的 detail::GetKeyboardState sdk+0x502710 按 0x30 拷贝）：int64 采样号 + 修饰 / 属性 + 256 位按键。
+// 宿主不接 USB 键盘：只递增采样号，其余为 0（未连接、无键按下）。原先是不写的桩，游戏每帧读到未初始化的栈内容。
+// KeyboardState = 0x30 bytes (the sdk's detail::GetKeyboardState at sdk+0x502710 copies 0x30): int64 sampling number + modifiers / attributes + 256 key bits.
+// The host attaches no USB keyboard: only the sampling number advances, the rest is 0 (not connected, no key down). It used to be a stub that wrote nothing, so the game read uninitialized stack contents every frame.
+HLE_FORCE_OPT("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", "键盘状态：未连接（采样号递增、其余 0）", void, h_hid_GetKeyboard, uint8_t *out) {
+    static _Atomic int64_t n; memset(out, 0, 0x30); int64_t v = atomic_fetch_add(&n, 1) + 1; memcpy(out, &v, 8);
+}
 HID_STUB("_ZN2nn3hid17InitializeGestureEii", h_hid_stub8, "nn::hid::InitializeGesture(int, int)")
 HID_STUB("_ZN2nn3hid17InitializeGestureEv", h_hid_stub9, "nn::hid::InitializeGesture()")
 HID_STUB("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub10, "nn::hid::StopSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")

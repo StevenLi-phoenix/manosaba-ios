@@ -53,6 +53,10 @@ static int file_path(char *p, size_t n) {
 
 static void load_once(void) {
     if (atomic_load(&g_loaded)) return;
+    if (!dm_is_d2r()) {   // 这些都是 D2R 的玩法开关：别的游戏不读盘、不建文件，一律缺省 | These are all D2R gameplay switches: for other games nothing is read or created, everything stays at its default
+        for (int i = 0; i < NK; i++) { atomic_store(&g_val[i], k_def[i]); atomic_store(&g_pend[i], -1); }
+        atomic_store(&g_loaded, 1); return;
+    }
     char p[1100]; if (!file_path(p, sizeof p)) return;   // 存档还没挂上：先按缺省开答，挂上后再读 | The save is not mounted yet: answer with the default (on) for now, and read again after it is mounted
     int v[NK]; for (int i = 0; i < NK; i++) v[i] = k_def[i];
     FILE *f = fopen(p, "r"); char ln[128];
@@ -70,7 +74,7 @@ int dm_custom_get(const char *key) {
     return atomic_load(&g_loaded) ? atomic_load(&g_val[i]) : k_def[i];
 }
 int dm_custom_lang_explicit(void) { load_once(); return atomic_load(&g_loaded) ? atomic_load(&g_lang_explicit) : -1; }
-int dm_fps_setting(void) { return dm_custom_get("eco_fps") ? 30 : 60; }   // 图形层 nvn_mtl.m mtl_fps_target 每帧读（弱符号的强定义） | Read every frame by mtl_fps_target in the graphics layer nvn_mtl.m (strong definition of a weak symbol)
+int dm_fps_setting(void) { return dm_is_d2r() && dm_custom_get("eco_fps") ? 30 : 60; }   // 省电 30 帧是 D2R 的设置项；别的游戏按自己设的出图间隔 | the 30 fps power-saving cap is a D2R setting; other games follow their own present interval   // 图形层 nvn_mtl.m mtl_fps_target 每帧读（弱符号的强定义） | Read every frame by mtl_fps_target in the graphics layer nvn_mtl.m (strong definition of a weak symbol)
 static void save(void) {
     char p[1100], t[1120]; if (!file_path(p, sizeof p)) { LOG("【红】自定义设置：存档目录没挂上，没存盘"); return; }
     snprintf(t, sizeof t, "%s.tmp", p); FILE *f = fopen(t, "w"); int ok = f != NULL;
