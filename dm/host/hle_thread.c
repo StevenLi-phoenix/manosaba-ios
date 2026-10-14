@@ -27,12 +27,16 @@
 #include <mach/mach.h>
 #include <pthread/qos.h>
 #include <dlfcn.h>
+#include <stdatomic.h>
+#include <unistd.h>
 
 #define R_TIMEOUT     0xEA01u   // 内核模块 1，描述 117 | Kernel module 1, description 117
 #define R_CANCELLED   0xEC01u   // 118
 #define R_BAD_HANDLE  0xE401u   // 114
 #define R_BAD_STATE   0xFA01u   // 125
 #define R_OUT_OF_RES  0xCE01u   // 103
+#define R_BAD_ENUM    0xF001u   // 120 InvalidEnumValue
+#define R_BUSY        0xF401u   // 122 Busy
 #define WAITERS_BIT   0x40000000u
 #define H_CUR_THREAD  0xFFFF8000u
 
@@ -55,6 +59,13 @@ typedef struct thr {
     uint64_t nsvc;             // SVC 次数（现场导出用） | SVC count (for the state dump)
     mach_port_t mport;         // 宿主线程端口（取 CPU 时间） | Host thread port (to get CPU time)
     uint32_t qos;
+    // 暂停（SetThreadActivity / GetThreadContext3，IL2CPP 的 GC 停世界用）：见本文件「线程暂停」一节
+    // Pausing (SetThreadActivity / GetThreadContext3, used by the IL2CPP GC to stop the world): see the "thread pausing" section of this file
+    uint64_t tsd;              // 本线程 tpidrro_el0（TSD 基址）：读 K18（客体 x18）/ KTLS（tpidr_el0）槽 | This thread's tpidrro_el0 (TSD base): to read the K18 (guest x18) / KTLS (tpidr_el0) slots
+    _Atomic int in_svc;        // 正在 svc 门里（gate_dispatch 进出时置 / 清） | Currently inside an svc gate (set / cleared on gate_dispatch entry / exit)
+    uint64_t *svc_regs, svc_pc;   // 当前 svc 门存下的客体寄存器区与 svc 原地址 | Guest register area saved by the current svc gate and the svc's original address
+    _Atomic int pause_req, parked;   // 已请求暂停 / 已停在 svc 门出口 | Pause requested / stopped at the svc gate exit
+    int stop_kind;             // 暂停时的停法：1 = 在 svc 里（按门存的寄存器报）2 = Mach 挂起（按线程状态报） | How it was stopped: 1 = inside an svc (report from the gate's saved registers) 2 = Mach-suspended (report from the thread state)
 } thr_t;
 static thr_t *g_all;
 
@@ -163,6 +174,117 @@ static void lock_acquire_for(thr_t *t, uint64_t addr, uint32_t tag) {
     t->wseq = ++g_wseq;                                  // 内核把它新插进锁持有者的等待队列：同优先级排在已有锁等待者之后 | The kernel inserts it anew into the lock owner's wait queue: at equal priority it goes after the existing lock waiters
 }
 
+// ---------- 线程暂停（svc 0x32 SetThreadActivity / 0x33 GetThreadContext3） ----------
+// 语义按 Atmosphère mesosphère（kern_svc_activity.cpp / kern_k_thread.cpp SetActivity、GetThreadContext3，kern_k_thread_context.cpp GetUserContext）：
+//   · 不能对自己（Busy）；线程须已启动未退出（InvalidState）；Paused 时已暂停 / Runnable 时未暂停 → InvalidState；活动值只有 0 / 1（InvalidEnumValue）。
+//   · Paused 返回前等到目标「不在任何核上跑」：在内核等待里的线程立即算停（它醒来也回不到用户态）。
+//   · GetThreadContext3 须已暂停；在 svc 里的线程只报 x19–x28、fp、lr、sp、pc 与 v8–v15（被调用者保存的部分），其余为 0；否则报全部寄存器。
+// 宿主对应：
+//   · 在 svc 门里（in_svc）= 在内核：不挂起，出门时（gate_dispatch 返回前）自己停在 G 上等恢复；上下文按门存的客体寄存器报
+//     （门块 stp x29,x30,[sp,#-16]! 后 blr dm_gate，dm_gate 再开 800 字节存 x0–x30 / q0–q31 ⇒ 客体 sp = 存区 + 816，客体 lr 在存区 + 808）。
+//   · 在客体代码里（pc 落在模块内）：Mach thread_suspend 挂起，按线程状态报；x18 取 K18 槽（改写器把客体 x18 搬进了 TSD 槽）。
+//     客体代码不持有任何宿主锁，挂着它不会让停世界期间的其他宿主调用卡死。
+//   · 在宿主代码里（HLE 实现）：若停在系统等待桩（条件变量 / 信号量 / 睡眠 / mach_msg）里，同「在内核等待」：挂起并按线程状态报
+//     （宿主帧就在客体栈上、sp 更低，从它往上扫覆盖全部客体帧）；否则放开它、稍后再试，直到它回到客体代码或进入等待。
+// Thread pausing (svc 0x32 SetThreadActivity / 0x33 GetThreadContext3)
+// Semantics follow Atmosphère mesosphère (kern_svc_activity.cpp / kern_k_thread.cpp SetActivity, GetThreadContext3, kern_k_thread_context.cpp GetUserContext):
+//   - Not on oneself (Busy); the thread must be started and not exited (InvalidState); already paused on Paused / not paused on Runnable → InvalidState; activity is only 0 / 1 (InvalidEnumValue).
+//   - Paused returns only once the target is "not running on any core": a thread in a kernel wait counts as stopped at once (even if it wakes it cannot return to user mode).
+//   - GetThreadContext3 requires the thread to be paused; a thread inside an svc reports only x19–x28, fp, lr, sp, pc and v8–v15 (the callee-saved part), the rest 0; otherwise all registers.
+// Host mapping:
+//   - Inside an svc gate (in_svc) = in the kernel: not suspended; on leaving the gate (before gate_dispatch returns) it stops itself on G until resumed; the context comes from the gate's saved guest registers
+//     (the gate block does stp x29,x30,[sp,#-16]! then blr dm_gate, and dm_gate opens 800 more bytes to save x0–x30 / q0–q31 ⇒ guest sp = save area + 816, guest lr at save area + 808).
+//   - In guest code (pc inside a module): Mach thread_suspend, report from the thread state; x18 is read from the K18 slot (the rewriter moved the guest's x18 into a TSD slot).
+//     Guest code holds no host locks, so keeping it suspended cannot hang other host calls during the stop-the-world.
+//   - In host code (an HLE implementation): if it is parked in a system wait stub (condition variable / semaphore / sleep / mach_msg), treat it like a kernel wait: suspend and report from the thread state
+//     (the host frames are on the guest stack with a lower sp, so scanning upward from it covers every guest frame); otherwise let it go and retry shortly, until it returns to guest code or enters a wait.
+#include <mach/thread_act.h>
+static struct { uint64_t a; } g_waitstub[16]; static int g_nwaitstub;
+static void waitstub_init(void) {
+    static const char *nm[] = {"__psynch_cvwait", "__semwait_signal", "__semwait_signal_nocancel", "semaphore_wait_trap", "semaphore_timedwait_trap",
+                               "mach_msg_trap", "mach_msg2_trap", "__select", "kevent", "kevent_id", "__workq_kernreturn"};
+    for (unsigned i = 0; i < sizeof nm / sizeof *nm; i++) { void *p = dlsym(RTLD_DEFAULT, nm[i]); if (p) g_waitstub[g_nwaitstub++].a = (uint64_t)p; }
+}
+static int in_waitstub(uint64_t pc) { for (int i = 0; i < g_nwaitstub; i++) if (pc >= g_waitstub[i].a && pc < g_waitstub[i].a + 0x40) return 1; return 0; }
+static uint64_t tsd_slot(const thr_t *t, pthread_key_t k) { return t->tsd ? ((const uint64_t *)(t->tsd & ~7ull))[k] : 0; }
+
+void thr_svc_enter(uint64_t *regs, uint64_t pc) {
+    thr_t *t = pthread_getspecific(g_keythr); if (!t) return;
+    t->svc_regs = regs; t->svc_pc = pc; atomic_store(&t->in_svc, 1);
+}
+void thr_svc_exit(void) {
+    thr_t *t = pthread_getspecific(g_keythr); if (!t) return;
+    atomic_store(&t->in_svc, 0);                 // 与暂停方「先置 pause_req 再读 in_svc」成对（都为顺序一致）：至少一方看见对方 | Pairs with the pauser's "set pause_req, then read in_svc" (both sequentially consistent): at least one side sees the other
+    if (!atomic_load(&t->pause_req)) return;
+    pthread_mutex_lock(&G);
+    atomic_store(&t->parked, 1);
+    while (atomic_load(&t->pause_req)) pthread_cond_wait(&t->cv, &G);
+    atomic_store(&t->parked, 0);
+    pthread_mutex_unlock(&G);
+}
+static uint32_t set_activity(uint32_t h, uint32_t act) {
+    if (act > 1) return R_BAD_ENUM;
+    pthread_mutex_lock(&G);
+    thr_t *t = h_peek(h, O_THREAD), *self = pthread_getspecific(g_keythr);
+    uint32_t r = !t ? R_BAD_HANDLE : t == self ? R_BUSY : (!t->started || t->exited) ? R_BAD_STATE : (act == 1) == (atomic_load(&t->pause_req) != 0) ? R_BAD_STATE : 0;
+    if (r || act == 0) {
+        int mach = 0;
+        if (!r) { atomic_store(&t->pause_req, 0); mach = t->stop_kind == 2; t->stop_kind = 0; pthread_cond_broadcast(&t->cv); }
+        pthread_mutex_unlock(&G);
+        if (mach) thread_resume(t->mport);
+        return r;
+    }
+    atomic_store(&t->pause_req, 1);
+    pthread_mutex_unlock(&G);
+    static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, waitstub_init);
+    for (unsigned n = 0;; n++) {
+        if (atomic_load(&t->in_svc) || atomic_load(&t->parked)) { t->stop_kind = 1; return 0; }
+        if (thread_suspend(t->mport) != KERN_SUCCESS) { LOG("【红】SetThreadActivity：挂起线程 %#x 失败", h); t->stop_kind = 0; return 0; }
+        arm_thread_state64_t st; mach_msg_type_number_t c = ARM_THREAD_STATE64_COUNT;
+        uint64_t pc = thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &c) == KERN_SUCCESS ? (uint64_t)__darwin_arm_thread_state64_get_pc(st) : 0;
+        if (atomic_load(&t->in_svc) || atomic_load(&t->parked)) { thread_resume(t->mport); t->stop_kind = 1; return 0; }   // 挂起前一瞬进了门 | Entered a gate just before being suspended
+        if (pc && (module_of((void *)pc) || in_waitstub(pc))) { t->stop_kind = 2; return 0; }
+        thread_resume(t->mport);
+        if (n == 100000) LOG("【红】SetThreadActivity：线程 %#x 久在宿主代码里（pc=%#llx），仍在等它回到客体代码", h, pc);
+        usleep(20);
+    }
+}
+static uint32_t get_context3(uint8_t *out, uint32_t h) {
+    pthread_mutex_lock(&G);
+    thr_t *t = h_peek(h, O_THREAD), *self = pthread_getspecific(g_keythr);
+    uint32_t r = !t ? R_BAD_HANDLE : t == self ? R_BUSY : !atomic_load(&t->pause_req) ? R_BAD_STATE : 0;
+    pthread_mutex_unlock(&G);
+    if (r) return r;
+    uint64_t *x = (uint64_t *)out; memset(out, 0, 0x320);   // ThreadContext：x0–x28 +0、fp lr sp pc +0xE8、pstate +0x108、v0–v31 +0x110、fpcr fpsr +0x310、tpidr +0x318（sdk+0x152600 拷贝时按此） | ThreadContext layout (as copied by sdk+0x152600)
+    if (t->exited) return 0;                                // 已终止：mesosphere 不填上下文 | Terminated: mesosphere leaves the context unfilled
+    if (t->stop_kind == 1) {
+        const uint64_t *g = t->svc_regs;
+        for (int i = 19; i < 29; i++) x[i] = g[i];
+        x[29] = g[29]; x[30] = *(const uint64_t *)((const uint8_t *)g + 808); x[31] = (uint64_t)g + 816; x[32] = t->svc_pc;
+        memcpy(out + 0x110 + 8 * 16, (const uint8_t *)g + 256 + 8 * 16, 8 * 16);   // v8–v15
+    } else if (t->stop_kind == 2) {
+        arm_thread_state64_t st; mach_msg_type_number_t c = ARM_THREAD_STATE64_COUNT;
+        arm_neon_state64_t ns; mach_msg_type_number_t cn = ARM_NEON_STATE64_COUNT;
+        if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &c) != KERN_SUCCESS) { LOG("【红】GetThreadContext3：读线程 %#x 状态失败", h); return 0; }
+        for (int i = 0; i < 29; i++) x[i] = st.__x[i];
+        x[18] = tsd_slot(t, g_key18);
+        x[29] = (uint64_t)__darwin_arm_thread_state64_get_fp(st); x[30] = (uint64_t)__darwin_arm_thread_state64_get_lr(st);
+        x[31] = (uint64_t)__darwin_arm_thread_state64_get_sp(st); x[32] = (uint64_t)__darwin_arm_thread_state64_get_pc(st);
+        *(uint32_t *)(out + 0x108) = st.__cpsr;
+        if (thread_get_state(t->mport, ARM_NEON_STATE64, (thread_state_t)&ns, &cn) == KERN_SUCCESS) {
+            memcpy(out + 0x110, &ns.__v, 0x200); *(uint32_t *)(out + 0x310) = ns.__fpcr; *(uint32_t *)(out + 0x314) = ns.__fpsr;
+        }
+    }
+    x[0x318 / 8] = tsd_slot(t, g_keytls);
+    static int gclog = -1; if (gclog < 0) gclog = getenv("DM_GCLOG") != NULL;   // 诊断：每次取上下文打一行（停法、sp 相对栈顶、pc 所在） | Diagnostics: one line per context fetch (how stopped, sp relative to the stack top, where pc is)
+    if (gclog) { module_t *pm = module_of((void *)x[32]); Dl_info di = {0}; if (!pm) dladdr((void *)x[32], &di);
+        LOG("GC 取上下文 %#x 停法 %d sp=%#llx（栈顶 %#llx，差 %#llx）pc=%s+%#llx x18=%#llx", h, t->stop_kind, x[31], t->stack_top, t->stack_top - x[31],
+            pm ? pm->name : di.dli_sname ? di.dli_sname : "?", pm ? x[32] - (uint64_t)pm->base : di.dli_saddr ? x[32] - (uint64_t)di.dli_saddr : x[32], x[18]); }
+    return 0;
+}
+uint64_t svc_thread_activity(uint64_t *regs) { regs[0] = set_activity((uint32_t)regs[0], (uint32_t)regs[1]); return 0; }
+uint64_t svc_thread_context3(uint64_t *regs) { regs[0] = get_context3((uint8_t *)regs[0], (uint32_t)regs[1]); return 0; }
+
 // ---------- 线程 ----------
 // ---------- Threads ----------
 extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);   // entry.S
@@ -176,6 +298,7 @@ static void *thread_main(void *p) {
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
     pthread_get_qos_class_np(pthread_self(), &qc, &rp); t->qos = (uint32_t)qc;
     t->mport = pthread_mach_thread_np(pthread_self());
+    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(t->tsd));
     crash_thread_init();
     guest_thread_init();
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); pthread_mutex_unlock(&G);
@@ -208,6 +331,7 @@ uint32_t svc_thread_main_init(void) {
     thr_t *t = calloc(1, sizeof *t);
     pthread_cond_init(&t->cv, NULL);
     t->started = 1; t->prio = 44; t->core = 0; t->mask = 7; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt);
+    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(t->tsd));
     pthread_mutex_lock(&G); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; t->all = g_all; g_all = t; pthread_mutex_unlock(&G);
     pthread_setspecific(g_keythr, t);
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
@@ -439,6 +563,8 @@ int svc_thread(int num, uint64_t *regs) {
     { thr_t *me = pthread_getspecific(g_keythr); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->nsvc++; } }
     if (g_flag.thr && num != 0x0B) { thr_t *me = pthread_getspecific(g_keythr); LOG("[%#x] svc %#x x0=%#llx x1=%#llx x2=%#llx x3=%#llx", me ? me->handle : 0, num, regs[0], regs[1], regs[2], regs[3]); }
     switch (num) {
+    case 0x32: svc_thread_activity(regs); return 1;   // SetThreadActivity(句柄, 0 可运行 / 1 暂停) | SetThreadActivity(handle, 0 runnable / 1 paused)
+    case 0x33: svc_thread_context3(regs); return 1;   // GetThreadContext3(→上下文, 句柄) | GetThreadContext3(→context, handle)
     case 0x08: {  // CreateThread(→w1 句柄; x1 入口, x2 参数, x3 栈顶, w4 优先级, w5 核) | CreateThread(→w1 handle; x1 entry, x2 argument, x3 stack top, w4 priority, w5 core)
         thr_t *t = calloc(1, sizeof *t);
         pthread_cond_init(&t->cv, NULL);

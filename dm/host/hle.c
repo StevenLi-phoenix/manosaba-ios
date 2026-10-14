@@ -94,7 +94,14 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
                 return t;
             }
             case G_OBS: if (g_obs_fn[g->arg]) g_obs_fn[g->arg](regs); return 0;   // 只读寄存器；dm_gate 回写的 x0–x8 即原值 | Registers are read-only; the x0–x8 that dm_gate writes back are the original values
-            default: return svc_dispatch(g->arg, regs, g->orig);
+            default: {   // svc：进出时登记（线程暂停按「在内核」处理，出门时停下；hle_thread.c） | svc: registered on entry / exit (thread pausing treats it as "in the kernel" and stops it on the way out; hle_thread.c)
+                void thr_svc_enter(uint64_t *regs, uint64_t pc); void thr_svc_exit(void);
+                module_t *m = module_of((void *)ret_addr);
+                thr_svc_enter(regs, m ? (uint64_t)m->base + g->orig : 0);
+                uint64_t r = svc_dispatch(g->arg, regs, g->orig);
+                thr_svc_exit();
+                return r;
+            }
         }
         if (!g->ret) die("unknown gate at %#llx", ret_addr);
     }
