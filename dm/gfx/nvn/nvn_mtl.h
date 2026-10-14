@@ -24,7 +24,6 @@ typedef struct {
     uint64_t pool_adds;
     uint32_t c1_bufs; uint64_t c1_alloc, c1_data;   // 着色器 c1 常数段：缓冲个数（4 MiB 块 + 独占 64 KiB）、分配字节、实际字节 | Shader c1 constant segment: buffer count (4 MiB blocks + dedicated 64 KiB), allocated bytes, actual bytes
 } mtl_res_count;
-void mtl_res_counts(uint32_t tick, const char *why);   // 打一行资源计数（宿主按拍 / 事件调用，见 dm.h dm_res_report_register） | Print one line of resource counts (the host calls it per tick / event, see dm_res_report_register in dm.h)
 void mtl_res_snapshot(mtl_res_count *out);
 
 // 一次提交：begin → 若干操作 → commit（返回本次提交完成时的栅栏值）
