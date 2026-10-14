@@ -1,24 +1,19 @@
-// 实际dm_input_set→GetNpadState返回收样；假时钟只固定timestamp，不替换输入/返回布局。
 // The actual dm_input_set -> GetNpadState return takes the sample; the fake clock only fixes the timestamp and does not replace the input/return layout.
 #ifndef HLE_HID_SOURCE
 #define HLE_HID_SOURCE "../hle_hid.c"
 #endif
 #include HLE_HID_SOURCE
 module_t g_mod[MAX_MOD]; int g_nmod;
+void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 #include <unistd.h>
 #include <sys/wait.h>
 static uint64_t clock_ns=1000000000ull;
-uint64_t dm_guest_frame(void) { return 0; }
-uint64_t dm_server_tick(void) { return UINT64_MAX; }
-int dm_loadscreen_up(void) { return 0; }
-void dm_hold_for_loadscreen(void) {}
 uint64_t now_ns(void) { return clock_ns; }
 uint64_t guest_ns(void) { return clock_ns; }
 static int opmode=1;
 int dm_opmode(void) { return opmode; }
 int touch_fill(void *p, uint64_t n) { (void)p;(void)n;return 0; }
 void dm_touch_set(const dm_touch *p,int n) { (void)p;(void)n; }
-void uimsg_subscribe(void (*f)(const char *,const char *,const char *)) { (void)f; }
 static int checks,fails;
 #define CK(c) do { checks++; if (!(c)) { fails++;printf("FAIL line=%d %s\n",__LINE__,#c); } } while(0)
 typedef struct { long long sampling; unsigned long long start,time,buttons,script; unsigned id,style,attrs; int lx,ly,rx,ry; } Row;

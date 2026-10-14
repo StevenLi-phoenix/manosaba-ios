@@ -1,6 +1,3 @@
-# HLE 审计清单：抽 dm/host 下全部 HLE_FORCE / HLE 条目与 libc 直通表、svc 分派，输出 TSV（类别 文件 行 改编名 C 名 理由 函数体行数 体内特征）
-# 体内特征只是粗筛提示（如「只 return RES_OK」），三类判定（完整 / 简化 / 剪口）须逐条读体后人工定。
-# 用法：hle_inventory.py [输出 tsv]
 # HLE audit list: extracts all HLE_FORCE / HLE entries under dm/host plus the libc passthrough table and svc dispatch, and outputs TSV (category, file, line, mangled name, C name, reason, function body line count, body features)
 # Body features are only a coarse screening hint (e.g. "only return RES_OK"); the three-way classification (full / simplified / cut) must be decided manually after reading each body.
 # Usage: hle_inventory.py [output tsv]

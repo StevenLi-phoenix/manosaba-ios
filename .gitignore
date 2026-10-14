@@ -11,3 +11,4 @@
 /sd_backup_*/
 /work/
 /analysis/**/*.bin
+__pycache__/

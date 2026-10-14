@@ -1,11 +1,4 @@
-// nn::diag 模块信息：真机经 svc QueryMemory 逐块走进程内存，用 nn::ro 读各模块的 MOD0 头取路径与模块号（GNU build-id 注记）。
-// 宿主模块不在 Horizon 内存块里，sdk 的实现会在 nn::ro::detail::GetExceptionInfo 中止；这里按同样的输出格式直接给出已装载模块。
-// 输出格式取自 sdk GetAllModuleInfoImpl（2.0.4b sdk+0xac060）：缓冲前部按模块依次放 0x30 字节的 ModuleInfo，
-// 路径串（含 NUL）与模块号字节从缓冲尾部往前放；每个模块占 路径长 + 模块号长 + 0x31 字节；返回模块数。
 //   ModuleInfo = { const char *path; uint64 base; uint64 size; const uint8 *id; uint64 id_size; uint32 0 }
-// 路径：模块 .rodata 开头的模块路径记录（+0x10 u32 长度、+0x14 字符串）。Unity 按路径以 .nss 结尾找主模块（main+0x391344 起）。
-// 模块号：模块内唯一的 GNU build-id 注记（namesz 4、type 3、"GNU"），长度 = descsz（≤ 0x20），同 nn::ro::GetModuleId（sdk+0x15a420）。
-// 真机还列出 rtld；宿主不装 rtld，不列。
 // nn::diag module info: the real device walks process memory block by block with svc QueryMemory and uses nn::ro to read each module's MOD0 header for the path and the module ID (GNU build-id note).
 // Host modules are not in Horizon memory blocks, so the sdk implementation aborts in nn::ro::detail::GetExceptionInfo; here the loaded modules are reported directly in the same output format.
 // Output format taken from the sdk's GetAllModuleInfoImpl (2.0.4b sdk+0xac060): the front of the buffer holds one 0x30-byte ModuleInfo per module in order,
@@ -24,7 +17,7 @@ static void mod_path(const module_t *m, modinfo *o) {
     if (*(const uint32_t *)(ro + 0xc) == 0 && n && n < 0x200 && ro + 0x14 + n <= m->base + m->size && memchr(ro + 0x14, 0, n) == NULL) {
         o->path = (const char *)(ro + 0x14); o->plen = n; return;
     }
-    LOG("【红】diag：%s 的 .rodata 开头没有模块路径记录，路径改用宿主模块名", m->name);
+    LOG("[red] diag: no module path record at the start of %s .rodata; using the host module name", m->name);
     o->path = m->name; o->plen = strlen(m->name);
 }
 static void mod_id(const module_t *m, modinfo *o) {
@@ -37,26 +30,26 @@ static void mod_id(const module_t *m, modinfo *o) {
         if (n > 0x20 || off + 16 + n > m->size) continue;
         o->id = p + 16; o->idlen = n; return;
     }
-    LOG("【红】diag：%s 里没有 GNU build-id 注记，模块号留空", m->name);
+    LOG("[red] diag: no GNU build-id note in %s; module id left empty", m->name);
 }
 static int mods(modinfo *out) {
     static modinfo cache[MAX_MOD]; static int n = -1;
     if (n < 0) {
         int k = 0;
         for (int i = 0; i < g_nmod; i++) { modinfo o = {0}; mod_path(&g_mod[i], &o); mod_id(&g_mod[i], &o); o.base = g_mod[i].base; o.size = g_mod[i].size; cache[k++] = o; }
-        for (int i = 1; i < k; i++) for (int j = i; j > 0 && cache[j].base < cache[j - 1].base; j--) { modinfo t = cache[j]; cache[j] = cache[j - 1]; cache[j - 1] = t; }   // 真机按地址顺序走内存块 | the real device walks memory blocks in address order
+        for (int i = 1; i < k; i++) for (int j = i; j > 0 && cache[j].base < cache[j - 1].base; j--) { modinfo t = cache[j]; cache[j] = cache[j - 1]; cache[j - 1] = t; }   // the real device walks memory blocks in address order
         n = k;
     }
     memcpy(out, cache, sizeof cache);
     return n;
 }
 
-HLE_FORCE_OPT("_ZN2nn4diag40GetRequiredBufferSizeForGetAllModuleInfoEv", "模块信息所需缓冲：按宿主已装载模块算", uint64_t, h_diag_ModBufSize, void) {
+HLE_FORCE_OPT("_ZN2nn4diag40GetRequiredBufferSizeForGetAllModuleInfoEv", "module info buffer size, from the modules the host loaded", uint64_t, h_diag_ModBufSize, void) {
     modinfo m[MAX_MOD]; int n = mods(m); uint64_t sz = 0;
     for (int i = 0; i < n; i++) sz += m[i].plen + m[i].idlen + 0x31;
     return n ? sz : 0;
 }
-HLE_FORCE_OPT("_ZN2nn4diag16GetAllModuleInfoEPPNS0_10ModuleInfoEPvm", "模块信息：宿主已装载模块（格式同 sdk GetAllModuleInfoImpl）", int, h_diag_AllModInfo, void **out, void *buf, uint64_t bufsz) {
+HLE_FORCE_OPT("_ZN2nn4diag16GetAllModuleInfoEPPNS0_10ModuleInfoEPvm", "module info of the modules the host loaded (format of sdk GetAllModuleInfoImpl)", int, h_diag_AllModInfo, void **out, void *buf, uint64_t bufsz) {
     *out = buf;
     modinfo m[MAX_MOD]; int n = mods(m), cnt = 0;
     if (bufsz <= 0x30) return 0;

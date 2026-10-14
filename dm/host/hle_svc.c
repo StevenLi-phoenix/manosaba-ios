@@ -1,34 +1,26 @@
-// Horizon 内核系统调用（装 SDK 后由 SDK 运行时触发）。只实现 P1 启动链要的：内存布局 + 堆 + 查询 + 调试输出 + 计时。
-// 寄存器约定：入参 w1.. / 出参 w0=Result、x1=值（GetInfo / SetHeapSize），与公开 Horizon ABI 一致。
-// Horizon kernel system calls (triggered by the SDK runtime once the SDK is loaded). Only what the P1 boot chain needs is implemented: memory layout + heap + query + debug output + timing.
-// Register convention: inputs w1.. / outputs w0=Result, x1=value (GetInfo / SetHeapSize), consistent with the public Horizon ABI.
+// Horizon kernel system calls the SDK runtime makes: memory layout, heap, queries, debug output, timing, process info.
+// Register convention as in the public Horizon ABI: inputs w1.., outputs w0 = Result, x1 = value (GetInfo / SetHeapSize).
 #include "dm.h"
 #include "hle.h"
+#include "game.h"
 #include <stdatomic.h>
 #include <sys/mman.h>
 #include <TargetConditionals.h>
 #include <mach/mach.h>
 #include <errno.h>
 #include <unistd.h>
-#include <unistd.h>
 #include <sched.h>
 #include <time.h>
 
-// 预留一整块客体地址空间，按 Horizon 分区（地址值直接用宿主 mmap 得到的真地址）。只占地址、不占内存。
-// 大小 5 GB：游戏要的是开头 1 GB（别名区、栈）+ 一整块堆（应用内存池 3285 MiB，见下面 APP_POOL），合计约 4.2 GB；
-// iOS 上不带「扩展虚拟寻址」权限时一次最多能预留 6 GB（真机实读：6 GB 成、7 GB 不成），所以不能留得更宽——
-// 留到 8 GB 的话，签不了那项权限的开发者账号（免费账号）出的包在这一步就退出。
-// Reserve one whole block of guest address space, partitioned the Horizon way (address values are the real addresses returned by the host's mmap).
-// It only takes address space, not memory.
-// Size 5 GB: the game needs the first 1 GB (alias region, stacks) + one whole heap block (application memory pool of 3285 MiB, see APP_POOL below),
-// about 4.2 GB in total; on iOS without the "extended virtual addressing" entitlement a single reservation can be at most 6 GB
-// (read on a real device: 6 GB succeeds, 7 GB fails), so it cannot be made any wider --
-// with an 8 GB reservation, builds from developer accounts that cannot sign that entitlement (free accounts) would exit at this step.
-static size_t g_reserve = 5ull << 30;   // D2R: 5 GB as described above; other games: see mem_init
+// One reserved block of guest address space, partitioned the Horizon way (address values are the host's real mmap addresses). It takes address space, not memory.
+// Unity never calls SetHeapSize: its memory comes from the alias region through the SDK's VammManager, which keeps the first 0x3fe00000 of that region for its
+// own node heap. A real 39-bit process has a 64 GB alias region; here Mac reserves 12 GB (alias 4 GB) and iOS steps down from 6 GB (see mem_init).
+// DM_GUEST_AS_GB=<n> (n >= 6) sets the total.
+static size_t g_reserve;
+
 #define RESERVE g_reserve
-static uint8_t *g_as;              // ASLR 区基址 = 整块 | ASLR region base = the whole block
+static uint8_t *g_as;              // ASLR region base = the whole block
 static uint8_t *g_heap; static size_t g_heap_cur, g_heap_cap; static int g_heap_rejects;
-// 地址段整个落在客体堆当前已开放（可读写）的范围内：这种读不用陷内核核对，直接 memcpy（diag.c tk_rd 等每拍读客体内存的地方用）
 // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
 int dm_guest_heap_readable(uint64_t a, size_t n) { uint64_t b = (uint64_t)(uintptr_t)g_heap; size_t cur = g_heap_cur; return g_heap && a >= b && n <= cur && a - b <= cur - n; }
 static uint8_t *g_alias; static size_t g_alias_cap;
@@ -42,119 +34,78 @@ static int alias_bit(size_t i) { return g_alias_bits[i >> 3] >> (i & 7) & 1; }
 static void alias_phys(uint8_t *a, size_t size, int map) {
     size_t hp = vm_page_size, sub = hp / 0x1000;
     pthread_mutex_lock(&g_alias_lock);
-    if (!g_alias_bits && !(g_alias_bits = calloc(g_alias_cap / 0x1000 / 8 + 1, 1))) die("alias 位图分配失败");
+    if (!g_alias_bits && !(g_alias_bits = calloc(g_alias_cap / 0x1000 / 8 + 1, 1))) die("cannot allocate the alias region bitmap");
     size_t first = (size_t)(a - g_alias) / 0x1000, n = size / 0x1000;
-    // 用量读数：已映射 4 KB 页数、峰值、用到的最高偏移；峰值每过 128 MB 记一行（定 alias 区要留多大，iOS 预留有上限）
     // Usage readout: mapped 4 KB pages, peak, highest offset used; one log line each time the peak passes another 128 MB (sizes the alias region; the iOS reservation has a ceiling)
     static size_t mapped, peak, top, logged;
     for (size_t i = first; i < first + n; i++) { int was = alias_bit(i); if (map && !was) mapped++; else if (!map && was) mapped--; }
     if (map && first + n > top) top = first + n;
-    if (mapped > peak) { peak = mapped; if ((peak >> 15) > logged) { logged = peak >> 15; LOG("alias 区用量峰值 %zu MB（最高偏移 %zu MB，区大小 %zu MB）", peak >> 8, top >> 8, g_alias_cap >> 20); } }
+    if (mapped > peak) { peak = mapped; if ((peak >> 15) > logged) { logged = peak >> 15; LOG("alias region peak use %zu MB (highest offset %zu MB, region %zu MB)", peak >> 8, top >> 8, g_alias_cap >> 20); } }
     for (size_t i = first; i < first + n; i++) if (map) g_alias_bits[i >> 3] |= 1 << (i & 7); else g_alias_bits[i >> 3] &= ~(1 << (i & 7));
     for (size_t h = first / sub * sub; h < first + n; h += sub) {   // every host page the range touches
         int used = 0; for (size_t k = h; k < h + sub; k++) used |= alias_bit(k);
         uint8_t *hpage = g_alias + h * 0x1000;
         if (map) { if (mprotect(hpage, hp, PROT_READ | PROT_WRITE)) die("MapPhysicalMemory mprotect %p errno=%d", hpage, errno); }
         else if (used) { for (size_t k = h; k < h + sub; k++) if (k >= first && k < first + n) memset(g_alias + k * 0x1000, 0, 0x1000); }
-        else if (mmap(hpage, hp, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == MAP_FAILED) die("UnmapPhysicalMemory 换新页 %p errno=%d", hpage, errno);
+        else if (mmap(hpage, hp, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == MAP_FAILED) die("UnmapPhysicalMemory: replacing page %p failed, errno=%d", hpage, errno);
     }
     pthread_mutex_unlock(&g_alias_lock);
 }
 
 static void mem_init(void) {
     if (g_as) return;
-    size_t alias_cap = 0x20000000;
-    if (!dm_is_d2r()) {
-        // The SDK's VammManager (nn::os::AllocateAddressRegion / AllocateMemoryPages, used by Unity) keeps the first 0x3fe00000 of the alias region
-        // for its own node heap and hands out only the rest (sdk VammManager tree init); with D2R's 512 MB alias every request fails with 0x1803.
-        // A real 39-bit process has a 64 GB alias region. Other games: alias 4 GB on Mac (1 GB node heap + 3 GB for the game); iOS stays within
-        // the 6 GB single-reservation limit noted above (alias 3 GB). DM_GUEST_AS_GB overrides the total.
-        alias_cap = TARGET_OS_IPHONE ? 0xC0000000ull : 0x100000000ull;
-        g_reserve = TARGET_OS_IPHONE ? 6ull << 30 : 12ull << 30;
-        const char *e = getenv("DM_GUEST_AS_GB"); if (e && atoi(e) >= 6) g_reserve = (size_t)atoi(e) << 30;
+    size_t alias_cap = TARGET_OS_IPHONE ? 0xC0000000ull : 0x100000000ull;
+    g_reserve = TARGET_OS_IPHONE ? 6ull << 30 : 12ull << 30;
+    const char *e = getenv("DM_GUEST_AS_GB"); if (e && atoi(e) >= 6) g_reserve = (size_t)atoi(e) << 30;
 #if TARGET_OS_IPHONE
-        // iOS 不带扩展虚拟寻址（免费账号签不了）时，一次能预留多大因机型 / 系统而异：iPhone 17 Pro（iOS 26.4）上 6 GB 已失败。
-        // manosaba（Unity）从不 SetHeapSize，内存全走 alias 区（VammManager：开头约 1 GB 是它的节点堆，Mac 上剧情 90 秒用量峰值 1166 MB、最高偏移 2460 MB）。
-        // 所以从 6 GB 起每次减 256 MB 试到成功为止：开头 256 MB、栈 256 MB、堆 256 MB 之外全给 alias；alias 不足 1.5 GB 就报出拿到多少后退出
-        // On iOS without extended virtual addressing (a free account cannot sign it) how much can be reserved at once varies by device / OS: 6 GB already fails on an iPhone 17 Pro (iOS 26.4).
-        // manosaba (Unity) never calls SetHeapSize; all its memory goes through the alias region (VammManager: the first ~1 GB is its node heap; on the Mac a 90 s story run peaks at 1166 MB used, highest offset 2460 MB).
-        // So try from 6 GB downward in 256 MB steps until it succeeds: everything except the 256 MB prefix, 256 MB stack and 256 MB heap goes to the alias region; with less than 1.5 GB of alias, report what was obtained and exit
-        if (!e) {
-            for (size_t r = g_reserve; r >= 0x80000000ull; r -= 0x10000000ull) {
-                g_as = mmap(NULL, r, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-                if (g_as != MAP_FAILED) { g_reserve = r; break; }
-                g_as = NULL;
-            }
-            if (!g_as) die("reserve guest AS：2 GB 也预留不了");
-            alias_cap = g_reserve - 0x30000000ull;
-            LOG("客体地址空间：iOS 一次预留到 %zu MB（alias %zu MB）", g_reserve >> 20, alias_cap >> 20);
-            if (alias_cap < 0x60000000ull) die("reserve guest AS：只预留到 %zu MB，alias 区 %zu MB 不够（VammManager 自留约 1 GB）", g_reserve >> 20, alias_cap >> 20);
+    // Without the extended virtual addressing entitlement (a free account cannot sign it) the largest single reservation varies by device and OS:
+    // 6 GB already fails on an iPhone 17 Pro (iOS 26.4). Step down from 6 GB by 256 MB until it succeeds; everything except the 256 MB prefix, the
+    // 256 MB stack region and the profile's heap (guest_heap_mb) goes to the alias region (manosaba on the Mac: a 90 s story run peaks at 1166 MB
+    // of alias used, highest offset 2460 MB).
+    if (!e) {
+        for (size_t r = g_reserve; r >= 0x80000000ull; r -= 0x10000000ull) {
+            g_as = mmap(NULL, r, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (g_as != MAP_FAILED) { g_reserve = r; break; }
+            g_as = NULL;
         }
-#endif
+        if (!g_as) die("reserve guest AS: not even 2 GB could be reserved");
+        size_t heap = (size_t)(dm_game.guest_heap_mb ? dm_game.guest_heap_mb : 256) << 20;
+        if (heap > g_reserve - 0x80000000ull) die("reserve guest AS: %zu MB cannot hold a %zu MB heap", g_reserve >> 20, heap >> 20);
+        alias_cap = g_reserve - 0x20000000ull - heap;
+        LOG("guest address space: iOS reserved %zu MB (alias %zu MB)", g_reserve >> 20, alias_cap >> 20);
+        if (alias_cap < 0x60000000ull) die("reserve guest AS: only %zu MB, alias region %zu MB is too small (VammManager keeps ~1 GB)", g_reserve >> 20, alias_cap >> 20);
     }
+#endif
     if (!g_as) g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (g_as == MAP_FAILED) die("reserve guest AS %#zx", RESERVE);
-    // 固定划分（都在预留块内）：alias（D2R 512MB）、stack 256MB、heap 其余（D2R 从 2GB 处起）
-    // Fixed partition (all inside the reserved block): alias (D2R 512MB), stack 256MB, heap the rest (D2R: starting at 2GB)
+    // Partition inside the block: 256 MB prefix, alias region, stack region 256 MB, heap the rest
     g_alias = g_as + 0x10000000; g_alias_cap = alias_cap;
     g_stack = g_alias + g_alias_cap; g_stack_cap = 0x10000000;
-    g_heap  = g_stack + g_stack_cap; g_heap_cap  = RESERVE - (size_t)(g_heap - g_as);   // D2R: 4 GB，容得下游戏那一整块约 3.2 GB 的堆 | D2R: 4 GB, enough to hold the game's single heap block of about 3.2 GB
+    g_heap  = g_stack + g_stack_cap; g_heap_cap  = RESERVE - (size_t)(g_heap - g_as);
     LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)RESERVE, g_heap, g_alias, g_stack);
 }
 
-// 应用内存池 = Switch（4 GB 机型）给应用的 3285 MB。游戏启动（main+0x1b66160）把 QueryMemoryInfo 报的总量整块设成堆、失败就减 2 MB 重试，
-// 整块交给自己的 StandardAllocator（main+0x32137a0）——所以堆大小 = 池 − 映像占用，宿主报多少它就只有多少。
-// 之前这里报 3 GB 且 SetHeapSize 从不失败：堆比真机少约 150 MB，进局高峰主堆只剩约 18 MB，本机负载高时时序一偏申请 128 KB 返回空、
-// 客体不判空直接写（CRASH main+0x1b36138，合入后复核 inv_tap）。
-// Application memory pool = the 3285 MB the Switch (4 GB model) gives applications. At startup (main+0x1b66160) the game sets the whole total reported by QueryMemoryInfo as the heap, retrying with 2 MB less on failure,
-// and hands the whole block to its own StandardAllocator (main+0x32137a0) -- so heap size = pool − image footprint, it has only as much as the host reports.
-// Previously 3 GB was reported here and SetHeapSize never failed: the heap was about 150 MB smaller than on the real device, at the run entry peak the main heap had only about 18 MB left, and under high local load a timing shift made a 128 KB request return null,
-// which the guest writes to without a null check (CRASH main+0x1b36138, re-verified after merge with inv_tap).
+// Application memory pool reported to the game: the 3285 MB a 4 GB Switch gives applications, + DM_APP_POOL_ADD_MB (default 512; may be negative).
+// GetInfo TotalMemory reports it and SetHeapSize refuses a heap that does not fit beside the loaded images.
 #define APP_POOL 0xCD500000ull
-// 报给游戏的池 = Switch 的 3285 MB + 512 MB（DM_APP_POOL_ADD_MB=<整数> 可调，可为负——往小调用来造「主堆用尽」的现场）。
-// 为什么多给：游戏自己固定划走约 3.08 GB，主堆余量进局只有 100–180 MB、换图时地板三四十 MB、最大可分配块二十几 MB；用尽时原版多处不判空直接写
-// （公开仓库，另见下面 dm_guest_heap_stat）。实测多给的量一比一变成主堆余量（138 → 649 MB），游戏划走的不跟着变；
-// 没碰过的堆页不计入常驻内存，余量真被用掉时常驻才涨。堆区上限是预留里的 4 GB（mem_init），3728 MB 放得下；再加要先动预留。
-// 取 +512 而不是更大：给 6 GB 内存的机型留余地，真机上限有读数后再定。
-// Pool reported to the game = the Switch's 3285 MB + 512 MB (adjustable with DM_APP_POOL_ADD_MB=<integer>, may be negative -- lowering it is how to stage a "main heap exhausted" scene).
-// Why more is given: the game carves out a fixed 3.08 GB or so for itself, leaving the main heap only 100–180 MB of free space on entering a game, a floor of thirty to forty MB when changing maps and a largest allocatable block of twenty-odd MB; when it runs out the original game writes through null without checking in many places
-// (see also dm_guest_heap_stat below). Measured: the extra amount turns one-to-one into main heap free space (138 -> 649 MB), while what the game carves out does not change with it;
-// heap pages never touched do not count toward resident memory, which grows only when the free space is actually used. The heap region limit is the 4 GB in the reservation (mem_init), which fits 3728 MB; adding more means changing the reservation first.
-// +512 rather than more: to leave room for devices with 6 GB of RAM; to be revisited once there are readings of the limit on real devices.
-static uint64_t app_pool(void) { static uint64_t v; if (!v) { const char *e = getenv("DM_APP_POOL_ADD_MB"); long add = e ? atol(e) : 512; v = APP_POOL + ((uint64_t)add << 20); if (e) LOG("DM_APP_POOL_ADD_MB：应用内存池报 %llu MB（Switch 的 3285 MB %+ld）", (unsigned long long)(v >> 20), add); } return v; }
+static uint64_t app_pool(void) {
+    static uint64_t v;
+    if (!v) { const char *e = getenv("DM_APP_POOL_ADD_MB"); long add = e ? atol(e) : 512; v = APP_POOL + ((uint64_t)add << 20);
+              if (e) LOG("DM_APP_POOL_ADD_MB: application pool %llu MB (Switch 3285 MB %+ld)", (unsigned long long)(v >> 20), add); }
+    return v;
+}
 static size_t image_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++) n += g_mod[i].size; return (n + 0x1fffff) & ~(size_t)0x1fffff; }
 
-// 游戏主堆读数：主堆 = main+0x32137a0 那个 nn::mem::StandardAllocator（启动时把整块堆交给它）。申请失败返回空，原版多处不判空直接写
-// （公开仓库 连战 82 分钟后异步读盘回调 main+0x27ecdc 要 765 KB 连续块得空，memset 写 0 地址；进程常驻内存看不出这件事）。
-// 余量 / 最大可分配块调的是分配器自己的查询（sdk+0x2f9d78 / +0x2f9dbc，内部走 CentralHeap::Query、自己加锁），只许在客体线程上调。
-// 读到的数留一份在 g_gheap_last 里，分配返回空时的报红直接带上次读数（那一刻不再进分配器）。单位：总量 / 余量 MB，最大块 KB
-// Game main heap readout: the main heap = the nn::mem::StandardAllocator at main+0x32137a0 (the whole heap block is handed to it at startup). A failed allocation returns null, and the original game writes through it without a null check in many places
-// (after 82 minutes of boss rush, the asynchronous disk-read callback main+0x27ecdc asked for a contiguous 765 KB block, got null, and memset wrote to address 0; the process resident memory does not show this).
-// Free space / largest allocatable block call the allocator's own queries (sdk+0x2f9d78 / +0x2f9dbc, which go through CentralHeap::Query and take their own lock) and may only be called on a guest thread.
-// The values read are kept in g_gheap_last, and the red report on a null allocation carries the last readout directly (the allocator is not entered again at that moment). Units: total / free in MB, largest block in KB
 static module_t *mod_named(const char *n) { for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, n)) return &g_mod[i]; return NULL; }
-static _Atomic unsigned long long g_gheap_last[3];
-int dm_guest_heap_stat(unsigned long long *total_mb, unsigned long long *free_mb, unsigned long long *maxblk_kb) {
-    module_t *mm = mod_named("main"), *ms = mod_named("sdk"); if (!mm || !ms || !g_heap_cur || !dm_is_d2r()) return 0;   // allocator location and query entries are D2R build offsets
-    uint8_t *al = mm->base + 0x32137a0; if (!al[0]) return 0;   // 首字节 = 已初始化（sdk+0x2f9898 写） | First byte = initialized (written by sdk+0x2f9898)
-    uint64_t fr = ((uint64_t (*)(void *))(ms->base + 0x2f9d78))(al), mx = ((uint64_t (*)(void *))(ms->base + 0x2f9dbc))(al);
-    *total_mb = g_heap_cur >> 20; *free_mb = fr >> 20; *maxblk_kb = mx >> 10;
-    g_gheap_last[0] = *total_mb; g_gheap_last[1] = *free_mb; g_gheap_last[2] = *maxblk_kb; return 1;
-}
-// 上次读到的主堆读数（总量 MB、余量 MB、最大可分配块 KB；没读过全 0）。任何线程可调——不进分配器（iOS 壳在主线程上记内存告警那一行用）
-// The last main-heap readout (total MB, free MB, largest allocatable block KB; all 0 if never read). Callable from any thread - does not enter the allocator (the iOS shell uses it on the main thread for the memory-warning log line)
-void dm_guest_heap_last(unsigned long long v[3]) { for (int i = 0; i < 3; i++) v[i] = atomic_load(&g_gheap_last[i]); }
-HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEmm", "照原版分配，只在返回空时报红（原版调用方多处不判空）", void *, hle_stdalloc_allocate, void *self, size_t size, size_t align) {
-    // the SDK's own definition, found by name (was sdk+0x2f9974 in the D2R build)
+// The SDK's own allocator, called as is: a null return is logged (first 8), since callers in games often do not check it
+HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEmm", "the SDK allocator, logging null returns", void *, hle_stdalloc_allocate, void *self, size_t size, size_t align) {
     static void *(*orig)(void *, size_t, size_t);
-    if (!orig) { orig = (void *(*)(void *, size_t, size_t))module_sym(mod_named("sdk"), "_ZN2nn3mem17StandardAllocator8AllocateEmm"); if (!orig) die("sdk 里找不到 StandardAllocator::Allocate"); }
+    if (!orig) { orig = (void *(*)(void *, size_t, size_t))module_sym(mod_named("sdk"), "_ZN2nn3mem17StandardAllocator8AllocateEmm"); if (!orig) die("StandardAllocator::Allocate not found in sdk"); }
     void *p = orig(self, size, align);
-    if (!p && size) { static _Atomic int n; if (atomic_fetch_add(&n, 1) < 8) LOG("【红】游戏堆分配返回空：申请 %zu 字节（对齐 %zu），分配器 %p；上次读数 主堆 %llu MB、余量 %llu MB、最大可分配块 %llu KB", size, align, self,
-        (unsigned long long)g_gheap_last[0], (unsigned long long)g_gheap_last[1], (unsigned long long)g_gheap_last[2]); }
+    if (!p && size) { static _Atomic int n; if (atomic_fetch_add(&n, 1) < 8) LOG("[red] game heap allocation returned null: %zu bytes (alignment %zu), allocator %p", size, align, self); }
     return p;
 }
 
-// 内存账（memstat.m）用：客体地址空间整块范围（未初始化时 base = NULL）
 // For memory accounting (memstat.m): the range of the whole guest address space block (base = NULL when not initialized)
 void svc_guest_range(uint8_t **base, size_t *size) { *base = g_as; *size = RESERVE; }
 
@@ -166,64 +117,73 @@ enum { I_CoreMask=0, I_PriorityMask=1, I_AliasAddr=2, I_AliasSize=3, I_HeapAddr=
 
 static uint8_t g_seen[256];
 
-// 已映射区间登记（MapMemory 栈、MapPhysicalMemory alias 页），QueryMemory 据此回报；SDK 靠它找空位
 // Registry of mapped ranges (MapMemory stacks, MapPhysicalMemory alias pages), QueryMemory reports from it; the SDK relies on it to find free space
 #define MAX_MAP 4096
 static struct { uint64_t base, size, src; uint32_t state; } g_map[MAX_MAP];
 static int g_nmap;
 static pthread_mutex_t g_map_lock = PTHREAD_MUTEX_INITIALIZER;
-static int map_find(uint64_t a, uint64_t n) {       // 返回 1 基下标，0 = 无重叠 | returns a 1-based index, 0 = no overlap
+static int map_find(uint64_t a, uint64_t n) {       // returns a 1-based index, 0 = no overlap
     for (int i = 0; i < g_nmap; i++) if (a < g_map[i].base + g_map[i].size && g_map[i].base < a + n) return i + 1;
     return 0;
 }
 static void map_add(uint64_t b, uint64_t n, uint64_t src, uint32_t st) {
     pthread_mutex_lock(&g_map_lock);
-    if (g_nmap >= MAX_MAP) die("映射表满");
+    if (g_nmap >= MAX_MAP) die("mapping table full");
     g_map[g_nmap++] = (typeof(g_map[0])){b, n, src, st};
     pthread_mutex_unlock(&g_map_lock);
 }
 static void map_del(int i) { pthread_mutex_lock(&g_map_lock); g_map[i] = g_map[--g_nmap]; pthread_mutex_unlock(&g_map_lock); }
 
-int svc_thread(int num, uint64_t *regs);   // hle_thread.c：线程与同步类 | hle_thread.c: thread and synchronization kind
+int svc_thread(int num, uint64_t *regs);   // hle_thread.c: thread and synchronization kind
+
+// Host calls (svc 0x80–0xff, hle.h): handlers registered by the game's hook code
+static int (*g_hcall[0x80])(uint64_t *regs);
+void dm_host_call_register(int num, int (*fn)(uint64_t *regs)) {
+    if (num < 0x80 || num > 0xff) die("host call number %#x out of range (0x80–0xff)", num);
+    if (g_hcall[num - 0x80] && g_hcall[num - 0x80] != fn) die("host call %#x registered twice", num);
+    g_hcall[num - 0x80] = fn;
+}
 
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
-    { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT：svc 按号计数 | DM_HLECOUNT: svc counts by number
+    { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT: svc counts by number
     mem_init();
+    if (num >= 0x80 && num <= 0xff) {
+        if (g_hcall[num - 0x80] && g_hcall[num - 0x80](regs)) return regs[0];
+        die("host call %#x from %s has no handler (the product's cuts and the game's hooks disagree)", num, module_of((void *)orig_addr) ? module_of((void *)orig_addr)->name : "?");
+    }
     if (svc_thread(num, regs)) return regs[0];
-    { uint64_t svc_host_call(int, uint64_t *); if (num >= 0x80 && svc_host_call(num, regs)) return regs[0]; }   // 0x80 起：剪口约定的宿主调用（hle_tact.c） | from 0x80: host calls by cut convention (hle_tact.c)
     switch (num) {
     case 0x01: {  // SetHeapSize(out_addr*, size)  → x1 = heap base
         size_t size = regs[1];
         if (size > g_heap_cap) { LOG("SetHeapSize OOM: req %#zx > cap %#zx", size, g_heap_cap); regs[0] = 0xD401; return 0; }
-        if (size + image_bytes() > app_pool()) { g_heap_rejects++; regs[0] = 0x10801; return 0; }   // 超出应用内存池：ResultLimitReached。游戏启动时按 2 MB 递减重试直到放得下（main+0x1b66184） | exceeds the application memory pool: ResultLimitReached. At startup the game retries in 2 MB decrements until it fits (main+0x1b66184)
+        if (size + image_bytes() > app_pool()) { g_heap_rejects++; regs[0] = 0x10801; return 0; }   // exceeds the application memory pool: ResultLimitReached. At startup the game retries in 2 MB decrements until it fits (main+0x1b66184)
         int rc = 0;
         if (size > g_heap_cur) rc = mprotect(g_heap + g_heap_cur, size - g_heap_cur, PROT_READ | PROT_WRITE);
         else if (size < g_heap_cur) rc = mprotect(g_heap + size, g_heap_cur - size, PROT_NONE);
         if (g_flag.svc) LOG("SetHeapSize %#zx -> base %p mprotect=%d errno=%d", size, g_heap, rc, errno);
-        { static int said; if (!said && size) { said = 1; LOG("SetHeapSize：首次设堆成功 %zu MB（应用内存池 %llu MB − 映像 %zu MB；此前被拒 %d 次）", size >> 20, (unsigned long long)(app_pool() >> 20), image_bytes() >> 20, g_heap_rejects); } }
+        { static int said; if (!said && size) { said = 1; LOG("SetHeapSize: heap first set to %zu MB (application pool %llu MB − images %zu MB; %d refusals before)", size >> 20, (unsigned long long)(app_pool() >> 20), image_bytes() >> 20, g_heap_rejects); } }
         g_heap_cur = size;
         regs[0] = 0; regs[1] = (uint64_t)g_heap; return 0;
     }
     case 0x02: regs[0] = 0; return 0;   // SetMemoryPermission
     case 0x03: regs[0] = 0; return 0;   // SetMemoryAttribute
-    case 0x04: {  // MapMemory(dst, src, size)：SDK 建线程时把堆上的栈搬进栈区 | MapMemory(dst, src, size): when creating a thread the SDK moves the stack on the heap into the stack region
+    case 0x04: {  // MapMemory(dst, src, size): when creating a thread the SDK moves the stack on the heap into the stack region
         uint64_t dst = regs[0], src = regs[1], size = regs[2];
         if ((uint8_t *)dst < g_stack || (uint8_t *)dst + size > g_stack + g_stack_cap || map_find(dst, size)) {
-            LOG("MapMemory 目标非法或已占用 %#llx+%#llx", dst, size); regs[0] = 0xDC01; return 0; }
-        // 苹果页 16K、Horizon 页 4K：可访问区扩到 16K 边界（多放开的是同区未用页，不影响语义）
+            LOG("MapMemory: target invalid or in use %#llx+%#llx", dst, size); regs[0] = 0xDC01; return 0; }
         // Apple pages are 16K, Horizon pages 4K: the accessible region is extended to a 16K boundary (the extra pages opened are unused pages of the same region, semantics unaffected)
         uint64_t lo = dst & ~0x3FFFull, hi = (dst + size + 0x3FFF) & ~0x3FFFull;
         if (mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE)) die("MapMemory mprotect errno=%d", errno);
-        memcpy((void *)dst, (void *)src, size);   // 搬移语义：映射期间源区不被访问（Horizon 把它设为不可访问） | move semantics: the source region is not accessed while mapped (Horizon makes it inaccessible)
+        memcpy((void *)dst, (void *)src, size);   // move semantics: the source region is not accessed while mapped (Horizon makes it inaccessible)
         map_add(dst, size, src, 0x0B /*MappedMemory*/);
         if (g_flag.svc) LOG("MapMemory %#llx <- %#llx +%#llx", dst, src, size);
         regs[0] = 0; return 0;
     }
-    case 0x05: {  // UnmapMemory(dst, src, size)：内容搬回源区；16K 页可能与相邻映射共用，不收回权限 | UnmapMemory(dst, src, size): contents are moved back to the source region; a 16K page may be shared with an adjacent mapping, permissions are not revoked
+    case 0x05: {  // UnmapMemory(dst, src, size): contents are moved back to the source region; a 16K page may be shared with an adjacent mapping, permissions are not revoked
         uint64_t dst = regs[0], src = regs[1], size = regs[2];
         int k = map_find(dst, size);
         if (!k || g_map[k - 1].base != dst || g_map[k - 1].size != size || g_map[k - 1].src != src) {
-            LOG("UnmapMemory 与映射不符 %#llx+%#llx", dst, size); regs[0] = 0xD401; return 0; }
+            LOG("UnmapMemory: does not match a mapping %#llx+%#llx", dst, size); regs[0] = 0xD401; return 0; }
         memcpy((void *)src, (void *)dst, size);
         map_del(k - 1);
         regs[0] = 0; return 0;
@@ -236,7 +196,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         int k;
         if (a >= g_heap && a < g_heap + g_heap_cur) { base=(uint64_t)g_heap; size=g_heap_cur; state=5/*Heap*/; perm=3; }
         else if ((k = map_find(addr, 1))) { base=g_map[k-1].base; size=g_map[k-1].size; state=g_map[k-1].state; perm=3; }
-        else if (a >= g_as && a < g_as + RESERVE) {   // 空闲：到相邻映射/堆边界为止 | free: up to the adjacent mapping/heap boundary
+        else if (a >= g_as && a < g_as + RESERVE) {   // free: up to the adjacent mapping/heap boundary
             uint64_t lo = (uint64_t)g_as, hi = (uint64_t)g_as + RESERVE;
             if (a >= g_heap) lo = (uint64_t)g_heap + g_heap_cur;
             else if (hi > (uint64_t)g_heap) hi = (uint64_t)g_heap;
@@ -247,10 +207,6 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             }
             base=lo; size=hi-lo; state=0; perm=0; }
         else {
-            // 地址落在「当前宿主线程的栈」里：回报整段栈（状态 0xB = 栈）。SDK 初始化主线程记录时拿当时的 sp 查这里，把回报的区间当主线程栈；
-            // 之后 nn::os::GetCurrentStackInfo 会断言 sp 仍在那个区间里，不在就中止。原先对客体地址空间之外的地址一律回报「它所在的 4 KiB 页」，
-            // 主线程栈于是被记成一页——初始化时的 sp 与后来的 sp 是否同页，取决于宿主栈顶的绝对位置，而它随环境变量 / 启动参数总长移动（换个环境偶发启动即中止）。
-            // 暗黑这一版不调 GetCurrentStackInfo（main / subsdk0 没有导入它，SDK 内部也没有调用点；宿主垫 12 档环境变量长度都起得到主菜单），所以没踩到；回报「一页」本身是错的，照改。
             // The address lies in "the current host thread's stack": report the whole stack (state 0xB = stack). When the SDK initializes the main thread record it queries here with the sp at that moment and takes the reported range as the main thread stack;
             // later nn::os::GetCurrentStackInfo asserts that sp is still inside that range and aborts if not. Previously every address outside the guest address space was reported as "the 4 KiB page containing it",
             // so the main thread stack was recorded as one page. Whether the sp at init and a later sp share a page depends on the absolute position of the host stack top, which moves with the total length of environment variables / launch arguments (a different environment occasionally aborts at startup).
@@ -258,24 +214,24 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             uint64_t top = (uint64_t)pthread_get_stackaddr_np(pthread_self()), ssz = pthread_get_stacksize_np(pthread_self());
             if (addr < top && addr >= top - ssz) { base = top - ssz; size = ssz; state = 0xB/*Stack*/; perm = 3; }
             else { base=addr & ~0xFFFull; size=0x1000; state=3/*Code*/; perm=5; } }
-        if (mi) { uint64_t *m=(uint64_t*)mi; m[0]=base; m[1]=size; ((uint32_t*)mi)[4]=state; ((uint32_t*)mi)[5]=0; ((uint32_t*)mi)[6]=perm; ((uint32_t*)mi)[7]=0; ((uint32_t*)mi)[8]=0; }
+        if (mi) { uint64_t *m=(uint64_t*)mi; m[0]=base; m[1]=size; ((uint32_t*)mi)[4]=(uint32_t)state; ((uint32_t*)mi)[5]=0; ((uint32_t*)mi)[6]=(uint32_t)perm; ((uint32_t*)mi)[7]=0; ((uint32_t*)mi)[8]=0; }
         regs[0] = 0; regs[1] = 0; return 0;
     }
-    case 0x2C: case 0x2D: {  // MapPhysicalMemory / UnmapPhysicalMemory(addr, size)：只许在 alias 区内（SDK 的 VammManager 用） | MapPhysicalMemory / UnmapPhysicalMemory(addr, size): only allowed inside the alias region (used by the SDK's VammManager)
+    case 0x2C: case 0x2D: {  // MapPhysicalMemory / UnmapPhysicalMemory(addr, size): only allowed inside the alias region (used by the SDK's VammManager)
         uint8_t *a = (uint8_t *)regs[0]; size_t size = regs[1];
-        if (a < g_alias || a + size > g_alias + g_alias_cap) { LOG("SVC %#x 越出 alias 区 %p+%#zx", num, a, size); regs[0] = 0xD401; return 0; }
-        if (((uintptr_t)a | size) & 0xfff) die("SVC %#x 地址 / 长度不是 4 KB 对齐 %p+%#zx（SDK 不会这样调）", num, a, size);
+        if (a < g_alias || a + size > g_alias + g_alias_cap) { LOG("SVC %#x outside the alias region %p+%#zx", num, a, size); regs[0] = 0xD401; return 0; }
+        if (((uintptr_t)a | size) & 0xfff) die("SVC %#x: address / size not 4 KB aligned %p+%#zx (the SDK never does this)", num, a, size);
         alias_phys(a, size, num == 0x2C);
         if (g_flag.svc) LOG("%sPhysicalMemory %p+%#zx", num == 0x2C ? "Map" : "Unmap", a, size);
         regs[0] = 0; return 0;
     }
-    case 0x26: {  // Break(reason, ptr, size)：SDK 致命中止 | Break(reason, ptr, size): SDK fatal abort
+    case 0x26: {  // Break(reason, ptr, size): SDK fatal abort
         uint32_t res = (regs[1] && regs[2] >= 4) ? *(uint32_t *)regs[1] : 0;
         module_t *mm = module_of((void *)regs[30]);
         static int nb;
-        LOG("Break#%d reason=%#llx Result=%#x svc 位于 %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
+        LOG("Break#%d reason=%#llx Result=%#x, svc at %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
         dm_backtrace(regs[29]);
-        if (regs[0] & 0x80000000ull) return 0;   // 仅通知，可继续 | notification only, can continue
+        if (regs[0] & 0x80000000ull) return 0;   // notification only, can continue
         _exit(42);
     }
     case 0x1E: regs[0] = 0; regs[1] = guest_ns() * 12 / 625; return 0;   // GetSystemTick
@@ -293,13 +249,12 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         case I_AslrAddr:  v = (uint64_t)g_as;    break;   case I_AslrSize:  v = RESERVE;     break;
         case I_StackAddr: v = (uint64_t)g_stack; break;   case I_StackSize: v = g_stack_cap; break;
         case I_TotalMem: case I_TotalNonSys: v = app_pool(); break;
-        case I_UsedMem:  case I_UsedNonSys:  v = g_heap_cur + image_bytes(); break;   // 已用 = 堆 + 映像，与 SetHeapSize 的核对同一口径（原先写死 64 MB）。sdk 的 QueryMemoryInfo（sdk+0x34f4ec）只拿它算「程序占用」那一格； | Used = heap + image, the same accounting as the check in SetHeapSize (it used to be hard-coded to 64 MB). The sdk's QueryMemoryInfo (sdk+0x34f4ec) only uses it to compute the "program usage" field;
-                                                 // 「可用总量」那一格直接是池总量，所以游戏启动设堆仍要从整池起按 2 MB 往下减到 池 − 映像（约 34 次被拒）——这是原版在真机上的走法，不是我们的口径错
+        case I_UsedMem:  case I_UsedNonSys:  v = g_heap_cur + image_bytes(); break;   // Used = heap + image, the same accounting as the check in SetHeapSize (it used to be hard-coded to 64 MB). The sdk's QueryMemoryInfo (sdk+0x34f4ec) only uses it to compute the "program usage" field;
                                                  // The "total available" field is simply the pool total, so at startup the game still has to step down from the whole pool by 2 MB at a time until pool - image (about 34 refusals) when setting its heap -- this is how the original behaves on the real device, not a mistake in our accounting
         case I_SysResTotal: v = 0x2000000; break; case I_SysResUsed: v = 0x400000; break;
         case I_DebuggerAttached: v = 0; break;
-        case I_RandomEntropy: { uint64_t dm_entropy64(void); v = dm_entropy64(); break; }   // DM_DETCLOCK 开时为确定流（hle_os.c） | a deterministic stream when DM_DETCLOCK is on (hle_os.c)
-        case I_ProgramId: v = 0x0100726014352000ull; break;
+        case I_RandomEntropy: { uint64_t dm_entropy64(void); v = dm_entropy64(); break; }   // a deterministic stream when DM_DETCLOCK is on (hle_os.c)
+        case I_ProgramId: v = dm_game.program_id; break;
         case I_IsApplication: v = 1; break;
         case I_UserExcAddr: v = 0; break;
         // Threads the process may still create (Unity checks this before starting each worker and silently skips the thread at 0, then waits
@@ -311,7 +266,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         regs[0] = 0; regs[1] = v; return 0;
     }
     default:
-        if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; LOG("SVC %#x x0=%#llx x1=%#llx x2=%#llx (占位返回成功)", num, regs[0], regs[1], regs[2]); }
+        if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; LOG("SVC %#x x0=%#llx x1=%#llx x2=%#llx (placeholder, returns success)", num, regs[0], regs[1], regs[2]); }
         regs[0] = 0; return 0;
     }
 }

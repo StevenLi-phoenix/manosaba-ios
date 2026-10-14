@@ -1,13 +1,9 @@
-# 全线程采样（DM_SAMPLE=毫秒:*）汇总：按时间窗、可选线程，统计各线程在跑占比，及游戏函数（eh_frame 起点）自身 / 含子调用热点。
-# 用法：sampagg.py <日志> <起s> <止s> [线程句柄 0x…]   需要 build/cache/dm/out/3.3.94012-r2/{main,sdk}.orig.bin（原映像，按偏移解函数）
-#   不给线程：列各线程样本数、在跑占比、自身热点前 3
-#   给线程：该线程在跑样本的自身热点、宿主帧、含子调用热点（等待类样本 = 最内层在系统等待函数，不计入在跑）
 # All-thread sampling (DM_SAMPLE=ms:*) summary: for a time window and an optional thread, reports each thread's running share and the self / inclusive hotspots of game functions (eh_frame starts).
 # Usage: sampagg.py <log> <start s> <end s> [thread handle 0x...]   Requires build/cache/dm/out/3.3.94012-r2/{main,sdk}.orig.bin (original images, functions resolved by offset)
 #   No thread given: lists each thread's sample count, running share and top 3 self hotspots
 #   Thread given: that thread's self hotspots among running samples, host frames, and inclusive hotspots (waiting samples = innermost frame is in a system wait function, not counted as running)
 import sys, re, bisect, subprocess, collections, os
-DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # 工作区根目录（游戏文件、产物、运行现场都在它下面） | Workspace root (game files, build outputs and run artifacts are all under it)
+DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 log, lo, hi = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]); thr = int(sys.argv[4], 16) if len(sys.argv) > 4 else None
 ORIG = os.path.join(DM_ROOT, 'build/cache/dm/out/3.3.94012-r2')
 SDIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sdis.py')
@@ -32,7 +28,7 @@ for i, l in enumerate(lines):
     bt = lines[i + 1].split('bt:')[1].split() if i + 1 < len(lines) and 'bt:' in lines[i + 1] else []
     if any(pc.startswith(w) for w in WAIT):
         p[1] += 1
-        if thr is not None and h == thr:                 # 等待点：回溯里第一个游戏函数（含 sdk 同步原语时再往外找一层 main 函数） | Wait point: the first game function in the backtrace (when it contains an sdk synchronization primitive, look one more level out for a main function)
+        if thr is not None and h == thr:                 # Wait point: the first game function in the backtrace (when it contains an sdk synchronization primitive, look one more level out for a main function)
             fs = [fnof(f) for f in bt if fnof(f)]; mf = next((f for f in fs if f.startswith('main')), None)
             waitat[(fs[0] if fs else '?') + ' ← ' + (mf or '?')] += 1
         continue

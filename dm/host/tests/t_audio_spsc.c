@@ -1,4 +1,3 @@
-// hle_audio.c 无锁队列压测：生产 / 出声 / 收回三线程并发 10 万块，字节流与收回顺序按序号逐一核对，事件不丢。
 // hle_audio.c lock-free queue stress test: three threads producing / playing / reclaiming 100 thousand blocks concurrently, the byte stream and reclaim order checked one by one by sequence number, no event lost.
 #include "../hle_audio.c"
 #include <sched.h>
@@ -51,7 +50,6 @@ static void *producer(void *p) {
     test_ctx *t = p;
     for (uint32_t i = 0; i < NBUF; i++) {
         t->bufs[i].ptr = t->data[i]; t->bufs[i].cap = MAX_SIZE; t->bufs[i].size = t->sizes[i];
-        // 真实缓冲池：在途（已追加未收回）不超过 QMAX，收回后才能再追加
         // Real buffer pool: buffers in flight (appended, not yet reclaimed) do not exceed QMAX, and more can be appended only after reclaiming
         while (i - (uint32_t)atomic_load_explicit(&t->released, memory_order_acquire) >= QMAX) sched_yield();
         while (!h_au_Append(t->out, &t->bufs[i])) sched_yield();
@@ -118,7 +116,7 @@ int main(void) {
     atomic_store(&t.a->state, STATE_STOPPED);
     h_au_Close(out);
     int sig = atomic_load(&g_sig), after = atomic_load(&g_after_last), released = atomic_load(&t.released), failed = atomic_load(&t.failed);
-    printf("SPSC：追加/释放 %d/%d，事件 %d，最后释放后触发=%d，失败=%d\n", NBUF, released, sig, after, failed);
+    printf("SPSC: appended/released %d/%d, events %d, signalled after the last release=%d, failures=%d\n", NBUF, released, sig, after, failed);
     free(t.scratch); free(t.sizes); free(t.data); free(t.bufs);
     return released != NBUF || failed || sig < 1 || !after;
 }

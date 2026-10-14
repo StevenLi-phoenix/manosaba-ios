@@ -1,8 +1,7 @@
-// t_condvar 的桩：hle_thread.c 在单测里用不到的宿主设施
 // Stubs for t_condvar: host facilities of hle_thread.c that the unit test does not use
 #include "../dm.h"
 struct dm_flags g_flag;
-pthread_key_t g_key18, g_keytls;   // 线程暂停取 x18 / tpidr 槽用（单测不暂停线程） | used by thread pausing to read the x18 / tpidr slots (the unit test does not pause threads)
+pthread_key_t g_key18, g_keytls;   // used by thread pausing to read the x18 / tpidr slots (the unit test does not pause threads)
 uint64_t g_t0_ns;
 void crash_thread_init(void) {}
 void guest_thread_init(void) {}

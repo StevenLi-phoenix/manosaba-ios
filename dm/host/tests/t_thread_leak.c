@@ -1,8 +1,3 @@
-// 客体线程每建销一条不许漏宿主堆（内存泄漏专题第 1 条）：guest_thread_init 给每条线程申请 TLS 块与线程本地区，
-// 原先建键时析构传空、线程退出时不放，每条漏 8192 + 0x200 + 0x400 = 9728 字节。
-// 做法：直接包含真的 thread.c，把其中的 calloc / free 换成这里计数的版本；TLS / 线程本地区两把键照装载器的建法（析构为空），释放靠 thread.c 自己另建的那把键。
-// 期望值写死：建销 200 条线程，申请过的字节 = 200 ×（9728 + 记指针的 16）= 1948800，全部线程退出后仍没释放的块数 = 0。
-// 每条线程在退出前把两把键的槽改写成别的指针（客体就是这么干的：它自己设线程指针）——析构按槽里的值 free 会崩（第一版修法在真宿主上就崩在这里）。
 // Creating and destroying a guest thread must not leak host heap (item 1 of the memory-leak work): guest_thread_init allocates a TLS block and a thread-local region for each thread,
 // and previously the keys were created with a null destructor and nothing was freed at thread exit, leaking 8192 + 0x200 + 0x400 = 9728 bytes per thread.
 // Method: include the real thread.c directly and replace its calloc / free with the counting versions here; the TLS / thread-local-region keys are created the way the loader does (null destructor), and freeing relies on the extra key thread.c creates itself.
@@ -15,7 +10,7 @@
 #include <malloc/malloc.h>
 static _Atomic long g_live_blocks, g_live_bytes, g_total_bytes;
 static void *t_calloc(size_t n, size_t sz) { void *p = calloc(n, sz); atomic_fetch_add(&g_live_blocks, 1); atomic_fetch_add(&g_live_bytes, (long)(n * sz)); atomic_fetch_add(&g_total_bytes, (long)(n * sz)); return p; }
-static _Atomic long g_freed_req;   // 释放次数 | number of frees
+static _Atomic long g_freed_req;   // number of frees
 static void t_free(void *p) { if (!p) return; atomic_fetch_sub(&g_live_blocks, 1); atomic_fetch_add(&g_freed_req, 1); free(p); }
 #define calloc t_calloc
 #define free t_free
@@ -29,15 +24,15 @@ uint64_t dm_game_res(int i) { (void)i; return 0; }
 uint64_t front_game_res(int i) { (void)i; return 0; }
 
 static int fails, checks;
-#define EXPECT(name, want, got) do { long w_ = (long)(want), g_ = (long)(got); checks++; printf("%-46s 期望 %-8ld → 真结果 %-8ld %s\n", name, w_, g_, w_ == g_ ? "✓" : "✗"); if (w_ != g_) fails++; } while (0)
+#define EXPECT(name, want, got) do { long w_ = (long)(want), g_ = (long)(got); checks++; printf("%-46s want %-8ld got %-8ld %s\n", name, w_, g_, w_ == g_ ? "ok" : "FAIL"); if (w_ != g_) fails++; } while (0)
 static char g_not_heap[64];
 static void *one(void *a) { (void)a; guest_thread_init(); pthread_setspecific(g_keytls, g_not_heap); pthread_setspecific(g_keytlr, g_not_heap + 32); return NULL; }
 int main(void) {
     enum { N = 200 };
-    if (pthread_key_create(&g_key18, NULL) || pthread_key_create(&g_keytls, NULL) || pthread_key_create(&g_keytlr, NULL) || pthread_key_create(&g_keygate, NULL)) { printf("建键失败\n"); return 2; }
-    for (int i = 0; i < N; i++) { pthread_t t; if (pthread_create(&t, NULL, one, NULL)) { printf("建线程失败\n"); return 2; } pthread_join(t, NULL); }
-    EXPECT("200 条线程申请过的字节（200 × 9744）", 1948800, atomic_load(&g_total_bytes));
-    EXPECT("全部退出后还没释放的块数", 0, atomic_load(&g_live_blocks));
-    EXPECT("释放次数（每条线程 3 块）", 600, atomic_load(&g_freed_req));
-    printf("t_thread_leak：%d 项，%d 项不通\n", checks, fails); return fails != 0;
+    if (pthread_key_create(&g_key18, NULL) || pthread_key_create(&g_keytls, NULL) || pthread_key_create(&g_keytlr, NULL) || pthread_key_create(&g_keygate, NULL)) { printf("pthread_key_create failed\n"); return 2; }
+    for (int i = 0; i < N; i++) { pthread_t t; if (pthread_create(&t, NULL, one, NULL)) { printf("pthread_create failed\n"); return 2; } pthread_join(t, NULL); }
+    EXPECT("bytes allocated by 200 threads (200 × 9744)", 1948800, atomic_load(&g_total_bytes));
+    EXPECT("blocks still live after all exited", 0, atomic_load(&g_live_blocks));
+    EXPECT("frees (3 blocks per thread)", 600, atomic_load(&g_freed_req));
+    printf("t_thread_leak: %d checks, %d failed\n", checks, fails); return fails != 0;
 }
