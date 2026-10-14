@@ -166,7 +166,7 @@ DM_ROMFS=<Update/RomFS 目录> DM_SAVE=<存档目录> DM_TEMP=<临时目录> DM_
 | `hle_hid.c`、`hle_touch.c` | 手柄与触屏输入 |
 | `hle_swkbd.c`、`hle_charname.c` | 系统软键盘接成宿主输入框；角色名放行中文 |
 | `hle_oe.c`、`hle_time.c`、`hle_account.c` | 运行环境、时钟、本地用户 |
-| `hle_movie.c` | 过场视频：不解码、不出画面，按原时长空播 |
+| `hle_movie.c`、`movie_av.m` | 影片库（`movie::` Extractor / Decoder）：用 AVFoundation 解封装与解码，NV12 视频与 PCM16 音频放在 CPU 缓冲 |
 | `hle_net.c`、`hle_friends.c`、`hle_misc.c` | 联网与好友接成不可用；其余零散服务 |
 | `hle_lifecycle.c` | 宿主的退出流程 |
 

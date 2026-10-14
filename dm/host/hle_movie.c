@@ -1,307 +1,547 @@
-// 过场 / 背景视频剪口（movie:: = subsdk0 任天堂 movie 库；视频内容在复刻排除范围内，不解码、不出画面）。
-// 语义：每段视频按容器里的真实时长「空播」，时序与原版一致——一次性视频到时长走游戏自己的「播完」路径（按键跳过照常生效），
-// 循环视频（选角背景 logoloop）由游戏自己 SeekTo 回开头、按原时长空转。排除的是内容，状态机不剪。
-// 游戏侧协议（main 3.3.94012 原映像偏移，读码所得）：
-//   播放器 P = [0x2e29b88]。Setup 0x8996d0：Ext 槽15 SetDataSource(读取器, 路径) → 槽4 GetTrackCount → Decoder 构造
-//     → Dec 槽3 RegisterClientEvents(&P+0x1b8 = {输入事件, 输出事件, 种类3, 种类4}) → 槽2 Configure → 启动解码线程 → 槽5 Start；
-//     Open 返回 (Start 状态 == 0)。
-//   解码线程 0x899270：WaitAny；种类 1（输入可用）：Dec 槽9 AcquireInputBufferIndex → 槽10 GetInputBuffer → Ext 槽10 Read：
-//     0x2000 = 流尾 ⇒ 循环（P+0x12）则 Ext 槽8 SeekTo(0)，否则置 P+0x488、标志 4；→ Ext 槽12 GetSampleTime
-//     → Dec 槽11 SendInputBufferForDecode(idx, off, size, pts, 标志) → Ext 槽11 Advance。
-//     种类 2（输出可用）：Dec 槽12 AcquireOutputBufferIndex(&idx,&pts,&标志,&剩余) 状态 0/0x2000 ⇒ 入帧队列。
-//   每帧 0xbbfcf4 → 0x898230：帧队列空时返回 !P[+0x489]；取帧 0x89a4b0：Dec 槽18(idx, MediaData*) 非 0 且标志 4 且非循环
-//     ⇒ P+0x489 = 1 ⇒ 游戏走正常播完 0xbbfb60。丢帧 0x899bc8 只在队列 ≥2 时（单个流尾项不会被丢）。
-// 本剪口的时间线：Start 记 t0、挂定时 → 时长内不发任何事件（0 帧，游戏视为在播）→ 到时长由客体计时线程发「输入可用」
-//   → Read 报 0x2000 →（循环）SeekTo 重挂定时 /（一次性）Send(标志 4) 时在解码线程上发「输出可用」→ Acquire 交出标志 4 项。
-// 时钟：宿主单调时钟（不按帧）。未用到的虚槽一律报红陷阱（被调到即中止并报名），不靠桩返回 0 侥幸通过。
-// Cutscene / background video cut (movie:: = the Nintendo movie library in subsdk0; video content is out of the reimplementation scope, not decoded, no picture output).
-// Semantics: each video is "played empty" for the real duration in the container, with timing matching the original game -- a one-shot video takes the game's own "finished playing" path at its duration (skipping by key works as usual),
-// a looping video (character select background logoloop) is SeekTo'd back to the start by the game itself and idles for the original duration. What is excluded is the content, the state machine is not cut.
-// Game-side protocol (offsets in the original main 3.3.94012 image, obtained by reading the code):
-//   Player P = [0x2e29b88]. Setup 0x8996d0: Ext slot 15 SetDataSource(reader, path) → slot 4 GetTrackCount → Decoder construction
-//     → Dec slot 3 RegisterClientEvents(&P+0x1b8 = {input event, output event, kind 3, kind 4}) → slot 2 Configure → start the decode thread → slot 5 Start;
-//     Open returns (Start status == 0).
-//   Decode thread 0x899270: WaitAny; kind 1 (input available): Dec slot 9 AcquireInputBufferIndex → slot 10 GetInputBuffer → Ext slot 10 Read:
-//     0x2000 = end of stream ⇒ if looping (P+0x12) then Ext slot 8 SeekTo(0), otherwise set P+0x488 and flag 4; → Ext slot 12 GetSampleTime
-//     → Dec slot 11 SendInputBufferForDecode(idx, off, size, pts, flags) → Ext slot 11 Advance.
-//     Kind 2 (output available): Dec slot 12 AcquireOutputBufferIndex(&idx,&pts,&flags,&remaining) status 0/0x2000 ⇒ enqueue into the frame queue.
-//   Every frame 0xbbfcf4 → 0x898230: returns !P[+0x489] when the frame queue is empty; frame fetch 0x89a4b0: Dec slot 18(idx, MediaData*) non-zero and flag 4 and not looping
-//     ⇒ P+0x489 = 1 ⇒ the game takes the normal finished-playing path 0xbbfb60. Frame drop 0x899bc8 only when the queue is ≥2 (a single end-of-stream item is not dropped).
-// This cut's timeline: Start records t0 and arms the timer → no event is sent within the duration (0 frames, the game considers it playing) → at the duration the guest timer thread sends "input available"
-//   → Read reports 0x2000 → (looping) SeekTo re-arms the timer / (one-shot) at Send(flag 4) "output available" is sent on the decode thread → Acquire hands over the flag 4 item.
-// Clock: host monotonic clock (not per frame). Unused virtual slots are all failure traps (abort and report the name when called), not stubs returning 0 that pass by luck.
+// movie:: — the Nintendo movie library in subsdk0, which Unity's VideoPlayer drives. Its Extractor, Decoder, MediaData and Buffer are replaced by
+// host versions: the container is read through the game's ClientStreamReader into a temporary file, and AVFoundation demuxes and decodes it
+// (movie_av.m). Unity asks for decoded data in CPU buffers (DecoderMode_Cpu): video as NV12 (DecoderOutputFormat_VideoColorNv12), audio as PCM16
+// (manosaba main+0x9184f8 / +0x9185b4, the Decoder constructions).
+// Semantics follow the NintendoSDK movie docs: Status codes, BufferFlags, the MediaData keys, input / output buffer indices and DecoderEvents
+// (input available, output available, format changed, error). vtable slot order is that of subsdk0's own vtables (_ZTVN5movie7DecoderE,
+// _ZTVN5movie9ExtractorE). Library objects are allocated by the game with its global operator new (0x10 bytes: vtable + host state pointer);
+// the deleting destructors return them with the game's operator delete.
+// Decoding is driven by the input: each input buffer the game sends is answered with the next decoded unit of that track (one video frame, one
+// PCM chunk); the input buffer stays busy until then, so the game cannot run ahead of the output buffers it has not released. The compressed bytes
+// the game copies in are not looked at: the decoder reads the same track decoded. When the game loops a movie (Extractor::SeekTo back to the start
+// at end of stream), the decoder restarts its read at the time of the next input once its own read has ended.
+// The output format (width, height, crop, stride, NV12 plane offsets / audio channels, sample rate) is announced with the format-changed event at
+// Start: Unity reads frame sizes in its format-changed handler (main+0x916a60). Crop is inclusive (Unity computes width = right − left + 1).
+// DM_MOVIE=1 logs the calls.
 #include "hle.h"
-#include <time.h>
+#include "movie_av.h"
+#include <stdatomic.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-#define MV_SKIP_NS   100000000ll   // 不带视频数据时每段「播放」的时长：0.1 秒 | duration of each "playback" when there is no video data: 0.1 s
-#define ST_OK        0
-#define ST_EOS       0x2000      // movie::Status 流尾（游戏 0x8995b8 比较的值） | movie::Status end of stream (the value the game compares at 0x8995b8)
-#define ST_TRY_AGAIN 0x1008      // 暂无缓冲（游戏 0x899564 自己用的值）：AcquireOutputBufferIndex 无输出时回它，游戏不入队 | no buffer for now (the value the game itself uses at 0x899564): AcquireOutputBufferIndex returns it when there is no output, the game does not enqueue
-#define FLAG_EOS     4
+enum {
+    ST_OK = 0, ST_BUFFER_TOO_SMALL = 0x1005, ST_NOT_SUPPORTED = 0x1006, ST_IO = 0x1009, ST_OUT_NOT_AVAILABLE = 0x100e, ST_IN_NOT_AVAILABLE = 0x1011,
+    ST_EOS = 0x2000, ST_INVALID_CONFIG = 0x2001, ST_TRACK_NOT_FOUND = 0x3000, ST_NULL_EXTRACTOR = 0x3003, ST_UNSUPPORTED_MEDIA = 0x4000,
+};
+enum { BF_SYNC = 1, BF_EOS = 4 };
+enum { DEC_NONE = 0, DEC_AVC = 1, DEC_VP8 = 2, DEC_VP9 = 3, DEC_AAC = 4, DEC_VORBIS = 5 };
 #define NN_OS_DEFAULT_THREAD_PRIORITY 16
+#define MVLOG(fmt, ...) do { if (g_flag.movie) LOG("[movie] [%.3f] " fmt, (now_ns() - g_t0_ns) / 1e9, ##__VA_ARGS__); } while (0)
+static int trace(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_MOVIE"); v = e && atoi(e) >= 2; } return v; }
+#define MVTRACE(fmt, ...) do { if (trace()) LOG("[movie] [%.3f] " fmt, (now_ns() - g_t0_ns) / 1e9, ##__VA_ARGS__); } while (0)
 
-static int64_t mono_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000000ll + t.tv_nsec; }
-#define MVLOG(fmt, ...) do { if (g_flag.movie) LOG("movie 空播 [%.3f] " fmt, (now_ns() - g_t0_ns) / 1e9, ##__VA_ARGS__); } while (0)
+// ---------- Media cache: one temporary copy per source path, shared by the extractors that open it ----------
+// Unity opens the same clip twice (probe, then playback). The copy is removed when the last extractor using it is destroyed;
+// readers already created keep the file open.
+typedef struct mv_src { struct mv_src *next; char path[512], file[1024]; mav_media *media; int users; } mv_src;
+static pthread_mutex_t g_src_mu = PTHREAD_MUTEX_INITIALIZER;
+static mv_src *g_srcs;
 
-// ---------- WebM 时长：EBML Segment/Info 的 Duration × TimecodeScale ----------
-// rd(ctx, 偏移, 缓冲, 长度) 返回读到字节数。读不到 / 没有 Duration 返回 -1（调用方报红，不给缺省值）。
-// ---------- WebM duration: Duration × TimecodeScale of EBML Segment/Info ----------
-// rd(ctx, offset, buffer, length) returns the number of bytes read. Returns -1 if it cannot be read / there is no Duration (the caller reports a failure, no default value is given).
-typedef int64_t (*mv_read_fn)(void *ctx, int64_t off, void *buf, size_t n);
-static int ebml_vint(const uint8_t *p, size_t n, int keep_marker, uint64_t *v) {   // 返回长度，0 = 非法 | returns the length, 0 = invalid
-    if (!n || !p[0]) return 0;
-    int len = __builtin_clz((unsigned)p[0]) - 23;          // 首字节前导 0 个数 + 1 | number of leading 0s in the first byte + 1
-    if (len < 1 || len > 8 || (size_t)len > n) return 0;
-    uint64_t x = keep_marker ? p[0] : (p[0] & (0xFF >> len));
-    for (int i = 1; i < len; i++) x = (x << 8) | p[i];
-    *v = x; return len;
-}
-int64_t mv_webm_duration_ns(mv_read_fn rd, void *ctx) {
-    uint8_t b[64]; uint64_t id, sz; int a, c;
-    int64_t off = 0, seg_end = -1;
-    for (int depth = 0; depth < 2;) {                       // depth0：顶层找 Segment；depth1：Segment 内找 Info | depth0: find Segment at top level; depth1: find Info inside Segment
-        int64_t got = rd(ctx, off, b, sizeof b);
-        if (got < 2 || !(a = ebml_vint(b, got, 1, &id)) || !(c = ebml_vint(b + a, got - a, 0, &sz))) return -1;
-        int unknown = sz == (1ull << (7 * c)) - 1;          // 全 1 = 未知长度 | all 1s = unknown length
-        int64_t body = off + a + c;
-        if (depth == 0 && id == 0x18538067) { seg_end = unknown ? INT64_MAX : body + (int64_t)sz; off = body; depth = 1; continue; }
-        if (depth == 1 && id == 0x1549A966) {               // Info
-            if (unknown || sz > 4096) return -1;
-            uint8_t info[4096]; if (rd(ctx, body, info, sz) != (int64_t)sz) return -1;
-            uint64_t scale = 1000000; double dur = -1;      // TimecodeScale 缺省 1ms（Matroska 规范缺省值） | TimecodeScale defaults to 1ms (Matroska specification default)
-            for (size_t p = 0; p < sz;) {
-                uint64_t eid, esz; int ea = ebml_vint(info + p, sz - p, 1, &eid); if (!ea) return -1;
-                int ec = ebml_vint(info + p + ea, sz - p - ea, 0, &esz); if (!ec || p + ea + ec + esz > sz) return -1;
-                const uint8_t *e = info + p + ea + ec;
-                if (eid == 0x2AD7B1) { scale = 0; for (uint64_t i = 0; i < esz; i++) scale = (scale << 8) | e[i]; }
-                else if (eid == 0x4489 && (esz == 4 || esz == 8)) {
-                    uint64_t r = 0; for (uint64_t i = 0; i < esz; i++) r = (r << 8) | e[i];
-                    if (esz == 4) { uint32_t r32 = (uint32_t)r; float f; memcpy(&f, &r32, 4); dur = f; } else memcpy(&dur, &r, 8);
-                }
-                p += ea + ec + esz;
-            }
-            return dur > 0 && scale ? (int64_t)(dur * (double)scale + 0.5) : -1;
-        }
-        if (depth == 1 && id == 0x1F43B675) return -1;      // 到 Cluster 还没见到 Info | reached Cluster without having seen Info
-        if (unknown) return -1;
-        off = body + (int64_t)sz;
-        if (depth == 1 && off >= seg_end) return -1;
-    }
-    return -1;
-}
-
-// ---------- 播放状态（同一时刻游戏只有一个播放器 P；按对象登记，交接靠「最近一次取源」）----------
-// ---------- Playback state (the game has only one player P at a time; registered per object, handover relies on "the most recent source fetch") ----------
-typedef struct {
-    int64_t dur_ns, deadline;         // deadline：下一次发「输入可用」的单调时刻（0 = 未挂） | deadline: monotonic time of the next "input available" (0 = not armed)
-    int64_t fired;                    // 上一次到点的截止时刻：循环按媒体时间续接（新截止 = 上次截止 + 时长），不累积唤醒延迟 | deadline of the previous firing: loops continue in media time (new deadline = previous deadline + duration), wake-up delay does not accumulate
-    void *ev_in, *ev_out;             // 游戏的 nn::os::EventType*（DecoderEvents[0] / [1]） | the game's nn::os::EventType* (DecoderEvents[0] / [1])
-    int eos_out;                      // 已收到标志 4 输入，待交出流尾输出项 | flag 4 input received, end-of-stream output item still to be handed over
-    int64_t last_pts_us;
-} mv_t;
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
-static mv_t *g_pending;               // 最近一次 SetDataSource 解出的状态，等 Decoder 构造时认领 | state produced by the most recent SetDataSource, waiting to be claimed when the Decoder is constructed
-static mv_t *g_armed;                 // 计时线程盯着的那一个 | the one the timer thread is watching
-static void (*g_signal_event)(void *);
-
-// 客体计时线程：经 SDK nn::os::CreateThread 建（入口是本函数），这样 SignalEvent 是在正规客体线程上调的
-// Guest timer thread: created through the SDK's nn::os::CreateThread (entry is this function), so that SignalEvent is called on a proper guest thread
-static void timer_main(void *arg) {
-    (void)arg;
-    pthread_mutex_lock(&g_lock);
+typedef struct { void **vt; } guest_reader;   // movie::ClientStreamReader: slot 2 Open(path, void **h), 3 ReadAt(h, off, buf, n), 4 Close(h)
+static int copy_from_reader(void *reader, const char *path, const char *file) {
+    void **vt = *(void ***)reader; void *h = NULL;
+    if (!(((uint32_t (*)(void *, const char *, void **))vt[2])(reader, path, &h) & 1)) { LOG("[movie] [red] reader cannot open %s", path); return -1; }
+    FILE *f = fopen(file, "wb");
+    if (!f) { LOG("[movie] [red] cannot create %s", file); ((void (*)(void *, void *))vt[4])(reader, h); return -1; }
+    enum { CHUNK = 4 << 20 }; uint8_t *buf = malloc(CHUNK); int64_t off = 0; int ok = 1;
     for (;;) {
-        mv_t *m = g_armed;
-        if (!m || !m->deadline) { pthread_cond_wait(&g_cv, &g_lock); continue; }
-        int64_t now = mono_ns();
-        if (now < m->deadline) {
-            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-            int64_t t = ts.tv_sec * 1000000000ll + ts.tv_nsec + (m->deadline - now);
-            ts.tv_sec = t / 1000000000; ts.tv_nsec = t % 1000000000;
-            pthread_cond_timedwait(&g_cv, &g_lock, &ts); continue;
-        }
-        g_armed = NULL; m->fired = m->deadline;           // 一次定时只发一次；持锁发，和 Stop / 删除串行 | one timer fires only once; fired with the lock held, serialized with Stop / delete
-        MVLOG("到时长，发输入可用");
-        g_signal_event(m->ev_in);
+        size_t n = ((size_t (*)(void *, void *, int64_t, void *, size_t))vt[3])(reader, h, off, buf, CHUNK);
+        if (n > CHUNK || (n && fwrite(buf, 1, n, f) != n)) { ok = 0; break; }
+        off += (int64_t)n;
+        if (n < CHUNK) break;
+    }
+    free(buf); fclose(f);
+    ((void (*)(void *, void *))vt[4])(reader, h);
+    MVLOG("copied %s: %lld bytes", path, (long long)off);
+    return ok && off > 0 ? 0 : -1;
+}
+static mv_src *src_open(void *reader, const char *path) {
+    pthread_mutex_lock(&g_src_mu);
+    for (mv_src *s = g_srcs; s; s = s->next)
+        if (!strcmp(s->path, path)) { s->users++; pthread_mutex_unlock(&g_src_mu); return s; }
+    pthread_mutex_unlock(&g_src_mu);
+    mv_src *s = calloc(1, sizeof *s);
+    strlcpy(s->path, path, sizeof s->path);
+    uint64_t h = 0xcbf29ce484222325ull; for (const char *p = path; *p; p++) h = (h ^ (uint8_t)*p) * 0x100000001b3ull;
+    const char *tmp = getenv("DM_TEMP"); if (!tmp) tmp = getenv("TMPDIR"); if (!tmp) tmp = "/tmp";
+    mkdir(tmp, 0755);
+    snprintf(s->file, sizeof s->file, "%s/movie-%016llx.mp4", tmp, (unsigned long long)h);
+    if (copy_from_reader(reader, path, s->file) || !(s->media = mav_open(s->file))) {
+        LOG("[movie] [red] %s: no playable audio / video track", path);
+        unlink(s->file); free(s); return NULL;
+    }
+    for (int i = 0; i < mav_track_count(s->media); i++) {
+        const mav_track *t = mav_track_at(s->media, i);
+        LOG("[movie] %s track %d: %s %dx%d %d fps, %d ch %d Hz, %.3f s", path, i, t->mime, t->width, t->height, t->frame_rate, t->channels, t->sample_rate,
+            t->duration_us / 1e6);
+    }
+    s->users = 1;
+    pthread_mutex_lock(&g_src_mu); s->next = g_srcs; g_srcs = s; pthread_mutex_unlock(&g_src_mu);
+    return s;
+}
+static void src_close(mv_src *s) {
+    if (!s) return;
+    pthread_mutex_lock(&g_src_mu);
+    int last = --s->users == 0;
+    if (last) for (mv_src **p = &g_srcs; *p; p = &(*p)->next) if (*p == s) { *p = s->next; break; }
+    pthread_mutex_unlock(&g_src_mu);
+    if (!last) return;
+    mav_release(s->media); unlink(s->file); free(s);
+}
+
+// ---------- Allocator, events ----------
+static void (*g_delete)(void *);
+static void (*g_signal)(void *);
+static void guest_fns(void) {
+    if (g_signal) return;
+    g_delete = guest_sym("_ZdlPv"); g_signal = guest_sym("_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+    if (!g_delete || !g_signal) die("movie: missing guest operator delete / nn::os::SignalEvent");
+}
+HLE_FORCE("_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", "movie library: host objects use host memory, the allocator is not needed",
+          void, mv_SetAllocator, void *alloc, void *fr, void *realloc_, void *user) { (void)alloc; (void)fr; (void)realloc_; (void)user; }
+HLE_FORCE_OPT("_ZN5movie11SetCoreMaskEm", "movie library: decoding runs on host threads", void, mv_SetCoreMask, uint64_t mask) { (void)mask; }
+HLE_FORCE("_ZN5movie17GetThreadPriorityEv", "movie library: only passed to the Decoder constructor", int, mv_GetThreadPriority, void) { return NN_OS_DEFAULT_THREAD_PRIORITY; }
+
+// ---------- Buffer: host layout, only used through these methods ----------
+typedef struct { uint8_t *data; uint64_t cap; int32_t off, size; } mvbuf;
+HLE_FORCE("_ZN5movie6BufferC1Ev", "movie::Buffer", void, mv_Buffer, mvbuf *b) { memset(b, 0, sizeof *b); }
+HLE_FORCE("_ZN5movie6BufferD1Ev", "movie::Buffer (the data belongs to whoever set it)", void, mv_BufferD, mvbuf *b) { (void)b; }
+HLE_FORCE("_ZNK5movie6Buffer4DataEv", "movie::Buffer", void *, mv_BufData, const mvbuf *b) { return b->data; }
+HLE_FORCE("_ZNK5movie6Buffer6OffsetEv", "movie::Buffer", int, mv_BufOffset, const mvbuf *b) { return b->off; }
+HLE_FORCE("_ZNK5movie6Buffer4SizeEv", "movie::Buffer", int, mv_BufSize, const mvbuf *b) { return b->size; }
+HLE_FORCE("_ZN5movie6Buffer8SetRangeEii", "movie::Buffer", void, mv_BufSetRange, mvbuf *b, int off, int size) { b->off = off; b->size = size; }
+HLE_FORCE("_ZN5movie6Buffer18SetDataAndCapacityEPvm", "movie::Buffer", void, mv_BufSetData, mvbuf *b, void *p, uint64_t cap) {
+    b->data = p; b->cap = cap; b->off = b->size = 0;
+}
+
+// ---------- MediaData: the guest object's first 8 bytes point to a host table ----------
+typedef struct { char key[24]; char type; int64_t i; int32_t r[4]; char s[32]; } md_ent;   // type: 'i' int32, 'l' int64, 'r' rect, 's' string
+typedef struct { int n; md_ent e[24]; mav_media *media; int track; } md_t;              // media / track: set by GetTrackConfiguration, read by Configure
+static md_t *md_get(void *self) { md_t **p = self; if (!*p) *p = calloc(1, sizeof(md_t)); return *p; }
+static md_ent *md_add(md_t *m, const char *k, char type) {
+    md_ent *e = NULL;
+    for (int i = 0; i < m->n; i++) if (!strcmp(m->e[i].key, k)) e = &m->e[i];
+    if (!e && m->n < (int)(sizeof m->e / sizeof *m->e)) e = &m->e[m->n++];
+    if (!e) die("movie: MediaData full");
+    memset(e, 0, sizeof *e); strlcpy(e->key, k, sizeof e->key); e->type = type;
+    return e;
+}
+static void md_i32(md_t *m, const char *k, int32_t v) { md_add(m, k, 'i')->i = v; }
+static void md_i64(md_t *m, const char *k, int64_t v) { md_add(m, k, 'l')->i = v; }
+static void md_str(md_t *m, const char *k, const char *v) { strlcpy(md_add(m, k, 's')->s, v, sizeof m->e[0].s); }
+static void md_rect(md_t *m, const char *k, int l, int t, int r, int b) { md_ent *e = md_add(m, k, 'r'); e->r[0] = l; e->r[1] = t; e->r[2] = r; e->r[3] = b; }
+static void md_clear(md_t *m) { if (!m) return; if (m->media) mav_release(m->media); memset(m, 0, sizeof *m); }
+static void md_copy(md_t *d, const md_t *s) { md_clear(d); if (!s) return; *d = *s; if (d->media) mav_retain(d->media); }
+static const md_ent *md_find(void *self, const char *k, char type) {
+    const md_t *m = *(md_t **)self;
+    if (m) for (int i = 0; i < m->n; i++) if (m->e[i].type == type && !strcmp(m->e[i].key, k)) return &m->e[i];
+    return NULL;
+}
+HLE_FORCE("_ZN5movie9MediaDataC1Ev", "movie::MediaData → host table", void, mv_MediaData, void **self) { *self = NULL; }
+HLE_FORCE_OPT("_ZN5movie9MediaDataC1ERKS0_", "movie::MediaData copy", void, mv_MediaDataCopy, void **self, void *const *other) {
+    *self = NULL; if (*other) md_copy(md_get(self), *(md_t *const *)other);
+}
+HLE_FORCE_OPT("_ZN5movie9MediaDataaSERKS0_", "movie::MediaData assignment", void *, mv_MediaDataAssign, void **self, void *const *other) {
+    if (self != (void **)other) { if (*other) md_copy(md_get(self), *(md_t *const *)other); else md_clear(*(md_t **)self); }
+    return self;
+}
+HLE_FORCE("_ZN5movie9MediaDataD1Ev", "movie::MediaData → host table", void, mv_MediaDataD, void **self) { md_clear(*(md_t **)self); free(*self); *self = NULL; }
+HLE_FORCE_OPT("_ZN5movie9MediaData5ClearEv", "movie::MediaData", void, mv_MediaDataClear, void **self) { md_clear(*(md_t **)self); }
+HLE_FORCE("_ZNK5movie9MediaData9FindInt32EPKcPi", "movie::MediaData", int, mv_FindInt32, void **self, const char *k, int32_t *v) {
+    const md_ent *e = md_find(self, k, 'i'); if (e) *v = (int32_t)e->i; return e != NULL;
+}
+HLE_FORCE("_ZNK5movie9MediaData9FindInt64EPKcPl", "movie::MediaData", int, mv_FindInt64, void **self, const char *k, int64_t *v) {
+    const md_ent *e = md_find(self, k, 'l'); if (e) *v = e->i; return e != NULL;
+}
+HLE_FORCE("_ZNK5movie9MediaData10FindStringEPKcPS2_", "movie::MediaData", int, mv_FindString, void **self, const char *k, const char **v) {
+    const md_ent *e = md_find(self, k, 's'); if (e) *v = e->s; return e != NULL;
+}
+HLE_FORCE_OPT("_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_", "movie::MediaData", int, mv_FindRect, void **self, const char *k, int32_t *l, int32_t *t, int32_t *r, int32_t *b) {
+    const md_ent *e = md_find(self, k, 'r'); if (e) { *l = e->r[0]; *t = e->r[1]; *r = e->r[2]; *b = e->r[3]; } return e != NULL;
+}
+// Track description (Extractor::GetTrackConfiguration) and decoder output format (Decoder::GetOutputFormat etc.)
+static void md_track(md_t *m, mav_media *media, int track) {
+    const mav_track *t = mav_track_at(media, track);
+    md_clear(m);
+    m->media = media; m->track = track; mav_retain(media);
+    md_str(m, "mime", t->mime); md_i64(m, "durationUs", t->duration_us);
+    if (t->bit_rate) md_i32(m, "bit-rate", t->bit_rate);
+    if (t->kind == MAV_VIDEO) {
+        md_i32(m, "width", t->width); md_i32(m, "height", t->height); md_i32(m, "frame-rate", t->frame_rate);
+        md_i32(m, "max-input-size", t->width * t->height * 3 / 2);
+    } else {
+        md_i32(m, "channel-count", t->channels); md_i32(m, "sample-rate", t->sample_rate); md_i32(m, "max-input-size", 64 << 10);
+        if (t->lang[0]) md_str(m, "media-language", t->lang);
     }
 }
-static void timer_ensure(void) {                          // 在客体线程上调（Decoder::Start 里） | called on a guest thread (inside Decoder::Start)
-    static int started; if (started) return; started = 1;
-    static _Alignas(16) uint8_t thread_obj[0x400];
-    uint32_t (*create)(void *, void (*)(void *), void *, void *, size_t, int) =
-        guest_sym("_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi");
-    void (*start)(void *) = guest_sym("_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE");
-    g_signal_event = guest_sym("_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
-    if (!create || !start || !g_signal_event) die("movie 剪口：缺 nn::os 线程 / 事件符号");
-    size_t ss = 0x10000; void *stack = aligned_alloc(0x1000, ss);
-    uint32_t r = create(thread_obj, timer_main, NULL, stack, ss, NN_OS_DEFAULT_THREAD_PRIORITY);
-    if (r) die("movie 剪口：建计时线程失败 %#x", r);
-    start(thread_obj);
-}
-static void arm(mv_t *m, int64_t at) {                    // 持锁调用 | called with the lock held
-    m->deadline = at; g_armed = m; pthread_cond_signal(&g_cv);
-}
 
-// SetAllocator 登记的客体分配器：库对象由游戏用同一分配器申请后原地构造，删除析构须用登记的 free 还回去
-// Guest allocator registered by SetAllocator: library objects are allocated by the game with the same allocator and constructed in place, the deleting destructor must return them with the registered free
-static void (*g_free)(void *, void *); static void *g_user;
-HLE_FORCE("_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", "过场空播：登记客体分配器（删除析构用其 free）",
-          void, mv_SetAllocator, void *alloc, void (*fr)(void *, void *), void *realloc_, void *user) {
-    (void)alloc; (void)realloc_; g_free = fr; g_user = user;
+// ---------- Extractor (16 slots) ----------
+typedef struct {
+    pthread_mutex_t mu;
+    mv_src *src;
+    int ntracks, sel[8];
+    mav_reader *rd[8]; mav_sample cur[8]; int have[8];   // per selected track: the next sample in decode order
+} ext_t;
+static ext_t *EXT(void *self) { return ((ext_t **)self)[1]; }
+static void ext_fill(ext_t *x, int t) { x->have[t] = x->rd[t] && mav_reader_next(x->rd[t], &x->cur[t]) == 1; }
+static void ext_start(ext_t *x, int t, int64_t at_us) {
+    mav_reader_free(x->rd[t]); x->rd[t] = mav_reader_new(x->src->media, t, at_us, 1); ext_fill(x, t);
 }
-
-// ---- 虚表：对象首字 = 虚表地址点，次字 = 本剪口的 mv_t*（游戏为库对象分配的空间远大于 16 字节）----
-// ---- Vtable: first word of the object = vtable address point, second word = this cut's mv_t* (the space the game allocates for library objects is far larger than 16 bytes) ----
-#define TRAP(cls, slot, what) static void mv_trap_##cls##_##slot(void) { die("movie 剪口：%s 槽%d %s 被调用（不在空播协议内）", #cls, slot, what); }
-static mv_t *M(void *self) { return ((mv_t **)self)[1]; }
-static void mv_dtor(void *self) { (void)self; }
-static void mv_delete(void *self) {
-    pthread_mutex_lock(&g_lock);
-    mv_t *m = M(self);
-    if (m && g_armed == m) g_armed = NULL;
-    if (m && g_pending == m) g_pending = NULL;
-    pthread_mutex_unlock(&g_lock);
-    if (!g_free) die("movie 剪口：未登记分配器");
-    g_free(self, g_user);
+static int ext_next_track(ext_t *x) {   // the selected track whose pending sample comes first in decode order; -1 at end of stream
+    int best = -1;
+    for (int t = 0; t < x->ntracks; t++)
+        if (x->sel[t] && x->have[t] && (best < 0 || x->cur[t].dts_us < x->cur[best].dts_us)) best = t;
+    return best;
 }
-
-// ---- 游戏的 ClientStreamReader（main 虚表 0x20b0e90）：槽2 bool Open(路径, void**h)、槽3 ReadAt(h,off,buf,n)、槽4 Close(h) ----
-// ---- The game's ClientStreamReader (main vtable 0x20b0e90): slot 2 bool Open(path, void**h), slot 3 ReadAt(h,off,buf,n), slot 4 Close(h) ----
-typedef struct { void **reader; void *h; } rdctx;
-static int64_t rd_reader(void *c_, int64_t off, void *buf, size_t n) {
-    rdctx *c = c_; void **vt = *(void ***)c->reader;
-    return ((int64_t (*)(void *, void *, int64_t, void *, size_t))vt[3])(c->reader, c->h, off, buf, n);
+static void ext_free(ext_t *x) {
+    if (!x) return;
+    for (int t = 0; t < 8; t++) mav_reader_free(x->rd[t]);
+    src_close(x->src); pthread_mutex_destroy(&x->mu); free(x);
 }
-
-// Extractor（16 槽）
-// Extractor (16 slots)
-static int ext_SetDataSourceReader(void *self, void **reader, const char *path) {
-    // 过场 / 背景视频是产品排除项（过场动画不接，游戏自然跳过）：资源包里不带视频数据，这里不打开文件、不读时长，
-    // 一律按 MV_SKIP_NS 即「播完」——一次性视频走游戏自己的播完路径，循环视频（选角背景 logoloop）按这个周期空转。
-    // DM_MOVIE_REAL=1：按容器里的真实时长空播（旧行为；对真值时序用，需要带视频数据的资源包）。
-    // Cutscene / background videos are out of scope for this product (cutscenes are not hooked up, the game skips them naturally): the resource pack carries no video data, here no file is opened and no duration is read,
-    // always MV_SKIP_NS and then "finished playing" -- one-shot videos take the game's own finished-playing path, looping videos (character select background logoloop) idle at this period.
-    // DM_MOVIE_REAL=1: no-op playback by the real duration in the container (old behavior; for timing against ground truth, needs a resource pack with video data).
-    (void)reader; int64_t d = MV_SKIP_NS;
-    static int real = -1; if (real < 0) { const char *e = getenv("DM_MOVIE_REAL"); real = e && !strcmp(e, "1"); }
-    if (real) {
-        void **vt = *(void ***)reader; rdctx c = {reader, NULL};
-        if (!(((uint32_t (*)(void *, const char *, void **))vt[2])(reader, path, &c.h) & 1)) die("movie 剪口：读取器打不开 %s", path);
-        d = mv_webm_duration_ns(rd_reader, &c);
-        ((void (*)(void *, void *))vt[4])(reader, c.h);
-        if (d <= 0) die("movie 剪口：%s 读不出 WebM 时长（Segment/Info/Duration）", path);
-    }
-    mv_t *m = calloc(1, sizeof *m); m->dur_ns = d;
-    pthread_mutex_lock(&g_lock); ((mv_t **)self)[1] = m; g_pending = m; pthread_mutex_unlock(&g_lock);
-    MVLOG("%s 时长 %.3f 秒", path, d / 1e9);
+static void ext_dtor(void **self) { ext_free(EXT(self)); self[1] = NULL; }
+static void ext_delete(void **self) { ext_dtor(self); guest_fns(); g_delete(self); }
+static int ext_SetDataSourceReader(void **self, void *reader, const char *path) {
+    ext_t *x = EXT(self);
+    if (x->src) return ST_IO;
+    mv_src *s = src_open(reader, path);
+    if (!s) return ST_UNSUPPORTED_MEDIA;
+    x->src = s; x->ntracks = mav_track_count(s->media);
+    MVLOG("Extractor %p SetDataSource %s: %d tracks", (void *)self, path, x->ntracks);
     return ST_OK;
 }
-static int ext_GetTrackCount(void *self, int *n) { (void)self; *n = 0; return ST_OK; }   // 0 轨 ⇒ Setup 跳过选轨 | 0 tracks ⇒ Setup skips track selection
-static int ext_SeekTo(void *self, int64_t us, int mode) {   // 循环视频回开头：重新计一轮时长 | looping video back to the start: count one more round of the duration
-    (void)us; (void)mode; mv_t *m = M(self);
-    pthread_mutex_lock(&g_lock); arm(m, (m->fired ? m->fired : mono_ns()) + m->dur_ns); m->last_pts_us = 0; pthread_mutex_unlock(&g_lock);
-    MVLOG("循环回开头");
+static int ext_SetDataSourcePath(void **self, const char *path) { (void)self; LOG("[movie] [red] Extractor::SetDataSource(path) %s: not supported", path); return ST_NOT_SUPPORTED; }
+static int ext_SetDataSourceMem(void **self, const void *p, int n) { (void)self; (void)p; LOG("[movie] [red] Extractor::SetDataSource(memory, %d): not supported", n); return ST_NOT_SUPPORTED; }
+static int ext_GetTrackCount(void **self, int32_t *n) { ext_t *x = EXT(self); *n = x->ntracks; return x->src ? ST_OK : ST_NULL_EXTRACTOR; }
+static int ext_GetTrackConfiguration(void **self, int i, void **md) {
+    ext_t *x = EXT(self);
+    if (!x->src) return ST_NULL_EXTRACTOR;
+    if (i < 0 || i >= x->ntracks) return ST_TRACK_NOT_FOUND;
+    md_track(md_get(md), x->src->media, i);
     return ST_OK;
 }
-static int ext_Read(void *self, void *buf) {
-    (void)buf; mv_t *m = M(self);
-    pthread_mutex_lock(&g_lock); int64_t dl = m->deadline; pthread_mutex_unlock(&g_lock);
-    if (dl && mono_ns() < dl) die("movie 剪口：未到时长就被要求读样本（协议外）");
-    m->last_pts_us = m->dur_ns / 1000;
-    return ST_EOS;
+static int ext_SelectTrack(void **self, int i) {
+    ext_t *x = EXT(self);
+    if (!x->src || i < 0 || i >= x->ntracks) return ST_TRACK_NOT_FOUND;
+    pthread_mutex_lock(&x->mu);
+    if (!x->sel[i]) { x->sel[i] = 1; ext_start(x, i, 0); }
+    pthread_mutex_unlock(&x->mu);
+    MVLOG("Extractor %p SelectTrack %d", (void *)self, i);
+    return ST_OK;
 }
-static int ext_Advance(void *self) { (void)self; return ST_OK; }
-static int ext_GetSampleTime(void *self, int64_t *us) { *us = M(self)->last_pts_us; return ST_OK; }
-TRAP(ext, 2, "SetDataSource(char const*)") TRAP(ext, 3, "SetDataSource(void const*, int)") TRAP(ext, 5, "GetTrackConfiguration")
-TRAP(ext, 6, "SelectTrack") TRAP(ext, 7, "UnselectTrack") TRAP(ext, 9, "GetTrackIndexForAvailableData")
-TRAP(ext, 13, "GetSampleMetaData") TRAP(ext, 14, "GetBufferedRange")
+static int ext_UnselectTrack(void **self, int i) {
+    ext_t *x = EXT(self);
+    if (i < 0 || i >= x->ntracks) return ST_TRACK_NOT_FOUND;
+    pthread_mutex_lock(&x->mu); x->sel[i] = 0; mav_reader_free(x->rd[i]); x->rd[i] = NULL; x->have[i] = 0; pthread_mutex_unlock(&x->mu);
+    return ST_OK;
+}
+static int ext_SeekTo(void **self, int64_t us) {
+    ext_t *x = EXT(self);
+    pthread_mutex_lock(&x->mu);
+    for (int t = 0; t < x->ntracks; t++) if (x->sel[t]) ext_start(x, t, us);
+    pthread_mutex_unlock(&x->mu);
+    MVLOG("Extractor %p SeekTo %lld us", (void *)self, (long long)us);
+    return ST_OK;
+}
+static int ext_GetTrackIndexForAvailableData(void **self, uint64_t *idx) {
+    ext_t *x = EXT(self);
+    pthread_mutex_lock(&x->mu); int t = ext_next_track(x); pthread_mutex_unlock(&x->mu);
+    if (t < 0) return ST_EOS;
+    *idx = (uint64_t)t; return ST_OK;
+}
+static int ext_Read(void **self, mvbuf *b) {
+    ext_t *x = EXT(self); int st = ST_OK;
+    pthread_mutex_lock(&x->mu);
+    int t = ext_next_track(x);
+    if (t < 0) st = ST_EOS;
+    else if (x->cur[t].size > b->cap) st = ST_BUFFER_TOO_SMALL;
+    else { memcpy(b->data, x->cur[t].data, x->cur[t].size); b->off = 0; b->size = (int32_t)x->cur[t].size; }
+    pthread_mutex_unlock(&x->mu);
+    if (st == ST_BUFFER_TOO_SMALL) LOG("[movie] [red] Extractor::Read: sample %zu bytes, buffer %llu", x->cur[t].size, (unsigned long long)b->cap);
+    return st;
+}
+static int ext_Advance(void **self) {
+    ext_t *x = EXT(self);
+    pthread_mutex_lock(&x->mu); int t = ext_next_track(x); if (t >= 0) ext_fill(x, t); pthread_mutex_unlock(&x->mu);
+    return t < 0 ? ST_EOS : ST_OK;
+}
+static int ext_GetSampleTime(void **self, int64_t *us) {
+    ext_t *x = EXT(self);
+    pthread_mutex_lock(&x->mu); int t = ext_next_track(x); if (t >= 0) *us = x->cur[t].pts_us; pthread_mutex_unlock(&x->mu);
+    return t < 0 ? ST_EOS : ST_OK;
+}
+static int ext_GetSampleMetaData(void **self, void **md) {
+    ext_t *x = EXT(self);
+    pthread_mutex_lock(&x->mu); int t = ext_next_track(x); int sync = t >= 0 && x->cur[t].sync; pthread_mutex_unlock(&x->mu);
+    if (t < 0) return ST_EOS;
+    md_i32(md_get(md), "is-sync-frame", sync);
+    return ST_OK;
+}
+static int ext_GetBufferedRange(void **self, int64_t *start, int64_t *end) {   // the whole file is local
+    ext_t *x = EXT(self); int64_t d = 0;
+    for (int t = 0; x->src && t < x->ntracks; t++) { int64_t v = mav_track_at(x->src->media, t)->duration_us; if (v > d) d = v; }
+    *start = 0; *end = d; return ST_OK;
+}
 static void *const g_ext_vt[16] = {
-    mv_dtor, mv_delete, mv_trap_ext_2, mv_trap_ext_3, ext_GetTrackCount, mv_trap_ext_5, mv_trap_ext_6, mv_trap_ext_7,
-    ext_SeekTo, mv_trap_ext_9, ext_Read, ext_Advance, ext_GetSampleTime, mv_trap_ext_13, mv_trap_ext_14,
+    ext_dtor, ext_delete, ext_SetDataSourcePath, ext_SetDataSourceMem, ext_GetTrackCount, ext_GetTrackConfiguration, ext_SelectTrack, ext_UnselectTrack,
+    ext_SeekTo, ext_GetTrackIndexForAvailableData, ext_Read, ext_Advance, ext_GetSampleTime, ext_GetSampleMetaData, ext_GetBufferedRange,
     ext_SetDataSourceReader,
 };
+HLE_FORCE("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", "movie::Extractor → host (AVFoundation)", void, mv_Extractor, void **self, int type) {
+    (void)type; guest_fns();
+    ext_t *x = calloc(1, sizeof *x); pthread_mutex_init(&x->mu, NULL);
+    self[0] = (void *)g_ext_vt; self[1] = x;
+}
+// The non-virtual entries main imports directly
+HLE_FORCE_OPT("_ZN5movie9ExtractorD1Ev", "movie::Extractor → host", void, mv_ExtractorD, void **self) { ext_dtor(self); }
+HLE_FORCE_OPT("_ZN5movie9Extractor13SetDataSourceEPKc", "movie::Extractor → host", int, mv_ExtSetDataSourcePath, void **self, const char *p) { return ext_SetDataSourcePath(self, p); }
+HLE_FORCE_OPT("_ZN5movie9Extractor13GetTrackCountEPi", "movie::Extractor → host", int, mv_ExtGetTrackCount, void **self, int32_t *n) { return ext_GetTrackCount(self, n); }
+HLE_FORCE_OPT("_ZN5movie9Extractor21GetTrackConfigurationEiPNS_9MediaDataE", "movie::Extractor → host", int, mv_ExtGetTrackConfiguration, void **self, int i, void **md) {
+    return ext_GetTrackConfiguration(self, i, md);
+}
 
-// Decoder（19 槽）
-// Decoder (19 slots)
-static int dec_Configure(void *self, void *md) { (void)self; (void)md; return ST_OK; }
-static int dec_RegisterClientEvents(void *self, void **ev) { mv_t *m = M(self); m->ev_in = ev[0]; m->ev_out = ev[1]; return ST_OK; }
-static int dec_Start(void *self) {
-    timer_ensure();
-    MVLOG("Start");
-    mv_t *m = M(self);
-    pthread_mutex_lock(&g_lock); arm(m, mono_ns() + m->dur_ns); pthread_mutex_unlock(&g_lock);
-    return ST_OK;
-}
-static int dec_Stop(void *self) {                          // 按键跳过 / 收尾：立即撤销定时 | skipped by key / wrap-up: cancel the timer immediately
-    mv_t *m = M(self);
-    pthread_mutex_lock(&g_lock); m->deadline = 0; if (g_armed == m) g_armed = NULL; pthread_mutex_unlock(&g_lock);
-    return ST_OK;
-}
-static int dec_AcquireInputBufferIndex(void *self, int *idx, int *remaining) {
-    mv_t *m = M(self);
-    pthread_mutex_lock(&g_lock); int due = m->deadline && mono_ns() >= m->deadline; pthread_mutex_unlock(&g_lock);
-    *idx = due ? 0 : -1; *remaining = 0;
-    MVLOG("取输入缓冲 %s", due ? "到时" : "未到");
-    return ST_OK;
-}
-static uint8_t g_inbuf[16];
-typedef struct { void *data; uint64_t cap; int32_t off, size; } mvbuf;   // movie::Buffer 的宿主布局（游戏栈上留了 ≥0x40 字节） | host layout of movie::Buffer (the game leaves ≥0x40 bytes on its stack)
-static int dec_GetInputBuffer(void *self, int idx, mvbuf *b) {
-    (void)self; (void)idx; b->data = g_inbuf; b->cap = sizeof g_inbuf; b->off = b->size = 0; return ST_OK;
-}
-static int dec_SendInputBufferForDecode(void *self, int idx, int off, int size, int64_t pts, int flags) {
-    (void)idx; (void)off; (void)size; (void)pts; mv_t *m = M(self);
-    if (flags & FLAG_EOS) {                                 // 一次性视频播到头：在解码线程上直接发「输出可用」 | a one-shot video played to the end: send "output available" directly on the decode thread
-        pthread_mutex_lock(&g_lock); m->eos_out = 1; m->deadline = 0; pthread_mutex_unlock(&g_lock);
-        MVLOG("播完");
-        g_signal_event(m->ev_out);
+// ---------- Decoder (19 slots) ----------
+enum { NIN = 4, NOUT = 4 };
+enum { IN_FREE, IN_CLIENT, IN_SENT };
+enum { OUT_FREE, OUT_READY, OUT_CLIENT };
+typedef struct {
+    pthread_mutex_t mu;
+    int type, fmt, mode, kind, started, last_error;
+    mav_media *media; int track; int32_t width, height, channels, sample_rate;
+    void *ev[4];                                     // DecoderEvents: input available, output available, format changed, error
+    mav_reader *rd; int rd_done, restart;            // restart: read again from the next input's time once rd_done
+    int in_state[NIN]; uint8_t *in_mem[NIN]; size_t in_cap; int64_t in_pts[NIN]; uint32_t in_flags[NIN];
+    int credit[NIN], ncredit;                        // sent inputs not yet answered, in order
+    int eos_in, eos_out;
+    int out_state[NOUT]; uint8_t *out_mem[NOUT]; size_t out_cap, out_size[NOUT]; int64_t out_pts[NOUT]; uint32_t out_flags[NOUT];
+    int ready[NOUT], nready;
+    mav_sample carry; size_t carry_off; int have_carry;   // audio: rest of a decoded chunk larger than one output buffer
+    uint64_t frames;
+} dec_t;
+static dec_t *DEC(void *self) { return ((dec_t **)self)[1]; }
+static void dec_format(dec_t *d, void **md) {
+    md_t *m = md_get(md);
+    md_track(m, d->media, d->track);
+    if (d->kind == MAV_VIDEO) {
+        md_i32(m, "stride", d->width); md_i32(m, "slice-height", d->height); md_rect(m, "crop", 0, 0, d->width - 1, d->height - 1);
+        md_i32(m, "nv12-y-stride", d->width); md_i32(m, "nv12-y-offset", 0); md_i32(m, "nv12-uv-offset", d->width * d->height);
     }
+}
+static void dec_buffers_free(dec_t *d) {
+    for (int i = 0; i < NIN; i++) { free(d->in_mem[i]); d->in_mem[i] = NULL; }
+    for (int i = 0; i < NOUT; i++) { free(d->out_mem[i]); d->out_mem[i] = NULL; }
+    mav_reader_free(d->rd); d->rd = NULL;
+}
+static void dec_drop(dec_t *d) {   // Flush / Reset: forget queued work, keep the buffers
+    for (int i = 0; i < NIN; i++) d->in_state[i] = IN_FREE;
+    for (int i = 0; i < NOUT; i++) d->out_state[i] = OUT_FREE;
+    d->ncredit = d->nready = 0; d->eos_in = d->eos_out = 0; d->have_carry = 0;
+    mav_reader_free(d->rd); d->rd = NULL; d->rd_done = 0; d->restart = 1;
+}
+static int out_slot(dec_t *d) { for (int i = 0; i < NOUT; i++) if (d->out_state[i] == OUT_FREE) return i; return -1; }
+static void out_push(dec_t *d, int o, const uint8_t *p, size_t n, int64_t pts, uint32_t flags) {
+    if (n) memcpy(d->out_mem[o], p, n);
+    d->out_size[o] = n; d->out_pts[o] = pts; d->out_flags[o] = flags; d->out_state[o] = OUT_READY; d->ready[d->nready++] = o;
+}
+// Next decoded unit into output slot o; 0 when the track has ended
+static int decode_one(dec_t *d, int o, int64_t at_us) {
+    if (!d->rd && !d->rd_done) {
+        d->rd = mav_reader_new(d->media, d->track, at_us > 0 ? at_us : 0, 0);
+        if (!d->rd) { d->rd_done = 1; d->last_error = ST_UNSUPPORTED_MEDIA; LOG("[movie] [red] decoder: track %d cannot be decoded", d->track); return 0; }
+    }
+    if (!d->have_carry) {
+        int r = d->rd_done ? 0 : mav_reader_next(d->rd, &d->carry);
+        if (r != 1) {
+            if (r < 0) LOG("[movie] [red] decoder: read error on track %d", d->track);
+            d->rd_done = 1; return 0;
+        }
+        d->have_carry = 1; d->carry_off = 0;
+    }
+    size_t n = d->carry.size - d->carry_off;
+    if (n > d->out_cap) n = d->kind == MAV_AUDIO ? d->out_cap / (2 * d->channels) * (2 * d->channels) : d->out_cap;
+    int64_t pts = d->carry.pts_us;
+    if (d->kind == MAV_AUDIO && d->carry_off) pts += (int64_t)(d->carry_off / (2 * d->channels)) * 1000000 / d->sample_rate;
+    out_push(d, o, d->carry.data + d->carry_off, n, pts, 0);
+    d->carry_off += n;
+    if (d->carry_off >= d->carry.size) d->have_carry = 0;
+    d->frames++;
+    return 1;
+}
+// Answers sent inputs while output slots are free; at end of input drains what is left and ends with an empty end-of-stream output.
+// Returns which events to signal (bit 0 input available, bit 1 output available).
+static int dec_pump(dec_t *d) {
+    int sig = 0, o;
+    while (d->started && d->ncredit && (o = out_slot(d)) >= 0) {
+        int i = d->credit[0];
+        memmove(d->credit, d->credit + 1, sizeof d->credit[0] * (size_t)--d->ncredit);
+        int64_t at = 0;   // where a new read starts: the beginning, or this input's time after a loop / flush
+        if (d->restart && (d->rd_done || !d->rd) && !(d->in_flags[i] & BF_EOS)) {
+            mav_reader_free(d->rd); d->rd = NULL; d->rd_done = 0; d->have_carry = 0; at = d->in_pts[i];
+            MVLOG("decoder track %d: restart at %lld us", d->track, (long long)at);
+        }
+        d->restart = 0;
+        if (decode_one(d, o, at)) sig |= 2;
+        else if (!(d->in_flags[i] & BF_EOS)) d->restart = 1;   // the game feeds on after our read ended: it looped
+        if (d->in_flags[i] & BF_EOS) d->eos_in = 1;
+        d->in_state[i] = IN_FREE; sig |= 1;
+    }
+    while (d->started && d->eos_in && !d->eos_out && !d->ncredit && (o = out_slot(d)) >= 0) {
+        if (decode_one(d, o, 0)) { sig |= 2; continue; }
+        out_push(d, o, NULL, 0, 0, BF_EOS); d->eos_out = 1; sig |= 2;
+        MVLOG("decoder track %d: end of stream after %llu units", d->track, (unsigned long long)d->frames);
+    }
+    return sig;
+}
+static void dec_signal(dec_t *d, int sig) {   // outside the lock: the woken game thread calls back in
+    if ((sig & 1) && d->ev[0]) g_signal(d->ev[0]);
+    if ((sig & 2) && d->ev[1]) g_signal(d->ev[1]);
+}
+static void dec_dtor(void **self) {
+    dec_t *d = DEC(self); if (!d) return;
+    dec_buffers_free(d); if (d->media) mav_release(d->media);
+    pthread_mutex_destroy(&d->mu); free(d); self[1] = NULL;
+}
+static void dec_delete(void **self) { dec_dtor(self); g_delete(self); }
+static int dec_Configure(void **self, void **md) {
+    dec_t *d = DEC(self); const md_t *m = *(md_t **)md;
+    if (!m || !m->media) { LOG("[movie] [red] Decoder::Configure without a track configuration"); return ST_INVALID_CONFIG; }
+    const mav_track *t = mav_track_at(m->media, m->track);
+    int want = t->kind == MAV_VIDEO ? (!strcmp(t->mime, "video/avc") ? DEC_AVC : DEC_NONE) : (!strcmp(t->mime, "audio/mp4a-latm") ? DEC_AAC : DEC_NONE);
+    if (want != d->type) { LOG("[movie] [red] Decoder::Configure: decoder type %d, track %s", d->type, t->mime); return ST_UNSUPPORTED_MEDIA; }
+    pthread_mutex_lock(&d->mu);
+    dec_buffers_free(d); if (d->media) mav_release(d->media);
+    d->media = m->media; mav_retain(d->media); d->track = m->track; d->kind = t->kind;
+    d->width = t->width; d->height = t->height; d->channels = t->channels ? t->channels : 2; d->sample_rate = t->sample_rate ? t->sample_rate : 48000;
+    d->in_cap = t->kind == MAV_VIDEO ? (size_t)t->width * t->height * 3 / 2 + (64 << 10) : 64 << 10;
+    // Video: one NV12 frame as movie_av.h packs it. Audio: one AAC frame (1024 samples per channel), so each packet sent is answered with the PCM it holds;
+    // larger outputs ran the audio decoder ahead of its input, and since the extractor interleaves tracks by time, video starved behind unread audio.
+    d->out_cap = t->kind == MAV_VIDEO ? (size_t)t->width * (t->height + (t->height + 1) / 2) : (size_t)1024 * 2 * d->channels;
+    for (int i = 0; i < NIN; i++) d->in_mem[i] = malloc(d->in_cap);
+    for (int i = 0; i < NOUT; i++) d->out_mem[i] = malloc(d->out_cap);
+    dec_drop(d); d->restart = 0;
+    pthread_mutex_unlock(&d->mu);
+    MVLOG("Decoder %p Configure: track %d %s", (void *)self, d->track, t->mime);
     return ST_OK;
 }
-static int dec_AcquireOutputBufferIndex(void *self, int *idx, int64_t *pts, int *flags, int *remaining) {
-    mv_t *m = M(self); *remaining = 0;
-    pthread_mutex_lock(&g_lock); int eos = m->eos_out; m->eos_out = 0; pthread_mutex_unlock(&g_lock);
-    if (!eos) return ST_TRY_AGAIN;                          // 无输出 ⇒ 游戏不入队 | no output ⇒ the game does not enqueue
-    *idx = 0; *pts = m->dur_ns / 1000; *flags = FLAG_EOS;
+static int dec_RegisterClientEvents(void **self, void **ev) { dec_t *d = DEC(self); for (int i = 0; i < 4; i++) d->ev[i] = ev[i]; return ST_OK; }
+static int dec_GetOutputFormat(void **self, void **md) {
+    dec_t *d = DEC(self); if (!d->media) return ST_INVALID_CONFIG;
+    dec_format(d, md); MVTRACE("dec %p GetOutputFormat", (void *)self); return ST_OK;
+}
+static int dec_Start(void **self) {
+    dec_t *d = DEC(self);
+    if (!d->media) return ST_INVALID_CONFIG;
+    pthread_mutex_lock(&d->mu); d->started = 1; int sig = 1 | dec_pump(d); pthread_mutex_unlock(&d->mu);
+    MVLOG("Decoder %p Start (track %d)", (void *)self, d->track);
+    if (d->ev[2]) g_signal(d->ev[2]);   // format changed: Unity learns the frame size from GetOutputFormat
+    dec_signal(d, sig);
     return ST_OK;
 }
-static int dec_ReleaseOutputBufferIndex(void *self, int idx) { (void)self; (void)idx; return ST_OK; }
-static int dec_GetOutputBufferFormat(void *self, int idx, void *md) { (void)self; (void)idx; (void)md; return ST_EOS; }   // 非 0 ⇒ 取帧按流尾项处理 | non-zero ⇒ frame fetch treats it as the end-of-stream item
-TRAP(dec, 4, "GetOutputFormat") TRAP(dec, 7, "Reset") TRAP(dec, 8, "Flush")
-TRAP(dec, 13, "GetOutputBuffer") TRAP(dec, 14, "GetOutputBufferSize")
-TRAP(dec, 16, "GetLastError") TRAP(dec, 17, "GetOutputBuffer(MediaData)")
+static int dec_Stop(void **self) { dec_t *d = DEC(self); pthread_mutex_lock(&d->mu); d->started = 0; pthread_mutex_unlock(&d->mu); MVLOG("Decoder %p Stop", (void *)self); return ST_OK; }
+static int dec_Reset(void **self) {
+    dec_t *d = DEC(self);
+    pthread_mutex_lock(&d->mu); d->started = 0; dec_drop(d); pthread_mutex_unlock(&d->mu);
+    return ST_OK;
+}
+static int dec_Flush(void **self) {
+    dec_t *d = DEC(self);
+    pthread_mutex_lock(&d->mu); dec_drop(d); int sig = d->started ? 1 : 0; pthread_mutex_unlock(&d->mu);
+    MVLOG("Decoder %p Flush", (void *)self);
+    dec_signal(d, sig);
+    return ST_OK;
+}
+static int dec_AcquireInputBufferIndex(void **self, int32_t *idx, int32_t *remaining) {
+    dec_t *d = DEC(self); int st = ST_IN_NOT_AVAILABLE;
+    pthread_mutex_lock(&d->mu);
+    *idx = -1; *remaining = 0;
+    for (int i = 0; d->started && i < NIN; i++)
+        if (d->in_state[i] == IN_FREE) { if (*idx < 0) { *idx = i; d->in_state[i] = IN_CLIENT; st = ST_OK; } else ++*remaining; }
+    pthread_mutex_unlock(&d->mu);
+    MVTRACE("dec %p AcquireInput → %#x idx %d rem %d", (void *)self, st, *idx, *remaining);
+    return st;
+}
+static int dec_GetInputBuffer(void **self, int32_t i, mvbuf *b) {
+    dec_t *d = DEC(self);
+    if (i < 0 || i >= NIN || d->in_state[i] != IN_CLIENT) return ST_IN_NOT_AVAILABLE;
+    b->data = d->in_mem[i]; b->cap = d->in_cap; b->off = b->size = 0;
+    return ST_OK;
+}
+static int dec_SendInputBufferForDecode(void **self, int32_t i, int32_t off, int32_t size, int64_t pts, uint32_t flags) {
+    (void)off; (void)size;
+    dec_t *d = DEC(self);
+    pthread_mutex_lock(&d->mu);
+    if (i < 0 || i >= NIN || d->in_state[i] != IN_CLIENT) { pthread_mutex_unlock(&d->mu); return ST_IN_NOT_AVAILABLE; }
+    d->in_state[i] = IN_SENT; d->in_pts[i] = pts; d->in_flags[i] = flags; d->credit[d->ncredit++] = i;
+    MVTRACE("dec %p SendInput idx %d off %d size %d pts %lld flags %#x", (void *)self, i, off, size, (long long)pts, flags);
+    int sig = dec_pump(d);
+    pthread_mutex_unlock(&d->mu);
+    dec_signal(d, sig);
+    return ST_OK;
+}
+static int dec_AcquireOutputBufferIndex(void **self, int32_t *idx, int64_t *pts, uint32_t *flags, int32_t *remaining) {
+    dec_t *d = DEC(self); int st = ST_OUT_NOT_AVAILABLE;
+    pthread_mutex_lock(&d->mu);
+    *idx = -1; *remaining = 0;
+    if (d->nready) {
+        int o = d->ready[0]; memmove(d->ready, d->ready + 1, sizeof d->ready[0] * (size_t)--d->nready);
+        d->out_state[o] = OUT_CLIENT; *idx = o; *pts = d->out_pts[o]; *flags = d->out_flags[o]; *remaining = d->nready; st = ST_OK;
+    }
+    pthread_mutex_unlock(&d->mu);
+    MVTRACE("dec %p AcquireOutput → %#x idx %d pts %lld flags %#x rem %d", (void *)self, st, *idx, st ? 0ll : (long long)*pts, st ? 0 : *flags, *remaining);
+    return st;
+}
+static int out_copy(dec_t *d, int32_t o, mvbuf *b) {
+    if (o < 0 || o >= NOUT || d->out_state[o] != OUT_CLIENT) return ST_OUT_NOT_AVAILABLE;
+    size_t n = d->out_size[o];
+    if (n > b->cap) { LOG("[movie] [red] Decoder::GetOutputBuffer: %zu bytes, buffer %llu", n, (unsigned long long)b->cap); return ST_BUFFER_TOO_SMALL; }
+    if (n) memcpy(b->data, d->out_mem[o], n);
+    b->off = 0; b->size = (int32_t)n;
+    return ST_OK;
+}
+static int dec_GetOutputBuffer(void **self, int32_t o, mvbuf *b) {
+    int st = out_copy(DEC(self), o, b);
+    MVTRACE("dec %p GetOutputBuffer idx %d cap %llu → %#x size %d", (void *)self, o, (unsigned long long)b->cap, st, b->size);
+    return st;
+}
+static int dec_GetOutputBufferFmt(void **self, int32_t o, mvbuf *b, void **md) {
+    int st = out_copy(DEC(self), o, b); if (!st) dec_format(DEC(self), md);
+    MVTRACE("dec %p GetOutputBuffer+format idx %d → %#x", (void *)self, o, st);
+    return st;
+}
+static int dec_GetOutputBufferSize(void **self, int32_t *size, int32_t *align) {
+    dec_t *d = DEC(self); *size = (int32_t)d->out_cap; *align = 256;
+    MVTRACE("dec %p GetOutputBufferSize → %d", (void *)self, *size);
+    return d->media ? ST_OK : ST_INVALID_CONFIG;
+}
+static int dec_ReleaseOutputBufferIndex(void **self, int32_t o) {
+    dec_t *d = DEC(self);
+    pthread_mutex_lock(&d->mu);
+    if (o < 0 || o >= NOUT || d->out_state[o] != OUT_CLIENT) { pthread_mutex_unlock(&d->mu); return ST_OUT_NOT_AVAILABLE; }
+    d->out_state[o] = OUT_FREE;
+    MVTRACE("dec %p ReleaseOutput idx %d", (void *)self, o);
+    int sig = dec_pump(d);
+    pthread_mutex_unlock(&d->mu);
+    dec_signal(d, sig);
+    return ST_OK;
+}
+static int dec_GetLastError(void **self) { return DEC(self)->last_error; }
+static int dec_GetOutputBufferFormat(void **self, int32_t o, void **md) {
+    dec_t *d = DEC(self);
+    MVTRACE("dec %p GetOutputBufferFormat idx %d", (void *)self, o);
+    if (o < 0 || o >= NOUT || d->out_state[o] != OUT_CLIENT) return ST_OUT_NOT_AVAILABLE;
+    dec_format(d, md); return ST_OK;
+}
 static void *const g_dec_vt[19] = {
-    mv_dtor, mv_delete, dec_Configure, dec_RegisterClientEvents, mv_trap_dec_4, dec_Start, dec_Stop, mv_trap_dec_7,
-    mv_trap_dec_8, dec_AcquireInputBufferIndex, dec_GetInputBuffer, dec_SendInputBufferForDecode, dec_AcquireOutputBufferIndex,
-    mv_trap_dec_13, mv_trap_dec_14, dec_ReleaseOutputBufferIndex, mv_trap_dec_16, mv_trap_dec_17, dec_GetOutputBufferFormat,
+    dec_dtor, dec_delete, dec_Configure, dec_RegisterClientEvents, dec_GetOutputFormat, dec_Start, dec_Stop, dec_Reset,
+    dec_Flush, dec_AcquireInputBufferIndex, dec_GetInputBuffer, dec_SendInputBufferForDecode, dec_AcquireOutputBufferIndex,
+    dec_GetOutputBuffer, dec_GetOutputBufferSize, dec_ReleaseOutputBufferIndex, dec_GetLastError, dec_GetOutputBufferFmt, dec_GetOutputBufferFormat,
 };
-
-HLE_FORCE("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", "过场空播：Extractor 装空播虚表（取源时读 WebM 时长）",
-          void, mv_Extractor, void **self, int type) { (void)type; self[0] = (void *)g_ext_vt; self[1] = NULL; }
-HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", "过场空播：Decoder 装空播虚表（按时长发流尾）",
+HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", "movie::Decoder → host (AVFoundation)",
           void, mv_Decoder, void **self, int type, int fmt, int mode, int prio) {
-    (void)type; (void)fmt; (void)mode; (void)prio;
-    pthread_mutex_lock(&g_lock); mv_t *m = g_pending; g_pending = NULL; pthread_mutex_unlock(&g_lock);
-    if (!m) die("movie 剪口：Decoder 构造前没有取过源");
-    self[0] = (void *)g_dec_vt; self[1] = m;
+    (void)prio; guest_fns();
+    dec_t *d = calloc(1, sizeof *d); pthread_mutex_init(&d->mu, NULL);
+    d->type = type; d->fmt = fmt; d->mode = mode;
+    if (mode != 1 || (fmt != 1 && fmt != 4))   // DecoderMode_Cpu with AudioPcm16 / VideoColorNv12 only
+        LOG("[movie] [red] Decoder type %d output format %d mode %d: only CPU mode with PCM16 / NV12 is implemented", type, fmt, mode);
+    self[0] = (void *)g_dec_vt; self[1] = d;
+    MVLOG("Decoder %p created: type %d format %d mode %d", (void *)self, type, fmt, mode);
 }
-HLE_FORCE("_ZN5movie17GetThreadPriorityEv", "过场空播：只作 Decoder 构造参数", int, mv_GetThreadPriority, void) { return NN_OS_DEFAULT_THREAD_PRIORITY; }
-
-// MediaData：Setup / 取帧在栈上构造析构（栈槽 8 字节）；Find* 只在选轨与真帧路径里（空播不可达）
-// MediaData: constructed and destructed on the stack by Setup / frame fetch (stack slot 8 bytes); Find* is only on the track selection and real frame paths (unreachable in no-op playback)
-HLE_FORCE("_ZN5movie9MediaDataC1Ev", "过场空播：空 MediaData", void, mv_MediaData, void **self) { *self = 0; }
-HLE_FORCE("_ZN5movie9MediaDataD1Ev", "过场空播：空 MediaData", void, mv_MediaDataD, void **self) { (void)self; }
-#define TRAPFN(mangled, cname, what) \
-    HLE_FORCE(mangled, "过场空播：协议外（" what "）", void, cname, void) { die("movie 剪口：%s 被调用（不在空播协议内）", what); }
-TRAPFN("_ZNK5movie9MediaData9FindInt32EPKcPi", mv_FindInt32, "MediaData::FindInt32")
-TRAPFN("_ZNK5movie9MediaData9FindInt64EPKcPl", mv_FindInt64, "MediaData::FindInt64")
-TRAPFN("_ZNK5movie9MediaData10FindStringEPKcPS2_", mv_FindString, "MediaData::FindString")
-// Buffer：解码线程与取帧在游戏栈上构造（每处 ≥0x40 字节），宿主布局 mvbuf
-// Buffer: constructed on the game stack by the decode thread and frame fetch (≥0x40 bytes at each site), host layout mvbuf
-HLE_FORCE("_ZN5movie6BufferC1Ev", "过场空播：空 Buffer", void, mv_Buffer, mvbuf *b) { memset(b, 0, sizeof *b); }
-HLE_FORCE("_ZN5movie6BufferD1Ev", "过场空播：Buffer 无资源", void, mv_BufferD, mvbuf *b) { (void)b; }
-HLE_FORCE("_ZNK5movie6Buffer4DataEv", "过场空播：Buffer 数据指针", void *, mv_BufData, const mvbuf *b) { return b->data; }
-HLE_FORCE("_ZNK5movie6Buffer6OffsetEv", "过场空播：Buffer 偏移", int, mv_BufOffset, const mvbuf *b) { return b->off; }
-HLE_FORCE("_ZNK5movie6Buffer4SizeEv", "过场空播：Buffer 长度", int, mv_BufSize, const mvbuf *b) { return b->size; }
-HLE_FORCE("_ZN5movie6Buffer8SetRangeEii", "过场空播：Buffer 设范围", void, mv_BufSetRange, mvbuf *b, int off, int size) { b->off = off; b->size = size; }
-HLE_FORCE("_ZN5movie6Buffer18SetDataAndCapacityEPvm", "过场空播：Buffer 设数据", void, mv_BufSetData, mvbuf *b, void *p, uint64_t cap) { b->data = p; b->cap = cap; b->off = b->size = 0; }

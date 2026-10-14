@@ -166,7 +166,7 @@ Usage is `dmhost <build output directory> [module…] [-- game arguments…]`. `
 | `hle_hid.c`, `hle_touch.c` | Gamepad and touch-screen input |
 | `hle_swkbd.c`, `hle_charname.c` | The system software keyboard connected to a host input box; Chinese allowed in character names |
 | `hle_oe.c`, `hle_time.c`, `hle_account.c` | Operating environment, clocks, local user |
-| `hle_movie.c` | Cutscene videos: not decoded, no picture shown, played as empty for the original duration |
+| `hle_movie.c`, `movie_av.m` | The movie library (`movie::` Extractor / Decoder): demuxed and decoded with AVFoundation, NV12 video and PCM16 audio in CPU buffers |
 | `hle_net.c`, `hle_friends.c`, `hle_misc.c` | Networking and friends connected as unavailable; the remaining miscellaneous services |
 | `hle_lifecycle.c` | The host's exit flow |
 
