@@ -1,4 +1,4 @@
-# Rewriter rules for manosaba (dm/tools/patch_nso.py --rules games/manosaba/rules.py), keyed by the NSO build ID of each module.
+# Rewriter rules for manosaba (tools/patch_nso.py --rules games/manosaba/rules.py), keyed by the NSO build ID of each module.
 # Format: see the "Game rules" section at the top of patch_nso.py.
 
 CUTS = {

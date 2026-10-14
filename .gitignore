@@ -1,14 +1,21 @@
-# 构建产物（Xcode 的派生数据目录，由 dm/ios 下的脚本生成）
-.iosdd/
-.iosdd_mac/
-.iosdd_*/
 .DS_Store
+__pycache__/
+*.pkl
+*.bin
 
-# manosaba port: game data, keys and console backups never go into git
+# Game data, keys and console backups never go into git: they are the user's own dumps
 /dump/
 /keys/
 /extracted/
 /sd_backup_*/
 /work/
-/analysis/**/*.bin
-__pycache__/
+/analysis/
+
+# Build output
+/host/dmhost
+/host/dmhost_m3
+/host/*.dSYM/
+/gfx/tools/dmsh_xlate/obj/
+/gfx/tools/dmsh_xlate/bin/
+/third_party/ryujinx/**/obj/
+/third_party/ryujinx/**/bin/

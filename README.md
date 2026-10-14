@@ -181,13 +181,13 @@ flowchart LR
 
 | Part | Where | What it does |
 |---|---|---|
-| Program rewriter | `dm/tools/patch_nso.py` | Rewrites only the few instructions that cannot run unchanged under Apple's kernel (thread-pointer registers, system calls, timers) and leaves the rest of the program byte-for-byte as shipped |
-| Host | `dm/host` | Loads the rewritten program and provides the platform services it calls |
-| Graphics | `dm/gfx` | Implements the game's graphics API on Metal; shaders are translated offline from the game's originals |
-| iOS app | `dm/ios` | The app shell, touch controls and interface |
-| Verification | `dm/verify` | Checks that the rewritten code behaves exactly like the original, plus the regression gates every change goes through |
+| Program rewriter | `tools/patch_nso.py` | Rewrites only the few instructions that cannot run unchanged under Apple's kernel (thread-pointer registers, system calls, timers) and leaves the rest of the program byte-for-byte as shipped |
+| Host | `host` | Loads the rewritten program and provides the platform services it calls |
+| Graphics | `gfx` | Implements the game's graphics API on Metal; shaders are translated offline from the game's originals |
+| iOS app | `ios` | The app shell, touch controls and interface |
+| Verification | `verify` | Checks that the rewritten code behaves exactly like the original, plus the regression gates every change goes through |
 
-**Why you can trust it:** the stability is not luck. The test and verification tooling is part of the project — unit tests for the host and graphics layers, an equivalence check for every rewritten instruction, scripted walkthrough regression for the touch interface, and on-device smoke tests. Start with `make -C dm/host/tests run`, `make -C dm/gfx/tests run` and `dm/verify/regress.sh` (run them inside the Python environment prepared in step 2 below; `regress.sh` also needs `brew install llvm`). How to contribute is in [CONTRIBUTING.md](CONTRIBUTING.md).
+**Why you can trust it:** the stability is not luck. The test and verification tooling is part of the project — unit tests for the host and graphics layers, an equivalence check for every rewritten instruction, scripted walkthrough regression for the touch interface, and on-device smoke tests. Start with `make -C host/tests run`, `make -C gfx/tests run` and `verify/regress.sh` (run them inside the Python environment prepared in step 2 below; `regress.sh` also needs `brew install llvm`). How to contribute is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Which devices are supported
 
@@ -213,7 +213,7 @@ Both routes start with **the files of the game you bought**: the Switch release 
 
 > This project provides only tools and an install shell that contains no game content. We do not distribute or endorse, and are not responsible for, any third party distributing game assets, game executables or install packages that contain game content. Please use only game files you legally own.
 
-This project is implemented and verified on the Switch release 1.0.34.0 (which corresponds to PC version 3.3.94012), and by default the tools accept only that version. Community users have reported adapting other versions on their own by following the structure of this repository, and running them successfully. The rule tables are grouped by game version (in `dm/tools/patch_nso.py`, keyed by the build ID of the main program); you are welcome to contribute the version you adapted.
+This project is implemented and verified on the Switch release 1.0.34.0 (which corresponds to PC version 3.3.94012), and by default the tools accept only that version. Community users have reported adapting other versions on their own by following the structure of this repository, and running them successfully. The rule tables are grouped by game version (in `tools/patch_nso.py`, keyed by the build ID of the main program); you are welcome to contribute the version you adapted.
 
 **Check your device first**: the "Which devices are supported" table above tells you which build to use and whether you also need a Legacy Device Pack.
 
@@ -245,13 +245,13 @@ The Apple account used for signing: a paid developer account gives you everythin
 3. Fill in your signing details and build the app:
 
    ```
-   cp dm/ios/local.env.example dm/ios/local.env     # set DM_TEAM_ID and DM_BUNDLE_ID; with a free Apple ID also set DM_FREE_ACCOUNT=1 and DM_IOS_UDID, and keep the phone connected while building
-   cd dm/ios && ./run.sh build    # targets both iPhone and iPad by default; for iPhone only: DM_DEVICE_FAMILY=1 ./run.sh build
+   cp ios/local.env.example ios/local.env     # set DM_TEAM_ID and DM_BUNDLE_ID; with a free Apple ID also set DM_FREE_ACCOUNT=1 and DM_IOS_UDID, and keep the phone connected while building
+   cd ios && ./run.sh build    # targets both iPhone and iPad by default; for iPhone only: DM_DEVICE_FAMILY=1 ./run.sh build
    ```
 
 The first time you open the app on your phone, it asks for the "game resource folder" — the 18 resource archives from your game files. Where to put them is in the section "The "game resource folder" that goes on the phone" of [docs/GAME_FILES.md](docs/GAME_FILES.md).
 
-`./setup.sh check` is a health check: it reports the state of this computer, the tools, the game files and the signing configuration item by item, and for everything missing it says where to get it and which command to run next; it changes nothing. If what you have is a whole game package (`.xci` / `.nsp`), `./setup.sh <game package> <prod.keys>` first extracts the game files into place and then carries on (install hactool first). Run `./setup.sh` again after every update to a new commit: it rebuilds the patched binaries and the shader library for the current sources (steps that are already up to date are skipped). It also rewrites three files in the repository that change with your local tool fingerprints (`dm/gfx/tools/dmsh_chain.lock`, `dm/gfx/nvn/dmsh_chain.h`, `dm/gfx/nvn/c1_full.tsv`); that is expected, do not commit them.
+`./setup.sh check` is a health check: it reports the state of this computer, the tools, the game files and the signing configuration item by item, and for everything missing it says where to get it and which command to run next; it changes nothing. If what you have is a whole game package (`.xci` / `.nsp`), `./setup.sh <game package> <prod.keys>` first extracts the game files into place and then carries on (install hactool first). Run `./setup.sh` again after every update to a new commit: it rebuilds the patched binaries and the shader library for the current sources (steps that are already up to date are skipped). It also rewrites three files in the repository that change with your local tool fingerprints (`gfx/tools/dmsh_chain.lock`, `gfx/nvn/dmsh_chain.h`, `gfx/nvn/c1_full.tsv`); that is expected, do not commit them.
 
 ### Playing directly on a Mac
 
@@ -259,8 +259,8 @@ After the same `./setup.sh`, one more command builds a native macOS App that sta
 
 ```bash
 source ~/dm-work/build/cache/dm/venv/bin/activate
-dm/tools/mac_app.sh                  # macOS 26 or later: produces ~/dm-work/out/macapp/D2R Mobile.app
-DM_MAC_M3=1 dm/tools/mac_app.sh      # macOS 15 – 25: produces D2R Mobile M3.app
+tools/mac_app.sh                  # macOS 26 or later: produces ~/dm-work/out/macapp/D2R Mobile.app
+DM_MAC_M3=1 tools/mac_app.sh      # macOS 15 – 25: produces D2R Mobile M3.app
 ```
 
 The interface is the original's gamepad interface. Keyboard: Space confirms, Esc goes back, Return, the `=` key opens the menu / a new character, W A S D moves, and every other gamepad button has a key. Mouse: clicking a monster, NPC or object walks over and interacts, and the skill slots, potion cells and key hints at the bottom, buttons and tabs in panels, the class figures when creating a character and the minimap can all be clicked; clicking empty ground walks there and holding keeps walking, clicking a monster attacks it, and items take double clicks and drags. With a keyboard, the prompts on screen show keyboard keys. Saves stay on this Mac (an App you build yourself has no iCloud sync) and can be imported by hand from an iPhone / iPad. The key table, how to create a character, what the mouse can do, the import steps and the known shortcomings are in [docs/MAC.md](docs/MAC.md). Keyboard and a physical gamepad have not been operated by a person yet — if you try it, please tell us how it went.
@@ -279,7 +279,7 @@ Download our prebuilt "shell" package (`D2RMobile-shell.ipa`; `D2RMobile-shell-i
 | Making the package on Linux | Not verified (verified on Windows and Mac) |
 | Devices that have not moved to iOS 26 / macOS 26 | Playable with the older-API build (minimum iOS 18.0 / macOS 15.0): [docs/OLDER_SYSTEMS.md](docs/OLDER_SYSTEMS.md); the full device table is under "Which devices are supported" above |
 | A16 and earlier devices (iPhone 14 family, iPhone 15 / 15 Plus and so on) | Playable; they need a Legacy Device Pack and an App built with it: [docs/LEGACY_DEVICES.md](docs/LEGACY_DEVICES.md). "One More Step for This Device" (older versions say "Device Not Supported") in the App means this step is missing |
-| The "one-line verdict" and "legacy Chinese name" entries in item notes | These two content tables are not shipped with the repository; you can supply your own, see `dm/ios/tools/annot/README.md` |
+| The "one-line verdict" and "legacy Chinese name" entries in item notes | These two content tables are not shipped with the repository; you can supply your own, see `ios/tools/annot/README.md` |
 
 ## Contributing and feedback
 
@@ -291,13 +291,13 @@ Download our prebuilt "shell" package (`D2RMobile-shell.ipa`; `D2RMobile-shell-i
 
 **Taking it to other games:** someone has already tried other Switch games on the same host. The host has some behaviour that is on by default on iOS and was written for this one game; another game runs into these first, so turn them off or move them out before you start:
 
-- `dm/host/hle_oe.c`: the 3D render scale defaults to 0.75 on iOS, and `scale3d_tick` rewrites it at offsets inside this game's renderer — with another game that is a wild pointer.
-- `dm/host/hle_fs.c`: seeding the shared stash on first launch (`DM_STASH_SEED`) and the touch-layout default settings (`DM_TOUCH_DEFAULTS`) are on by default on iOS.
-- `dm/host/main.c`: the save-flush throttle patches a constant at a fixed address in the game program; `argv[0]` is hard-coded to `"D2R"`.
-- `dm/host/hle_time.c`: the fixed-time test switch recognises a fixed address in the game program.
-- `front_game_res` in `dm/host/front_mac.m`: the docked / handheld resolutions are hard-coded to 1600×900 / 1280×720.
-- `dm/host/dm_cloudsync.c`: character directories are recognised by `.d2s`.
-- `dm/host/dm_cursor.c` and `dm/host/dm_world.c`: the whole files are specific to this game.
+- `host/hle_oe.c`: the 3D render scale defaults to 0.75 on iOS, and `scale3d_tick` rewrites it at offsets inside this game's renderer — with another game that is a wild pointer.
+- `host/hle_fs.c`: seeding the shared stash on first launch (`DM_STASH_SEED`) and the touch-layout default settings (`DM_TOUCH_DEFAULTS`) are on by default on iOS.
+- `host/main.c`: the save-flush throttle patches a constant at a fixed address in the game program; `argv[0]` is hard-coded to `"D2R"`.
+- `host/hle_time.c`: the fixed-time test switch recognises a fixed address in the game program.
+- `front_game_res` in `host/front_mac.m`: the docked / handheld resolutions are hard-coded to 1600×900 / 1280×720.
+- `host/dm_cloudsync.c`: character directories are recognised by `.d2s`.
+- `host/dm_cursor.c` and `host/dm_world.c`: the whole files are specific to this game.
 
 The cleaner arrangement is to move these defaults into per-game configuration and keep the host free of game-specific defaults; pull requests in that direction are welcome.
 
@@ -306,9 +306,9 @@ The cleaner arrangement is to move these defaults into per-game configuration an
 | Document | Covers |
 |---|---|
 | [dm/README.md](dm/README.md) | How the whole thing works, directory layout, common commands, the host's source files |
-| [dm/gfx/README.md](dm/gfx/README.md) | The graphics layer and the shader translation chain |
-| [dm/ios/README.md](dm/ios/README.md) | The iOS shell, building and smoke testing |
-| [dm/verify/README.md](dm/verify/README.md) | What each verification tool checks and what it needs |
+| [gfx/README.md](gfx/README.md) | The graphics layer and the shader translation chain |
+| [ios/README.md](ios/README.md) | The iOS shell, building and smoke testing |
+| [verify/README.md](verify/README.md) | What each verification tool checks and what it needs |
 | [docs/GAME_FILES.md](docs/GAME_FILES.md) | Game files: which ones you need, how to get them from your own console, where to put them |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | Dependencies and third-party licenses |
 | [docs/NO_XCODE.md](docs/NO_XCODE.md) | Building without Xcode and without a Mac |
@@ -326,13 +326,13 @@ The cleaner arrangement is to move these defaults into per-game configuration an
 
 This project stands on the open-source work below. Thank you to its authors and maintainers.
 
-- **Ryujinx** (Ryubing 1.3.2, MIT): `dm/third_party/ryujinx` bundles its shader translator unchanged (the Ryujinx.Graphics.Shader, Spv.Generator and Ryujinx.Common projects), which translates the Switch game's shaders to SPIR-V. During development we also ran the original game in a patched Ryujinx as the reference for comparing pictures and game state (see [dm/verify/README.md](dm/verify/README.md); the scripts that build and drive it are not in this repository).
-- **deko3d** (devkitPro, zlib): the texture layout size algorithm in `dm/gfx/nvn/nvn_tex.c` is ported from it.
-- **nvn.h** (h1k421, MIT): the graphics API declarations in `dm/gfx/nvn/include/nvn.h`.
+- **Ryujinx** (Ryubing 1.3.2, MIT): `third_party/ryujinx` bundles its shader translator unchanged (the Ryujinx.Graphics.Shader, Spv.Generator and Ryujinx.Common projects), which translates the Switch game's shaders to SPIR-V. During development we also ran the original game in a patched Ryujinx as the reference for comparing pictures and game state (see [verify/README.md](verify/README.md); the scripts that build and drive it are not in this repository).
+- **deko3d** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c` is ported from it.
+- **nvn.h** (h1k421, MIT): the graphics API declarations in `gfx/nvn/include/nvn.h`.
 - **libdeflate** (Eric Biggers, MIT): decompressing game data.
 - **bcdec** (iOrange, MIT or Unlicense): decoding BC textures on devices that do not support the BC formats.
 - **FLIP** (NVIDIA, BSD 3-Clause): the image difference metric used in image-quality checks.
-- **Offline fix patch** (LFS Mod Offline Fix): the 7 rewrites in `dm/tools/patch_nso.py` that let the game run offline come from this community patch. We have no reliable record of where it was first published or who wrote it; if you know, please open an Issue.
+- **Offline fix patch** (LFS Mod Offline Fix): the 7 rewrites in `tools/patch_nso.py` that let the game run offline come from this community patch. We have no reliable record of where it was first published or who wrote it; if you know, please open an Issue.
 - Tools used to build and verify: SPIRV-Cross (SPIR-V to Metal Shading Language), XcodeGen, .NET, Capstone and Unicorn (disassembly and equivalence checks of the rewrites), Pillow, numpy, lz4, astcenc (the Legacy Device Pack), hactool (extracting files from a game package), libimobiledevice and LLVM. Versions and links are in [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 - Community contributions: Joe Hu reported and diagnosed several Greater Rift issues and proposed a verification matrix; seedds found and diagnosed the render-target view format issue on another port (#36). Both are credited as co-authors on the corresponding commits.
 
