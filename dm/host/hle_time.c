@@ -52,6 +52,26 @@ HLE_FORCE("_ZN2nn4time13IsInitializedEv", "time 服务已被接管，恒为已�
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "用户时钟 → 宿主 time()", Result, h_time_GetCurrentTime, int64_t *out) {
     int64_t ft = fixed_time(); *out = ft >= 0 ? ft : time(NULL); return RES_OK;
 }
+// The real GetSystemClockContext asks the time service, which the host does not have, and fails. Unity's IL2CPP clock (manosaba main+0x394ba0 / +0x394c40,
+// behind DateTime.UtcNow / Now) only marks itself initialized once this succeeds and returns 0 ticks until then, so DateTime.Now was 0001-01-01 and every
+// save slot showed that date (Naninovel GameStateMap.SaveDateTime). That clock caches GetCurrentTime and extrapolates with GetSystemTick, re-reading only when
+// the context changes (SDK docs: the context changes when the clock is corrected, adjusted or reset).
+// Context: 0x20 bytes (the game compares all 0x20); only the first 8 are set, to wall-clock minus guest-clock nanoseconds. It is re-reported only after it moves
+// by more than 2 s, which happens when the guest clock stops while wall time goes on (iOS background, DM_TICK_HOLD) or the wall clock is changed; the game then
+// re-reads the time. Under DM_FIXED_TIME it is constant.
+HLE_FORCE_OPT("_ZN2nn4time23StandardUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE", "user clock context from the host wall clock vs the guest clock",
+              Result, h_time_GetSystemClockContext, uint8_t *out) {
+    static _Atomic int64_t reported = INT64_MIN;
+    int64_t v = 0;
+    if (fixed_time() < 0) {
+        struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+        int64_t off = (int64_t)t.tv_sec * 1000000000ll + t.tv_nsec - (int64_t)guest_ns(), r = atomic_load(&reported);
+        if (r == INT64_MIN || llabs(off - r) > 2000000000ll) { atomic_store(&reported, off); r = off; }
+        v = r;
+    }
+    memset(out, 0, 0x20); memcpy(out, &v, sizeof v);
+    return RES_OK;
+}
 // 首领连战第 6–10 关的强制恐怖地带（dm_bossrush.c 设）：g_dm_tz_time 非 0 且未过期时，只有「恐怖地带」那几处取时钟拿到它，存档时间等其余调用照旧。
 // 哪几处：返回点落在地带函数 0x58f1e0 起的那一簇（0x58f1e0–0x591440），或返回后 8 条指令内调地带日程 0x58f310（服务端 0x636b38 套地带、0x694b48 等 9 处）。
 // 过期：dm_bossrush 每拍续 1 秒，本局停拍（退出 / 崩溃）后不再生效，下一局建局时取到的是真实时钟。
@@ -82,6 +102,29 @@ HLE_FORCE("_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditi
     if (ct) *ct = (CalendarTime){(int16_t)(tm.tm_year + 1900), (int8_t)(tm.tm_mon + 1), (int8_t)tm.tm_mday, (int8_t)tm.tm_hour, (int8_t)tm.tm_min, (int8_t)tm.tm_sec, 0};
     if (ai) { memset(ai, 0, sizeof *ai); ai->wday = tm.tm_wday; ai->yday = tm.tm_yday; strlcpy(ai->tzname, tm.tm_zone ? tm.tm_zone : "UTC", sizeof ai->tzname);
               ai->dst = tm.tm_isdst > 0; ai->offset = (int32_t)tm.tm_gmtoff; }
+    return RES_OK;
+}
+// nn::time::ToPosixTime (device time zone overload): local calendar time → absolute times, by the host time zone (same source as ToCalendarTime above).
+// The SDK one needs the time service and fails; Unity's IL2CPP time zone lookup (manosaba main+0x394e30, behind TimeZoneInfo.Local) then reports no
+// offset, so DateTime.Now came out in UTC. SDK docs: 0–2 results; 2 when the local time occurs twice (offset change turning the clock back), ascending;
+// 0 for a skipped local time or a date that does not exist (e.g. February 31). Each mktime result is checked by converting it back.
+HLE_FORCE_OPT("_ZN2nn4time11ToPosixTimeEPiPNS0_9PosixTimeEiRKNS0_12CalendarTimeE", "device time zone conversion → host mktime / localtime_r",
+              Result, h_time_ToPosixTime, int32_t *count, int64_t *out, int32_t max, const CalendarTime *ct) {
+    int n = 0; int64_t r[2];
+    for (int dst = 0; dst <= 1; dst++) {
+        struct tm tm = {.tm_year = ct->year - 1900, .tm_mon = ct->month - 1, .tm_mday = ct->day, .tm_hour = ct->hour, .tm_min = ct->minute,
+                        .tm_sec = ct->second, .tm_isdst = dst};
+        time_t t = mktime(&tm); struct tm back;
+        if (t == (time_t)-1 || !localtime_r(&t, &back)) continue;
+        if (back.tm_year != ct->year - 1900 || back.tm_mon != ct->month - 1 || back.tm_mday != ct->day || back.tm_hour != ct->hour ||
+            back.tm_min != ct->minute || back.tm_sec != ct->second) continue;
+        if (n && r[0] == (int64_t)t) continue;
+        r[n++] = (int64_t)t;
+    }
+    if (n == 2 && r[0] > r[1]) { int64_t x = r[0]; r[0] = r[1]; r[1] = x; }
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) out[i] = r[i];
+    *count = n;
     return RES_OK;
 }
 // 本地时刻换算强制接宿主 libc：SDK 自带的 localtime / localtime_r / mktime 没有时区数据、恒按 UTC（宿主实测：编年史「首次发现」由
