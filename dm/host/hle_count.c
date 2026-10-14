@@ -27,12 +27,19 @@ static void hc_write(void) {
     for (int k = 0; k < 256; k++) if (atomic_load(&g_hsvc[k])) fprintf(f, "SVC\t%#x\t%llu\n", k, (unsigned long long)atomic_load(&g_hsvc[k]));
     fclose(f); LOG("DM_HLECOUNT：%u 条入口 → %s", g_nhc, pth);
 }
+// DM_HLECOUNT_AT=秒：另在启动后第 N 秒写一次（看门狗 SIGALRM 杀进程时 atexit 不跑，写不出退出时那份）
+// DM_HLECOUNT_AT=seconds: also write once N seconds after start (atexit does not run when the watchdog's SIGALRM kills the process, so the on-exit copy is never written)
+static void *hc_at_main(void *p) { sleep((unsigned)(uintptr_t)p); hc_write(); return NULL; }
+static void hc_at_start(void) {
+    const char *e = getenv("DM_HLECOUNT_AT"); int s = e ? atoi(e) : 0; if (s <= 0) return;
+    pthread_t t; pthread_create(&t, NULL, hc_at_main, (void *)(uintptr_t)s); pthread_detach(t);
+}
 void *hlecount_wrap(const char *kind, const char *name, void *fn) {
     if (!hc_on() || !fn) return fn;
     if (g_hsealed) { static int once; if (!once++) LOG("【红】DM_HLECOUNT：封页后还有解析（%s），此后的入口不计数", name); return fn; }
     for (unsigned i = 0; i < g_nhc; i++) if (g_hc[i].fn == fn && !strcmp(g_hc[i].name, name)) return g_hcode + 12 * i;   // 同名同实现复用一个桩 | Same name and same implementation reuse one stub
     if (g_nhc == HC_MAX) die("DM_HLECOUNT 入口超过 %d", HC_MAX);
-    if (!g_hcode) { g_hcode = mmap(NULL, HC_MAX * 48, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); if (g_hcode == MAP_FAILED) die("DM_HLECOUNT mmap"); atexit(hc_write); }
+    if (!g_hcode) { g_hcode = mmap(NULL, HC_MAX * 48, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); if (g_hcode == MAP_FAILED) die("DM_HLECOUNT mmap"); atexit(hc_write); hc_at_start(); }
     unsigned i = g_nhc++; g_hc[i].kind = kind; g_hc[i].name = name; g_hc[i].fn = fn;
     uint32_t *w = g_hcode + 12 * i;                                  // 48 字节：5 条指令 + 1 空 + 两个 8 字节字面量（偏移 0x18 / 0x20） | 48 bytes: 5 instructions + 1 empty + two 8-byte literals (offsets 0x18 / 0x20)
     w[0] = 0x58000000 | ((0x18 / 4) << 5) | 16;                      // ldr x16, [pc+0x18]   → &计数 | ldr x16, [pc+0x18]   → &count

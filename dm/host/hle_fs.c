@@ -231,6 +231,7 @@ static int set_guest_name(const char *hp, const char *path) {
     return -1;
 }
 static Result err_res(const char *op, const char *path) {
+    if (g_flag.fs) LOG("fs %s %s → errno %d", op, path, errno);
     if (errno == ENOENT || errno == ENOTDIR) return RES_PATH_NOT_FOUND;
     if (errno == EEXIST) return RES_PATH_EXISTS;
     LOG("fs %s %s 失败 errno=%d", op, path, errno); return RES_FAIL;
@@ -717,6 +718,34 @@ HLE_FORCE_OPT("_ZN2nn2fs9IsMountedEPKc", "挂载表查询（返回 bool）", uns
     for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name)) hit = 1;
     pthread_mutex_unlock(&g_lock); return hit;
 }
+// sdk 的 POSIX 层（libc open / stat / opendir，Unity 的 IL2CPP 文件接口走它）先按路径查挂载与长度上限（sdk+0x9f890）：
+// IsPathMounted → GetPathLengthMax → GetUtf16PathLengthMax → GetEntryNameLengthMax → GetUtf16EntryNameLengthMax。原生实现查 sdk 自己的挂载表，
+// 宿主的挂载（MountRom 等已接管）不在里面，于是一律失败（Unity 读 StreamingAssets 报 DirectoryNotFound）。
+// IsPathMounted 同 sdk+0xb6220：空指针 / "@Host" 前缀 → false；取 ':' 前的挂载名查表。
+// 上限：原生实现读挂载的文件系统属性取上限；这里按 sdk 代码在「属性未给任何上限」时的分支输出——
+//   GetPathLengthMax / GetEntryNameLengthMax = 0x300（sdk+0xbbedc / +0xbc03c），GetUtf16*LengthMax = {false, 0}（sdk+0xbc150 / +0xbc350 逐条推演）。
+//   真机 RomFS / 存档的属性实际给什么未核；上限只用于路径校验，游戏路径远短于 0x300。
+// The sdk's POSIX layer (libc open / stat / opendir, which Unity's IL2CPP file interface goes through) first checks the mount and length limits for a path (sdk+0x9f890):
+// IsPathMounted → GetPathLengthMax → GetUtf16PathLengthMax → GetEntryNameLengthMax → GetUtf16EntryNameLengthMax. The native implementations look in the sdk's own mount table,
+// which does not contain the host's mounts (MountRom etc. are taken over), so they always fail (Unity's StreamingAssets reads report DirectoryNotFound).
+// IsPathMounted as in sdk+0xb6220: null pointer / "@Host" prefix → false; otherwise look up the mount name before ':'.
+// Limits: the native implementations read the mounted file system's attributes; here the output follows the sdk code's branch for "the attributes give no limit" --
+//   GetPathLengthMax / GetEntryNameLengthMax = 0x300 (sdk+0xbbedc / +0xbc03c), GetUtf16*LengthMax = {false, 0} (worked through sdk+0xbc150 / +0xbc350 instruction by instruction).
+//   What the real RomFS / save data attributes report is unverified; the limits only serve path validation, and the game's paths are far shorter than 0x300.
+static int path_mounted(const char *path) {
+    if (!path || !strncmp(path, "@Host", 5)) return 0;
+    const char *c = strchr(path, ':'); if (!c) return 0;
+    size_t ln = (size_t)(c - path); int hit = 0;
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < g_nmnt; i++) if (strlen(g_mnt[i].name) == ln && !strncmp(g_mnt[i].name, path, ln)) hit = 1;
+    pthread_mutex_unlock(&g_lock); return hit;
+}
+#define LIMIT_MOUNTED(path) if (!path_mounted(path)) { LOG("【红】fs 路径上限查询：%s 未挂载", path ? path : "(null)"); return RES_FAIL; }
+HLE_FORCE_OPT("_ZN2nn2fs13IsPathMountedEPKc", "路径所在挂载是否存在（返回 bool）", unsigned, h_fs_IsPathMounted, const char *path) { return path_mounted(path); }
+HLE_FORCE_OPT("_ZN2nn2fs16GetPathLengthMaxEPmPKc", "路径长度上限（文件系统属性未给上限时的 sdk 缺省）", Result, h_fs_PathLenMax, size_t *out, const char *path) { LIMIT_MOUNTED(path); *out = 0x300; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn2fs21GetEntryNameLengthMaxEPmPKc", "条目名长度上限（同上）", Result, h_fs_NameLenMax, size_t *out, const char *path) { LIMIT_MOUNTED(path); *out = 0x300; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn2fs21GetUtf16PathLengthMaxEPbPmPKc", "UTF-16 路径长度上限（同上：无上限）", Result, h_fs_U16PathLenMax, uint8_t *has, size_t *out, const char *path) { LIMIT_MOUNTED(path); *has = 0; *out = 0; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn2fs26GetUtf16EntryNameLengthMaxEPbPmPKc", "UTF-16 条目名长度上限（同上：无上限）", Result, h_fs_U16NameLenMax, uint8_t *has, size_t *out, const char *path) { LIMIT_MOUNTED(path); *has = 0; *out = 0; return RES_OK; }
 HLE_FORCE_OPT("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "追加内容：缓存只给最小值", Result, h_fs_QueryAocCache, size_t *out, int idx) { (void)idx; *out = 0x1000; return RES_OK; }
 HLE_FORCE_OPT("_ZN2nn2fs17MountAddOnContentEPKciPvm", "追加内容，排除范围：没有可挂载的追加内容", Result, h_fs_MountAoc, const char *name, int idx, void *buf, size_t sz) {
     (void)buf; (void)sz; LOG("fs MountAddOnContent %s #%d：宿主没有追加内容", name, idx); return RES_PATH_NOT_FOUND;
@@ -741,6 +770,7 @@ static Result read_exact(uint64_t h, int64_t off, void *buf, size_t sz) {
 }
 HLE_FORCE_OPT("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm", "fsp-srv → pread(2)；不回读数的版本要读满", Result, h_fs_ReadFileN, uint64_t h, int64_t off, void *buf, size_t sz) { return read_exact(h, off, buf, sz); }
 HLE_FORCE_OPT("_ZN2nn2fs8ReadFileENS0_10FileHandleElPvmRKNS0_10ReadOptionE", "fsp-srv → pread(2)；不回读数的版本要读满", Result, h_fs_ReadFileNO, uint64_t h, int64_t off, void *buf, size_t sz, const void *opt) { (void)opt; return read_exact(h, off, buf, sz); }
+HLE_FORCE_OPT("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE", "fsp-srv → pread(2)；回读数、带读取选项（sdk 的 libc read 用这个）", Result, h_fs_ReadFileO, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz, const void *opt) { (void)opt; return h_fs_ReadFile(out, h, off, buf, sz); }
 HLE_FORCE_OPT("_ZN2nn2fs15DeleteDirectoryEPKc", "fsp-srv → rmdir(2)", Result, h_fs_DeleteDir, const char *path) { HP(path); RW(); return rmdir(hp) ? err_res("rmdir", hp) : RES_OK; }
 HLE_FORCE_OPT("_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", "fsp-srv → 清空目录内容、保留目录本身", Result, h_fs_CleanDir, const char *path) {
     HP(path); RW(); DIR *d = opendir(hp); if (!d) return err_res("opendir", hp);

@@ -58,7 +58,8 @@ static uint8_t g_unimpl_seen[NVN_NFUNC];
 
 uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2, uint64_t lr, uint64_t x8) {
     unsigned i = (unsigned)(slot - nvn_slot);
-    if (!g_unimpl_seen[i]++) {
+    if (!g_unimpl_seen[i]) {   // 只报一次（置 1 不再累加：uint8 累加会在 256 次后回绕重报） | Report once (set to 1, no increment: a uint8 increment wraps and re-reports after 256 calls)
+        g_unimpl_seen[i] = 1;
         module_t *m = module_of((void *)lr);
         LOG("【红】NVN 未实现被调用：%s (x0=%#llx x1=%#llx x2=%#llx x8=%#llx) 调用点 %s+%#llx", nvn_names[i], x0, x1, x2, x8,
             m ? m->name : "?", m ? lr - (uint64_t)m->base : lr);
@@ -232,6 +233,9 @@ NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *tp, const NVNmemoryPoo
 }
 NVN(nvnTexturePoolFinalize, void, NVNtexturePool *tp) { (void)tp; }
 NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) { (void)tp; mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v); }
+// 图像描述符与贴图描述符同在贴图池、同一编号空间（回放层的图像槽按同一张登记表取贴图，见 nvn_mtl.m NVN_RB_IMG）
+// Image descriptors live in the texture pool alongside texture descriptors, in the same ID space (the replay layer's image slots fetch textures from the same registration table, see nvn_mtl.m NVN_RB_IMG)
+NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) { (void)tp; mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v); }
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
     *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); return 1;
 }
@@ -660,6 +664,18 @@ NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, c
     p_viewports *r = REC(c, OP_VIEWPORTS, p_viewports); r->first = first; r->n = n;
     for (int i = 0; i < n; i++) memcpy(r->v[i], v + 4 * i, 16);
 }
+// 整数单视口 = 第 0 号视口（同 SetViewports(0, 1, {x, y, w, h})）
+// Integer single viewport = viewport 0 (same as SetViewports(0, 1, {x, y, w, h}))
+NVN(nvnCommandBufferSetViewport, void, NVNcommandBuffer *c, int x, int y, int w, int h) {
+    p_viewports *r = REC(c, OP_VIEWPORTS, p_viewports); r->first = 0; r->n = 1;
+    r->v[0][0] = (float)x; r->v[0][1] = (float)y; r->v[0][2] = (float)w; r->v[0][3] = (float)h;
+}
+NVN(nvnCommandBufferSetDepthClamp, void, NVNcommandBuffer *c, uint32_t en) { REC(c, OP_DEPTH_CLAMP, p_depth_clamp)->enable = B(en) != 0; }
+// 保守光栅化：Metal 无对应。关闭（Unity 的常态）无事可做；打开时报红
+// Conservative rasterization: no Metal equivalent. Disabling it (Unity's normal case) needs nothing; enabling it is reported red
+NVN(nvnCommandBufferSetConservativeRasterEnable, void, NVNcommandBuffer *c, uint32_t en) {
+    (void)c; static int red; if (B(en) && !red++) LOG("【红】CommandBufferSetConservativeRasterEnable 1：Metal 无保守光栅化，按普通光栅化画");
+}
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
@@ -711,6 +727,9 @@ NVN(nvnCommandBufferBindSeparateTextures, void, NVNcommandBuffer *c, NVNshaderSt
 NVN(nvnCommandBufferBindSeparateSamplers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h) {
     bind_handles(c, OP_BIND_SAMP, st, first, n, (const uint64_t *)h);
 }
+NVN(nvnCommandBufferBindSeparateTexture, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNseparateTextureHandle h) {
+    bind_handles(c, OP_BIND_TEX, st, i, 1, &h.value);
+}
 NVN(nvnCommandBufferBindSeparateSampler, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNseparateSamplerHandle h) {
     bind_handles(c, OP_BIND_SAMP, st, i, 1, &h.value);
 }
@@ -724,6 +743,9 @@ NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, 
 NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib,
     int bv, int bi, int inst) {
     *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, bv, bi, inst, ib};
+}
+NVN(nvnCommandBufferDrawElementsBaseVertex, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib, int bv) {
+    *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, bv, 0, 1, ib};
 }
 NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, int z) {
     // 跳板是尾跳（br），这里的返回地址就是游戏里的调用点

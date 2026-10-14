@@ -95,3 +95,29 @@ HLE_FORCE("_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditi
 HLE_FORCE("localtime", "本地时刻 → 宿主 localtime（跟系统时区）", struct tm *, h_localtime, const int64_t *t) { time_t v = (time_t)*t; return localtime(&v); }
 HLE_FORCE("localtime_r", "本地时刻 → 宿主 localtime_r（跟系统时区）", struct tm *, h_localtime_r, const int64_t *t, struct tm *out) { time_t v = (time_t)*t; return localtime_r(&v, out); }
 HLE_FORCE("mktime", "本地日历 → 绝对秒，宿主 mktime（跟系统时区）", int64_t, h_mktime, struct tm *tm) { return (int64_t)mktime(tm); }
+
+// libc clock_gettime 的时钟源（本 SDK 22.x）：nntimeStartup（sdk+0x439130）在 nn::time::Initialize 成功后把
+// CLOCK_REALTIME 换成 GetStandardUserSystemClockCurrentTimespec、CLOCK_MONOTONIC 换成 GetStandardSteadyClockCurrentTimespec
+// （sdk+0x9e39c / +0x9e464 设源，clock_gettime sdk+0xa4350 经函数指针调用，返回非 0 即报 EAGAIN）。原生实现要连 time 服务，宿主没有，
+// 于是 clock_gettime 失败、std::chrono::system_clock::now 抛 system_error 终止进程。这里接成宿主时钟：
+//   用户时钟（标准 / 可调）= 与 StandardUserSystemClock::GetCurrentTime 同源（墙钟秒，DM_FIXED_TIME 时为定值）+ 墙钟纳秒；
+//   稳态时钟 = 客体时钟 guest_ns（与 svc GetSystemTick 同源；改源前 SDK 缺省的单调时钟即由 GetSystemTick 换算）。
+// timespec = {int64 秒, int64 纳秒}（同 SDK 缺省源 sdk+0x9e410 的写法）；返回 0 = 成功。
+// The clock sources of libc clock_gettime (this SDK, 22.x): nntimeStartup (sdk+0x439130), once nn::time::Initialize succeeds, switches
+// CLOCK_REALTIME to GetStandardUserSystemClockCurrentTimespec and CLOCK_MONOTONIC to GetStandardSteadyClockCurrentTimespec
+// (sources set at sdk+0x9e39c / +0x9e464; clock_gettime at sdk+0xa4350 calls through a function pointer and reports EAGAIN on a non-zero return). The native implementations need the time service, which the host does not have,
+// so clock_gettime failed and std::chrono::system_clock::now threw system_error and terminated the process. Here they are wired to host clocks:
+//   user clocks (standard / adjustable) = same source as StandardUserSystemClock::GetCurrentTime (wall-clock seconds, a fixed value under DM_FIXED_TIME) + wall-clock nanoseconds;
+//   steady clock = the guest clock guest_ns (same source as svc GetSystemTick; before the switch the SDK's default monotonic clock was converted from GetSystemTick).
+// timespec = {int64 seconds, int64 nanoseconds} (as written by the SDK's default source sdk+0x9e410); return 0 = success.
+static int user_timespec(int64_t *ts) {
+    struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+    int64_t ft = fixed_time();
+    ts[0] = ft >= 0 ? ft : (int64_t)t.tv_sec; ts[1] = ft >= 0 ? 0 : (int64_t)t.tv_nsec;
+    return 0;
+}
+HLE_FORCE_OPT("_ZN2nn4time41GetStandardUserSystemClockCurrentTimespecEP8timespec", "libc CLOCK_REALTIME 源：宿主墙钟", int, h_time_UserTs, int64_t *ts) { return user_timespec(ts); }
+HLE_FORCE_OPT("_ZN2nn4time43GetAdjustableUserSystemClockCurrentTimespecEP8timespec", "libc 可调用户时钟源：宿主墙钟", int, h_time_AdjTs, int64_t *ts) { return user_timespec(ts); }
+HLE_FORCE_OPT("_ZN2nn4time37GetStandardSteadyClockCurrentTimespecEP8timespec", "libc CLOCK_MONOTONIC 源：客体时钟", int, h_time_SteadyTs, int64_t *ts) {
+    uint64_t ns = guest_ns(); ts[0] = (int64_t)(ns / 1000000000ull); ts[1] = (int64_t)(ns % 1000000000ull); return 0;
+}

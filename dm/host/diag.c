@@ -190,6 +190,35 @@ static int probe_hit(ucontext_t *uc) {   // 由 probe_install 注册给 crash.c 
     return 0;
 }
 static uint32_t *g_slots; static int g_slots_sealed;
+// DM_THROWLOG=1：在 sdk 的 __cxa_throw 入口下探针，打印每次 C++ 抛出的类型（x1 = std::type_info，+8 = 修饰名）。
+// IL2CPP 托管异常以 Il2CppExceptionWrapper 抛出（x0 指向它，首字段 = Il2CppException*）：再打印异常类（klass +0x10 名、+0x18 命名空间）
+// 与 message（对象 +0x18；先核该对象的类名是 String 才按 Il2CppString {klass, monitor, int32 长度 +0x10, UTF-16 +0x14} 读）。
+// DM_THROWLOG=1: probe the entry of the sdk's __cxa_throw and print the type of every C++ throw (x1 = std::type_info, +8 = mangled name).
+// IL2CPP managed exceptions are thrown as Il2CppExceptionWrapper (x0 points to it, first field = Il2CppException*): also print the exception class (klass +0x10 name, +0x18 namespace)
+// and the message (object +0x18; read as Il2CppString {klass, monitor, int32 length +0x10, UTF-16 +0x14} only after checking that object's class name is String).
+static int rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 0x1000 && !vm_read_overwrite(mach_task_self(), a, n, (vm_address_t)out, &got) && got == n; }
+static int rdstr(uint64_t a, char *out, size_t n) { if (!rd(a, out, 1)) return 0; size_t k = 0; while (k + 1 < n && rd(a + k, out + k, 1) && out[k]) k++; out[k] = 0; return 1; }
+static void throw_probe(ucontext_t *uc) {
+    uint64_t x0 = uc->uc_mcontext->__ss.__x[0], x1 = uc->uc_mcontext->__ss.__x[1], tn = 0; char tname[128] = "?";
+    if (rd(x1 + 8, &tn, 8)) rdstr(tn, tname, sizeof tname);
+    { extern uint64_t g_t0_ns; uint64_t now_ns(void); fprintf(stderr, "[dm] THROW [%.4fs] %s", (now_ns() - g_t0_ns) / 1e9, tname); }
+    uint64_t ex = 0, k = 0, kn = 0, kns = 0;
+    if (strstr(tname, "Il2CppExceptionWrapper") && rd(x0, &ex, 8) && rd(ex, &k, 8) && rd(k + 0x10, &kn, 8) && rd(k + 0x18, &kns, 8)) {
+        char n1[96] = "", n2[96] = ""; rdstr(kn, n1, sizeof n1); rdstr(kns, n2, sizeof n2);
+        fprintf(stderr, " 托管异常 %s.%s", n2, n1);
+        uint64_t msg = 0, mk = 0, mkn = 0; char mn[16] = "";
+        if (rd(ex + 0x18, &msg, 8) && msg && rd(msg, &mk, 8) && rd(mk + 0x10, &mkn, 8) && rdstr(mkn, mn, sizeof mn) && !strcmp(mn, "String")) {
+            int32_t len = 0; rd(msg + 0x10, &len, 4); if (len < 0) len = 0; if (len > 300) len = 300;
+            fputs(" message=\"", stderr);
+            for (int i = 0; i < len; i++) { uint16_t c = 0; rd(msg + 0x14 + 2 * i, &c, 2);
+                if (c < 0x80) fputc(c, stderr); else if (c < 0x800) { fputc(0xc0 | c >> 6, stderr); fputc(0x80 | (c & 0x3f), stderr); }
+                else { fputc(0xe0 | c >> 12, stderr); fputc(0x80 | ((c >> 6) & 0x3f), stderr); fputc(0x80 | (c & 0x3f), stderr); } }
+            fputc('"', stderr);
+        }
+    }
+    fputc('\n', stderr);
+    dm_backtrace(uc->uc_mcontext->__ss.__fp);
+}
 static void probe_add(module_t *m, uint64_t off, long dump, probe_fn fn) {
     if (g_nprobe >= MAX_PROBE) die("探针过多");
     if (!g_slots) g_slots = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -463,6 +492,11 @@ void probe_install(void) {
             if (at_) dump = at_[1] == '*' ? (0x1000000 | strtol(at_ + 2, 0, 16)) : strtol(at_ + 1, 0, 16);   // @偏移 / @*偏移 | @offset / @*offset
             probe_add(m, strtoull(c + 1, 0, 16), dump, NULL);
         }
+    }
+    if (getenv("DM_THROWLOG")) {
+        void *t = guest_sym("__cxa_throw"); module_t *m = t ? module_of(t) : NULL;
+        if (!m) LOG("【红】DM_THROWLOG：找不到 __cxa_throw");
+        else probe_add(m, (uint64_t)t - (uint64_t)m->base, -1, throw_probe);
     }
     if (g_slots && !g_slots_sealed) { mprotect(g_slots, 0x4000, PROT_READ | PROT_EXEC); sys_icache_invalidate(g_slots, 0x4000); g_slots_sealed = 1; }
 #endif
