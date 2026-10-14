@@ -382,23 +382,29 @@ DRV_FILL = {0: [(0x110, 0x210), (0x310, 0x410), (0x510, 0x610)],   # c0：存储
             2: [(0x168, 0x568), (0x568, 0x968)]}                     # c2：贴图句柄表、采样器句柄表（各 128 槽 × 8） | c2: texture handle table, sampler handle table (128 slots × 8 each)
 
 def drv_reads(src):
-    """MSL 里对驱动段 c0 / c2 的读取：常量下标 → 字节区间；非常量下标记为动态 | Reads of driver segments c0 / c2 in the MSL: constant index → byte range; non-constant indices are recorded as dynamic"""
+    """MSL 里对驱动段 c0 / c2 的读取：常量下标 → 字节区间；非常量下标记为动态。
+    words = 实际读到的 4 字节字偏移：下标后跟分量（.x / .yz …）只记这些分量，不跟分量按整个 vec4
+    （c2 的句柄表每槽 8 字节，与 vec4 不对齐：_m0[22].z = 0x168 是贴图槽 0，按 vec4 算会误报 0x160）
+    Reads of driver segments c0 / c2 in the MSL: constant index → byte range; non-constant indices are recorded as dynamic.
+    words = offsets of the 4-byte words actually read: an index followed by components (.x / .yz ...) records only those components, without components the whole vec4
+    (c2's handle tables use 8 bytes per slot, not vec4-aligned: _m0[22].z = 0x168 is texture slot 0, counting by vec4 would falsely report 0x160)"""
     out = {}
     for bank in (0, 2):
-        offs, dyn = set(), False
-        for m in re.finditer(r'fp_c%d\)\._m0\[([^\]]+)\]' % bank, src):
+        offs, words, dyn = set(), set(), False
+        for m in re.finditer(r'fp_c%d\)\._m0\[([^\]]+)\](\.[xyzw]{1,4}\b)?' % bank, src):
             idx = m.group(1).rstrip('u')
-            if idx.isdigit(): offs.add(int(idx) * 16)
-            else: dyn = True
-        if offs or dyn: out[str(bank)] = {'vec4_offsets': sorted(offs), 'dynamic': dyn}
+            if not idx.isdigit(): dyn = True; continue
+            o = int(idx) * 16; offs.add(o)
+            words.update(o + 4 * 'xyzw'.index(c) for c in (m.group(2)[1:] if m.group(2) else 'xyzw'))
+        if offs or dyn: out[str(bank)] = {'vec4_offsets': sorted(offs), 'words': sorted(words), 'dynamic': dyn}
     return out
 
 def unfillable(dr):
     bad = []
     for bank, d in dr.items():
         if d['dynamic']: bad.append(f'c{bank} 动态下标')
-        for o in d['vec4_offsets']:
-            if not any(a <= o and o + 16 <= b or (a <= o < b) for a, b in DRV_FILL[int(bank)]): bad.append(f'c{bank}+{o:#x}')
+        for o in d['words']:
+            if not any(a <= o and o + 4 <= b for a, b in DRV_FILL[int(bank)]): bad.append(f'c{bank}+{o:#x}')
     return bad
 
 RULES = []   # 按着色器名挂的 MSL 改写规则（函数, 适用判定）；原有的暗部重映射 toe 已删（回到 Switch 原版亮度） | MSL rewrite rules attached by shader name (function, applicability test); the former dark-range remap toe has been removed (back to the original Switch brightness)

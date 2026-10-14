@@ -384,7 +384,15 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                     if (src.UseOps.Remove(node) && src.UseOps.Count == 0)
                     {
                         Debug.Assert(src.AsgOp != null);
-                        nodes.Enqueue(src.AsgOp);
+
+                        // dm patch: only cascade into the definition when it is really dead. A multi-destination
+                        // operation (e.g. a texture sample writing .xyzw) can lose all uses of one destination
+                        // while others are still used; unlinking it from its sources' use lists then lets a later
+                        // copy propagation skip it and delete the definitions it still reads.
+                        if (IsUnused(src.AsgOp))
+                        {
+                            nodes.Enqueue(src.AsgOp);
+                        }
                     }
                 }
             }
