@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifndef DM_GAME_manosaba
 static int count_files(const char *root) {
     DIR *d = opendir(root); if (!d) return -1;
     int n = 0; struct dirent *e;
@@ -17,7 +18,57 @@ static int count_files(const char *root) {
     }
     closedir(d); return n;
 }
+#endif
 
+#ifdef DM_GAME_manosaba
+// manosaba 2.0.4b（Unity）：dir = RomFS 根（底下是 Data/）。核关键文件的字节数（版本固定，也就认出是不是这个版本），再核 Data 下的文件总数与总字节数
+// （Addressables 包 644 个，逐个列不现实；拷了一半的包会让总字节数对不上）。点开头的文件（.DS_Store 等）不计
+// manosaba 2.0.4b (Unity): dir = the RomFS root (with Data/ under it). Check the byte counts of the key files (fixed for this version, which also tells whether the resources are of this version), then the total file count and total bytes under Data
+// (644 Addressables bundles cannot reasonably be listed one by one; a half-copied bundle makes the total byte count disagree). Files starting with a dot (.DS_Store etc.) are not counted
+static const char *need[] = {
+    "Data/globalgamemanagers", "Data/globalgamemanagers.assets", "Data/level0", "Data/resources.assets", "Data/sharedassets0.assets",
+    "Data/Managed/Metadata/global-metadata.dat", "Data/StreamingAssets/aa/catalog.bin", "Data/StreamingAssets/aa/settings.json"};
+static const long long size[] = {261988, 693736, 19332, 1457528, 7076, 15809792, 5779305, 851};
+#define NEED_N (sizeof need / sizeof *need)
+#define TOTAL_FILES 667
+#define TOTAL_BYTES 2696520761LL
+static int tally(const char *root, int *n, long long *bytes) {
+    DIR *d = opendir(root); if (!d) return -1;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char p[4096]; snprintf(p, sizeof p, "%s/%s", root, e->d_name);
+        struct stat st; if (stat(p, &st)) { closedir(d); return -1; }
+        if (S_ISDIR(st.st_mode)) { if (tally(p, n, bytes)) { closedir(d); return -1; } }
+        else { (*n)++; *bytes += st.st_size; }
+    }
+    closedir(d); return 0;
+}
+static int need_state(const char *dir, size_t i, long long *have, long long *want) {
+    char p[4096]; snprintf(p, sizeof p, "%s/%s", dir, need[i]); struct stat st; *have = 0; *want = size[i];
+    if (stat(p, &st) || !S_ISREG(st.st_mode)) return 1;
+    *have = (long long)st.st_size; return *have == *want ? 0 : 2;
+}
+int dm_romfs_report(const char *dir, char *out, size_t out_n) {
+    int bad = 0, n = 0; long long have, want, bytes = 0;
+    for (size_t i = 0; i < NEED_N; i++) if (need_state(dir, i, &have, &want)) bad++;
+    char data[4096]; snprintf(data, sizeof data, "%s/Data", dir);
+    int whole = !tally(data, &n, &bytes) && n == TOTAL_FILES && bytes == TOTAL_BYTES;
+    snprintf(out, out_n, "关键文件 %d 个中 %d 个缺或字节数不对；Data 下文件 %d / %d 个、%lld / %lld 字节", (int)NEED_N, bad, n, TOTAL_FILES, bytes, TOTAL_BYTES);
+    return bad + !whole;
+}
+int dm_romfs_validate(const char *dir, char *why, size_t why_n) {
+    for (size_t i = 0; i < NEED_N; i++) { long long have, want; int st = need_state(dir, i, &have, &want);
+        if (st == 1) { snprintf(why, why_n, dm_ui("dmRvNoFile"), need[i]); return 0; }
+        if (st == 2) { snprintf(why, why_n, dm_ui("dmRvShort"), need[i], have, want); return 0; }
+    }
+    char data[4096]; snprintf(data, sizeof data, "%s/Data", dir); int n = 0; long long bytes = 0;
+    if (tally(data, &n, &bytes)) { snprintf(why, why_n, "读不了 %s", data); return 0; }
+    if (n != TOTAL_FILES || bytes != TOTAL_BYTES) { snprintf(why, why_n, "Data 下文件 %d 个、%lld 字节，应为 %d 个、%lld 字节（没拷全）", n, bytes, TOTAL_FILES, TOTAL_BYTES); return 0; }
+    snprintf(why, why_n, "关键文件 %d 个字节数对；Data 下文件 %d 个、%lld 字节齐", (int)NEED_N, n, bytes);   // 通过时 why 供启动日志记一行 | On success, why gives the startup log one line to record
+    return 1;
+}
+#else
 // 基底资源要核的只有档案文件（起产品 RomFS 只带简中：06–16 共 11 种语言的配音档案已删；开发机推的完整一份照样通过）。
 // 配置文件（.build.config）不在这里：游戏读的是 App 里覆盖层自带的那份（出包时生成、缺了出包失败，见 ios/run.sh），基底里有没有、对不对都不影响；
 // 密钥（build_key.txt）与各张清单（*.psv）是提取工具的产物，游戏不读。它们在任何一条路上都不是进不了游戏的原因，也不出现在给玩家的话里。
@@ -75,3 +126,4 @@ int dm_romfs_validate(const char *dir, char *why, size_t why_n) {
     snprintf(why, why_n, "档案 %d 个齐、字节数对；目录里共 %d 个文件", (int)NEED_N, count_files(dir));   // 通过时 why 供启动日志记一行 | On success, why gives the startup log one line to record
     return 1;
 }
+#endif

@@ -384,6 +384,11 @@ static NSString *romfs_locate(char *why, size_t n) {
           NSString *doc0 = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
           BOOL r = [NSFileManager.defaultManager removeItemAtPath:[doc0 stringByAppendingPathComponent:@(cl)] error:nil];
           plog("boot: DM_ROMFS_TEST_CLEAN：Documents/%s %s，退出", cl, r ? "已删" : "不存在"); exit(0); } }
+#ifdef DM_GAME_manosaba
+    // manosaba：只认开发机推进来的 Application Support/romfs（根下是 Data/，romfs_validate.c 的 manosaba 分支）；「文件」与托管资源包两条 D2R 的路不走
+    // manosaba: only the Application Support/romfs pushed in from the dev machine is accepted (Data/ under its root, the manosaba branch of romfs_validate.c); the two D2R paths (Files app, managed asset pack) are not taken
+    return dm_romfs_validate(local.fileSystemRepresentation, why, n) ? local : nil;
+#endif
     if (!getenv("DM_ROMFS_SKIP_LOCAL") && dm_romfs_validate([local stringByAppendingPathComponent:@"data"].fileSystemRepresentation, why, n)) return local;
     // 直装（Ad Hoc）：玩家在「文件」里把资源拖进「我的 iPhone / D2R Mobile」。标准摆法是 Documents/D2R Mobile Resources/data/…（最终资源包：全五幕、仅简中，
     // 过场视频与旧版音乐的零段已从档案里剔掉、旁带 .holes 区段表，宿主读时换算，见 hle_fs.c）。玩家手里的摆法五花八门（网盘多套一层、文件夹改了名、
@@ -565,7 +570,11 @@ static void boot_prepare(void) {
     NSString *found = romfs_locate(romwhy, sizeof romwhy);
     if (!found) {
         plog("boot: 🔴 RomFS 校验失败：%s", romwhy);
+#ifdef DM_GAME_manosaba
+        plog("boot: 请推送 RomFS：xcrun devicectl device copy to --device <设备> --domain-type appDataContainer --domain-identifier <包名> --source $DM_ROOT/data/switch/manosaba-2.0.4b/RomFS --destination 'Library/Application Support/romfs'");
+#else
         plog("boot: 请推送原版 RomFS：xcrun devicectl device copy to --device <设备> --domain-type appDataContainer --domain-identifier <包名> --source $DM_ROOT/data/switch/3.3.94012/Update/RomFS --destination 'Library/Application Support/romfs'");
+#endif
         abort();
     }
     romfs = found;
@@ -608,6 +617,15 @@ static void boot_prepare(void) {
         [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
     { void dm_custom_init(const char *dir); dm_custom_init(doc.fileSystemRepresentation); }   // 「自定义」设置文件在 Documents（覆盖层选择等启动期的读也要用，存档还没挂） | The "Custom" settings file lives in Documents (boot-time reads such as overlay selection need it too, and the save is not mounted yet)
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
+#ifdef DM_GAME_manosaba
+    // 系统共享字体（玩家自己主机导出的 BFTTF，hle_pl.c）：和 RomFS 一样由开发机推到 Application Support/sysfont
+    // 画面：游戏自己按 1920x1080（主机模式）出图，前端的游戏视图按 16:9 居中（front_game_res → letterbox_rect），触点归一化坐标才落在画面上
+    // System shared fonts (BFTTF exported from the player's own console, hle_pl.c): pushed to Application Support/sysfont from the dev machine, like the RomFS
+    // Picture: the game itself outputs 1920x1080 (docked mode); the front end's game view is 16:9 centered (front_game_res → letterbox_rect), so normalized touch coordinates land on the picture
+    setenv("DM_SYSFONT", [support stringByAppendingPathComponent:@"sysfont"].fileSystemRepresentation, 0);
+    setenv("DM_GAME_RES", "1920x1080", 0);
+#endif
+#ifndef DM_GAME_manosaba   // manosaba 没有 RomFS 覆盖层 | manosaba has no RomFS overlay
     NSString *bundledOverlay = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:g_astc_dir ? @"romfs_overlay_astc" : @"romfs_overlay"];   // 老机型补充包：贴图指向补充包的那套 | Legacy Device Pack: the set whose textures point to the Legacy Device Pack
     {   // 走覆盖层的自定义开关（物品注释…）：构建时出了全部组合 romfs_overlay_variants/<键+键…>（gen_romfs_overlay.py），按已生效的开关挑键集合正好相等的那份；全关用 romfs_overlay。重启后生效 | Custom switches that go through the overlay (item annotations...): the build produces every combination as romfs_overlay_variants/<key+key...> (gen_romfs_overlay.py); pick the one whose key set exactly equals the switches in effect; with all off use romfs_overlay. Takes effect after restart
         int dm_custom_get(const char *key);
@@ -622,6 +640,7 @@ static void boot_prepare(void) {
     if (g_astc_dir) bundledOverlay = [NSString stringWithFormat:@"%@:%@", bundledOverlay, g_astc_dir];   // 第二层：补充包（data/<档名>，覆盖层索引指向它） | Second layer: the Legacy Device Pack (data/<archive name>, which the overlay index points to)
     if (g_astc_dir || [fm fileExistsAtPath:bundledOverlay]) { setenv("DM_ROMFS_OVERLAY", bundledOverlay.fileSystemRepresentation, 1); plog("boot: RomFS 覆盖层 %s", bundledOverlay.fileSystemRepresentation); }
     else plog("boot: 🔴 App 内缺 romfs_overlay（底部 UI v4），按原版 HUD 启动");
+#endif
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     setenv("DM_NVN_SHMAP", [res stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
@@ -630,6 +649,9 @@ static void boot_prepare(void) {
     // Set the working directory to Documents: relative paths in environment variables (DM_TICKS / DM_C2S_REPLAY / DM_C2S_LOG / the name part of DM_NVN_SHOT, etc.) all land here (the container path is not known before launch)
     if (chdir(doc.fileSystemRepresentation)) plog("boot: 🔴 chdir Documents 失败 %s", strerror(errno));
     g_boot_argv[0] = "dmhost"; g_boot_argv[1] = strdup(res.fileSystemRepresentation); g_boot_argv[2] = "main"; g_boot_argv[3] = "sdk";
+#ifdef DM_GAME_manosaba
+    g_boot_argv[4] = "subsdk0"; g_boot_argc = 5;   // 任天堂影片库（开场影片） | Nintendo movie library (opening movies)
+#endif
 
 }
 static void boot_begin(void) {

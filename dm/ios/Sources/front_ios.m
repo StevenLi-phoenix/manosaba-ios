@@ -140,8 +140,25 @@ static void restart_cover_hook(int on) { dispatch_async(dispatch_get_main_queue(
     _rsCover=[[DmSwallowView alloc] initWithFrame:self.bounds]; _rsCover.backgroundColor=UIColor.blackColor; _rsCover.hidden=YES; _rsCover.userInteractionEnabled=YES;   // 开的时候挂到窗口上（restartCover） | Attached to the window when turned on (restartCover)
     { extern void (*g_dm_restart_cover_hook)(int); g_dm_restart_cover_hook=restart_cover_hook; }
     _navigation=0; [self navigationMode:atomic_load(&g_touch_navigation)];
+#ifdef DM_GAME_manosaba
+    _feMode=YES;   // manosaba：没有 D2R 的触屏控件层与信息层（藏的条件都含 _feMode，D2R 的界面消息不会来改它） | manosaba: no D2R touch control layer or info layer (every hide condition includes _feMode, and D2R UI messages never come to change it)
+#endif
     return self;
 }
+#ifdef DM_GAME_manosaba
+// manosaba：游戏自己处理触屏（Unity Input System 的触屏设备，main+0x20 剪口打开；hle_touch.c 按游戏画面像素换算），
+// 触点按游戏视图归一化后整组交给 dm_touch_set，不经 D2R 的手势层 / 界面点击。ph：0 按下、1 移动、2 抬起或取消
+// manosaba: the game handles the touchscreen itself (Unity Input System's touchscreen device, enabled by the main+0x20 cut; hle_touch.c converts to game picture pixels),
+// touch points are normalized to the game view and handed to dm_touch_set as a whole set, bypassing D2R's gesture layer / UI clicks. ph: 0 down, 1 move, 2 up or cancelled
+- (void)rawTouches:(NSSet<UITouch *> *)ts phase:(int)ph {
+    if(ph==0) for(UITouch *t in ts) for(int i=0;i<16;i++) if(!_slot[i]) { _slot[i]=t; break; }
+    if(ph==2) for(UITouch *t in ts) for(int i=0;i<16;i++) if(_slot[i]==t) _slot[i]=nil;
+    dm_touch pt[16]; int n=0; CGSize b=self.bounds.size;
+    if(b.width>0 && b.height>0) for(int i=0;i<16;i++) if(_slot[i]) { CGPoint p=[_slot[i] locationInView:self];
+        pt[n++]=(dm_touch){(uint32_t)i,(float)fmin(fmax(p.x/b.width,0),.99999),(float)fmin(fmax(p.y/b.height,0),.99999)}; }
+    dm_touch_set(pt,n);
+}
+#endif
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
 - (void)layoutSubviews {
     [super layoutSubviews];
@@ -480,6 +497,9 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     (void)e;
+#ifdef DM_GAME_manosaba
+    [self rawTouches:ts phase:0]; return;
+#endif
     [self sweepEndedSlots];
     // 手柄模式下碰屏幕 = 回触屏模式（dm_gamepad.m），这一下只做这一件事：此刻屏上是手柄版界面，触屏控件还没显示出来（布局重载要几十帧），
     // 照常往下走的话，落点正好在看不见的回城钮 / 技能钮位置就会直接回城、放技能，面板态还会对手柄版面板发点击。
@@ -514,6 +534,9 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     (void)e;
+#ifdef DM_GAME_manosaba
+    [self rawTouches:ts phase:1]; return;
+#endif
     if(_swallow.count) { NSMutableSet *r=[ts mutableCopy]; for(UITouch *t in ts) if([_swallow containsObject:t]) [r removeObject:t]; if(!r.count) return; ts=r; }
     if(atomic_load(&g_touch_frontend)) { [self uiTouch:ts phase:1]; return; }
     UITouch *uf=_uiFinger;
@@ -673,8 +696,13 @@ static BOOL touch_done(UITouch *t) { UITouchPhase ph=t.phase; return ph==UITouch
     } else { _pulseTicking=NO; return; }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(NSEC_PER_SEC/120)),dispatch_get_main_queue(),^{ [self pulseTick]; });
 }
+#ifdef DM_GAME_manosaba
+- (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self rawTouches:ts phase:2]; }
+- (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self rawTouches:ts phase:2]; }
+#else
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self finishTouches:ts phase:"ended"]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self finishTouches:ts phase:"cancelled"]; }
+#endif
 - (CGPoint)scriptPoint:(NSString *)spec move:(BOOL)move {
     // 数字对 "x,y"（点）或 "@目标[+dx,dy]"：目标 = joy/swap/main/skill1-4/portal/belt1-4/menu/map/mmname（小地图点击区中心）/mmbody（小地图矩形中心）
     // Number pair "x,y" (points) or "@target[+dx,dy]": target = joy/swap/main/skill1-4/portal/belt1-4/menu/map/mmname (center of the minimap tap area)/mmbody (center of the minimap rectangle)
@@ -984,6 +1012,9 @@ void front_run(void (*guest)(void)) {
     sigset_t all; sigfillset(&all); pthread_sigmask(SIG_UNBLOCK, &all, NULL);
     void uimsg_subscribe(void (*)(const char *,const char *,const char *));
     uimsg_subscribe(touch_ui_message);
+#ifdef DM_GAME_manosaba
+    guest(); return;   // D2R 的技能绑定读取（观测门）manosaba 没有 | manosaba has no D2R skill binding reads (observation gates)
+#endif
     dm_touch_game_live_check(1);
     if(!dm_touch_game_attach()) LOG("【红】技能绑定读取没挂上（产物没有观测门 OBS_BINDING_GETTER，或 main 模块不符）：技能键图标 / 回城键绑定不工作");   // 产品功能缺门不许静默 | A product feature missing its gate must not be silent
     guest();

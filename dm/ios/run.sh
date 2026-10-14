@@ -16,6 +16,12 @@ DD=${DM_IOS_DD:-$R/dd}
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app
 t(){ echo "[$(date +%T)] $*"; }
 OUT=${DM_OUT:-$(bash "../tools/product.sh" path touch)}; MODS="main sdk"
+# 游戏：本机配置 DM_GAME（缺省 d2r）。manosaba：改写产物 manosaba-2.0.4b-r1-keypage（含影片库 subsdk0）；宿主按 GAME=manosaba 取编译命令（nod2r 替身、-DDM_GAME_manosaba）；
+# 映射表 / c1 清单取本机 $DM_ROOT/build/mano（mano_shmap.py、c1_guard.py 的产物）；D2R 的原版衍生资源、宿主表头、RomFS 覆盖层都不做
+# Game: local configuration DM_GAME (default d2r). manosaba: rewrite output manosaba-2.0.4b-r1-keypage (with the movie library subsdk0); the host takes its compile command with GAME=manosaba (nod2r stand-ins, -DDM_GAME_manosaba);
+# the mapping table / c1 list come from the local $DM_ROOT/build/mano (outputs of mano_shmap.py, c1_guard.py); D2R's assets derived from the original game, host table headers and RomFS overlay are all skipped
+GAME_ID=${DM_GAME:-d2r}
+if [ "$GAME_ID" = manosaba ]; then export GAME=manosaba; OUT=${DM_OUT:-${DM_ROOT:-$HOME/dm-work}/build/cache/dm/out/manosaba-2.0.4b-r1-keypage}; MODS="main sdk subsdk0"; MANO=${DM_ROOT:-$HOME/dm-work}/build/mano; fi
 if [ "$1" = build ]; then
   # 生成：宿主源文件/头路径/框架（取自 dm/host/Makefile）+ 映像三段内嵌汇编与 -segprot + 装载表头/门表进 App 资源 dm/
   # Generate: host source files/header paths/frameworks (taken from dm/host/Makefile) + embedded assembly for the three image segments and -segprot + load table header/gate table into the App resources dm/
@@ -27,20 +33,32 @@ if [ "$1" = build ]; then
   [ "$nl" = 1 ] && [ "$gl" = 1 ] || { t "🔴 端口监听核对失败：listen( 共 $nl 处（只许 1），开关守卫 $gl 处（须 1）"; exit 1; }
   # 原版衍生资源（加宽储藏箱、百宝囊框、选角面板、小地图终点、技能图集、底部 UI v4 …）不进仓库，每次从游戏文件生成（tools/gen_assets.py；dm/README.md「从你的游戏文件生成资源」）
   # Assets derived from the original game (widened stash, pouch frame, character select panel, minimap goal, skill atlas, bottom UI v4 ...) are not committed to the repository and are generated from game files every time (tools/gen_assets.py; dm/README.md 「从你的游戏文件生成资源」(Generate assets from your game files))
+  if [ "$GAME_ID" = manosaba ]; then
+  # D2R 的原版衍生资源在 manosaba 里没有：技能图集换替身（nod2r/），工程描述里引用的素材目录建空的，构建前脚本见到 hud.json 与 dm_touch_native_art.c 在就不去生成
+  # D2R's assets derived from the original game do not exist in manosaba: the skill atlas gets a stand-in (nod2r/), the asset folders referenced by the project description are created empty, and the pre-build script skips generation when it sees hud.json and dm_touch_native_art.c
+  cp nod2r/dm_touch_native_art.c Sources/dm_touch_native_art.c
+  mkdir -p Gen/assets/NativeHUD/v4/hud_v4_ui Gen/assets/NativeHUD/mapgoal; [ -f Gen/assets/NativeHUD/v4/hud.json ] || echo '{}' > Gen/assets/NativeHUD/v4/hud.json
+  mkdir -p Gen/romfs_overlay Gen/romfs_overlay_variants Gen/romfs_overlay_astc Gen/romfs_overlay_astc_variants
+  else
   python3 tools/gen_assets.py "${DM_ROMFS_SRC:-${DM_ROOT:-$HOME/dm-work}/data/switch/3.3.94012/Update/RomFS}" || { t "🔴 gen_assets 失败（见上）"; exit 1; }
   make -s -C ../host dm_vault_tab.h dm_hud_exp.h dm_bright_levels.inc ROMFS="${DM_ROMFS_SRC:-${DM_ROOT:-$HOME/dm-work}/data/switch/3.3.94012/Update/RomFS}" || { t "🔴 宿主表头生成失败（见上）"; exit 1; }
+  fi
   python3 tools/gen_build.py ../host Gen > Gen/dm.xcconfig || { t "🔴 gen_build 失败"; exit 1; }
-  F=$(python3 tools/gen_embed.py $OUT Gen/embed.S $MODS) || { t "🔴 gen_embed 失败"; exit 1; }
+  F=$(python3 tools/gen_embed.py "$OUT" Gen/embed.S $MODS) || { t "🔴 gen_embed 失败"; exit 1; }
   echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F" >> Gen/dm.xcconfig
-  for m in $MODS; do cp $OUT/$m.fixups.tsv $OUT/$m.gates.tsv Gen/dm/; done
+  for m in $MODS; do cp "$OUT/$m.fixups.tsv" "$OUT/$m.gates.tsv" Gen/dm/; done
   # 启动块清单（缺省开预取：宿主到产物目录 = App 内 dm/ 找 bootlist.tsv）+ main.cuts.tsv（宿主据此核清单构建号）；产物没有就不带
   # Boot block list (prefetch on by default: the host looks for bootlist.tsv in the build output directory = dm/ inside the App) + main.cuts.tsv (the host uses it to check the list's build ID); not included if the build output lacks them
-  for f in bootlist.tsv main.cuts.tsv; do [ -f $OUT/$f ] && cp $OUT/$f Gen/dm/; done
+  for f in bootlist.tsv main.cuts.tsv; do [ -f "$OUT/$f" ] && cp "$OUT/$f" Gen/dm/; done
   # 图形：着色器映射表（与 Mac 同一份）+ iOS 版 metallib 缓存（PC 链 iphoneos 目标，已编，覆盖映射表 6,938/6,938；APFS 克隆不占空间）
   # Graphics: shader mapping table (the same copy as on Mac) + iOS metallib cache (PC chain iphoneos target, already compiled, covers 6,938/6,938 of the mapping table; APFS clones take no space)
+  if [ "$GAME_ID" = manosaba ]; then
+  for f in shader_map.tsv c1_full.tsv; do [ -f "$MANO/$f" ] || { t "🔴 缺 $MANO/$f（mano_shmap.py / c1_guard.py 的产物）"; exit 1; }; cp "$MANO/$f" Gen/dm/; done
+  else
   cp ../gfx/nvn/shader_map.tsv Gen/dm/   # 映射表（B 路线只用来查阶段） | Mapping table (route B only uses it to look up the stage)
   cp ../gfx/nvn/pso_manifest.tsv Gen/dm/   # 预热种子清单（与映射表同目录） | Warm-up seed list (same directory as the mapping table)
   cp ../gfx/nvn/c1_full.tsv Gen/dm/   # c1 运行时下标未证有界的着色器清单（与映射表同目录；缺失则全部 c1 独占 64 KiB 并报红） | List of shaders whose c1 runtime index is not proven bounded (same directory as the mapping table; if missing, every c1 gets an exclusive 64 KiB and a failure is reported)
+  fi
   # 着色器：B 路线（Switch 原版翻译）iOS 版 <键>_b.metallib + <键>_b.json，缺失回放层报红、不回退。
   # 出包：J=10 IOSOUT=<本目录> python3 ../gfx/tools/dmsh_build.py $DM_ROOT/build/cache/dm/dmsh <Mac 缓存目录>（编译口径 tools/ios_metal.py）
   # 宿主只从 DM_MSL_DIR/b-<V>/ 加载（V = dm/gfx/nvn/dmsh_chain.h 的翻译链版本），App 内放成 msl/b-<V>/，只带当前版本
@@ -62,6 +80,7 @@ if [ "$1" = build ]; then
   # 老机型补充包（DM_ASTC_PACK = 补充包目录，dm/tools/astc_pack.py 的产物）：设了才另出一套 ASTC 版覆盖层（Gen/romfs_overlay_astc*），不支持 BC 的机型用；没设（如 TestFlight）这两个目录为空
   # RomFS overlay (bottom UI v4: Gen/assets/NativeHUD/v4 → base image at the borrowed path + controller HUD layout); at App launch this layer is looked up first according to DM_ROMFS_OVERLAY
   # Legacy Device Pack (DM_ASTC_PACK = Legacy Device Pack directory, the build output of dm/tools/astc_pack.py): only when set is an additional ASTC overlay produced (Gen/romfs_overlay_astc*), used by devices that do not support BC; when unset (e.g. TestFlight) these two directories are empty
+  if [ "$GAME_ID" != manosaba ]; then
   python3 tools/gen_romfs_overlay.py "${DM_ROMFS_SRC:-${DM_ROOT:-$HOME/dm-work}/data/switch/3.3.94012/Update/RomFS}" Gen/romfs_overlay > /dev/null || { t "🔴 gen_romfs_overlay 失败"; exit 1; }
   # 游戏的配置文件只认 App 自带的这份（玩家那边的资源只核档案文件，见 host/romfs_validate.c）：每一套覆盖层里都得有，缺一套出包失败
   # The game only accepts the config file bundled with the App (on the player's side only the archive files of the resources are checked, see
@@ -70,6 +89,7 @@ if [ "$1" = build ]; then
     [ -d "$o/data" ] || continue; grep -q '^vfs-root = ' "$o/data/.build.config" 2>/dev/null || { t "🔴 覆盖层 $o 里没有可用的配置文件 data/.build.config"; exit 1; }
   done
   [ -f Gen/romfs_overlay/data/.build.config ] || { t "🔴 没生成覆盖层 Gen/romfs_overlay"; exit 1; }
+  fi
   # 免费的开发者账号（个人团队）签不了这几项权限：DM_FREE_ACCOUNT=1 时从工程描述里去掉再生成。去掉后少的是 iCloud 存档同步、
   # 持续执行模式与更高的内存上限；游戏照常运行（地址预留已按不带扩展虚拟寻址也放得下来定，见 host/hle_svc.c）
   # 两个开关各自独立、可以叠：先按免费档去掉签不了的，再按老接口版改部署目标（公开用户多是免费账号，「免费账号 + iOS 18」要两样都生效）。都没设 = 原样生成
@@ -120,7 +140,7 @@ if [ "$1" = build ]; then
   xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destination "$DEST" \
     -derivedDataPath "$DD" -allowProvisioningUpdates ${ASC_AUTH[@]+"${ASC_AUTH[@]}"} DM_BUILD_NUMBER=$BN ${DM_DEVICE_FAMILY:+DM_DEVICE_FAMILY=$DM_DEVICE_FAMILY} build > "$R/build.log" 2>&1 || { t "🔴 构建失败"; grep -E "error:" "$R/build.log" | head -5
       grep -q 'no devices from which to generate a provisioning profile' "$R/build.log" && t "原因：这个团队名下还没有设备。把手机用数据线连上并解锁，在本机配置里填 DM_IOS_UDID、DM_FREE_ACCOUNT=1，再构建一次"; exit 1; }
-  codesign -d --entitlements :- $APP 2>/dev/null | plutil -p - ; t "构建完成"
+  codesign -d --entitlements :- "$APP" 2>/dev/null | plutil -p - ; t "构建完成"
   # DM_NOINSTALL 保持兼容；build 现在本来就只编译，不触碰设备。
   # DM_NOINSTALL is kept for compatibility; build now only compiles anyway and does not touch the device.
   t "构建完成"; exit 0
@@ -129,18 +149,18 @@ if [ "$1" = install ]; then
   local_env_need DM_DEVICE || exit 1
   devlock_acquire "${SMOKE_OWNER:-${ACCEPT_OWNER:-run.sh install}}"
   trap devlock_release EXIT
-  xcrun devicectl device install app --device $D "$APP" > $R/install.log 2>&1 || { t "🔴 装机失败"; tail -5 $R/install.log; exit 1; }
+  xcrun devicectl device install app --device $D "$APP" > "$R/install.log" 2>&1 || { t "🔴 装机失败"; tail -5 "$R/install.log"; exit 1; }
   t "装机完成"; exit 0
 fi
 local_env_need DM_DEVICE || exit 1
-M=$1; CAP=${2:-60}; O=$R/out/$M.txt; rm -f $O
+M=$1; CAP=${2:-60}; O=$R/out/$M.txt; rm -f "$O"
 devlock_acquire "${SMOKE_OWNER:-${ACCEPT_OWNER:-run.sh $M}}"
 trap devlock_release EXIT
-xcrun devicectl device process launch --device $D --terminate-existing $B -mode $M > $R/launch_$M.log 2>&1
-grep -q Launched $R/launch_$M.log || { t "🔴 启动失败"; tail -8 $R/launch_$M.log; exit 1; }
-pull(){ xcrun devicectl device copy from --device $D --domain-type appDataContainer --domain-identifier $B --source Documents/$M.txt --destination $O >/dev/null 2>&1; }
+xcrun devicectl device process launch --device $D --terminate-existing $B -mode $M > "$R/launch_$M.log" 2>&1
+grep -q Launched "$R/launch_$M.log" || { t "🔴 启动失败"; tail -8 "$R/launch_$M.log"; exit 1; }
+pull(){ xcrun devicectl device copy from --device $D --domain-type appDataContainer --domain-identifier $B --source Documents/$M.txt --destination "$O" >/dev/null 2>&1; }
 alive(){ xcrun devicectl device info processes --device $D 2>/dev/null | grep -q "DmIOS.app/DmIOS"; }
 s=$SECONDS; sleep 3
-while :; do pull; grep -q DONE $O 2>/dev/null && { t "$M 完成"; cat $O; exit 0; }
-  alive || { sleep 1; pull; t "$M 进程已退出"; cat $O 2>/dev/null; exit 0; }
-  [ $((SECONDS - s)) -gt $CAP ] && { t "🔴 $M 超 ${CAP}s"; cat $O 2>/dev/null; exit 1; }; sleep 3; done
+while :; do pull; grep -q DONE "$O" 2>/dev/null && { t "$M 完成"; cat "$O"; exit 0; }
+  alive || { sleep 1; pull; t "$M 进程已退出"; cat "$O" 2>/dev/null; exit 0; }
+  [ $((SECONDS - s)) -gt $CAP ] && { t "🔴 $M 超 ${CAP}s"; cat "$O" 2>/dev/null; exit 1; }; sleep 3; done
