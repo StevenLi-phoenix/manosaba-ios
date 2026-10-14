@@ -145,7 +145,7 @@ static const struct { uint32_t mask; const char *name; } k_names[] = {
 enum { PK_LSL = 1u << 24, PK_LSR = 1u << 25, PK_LSU = 1u << 26, PK_LSD = 1u << 27, PK_MASK = 0xFu << 24, PK_TOUCH = 1u << 28, PK_MSG = 1u << 29, PK_CLICK = 1u << 30 };   // PK_CLICK：界面点击步（C<x>:<y>，经 dm_ui_touch = 与 iOS 前端真手指同一条注入鼠标消息的路）   // PK_TOUCH：触点步（T<x>:<y>，经 dm_touch_set） | PK_CLICK: UI click step (C<x>:<y>, via dm_ui_touch = the same injected mouse message path as a real finger on the iOS front end)   // PK_TOUCH: touch point step (T<x>:<y>, via dm_touch_set)
 static const struct { uint32_t mask; const char *name; } k_stick[] = {{PK_LSL, "LSL"}, {PK_LSR, "LSR"}, {PK_LSU, "LSU"}, {PK_LSD, "LSD"}};
 #define KMAX 256
-static struct { uint32_t mask; uint64_t t0, t1; } g_keys[KMAX];
+static struct { uint32_t mask; uint64_t t0, t1; float tx, ty; } g_keys[KMAX];   // tx / ty：按时刻的触点步（T<x>:<y>@秒+按住秒） | tx / ty: timed touch point step (T<x>:<y>@seconds+hold seconds)
 static int g_nkeys;
 static uint64_t g_kbase;
 // 按 UI 消息的步骤（状态由 UI 消息回调与手柄读取两路驱动，g_klock 保护）
@@ -301,11 +301,11 @@ static void keys_parse(void) {
         if (!mask) die("DM_KEYS 未知键名「%s」", tok);
         const char *v = at + 1;
         if ((*v >= '0' && *v <= '9') || *v == '.') {
-            if (mask & (PK_TOUCH | PK_MSG | PK_CLICK)) die("DM_KEYS 触点项 / 消息项只支持按 UI 消息的步（…@前置…），不支持按时刻");
+            if (mask & (PK_MSG | PK_CLICK)) die("DM_KEYS 消息项 / 界面点击项只支持按 UI 消息的步（…@前置…），不支持按时刻");
             char *plus = strchr(v, '+');
             double t = atof(v), d = plus ? atof(plus + 1) : 0.2;
             if (g_nkeys == KMAX) die("DM_KEYS 超过 %d 项", KMAX);
-            g_keys[g_nkeys++] = (typeof(g_keys[0])){mask, (uint64_t)(t * 1e9), (uint64_t)((t + d) * 1e9)};
+            g_keys[g_nkeys++] = (typeof(g_keys[0])){mask, (uint64_t)(t * 1e9), (uint64_t)((t + d) * 1e9), tx, ty};
         } else {
             if (g_nsteps == KMAX) die("DM_KEYS 超过 %d 项", KMAX);
             typeof(g_steps[0]) *st = &g_steps[g_nsteps++]; st->mask = mask; st->tx = tx; st->ty = ty; st->msg[0] = 0; if (msg) strcpy(st->msg, msg);
@@ -326,7 +326,15 @@ void hid_keys_init(void) { pthread_once(&g_kone, keys_parse); }
 static uint64_t keys_now(void) {
     pthread_once(&g_kone, keys_parse);
     uint64_t t = now_ns() - g_kbase, m = steps_now();
-    for (int i = 0; i < g_nkeys; i++) if (t >= g_keys[i].t0 && t < g_keys[i].t1) m |= g_keys[i].mask;
+    // 按时刻的触点步：时间窗内的触点整组推给触屏（hle_touch.c），组成变了才推；触点位不进按钮位
+    // Timed touch point steps: the touch points inside their time windows are pushed to the touchscreen as a whole set (hle_touch.c), only when the set changes; the touch bit does not enter the button bits
+    dm_touch act[16]; int na = 0; uint32_t on = 0;
+    for (int i = 0; i < g_nkeys; i++) if (t >= g_keys[i].t0 && t < g_keys[i].t1) {
+        if (!(g_keys[i].mask & PK_TOUCH)) { m |= g_keys[i].mask; continue; }
+        if (na < 16) { act[na] = (dm_touch){(uint32_t)na, g_keys[i].tx, g_keys[i].ty}; on |= 1u << i % 32; na++; }
+    }
+    static _Atomic uint32_t touch_on; static _Atomic int touch_n;
+    if (atomic_exchange(&touch_on, on) != on || atomic_exchange(&touch_n, na) != na) dm_touch_set(act, na);
     static _Atomic uint64_t seen;                 // 每个键第一次真被游戏读到时打一行（证明注入到达） | print one line the first time each key is really read by the game (proves the injection arrived)
     uint64_t newbits = m & ~atomic_fetch_or(&seen, m);
     if (newbits) LOG("hid 脚本键首次被读到：mask=%#llx @%.2fs", newbits, t / 1e9);
