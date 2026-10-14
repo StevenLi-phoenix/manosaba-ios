@@ -4,3 +4,7 @@ dm_hud_exp.h
 dm_bright_levels.inc
 *.h.tmp
 *.inc.tmp
+# stand-ins for games other than D2R (make GAME=<other>) are checked in
+!nod2r/dm_vault_tab.h
+!nod2r/dm_hud_exp.h
+!nod2r/dm_bright_levels.inc
