@@ -47,7 +47,11 @@ typedef struct {
     uint64_t serial;                     // 初始化序号：回放层按它在宿主表里找 MTLTexture（游戏可能按值拷贝对象，不能存对象指针） | Initialization serial: the replay layer uses it to find the MTLTexture in the host table (the game may copy the object by value, so object pointers cannot be stored)
 } tex_t;                                                                                     FITS(tex_t, NVNtexture);
 _Static_assert(sizeof(tex_t) <= 0x80, "tex_t 超出本 SDK NVNtexture 实际大小 0x80");
-typedef struct { uint8_t set_levels, set_layers, set_format, set_target; int32_t base_level, nlevels, min_layer, nlayers, format, target; } view_t;
+// NVNtextureView is at most 0x10 bytes in this SDK: Unity keeps two views 0x10 apart on its stack (main+0x9c35ec / +0x9c361c), and a view right before a
+// staging NVNbuffer (main+0x9c7f40: view at sp+0x20, buffer at sp+0x30). The earlier 0x1c-byte view_t overran the next local on every SetDefaults
+// (that NVNbuffer lost its memory pool pointer's low half; Unity then crashed releasing the upload memory of the first video frame).
+// Packed to 10 bytes: levels < 16, layers and formats fit 16 bits, targets 8 bits.
+typedef struct { uint8_t set_levels : 1, set_layers : 1, set_format : 1, set_target : 1; uint8_t base_level, nlevels, target; uint16_t min_layer, nlayers, format; } view_t;
 FITS(view_t, NVNtextureView);
 
 // 采样器参数（builder 与对象共用一份）

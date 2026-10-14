@@ -123,7 +123,7 @@ typedef struct {
 } NVNtexture;
 
 typedef struct {
-    char reserved[0x28];
+    char reserved[0x10];   // 0x28 in the DWARF reconstruction; at most 0x10 in this SDK (see view_t in nvn_obj.h)
 } NVNtextureView;
 
 typedef struct {
