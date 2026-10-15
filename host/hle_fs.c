@@ -32,7 +32,8 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 // Host: at mount, the committed directory commit (= $DM_SAVE) is clonefile'd as a whole tree into the working directory <commit>.work (APFS copy-on-write, nearly zero cost), and the mount points at the working directory,
 // all game reads and writes happen in the working directory; Commit = clonefile(work → <commit>.new), then renamex_np(RENAME_SWAP) swaps it atomically with commit, then the swapped-out old version is deleted.
 // Killed at any moment, commit is either the old version or the new version, never half-written / a mix of old and new; the next mount discards leftover .work / .new.
-typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro; } mount_t;
+// fixed: the contents never change while the process runs (RomFS), so directory name indexes may be kept (path_component)
+typedef struct { char name[32]; char dir[1024]; char overlay[4096]; char commit[1024]; int ro, fixed; } mount_t;
 static mount_t g_mnt[MAX_MOUNT];   // commit non-empty = transactional save mount
 static int g_nmnt;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -69,7 +70,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
         if (!strcmp(g_mnt[i].name, name)) { pthread_mutex_unlock(&g_lock); return RES_OK; }
     if (g_nmnt >= MAX_MOUNT) die("mount table full");
     strlcpy(g_mnt[g_nmnt].name, name, sizeof g_mnt[0].name);
-    g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
+    g_mnt[g_nmnt].ro = ro; g_mnt[g_nmnt].fixed = 0; g_mnt[g_nmnt].overlay[0] = 0; g_mnt[g_nmnt].commit[0] = 0;
     if (!strcmp(name, "rom") && getenv("DM_ROMFS_OVERLAY"))
         strlcpy(g_mnt[g_nmnt].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[0].overlay);
     if (txn) {
@@ -95,13 +96,65 @@ static Result mount(const char *name, const char *dir, int ro) { return mount_ex
 // clonefile preserves xattr, so save Commit/remount needs no separate mapping table; enumeration must not leak physical aliases.
 #define FS_GUEST_NAME "org.dm.guest-name"
 static int guest_name(const char *parent, const char *physical, char *out, size_t n) {
+    // Only the physical names chosen on a collision (.dm-case-N) carry the xattr: set_guest_name writes it only when the physical name differs from
+    // the guest name and removes it otherwise. Any other physical name is the guest name: no getxattr per entry (one system call per entry while
+    // listing or looking up; seconds for a large RomFS). (From seedds/nxnative 76ea922, MIT.)
+    if (strncmp(physical, ".dm-case-", 9)) { strlcpy(out, physical, n); return 1; }
     char p[1280]; snprintf(p, sizeof p, "%s/%s", parent, physical);
     ssize_t k = getxattr(p, FS_GUEST_NAME, out, n - 1, 0, XATTR_NOFOLLOW);
     if (k >= 0) { out[k] = 0; return 1; }
     if (errno != ENOATTR) return 0;
     strlcpy(out, physical, n); return 1;
 }
-static int path_component(char *parent, size_t n, const char *name, int create) {
+// Name index of the directories of mounts whose contents never change (mount_t.fixed: RomFS): guest name → physical name, sorted by guest name,
+// built at a directory's first lookup and kept for the process. The entry-by-entry scan below reads the whole parent directory for every path
+// component. (From seedds/nxnative 1b70789, MIT, where Engage's first frame went from 21 s to 6 s; nxnative indexes every read-only mount, but
+// here MountSaveDataReadOnly is read-only too and its directory changes with each Commit, so only RomFS is indexed.) Callers hold PATH_LOCK.
+typedef struct { const char *guest, *phys; } name_ent;
+typedef struct dir_index { struct dir_index *next; uint64_t hash; char *path; size_t n; name_ent *e; char *pool; } dir_index;
+#define DIR_INDEX_SLOTS 8192
+static dir_index *g_dir_index[DIR_INDEX_SLOTS];
+static uint64_t fnv1a(const char *s) { uint64_t h = 1469598103934665603ull; while (*s) { h ^= (uint8_t)*s++; h *= 1099511628211ull; } return h; }
+static int name_ent_cmp(const void *a, const void *b) { return strcmp(((const name_ent *)a)->guest, ((const name_ent *)b)->guest); }
+// NULL when it cannot be built (the directory cannot be opened, reading an entry's name fails): the caller then scans as before
+static const dir_index *dir_index_get(const char *dir) {
+    uint64_t h = fnv1a(dir); dir_index **slot = &g_dir_index[h % DIR_INDEX_SLOTS];
+    for (dir_index *x = *slot; x; x = x->next) if (x->hash == h && !strcmp(x->path, dir)) return x;
+    DIR *d = opendir(dir); if (!d) return NULL;
+    // The names go into one pool first (a physical name is stored separately only when it differs from the guest name), as offsets in off[];
+    // they become pointers once the pool stops growing
+    size_t n = 0, cap = 64, plen = 0, pcap = 4096; size_t (*off)[2] = malloc(cap * sizeof *off); char *pool = malloc(pcap);
+    if (!off || !pool) die("fs: directory index allocation failed");
+    struct dirent *e; char guest[0x301]; int ok = 1;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (!guest_name(dir, e->d_name, guest, sizeof guest)) { ok = 0; break; }
+        size_t gl = strlen(guest) + 1, same = !strcmp(guest, e->d_name), pl = same ? 0 : strlen(e->d_name) + 1;
+        if (n == cap && !(off = realloc(off, (cap *= 2) * sizeof *off))) die("fs: directory index allocation failed");
+        while (plen + gl + pl > pcap) if (!(pool = realloc(pool, pcap *= 2))) die("fs: directory index allocation failed");
+        off[n][0] = plen; memcpy(pool + plen, guest, gl); plen += gl;
+        off[n][1] = same ? off[n][0] : plen; if (!same) { memcpy(pool + plen, e->d_name, pl); plen += pl; }
+        n++;
+    }
+    closedir(d);
+    if (!ok) { free(off); free(pool); return NULL; }
+    dir_index *x = calloc(1, sizeof *x); if (!x || !(x->path = strdup(dir)) || !(x->e = malloc((n ? n : 1) * sizeof *x->e))) die("fs: directory index allocation failed");
+    for (size_t i = 0; i < n; i++) { x->e[i].guest = pool + off[i][0]; x->e[i].phys = pool + off[i][1]; }
+    free(off); qsort(x->e, n, sizeof *x->e, name_ent_cmp);
+    x->hash = h; x->n = n; x->pool = pool; x->next = *slot; *slot = x;
+    return x;
+}
+static int path_component(char *parent, size_t n, const char *name, int create, int fixed) {
+    if (fixed && !create) {
+        const dir_index *x = dir_index_get(parent);
+        if (x) {
+            name_ent key = {name, NULL}; const name_ent *hit = bsearch(&key, x->e, x->n, sizeof *x->e, name_ent_cmp);
+            if (!hit) { errno = ENOENT; return 0; }
+            size_t len = strlen(parent), k = strlen(hit->phys);
+            if (len + k + 2 > n) { errno = ENAMETOOLONG; return 0; }
+            parent[len] = '/'; memcpy(parent + len + 1, hit->phys, k + 1); return 1;
+        }
+    }
     DIR *d = opendir(parent); if (!d) return 0;
     struct dirent *e; char physical[0x301] = "", guest[0x301];
     while ((e = readdir(d))) {
@@ -136,7 +189,7 @@ static int root_path(const char *root, const char *rest, char *out, size_t n) {
         if (k >= sizeof part) { errno = ENAMETOOLONG; return 0; }
         memcpy(part, rest, k); part[k] = 0;
         if (!strcmp(part, "..")) { errno = ENOENT; return 0; }
-        if (strcmp(part, ".") && !path_component(out, n, part, 0)) return 0;
+        if (strcmp(part, ".") && !path_component(out, n, part, 0, 1)) return 0;   // only the RomFS mount and its overlay roots come here (rom_overlay_path, dir_snapshot)
         rest = end;
     }
     return 1;
@@ -190,7 +243,7 @@ static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create)
             memcpy(part, rest, k); part[k] = 0;
             if (!strcmp(part, "..")) { errno = ENOENT; return 0; }
             const char *next = end; while (*next == '/') next++;
-            if (strcmp(part, ".") && !path_component(out, n, part, create && !*next)) return 0;
+            if (strcmp(part, ".") && !path_component(out, n, part, create && !*next, g_mnt[i].fixed)) return 0;
             rest = end;
         }
         return 1;
@@ -225,10 +278,12 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", 
     (void)cache; (void)sz;
     const char *rom = getenv("DM_ROMFS"); if (!rom) die("DM_ROMFS is not set and the game profile has no workspace.romfs");
     Result r = mount(name, rom, 1);
-    if (r == RES_OK && getenv("DM_ROMFS_OVERLAY")) {
+    if (r == RES_OK) {
         PATH_LOCK();
         for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name)) {
-            strlcpy(g_mnt[i].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[i].overlay); break;
+            g_mnt[i].fixed = 1;
+            if (getenv("DM_ROMFS_OVERLAY")) strlcpy(g_mnt[i].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[i].overlay);
+            break;
         }
     }
     return r;
@@ -463,14 +518,17 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
 HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", "fsp-srv → readdir(3)", Result, h_fs_ReadDirectory, int64_t *count, DirectoryEntry *ents, uint64_t hh, int64_t max) {
     PATH_LOCK(); dirh_t *h = (dirh_t *)hh; int64_t n = 0; struct dirent *e;
     if (h->snap) { while (n < max && h->psnap < h->nsnap) { DirectoryEntry *src = &h->snap[h->psnap++]; if (!(h->mode & (src->type == ENT_DIR ? DIRMODE_DIR : DIRMODE_FILE))) continue; ents[n++] = *src; } *count = n; return RES_OK; }
+    int dfd = dirfd(h->d);
     while (n < max && (e = readdir(h->d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        char c[1280]; snprintf(c, sizeof c, "%s/%s", h->path, e->d_name);
-        struct stat st; if (stat(c, &st)) continue;
-        int isdir = S_ISDIR(st.st_mode);
+        // A directory's type comes from d_type without a stat; files need their size, from fstatat relative to the directory fd (following links,
+        // like stat did) instead of resolving the whole path again for every entry. (From seedds/nxnative 76ea922, MIT.)
+        struct stat st; int isdir;
+        if (e->d_type == DT_DIR) isdir = 1;
+        else { if (fstatat(dfd, e->d_name, &st, 0)) continue; isdir = S_ISDIR(st.st_mode); }
         if (!(h->mode & (isdir ? DIRMODE_DIR : DIRMODE_FILE))) continue;
         DirectoryEntry *o = &ents[n++]; memset(o, 0, sizeof *o);
-        if (!guest_name(h->path, e->d_name, o->name, sizeof o->name)) { *count = n - 1; return err_res("directory name", c); }
+        if (!guest_name(h->path, e->d_name, o->name, sizeof o->name)) { char c[1280]; snprintf(c, sizeof c, "%s/%s", h->path, e->d_name); *count = n - 1; return err_res("directory name", c); }
         o->type = isdir ? ENT_DIR : ENT_FILE; o->size = isdir ? 0 : st.st_size;
     }
     *count = n; return RES_OK;
