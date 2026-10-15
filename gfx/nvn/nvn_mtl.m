@@ -494,11 +494,13 @@ static int g_ruler_truth = -1, g_ruler_pending;
 static int tbdr_on(void);
 
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
+static void fin_drain(void);
 void mtl_sub_begin(void) {
     mtl_init(); g_sub_serial++;
     if (tbdr_on() == 0 && g_ruler_pending) { g_ruler_truth = 0; g_ruler_pending = 0; MLOG("DM_NVN_RULER: switched to the measured mode"); }
     defer_drain();
     defer_reset();
+    fin_drain();
     warm_claim();
     if (g_cb) MDIE("submit re-entered");
     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
@@ -1343,8 +1345,30 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
 }
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads) { *uploads = g_pkg_uploads; *reuploads = g_pkg_reuploads; }
 uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }
+// nvnTextureFinalize: the texture stays usable for FIN_GRACE more submissions before it is released. The game may finalize a texture that commands
+// it recorded earlier and submits afterwards still sample by ID (seen at a scene change); on the console the descriptor still names the storage, so
+// they read its content. Serials are never reused (nvn_new_serial), so a pending release cannot hit a new texture
+enum { FIN_GRACE = 16 };
+typedef struct { uint64_t serial, due; } fin_t;   // due: submission index at which it is released (0 = not yet stamped by the submit thread)
+static fin_t *g_fin; static int g_nfin, g_fincap; static pthread_mutex_t g_fin_mu = PTHREAD_MUTEX_INITIALIZER;
+static void fin_queue(uint64_t serial) {
+    pthread_mutex_lock(&g_fin_mu);
+    if (g_nfin == g_fincap) { g_fincap = g_fincap ? g_fincap * 2 : 256; g_fin = realloc(g_fin, g_fincap * sizeof *g_fin); }
+    g_fin[g_nfin++] = (fin_t){serial, 0};
+    pthread_mutex_unlock(&g_fin_mu);
+}
 static void treg_drop_views(uint64_t serial);
-void mtl_tex_release(tex_t *t) { @autoreleasepool { if (t->serial) { serial_del(t->serial); treg_drop_views(t->serial); } } }
+static void fin_drain(void) {   // submit thread, at the start of a submission
+    uint64_t due[64]; int n = 0;
+    pthread_mutex_lock(&g_fin_mu);
+    for (int i = 0; i < g_nfin;) {
+        if (!g_fin[i].due) g_fin[i].due = g_sub_serial + FIN_GRACE;
+        if (g_fin[i].due <= g_sub_serial && n < 64) { due[n++] = g_fin[i].serial; g_fin[i] = g_fin[--g_nfin]; } else i++;
+    }
+    pthread_mutex_unlock(&g_fin_mu);
+    for (int i = 0; i < n; i++) { serial_del(due[i]); treg_drop_views(due[i]); }
+}
+void mtl_tex_release(tex_t *t) { if (t->serial) fin_queue(t->serial); }
 
 // ---------- Render passes: SetRenderTargets opens a new pass; clears before the first command in the pass are folded into the load action ----------
 static struct {
@@ -1999,8 +2023,8 @@ void mtl_prog_release(prog_t *p) { @autoreleasepool { if (p->serial) serial_del(
 
 // ---------- Descriptor pool: texture ID / sampler ID → object ----------
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
-// fin: the texture this entry names was finalized (nvnTextureFinalize) while the ID stayed registered
-typedef struct { tex_t t; int ok, fin; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; } treg_t;
+// fin: the texture this entry names was released after nvnTextureFinalize (fin_drain) while the ID stayed registered, at submission fin_sub
+typedef struct { tex_t t; int ok, fin; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, fin_sub; } treg_t;
 static treg_t *g_treg; static int g_ntreg;
 // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
 // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
@@ -2023,7 +2047,7 @@ static void treg_drop_views(uint64_t serial) {
     pthread_mutex_lock(&g_rmu);
     for (int i = 1; i < g_ntreg && i < (1 << 20); i++) {
         if (atomic_load_explicit(&g_tser[i], memory_order_relaxed) != serial || !g_treg[i].ok) continue;
-        g_treg[i].fin = 1;
+        g_treg[i].fin = 1; g_treg[i].fin_sub = g_sub_serial;
         if (g_treg[i].view) { defer_obj_unref((__bridge id)g_treg[i].view); CFRelease(g_treg[i].view); g_treg[i].view = NULL; g_treg[i].view_id = g_treg[i].view_rid = 0; }
     }
     pthread_mutex_unlock(&g_rmu);
@@ -2060,9 +2084,13 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
         if (cur == v || v.parentTexture == cur) { rp->view_ser = sg; rp->view_dirty = dg; return v; }
         defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; v = nil;
     }
-    // The game uses an ID whose texture it finalized (undefined in NVN): its descriptor still names that storage, so the texture is created again from the
-    // snapshot (as before), but nothing will finalize it again
-    if (rp->fin) { RED_ONCE(67, "texture ID %d used after its texture (serial %llu) was finalized: created again", tid, (unsigned long long)rp->t.serial); rp->fin = 0; }
+    // The game uses an ID whose texture was released after its finalize and grace period: its descriptor still names that storage, so the texture is
+    // created again from the snapshot (a render target comes back blank) and queued for release again, so it does not stay forever
+    if (rp->fin) {
+        static uint64_t n_late; n_late++; rp->fin = 0; fin_queue(rp->t.serial);
+        if (n_late <= 8 || !(n_late % 64)) MLOG("[red] texture ID %d used %llu submissions after its texture (serial %llu, %ux%u format %#x) was released after nvnTextureFinalize: created again (%llu so far)",
+            tid, (unsigned long long)(g_sub_serial - rp->fin_sub), (unsigned long long)rp->t.serial, rp->t.d.width, rp->t.d.height, rp->t.d.format, (unsigned long long)n_late);
+    }
     treg_t r = *rp;
     id<MTLTexture> base = tex_mtl(&rp->t);
     if (!base) return nil;
