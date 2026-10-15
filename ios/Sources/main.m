@@ -255,7 +255,17 @@ static void host_start(NSString *romfs) {
     NSString *rf = romfs_locate(why, sizeof why);
     if (rf) {
         self.romfs = rf;
-        DmGameVC *vc = [DmGameVC new]; vc.view = front_ios_view(ws.effectiveGeometry.coordinateSpace.bounds, ws.screen.nativeScale);
+        // UIWindowSceneGeometry.coordinateSpace exists from iOS 26 only (the DM_IOS_M3 build runs on iOS 18: unrecognized selector at launch);
+        // UIWindowScene.coordinateSpace is the same space before that (deprecated from 26)
+        CGRect bounds;
+        if (@available(iOS 26.0, *)) bounds = ws.effectiveGeometry.coordinateSpace.bounds;
+        else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            bounds = ws.coordinateSpace.bounds;
+#pragma clang diagnostic pop
+        }
+        DmGameVC *vc = [DmGameVC new]; vc.view = front_ios_view(bounds, ws.screen.nativeScale);
         self.window.rootViewController = vc;
         dm_log_overlay_attach(vc.view);
         if (retry) { host_start(rf); front_ios_focus_event(2); front_ios_focus_event(3); }   // at launch sceneWillEnterForeground starts it
