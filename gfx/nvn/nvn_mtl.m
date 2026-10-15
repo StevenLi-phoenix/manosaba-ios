@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CAMetalDisplayLink.h>
+#import <MetalFX/MetalFX.h>
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
@@ -4483,9 +4484,15 @@ static const char *cctx_snap(void) {
     p_pass = g_stat_pass; p_up = up; p_reup = reup; p_ser = g_ser_gen; return b;
 }
 // ---------- Power-saving mode (30 frames per second) ----------
-// DM_FPS=30: present at 30 Hz (the display link and the frame rate hint of the front end follow, so a ProMotion screen lowers its refresh rate)
-int mtl_fps_target(void) { static int env = -2; if (env == -2) { const char *e = getenv("DM_FPS"); env = e ? atoi(e) : -1; if (env != 30 && env != 60) env = 60; }
-    return env; }
+// DM_FPS=30: present at 30 Hz (the display link and the frame rate hint of the front end follow, so a ProMotion screen lowers its refresh rate).
+// mtl_fps_set changes it while running (iOS Settings page): the display link follows on the next frame (link_sync)
+static _Atomic int g_fps_target;
+int mtl_fps_target(void) {
+    int f = atomic_load(&g_fps_target);
+    if (!f) { const char *e = getenv("DM_FPS"); int v = e && atoi(e) == 30 ? 30 : 60, z = 0; atomic_compare_exchange_strong(&g_fps_target, &z, v); f = atomic_load(&g_fps_target); }
+    return f;
+}
+void mtl_fps_set(int fps) { int v = fps == 30 ? 30 : 60; if (atomic_exchange(&g_fps_target, v) != v) MLOG("frame rate target %d fps", v); }
 
 void mtl_exec(const uint8_t *p) {
     static int inited; if (!inited) { inited = 1; state_reset(); }
@@ -4604,7 +4611,7 @@ void mtl_res_snapshot(mtl_res_count *out) {
 static struct { uint64_t frame; char path[1024]; } g_shotq[SHOTQ_MAX]; static int g_nshotq;
 static pthread_mutex_t g_shotq_mu = PTHREAD_MUTEX_INITIALIZER;
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]);
-static int present_encode_m4(CBUF cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i);
+static int present_encode_m4(CBUF cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i, id<MTLFence> wait);
 // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
 // with the same encoding as the present (present_encode) into an offscreen texture of the same size as the swapchain, and after the GPU finishes hands out a CGImage in the completion callback (the callback does not block the present). Guarded by g_shotq_mu
 static void (^g_grab_cb)(CGImageRef img);
@@ -4900,7 +4907,126 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTe
     [en endEncoding];
     return 1;
 }
-static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, const int crop[4], int uv_i) {
+// Viewport of the game picture (cw x ch) on a dw x dh target: its aspect ratio kept and centered; a ratio difference under 1% fills the target
+static MTLViewport present_vp(double dw, double dh, double cw, double ch) {
+    double s = fmin(dw / cw, dh / ch);
+    if (fabs((dw / dh) / (cw / ch) - 1) < 0.01) return (MTLViewport){0, 0, dw, dh, 0, 1};
+    return (MTLViewport){floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
+}
+// ---------- MetalFX spatial upscaling of the presented picture ----------
+// Mode: mtl_upscale_set (iOS Settings page), else DM_UPSCALE=metalfx; off = the present pass scales bilinearly. With it on and the picture shown
+// larger than the game renders it (crop rectangle at the texture's origin), MetalFX's spatial scaler first scales the picture to its on-screen size
+// and the present pass copies that 1:1.
+// Metal 4 (MTL4FXSpatialScaler): neither the headers nor the documentation describe its synchronization. Logging proxies around the command buffer
+// and the encoders it opens (macOS 26, Apple M5) showed: it adds a residency set of its own (useResidencySet:), encodes two render passes, and with
+// `fence` set its first pass waits on that fence before the fragment stage and its last pass updates it after the fragment stage; with no fence its
+// first pass waits for nothing. So (1) the present command buffer goes behind a queue-wide signal / wait of g_fx.ev (MTL4CommandQueue signalEvent:
+// "after all GPU work prior to this point is complete"; the game's frames and the presents share the one queue), ordering the scaler after the game's
+// frame, and (2) the present pass waits on the fence before its fragment stage. The older API (DM_NVN_M3) tracks these hazards itself.
+static _Atomic int g_upscale = -1;
+void mtl_upscale_set(int on) { int v = on != 0; if (atomic_exchange(&g_upscale, v) != v) MLOG("MetalFX upscaling %s", v ? "on" : "off"); }
+static int upscale_on(void) {
+    int m = atomic_load(&g_upscale);
+    if (m < 0) { const char *e = getenv("DM_UPSCALE"); int v = e && (!strcmp(e, "metalfx") || !strcmp(e, "1")), x = -1; atomic_compare_exchange_strong(&g_upscale, &x, v); m = atomic_load(&g_upscale); }
+    return m;
+}
+static struct {   // present thread only
+    id<MTLFXSpatialScalerBase> scaler; id<MTLTexture> out;
+    NSUInteger iw, ih, ow, oh; MTLPixelFormat fmt;   // iw x ih: the whole input texture (MetalFX asserts it matches the descriptor); the crop is its content size
+    id<MTLFence> fence;
+#if !DM_NVN_M3
+    id<MTL4Compiler> compiler; id<MTLEvent> ev; uint64_t ev_n; id<MTLResidencySet> rs;
+#endif
+    id old[8]; int old_i;   // replaced scalers and outputs: kept for four more replacements (at most 3 presents are in flight, one replacement per present)
+    int broken, state;      // broken: MetalFX unavailable here, bilinear from now on; state: what was logged last (1 upscaling, 2 not needed, 3 crop not at origin)
+} g_fx;
+static void fx_retire(id o) {
+    if (!o) return;
+    id gone = g_fx.old[g_fx.old_i]; g_fx.old[g_fx.old_i] = o; g_fx.old_i = (g_fx.old_i + 1) % 8;
+#if !DM_NVN_M3
+    if (gone && [gone conformsToProtocol:@protocol(MTLTexture)]) { [g_fx.rs removeAllocation:gone]; [g_fx.rs commit]; }
+#else
+    (void)gone;
+#endif
+}
+static void fx_broken(const char *why) { g_fx.broken = 1; MLOG("[red] MetalFX upscaling unavailable (%s): bilinear scaling", why); }
+static int fx_ready(id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
+    if (g_fx.broken) return 0;
+    NSUInteger cw = src.width, ch = src.height;
+    if (g_fx.scaler && g_fx.iw == cw && g_fx.ih == ch && g_fx.ow == ow && g_fx.oh == oh && g_fx.fmt == src.pixelFormat) return 1;
+    if (![MTLFXSpatialScalerDescriptor supportsDevice:g_dev]) { fx_broken("the device does not support the spatial scaler"); return 0; }
+    if (!g_fx.fence) g_fx.fence = [g_dev newFence];
+#if !DM_NVN_M3
+    if (![MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev]) { fx_broken("the device does not support MetalFX on Metal 4"); return 0; }
+    NSError *e = nil;
+    if (!g_fx.compiler && !(g_fx.compiler = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e])) { fx_broken(e.localizedDescription.UTF8String ?: "no Metal 4 compiler"); return 0; }
+    if (!g_fx.rs && !(g_fx.rs = [g_dev newResidencySetWithDescriptor:[MTLResidencySetDescriptor new] error:&e])) { fx_broken(e.localizedDescription.UTF8String ?: "no residency set"); return 0; }
+    if (!g_fx.ev) g_fx.ev = [g_dev newEvent];
+#endif
+    MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
+    d.colorTextureFormat = d.outputTextureFormat = src.pixelFormat;
+    d.inputWidth = cw; d.inputHeight = ch; d.outputWidth = ow; d.outputHeight = oh;
+    d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;   // the picture's bytes are gamma encoded (the present samples the swapchain through a non-sRGB view)
+#if DM_NVN_M3
+    id<MTLFXSpatialScalerBase> sc = [d newSpatialScalerWithDevice:g_dev];
+#else
+    id<MTLFXSpatialScalerBase> sc = [d newSpatialScalerWithDevice:g_dev compiler:g_fx.compiler];
+#endif
+    if (!sc) { MLOG("[red] MetalFX: no spatial scaler for %lux%lu → %lux%lu format %lu", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh, (unsigned long)src.pixelFormat); fx_broken("scaler creation failed"); return 0; }
+    if ((src.usage & sc.colorTextureUsage) != sc.colorTextureUsage) { MLOG("[red] MetalFX: the game picture's usage %#lx lacks %#lx", (unsigned long)src.usage, (unsigned long)sc.colorTextureUsage); fx_broken("input texture usage"); return 0; }
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:ow height:oh mipmapped:NO];
+    td.storageMode = MTLStorageModePrivate; td.usage = sc.outputTextureUsage | MTLTextureUsageShaderRead;
+    id<MTLTexture> out = [g_dev newTextureWithDescriptor:td];
+    if (!out) { fx_broken("output texture creation failed"); return 0; }
+    fx_retire(g_fx.scaler); fx_retire(g_fx.out);
+    g_fx.scaler = sc; g_fx.out = out; g_fx.iw = cw; g_fx.ih = ch; g_fx.ow = ow; g_fx.oh = oh; g_fx.fmt = src.pixelFormat;
+#if !DM_NVN_M3
+    [g_fx.rs addAllocation:out]; [g_fx.rs commit];
+#endif
+    MLOG("MetalFX spatial upscaling %lux%lu → %lux%lu (format %lu)", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh, (unsigned long)src.pixelFormat);
+    return 1;
+}
+static void fx_state(int st) {
+    if (st == g_fx.state) return;
+    g_fx.state = st;
+    if (st == 2) MLOG("MetalFX upscaling: the picture is not shown larger than the game renders it, bilinear");
+    if (st == 3) MLOG("MetalFX upscaling: the game's crop rectangle does not start at the texture's origin, bilinear");
+}
+// Encodes the upscale into cb and returns its output (out_crop = the whole output; *wait = the fence the present pass must wait on), or nil: bilinear
+static id<MTLTexture> fx_apply(CBUF cb, id<MTLTexture> src0, const int crop[4], id<MTLTexture> dst, int out_crop[4], id<MTLFence> *wait) {
+    *wait = nil;
+    if (!upscale_on()) { g_fx.state = 0; return nil; }
+    if (g_fx.broken) return nil;
+    id<MTLTexture> src = present_src(src0);
+    NSUInteger cw = src.width, ch = src.height;
+    if (crop && (crop[2] || crop[3])) {
+        if (crop[0] || crop[1]) { fx_state(3); return nil; }
+        if (crop[2] <= 0 || crop[3] <= 0 || (NSUInteger)crop[2] > src.width || (NSUInteger)crop[3] > src.height) return nil;   // present_encode_m4 reports it
+        cw = (NSUInteger)crop[2]; ch = (NSUInteger)crop[3];
+    }
+    MTLViewport vp = present_vp(dst.width, dst.height, cw, ch);
+    NSUInteger ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
+    if (ow <= cw && oh <= ch) { fx_state(2); return nil; }
+    if (!fx_ready(src, ow, oh)) return nil;
+    fx_state(1);
+    id<MTLFXSpatialScalerBase> sc = g_fx.scaler;
+    sc.colorTexture = src; sc.inputContentWidth = cw; sc.inputContentHeight = ch; sc.outputTexture = g_fx.out;
+#if DM_NVN_M3
+    [(id<MTLFXSpatialScaler>)sc encodeToCommandBuffer:cb];
+#else
+    sc.fence = g_fx.fence;
+    [cb useResidencySet:g_fx.rs];
+    [(id<MTL4FXSpatialScaler>)sc encodeToCommandBuffer:cb];
+    *wait = g_fx.fence;
+#endif
+    out_crop[0] = out_crop[1] = 0; out_crop[2] = (int)ow; out_crop[3] = (int)oh;
+    return g_fx.out;
+}
+#if !DM_NVN_M3
+// Right before committing a command buffer that fx_apply encoded into: everything queued so far finishes before anything queued after starts
+static void fx_commit_sync(void) { g_fx.ev_n++; [g_q4 signalEvent:g_fx.ev value:g_fx.ev_n]; [g_q4 waitForEvent:g_fx.ev value:g_fx.ev_n]; }
+#endif
+static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, const int crop[4], int uv_i, id<MTLFence> wait) {
     id<MTLTexture> src = present_src(src0);
     NSUInteger cx = 0, cy = 0, cw = src.width, ch = src.height;
     if (crop && (crop[2] || crop[3])) {
@@ -4911,9 +5037,8 @@ static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, c
         cx = crop[0]; cy = crop[1]; cw = crop[2]; ch = crop[3];
     }
     present_pipeline(dst.pixelFormat);
-    double dw = dst.width, dh = dst.height, s = fmin(dw / cw, dh / ch);
-    MTLViewport vp = {floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
-    if (fabs((dw / dh) / ((double)cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
+    double dw = dst.width, dh = dst.height;
+    MTLViewport vp = present_vp(dw, dh, cw, ch);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     RPD *rp = [RPD new];
     rp.colorAttachments[0].texture = dst;
@@ -4927,6 +5052,7 @@ static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, c
     [en setFragmentSamplerState:g_blit_samp atIndex:0];
 #else
     [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+    if (wait) [en waitForFence:wait beforeEncoderStages:MTLRenderStageFragment];   // MetalFX's output (fx_apply)
     [en setArgumentTable:g_present_args atStages:MTLRenderStageFragment];
     [g_present_args setTexture:src.gpuResourceID atIndex:0];
     [g_present_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
@@ -5015,13 +5141,15 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     }
 #if DM_NVN_M3
     CBUF cb = [g_q commandBuffer];   // older API: presentation is recorded on the command buffer (presentDrawable), so the frame reaches the screen only after its drawing is done
-    if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) return 0;
+    int fx_crop[4]; id<MTLFence> fx_wait; id<MTLTexture> fx = fx_apply(cb, src, crop, dr.texture, fx_crop, &fx_wait);
+    if (!present_encode_m4(cb, fx ?: src, dr.texture, fx ? fx_crop : crop, alloc_i, nil)) return 0;
 #else
     [g_present_alloc4[alloc_i] reset];
     [g_q4 waitForDrawable:dr];
     CBUF cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
-    if (!present_encode_m4(cb, src, dr.texture, crop, alloc_i)) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
+    int fx_crop[4]; id<MTLFence> fx_wait; id<MTLTexture> fx = fx_apply(cb, src, crop, dr.texture, fx_crop, &fx_wait);
+    if (!present_encode_m4(cb, fx ?: src, dr.texture, fx ? fx_crop : crop, alloc_i, fx_wait)) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
     [cb endCommandBuffer];
 #endif
 #if !DM_NVN_M3
@@ -5036,6 +5164,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 #endif
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
 #if !DM_NVN_M3
+    if (fx) fx_commit_sync();   // the scaler reads the finished game frame (fx_apply)
     [g_q4 commit:buffers count:1 options:o];
 #endif
     if (target_ts > 0) {

@@ -15,7 +15,7 @@ targets:
     sources:
       - Sources
       - Gen/AppAssets.xcassets        # app icon (run.sh: the game's icon from the local workspace; game art is not committed)
-      - path: Settings.bundle         # Settings app page: on-screen log switches (Sources/log_overlay.m)
+      - path: Settings.bundle         # Settings app page: graphics settings (Sources/main.m) and on-screen log switches (Sources/log_overlay.m)
         buildPhase: resources
       - path: Gen/embed.S             # the rewritten game modules, embedded as code sections (tools/gen_embed.py)
       - path: Gen/dm                  # product tables and the shader stage map (DM_NVN_SHMAP)

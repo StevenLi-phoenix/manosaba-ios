@@ -16,6 +16,10 @@ CUTS = {
         (0x20, 'e0031f2a', '20008052', 'player setting "touchscreen" 0x20: mov w0, wzr → mov w0, #1, so the Input System backend creates its touchscreen device'),
         (0x191d5b0, '542d2294', '00008052', 'ProfilePage.ControlPresentEvidenceUi: bl Platform.IsConsole → mov w0, #0 (present button shadow as off console)'),
         (0x200c734, 'f3700694', '00008052', 'WitchBookPageBase.ControlPresentEvidenceUi: bl Platform.IsConsole → mov w0, #0 (show the touchable present button)'),
+        # Render resolution (graphics.c): the game keeps its PC version's CameraManagerExtended settings. SetResolutionLevel 0x21c5c60 picks
+        # (width, height) from its configuration's table by level and tail-calls Screen.SetResolution(int, int, bool) 0x3327d00, its only caller on
+        # Switch (the PC settings dropdowns call the four-argument overload 0x328c360 directly); LoadServiceState 0x21c6660 calls it at startup
+        (0x3327d00, '5f00007268008052', '011000d4c0035fd6', 'Screen.SetResolution(int, int, bool): tst w2, #1; mov w8, #3 → svc #0x80; ret (host call: the size scaled, then the four-argument overload)'),
     ],
 }
 OBS = {}

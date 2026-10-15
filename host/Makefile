@@ -37,7 +37,7 @@ SRC = \
 GFX = $(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
 GFX_H = $(sort $(wildcard ../gfx/nvn/*.h ../gfx/nvn/include/*.h ../gfx/tex/*.h))
 HDR = $(wildcard *.h) $(GFX_H) $(wildcard $(GAMEDIR)/*.h)
-FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework AudioToolbox -framework CoreAudio -framework ImageIO \
+FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework CoreAudio -framework ImageIO \
 	-framework UniformTypeIdentifiers -framework GameController -framework Network -framework AVFoundation -framework CoreMedia -framework CoreVideo
 INCLUDES = -I. -I../gfx/nvn/include -I$(GAMEDIR)
 .DEFAULT_GOAL := dmhost

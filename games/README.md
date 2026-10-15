@@ -77,6 +77,7 @@ resolves to the host implementation, even when a module defines the symbol) and 
 
 ## manosaba
 
-`games/manosaba/` is 魔法少女ノ魔女裁判 (Switch, version 2.0.4b, Unity 6000.0.72f1 IL2CPP). It needs no C hooks, only cuts: one turns on Unity's
-touchscreen player setting so the game receives native touch input; two make the witch book show its touchable "present evidence" button, which
-the game hides on consoles (where A presents).
+`games/manosaba/` is 魔法少女ノ魔女裁判 (Switch, version 2.0.4b, Unity 6000.0.72f1 IL2CPP). Its cuts: one turns on Unity's touchscreen
+player setting so the game receives native touch input; two make the witch book show its touchable "present evidence" button, which the game
+hides on consoles (where A presents); one hands `Screen.SetResolution(int, int, bool)` to a host call, and `graphics.c` renders at most
+`DM_RENDER_HEIGHT` lines (the iOS render resolution setting).

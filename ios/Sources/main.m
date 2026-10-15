@@ -181,9 +181,33 @@ static void *boot_thread(void *arg) {
     plog("boot: dm_main returned %d", rc);
     return NULL;
 }
+// Graphics settings (Settings app → this app, Settings.bundle): dm.fps 60 / 30, dm.render_height 0 (the game's own) / 900 / 720 / 540, dm.metalfx.
+// At start they become DM_FPS / DM_RENDER_HEIGHT / DM_UPSCALE, unless a launch already set those (devicectl --environment, tests). Frame rate and
+// MetalFX also follow a change made while the game runs (on returning to it); the render resolution is read by the game once, at startup.
+void mtl_fps_set(int fps); void mtl_upscale_set(int on);   // gfx/nvn/nvn_mtl.m
+static NSInteger g_gfx_fps, g_gfx_fx;   // the settings as last applied: a later change is applied, an unchanged one leaves a launch's variables alone
+static void gfx_settings_boot(void) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    g_gfx_fps = [d integerForKey:@"dm.fps"] == 30 ? 30 : 60; g_gfx_fx = [d boolForKey:@"dm.metalfx"];
+    NSInteger h = [d integerForKey:@"dm.render_height"];
+    if (g_gfx_fps == 30) setenv("DM_FPS", "30", 0);
+    if (h > 0) { char b[16]; snprintf(b, sizeof b, "%ld", (long)h); setenv("DM_RENDER_HEIGHT", b, 0); }
+    if (g_gfx_fx) setenv("DM_UPSCALE", "metalfx", 0);
+    plog("boot: graphics settings: %ld fps, render height %s, MetalFX %s", (long)g_gfx_fps, getenv("DM_RENDER_HEIGHT") ?: "the game's", g_gfx_fx ? "on" : "off");
+}
+static void gfx_settings_refresh(void) {
+    if (!g_host_up) return;
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSInteger fps = [d integerForKey:@"dm.fps"] == 30 ? 30 : 60, fx = [d boolForKey:@"dm.metalfx"];
+    if (fps != g_gfx_fps) { g_gfx_fps = fps; mtl_fps_set((int)fps); }
+    if (fx != g_gfx_fx) { g_gfx_fx = fx; mtl_upscale_set((int)fx); }
+}
 static void host_start(NSString *romfs) {
     if (g_host_up) return;
     g_host_up = 1; plog("boot: scene in the foreground, starting the host");
+    gfx_settings_boot();
+    [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *n) { (void)n; gfx_settings_refresh(); }];
     boot_prepare(romfs);
     dm_host_preload_start(g_argc, g_argv);   // module loading and relocation on a background thread, alongside the rest of the UI setup
     front_ios_lifecycle_install();
@@ -260,7 +284,7 @@ static void host_start(NSString *romfs) {
     if (!g_host_up) host_start(self.romfs);
     front_ios_focus_event(2);
 }
-- (void)sceneDidBecomeActive:(UIScene *)s { (void)s; dm_log_overlay_refresh(); if (g_host_up) front_ios_focus_event(3); }
+- (void)sceneDidBecomeActive:(UIScene *)s { (void)s; dm_log_overlay_refresh(); gfx_settings_refresh(); if (g_host_up) front_ios_focus_event(3); }
 // Scene gone / app terminating: orderly host shutdown. (Swiping away a suspended app is a SIGKILL: neither of these runs.)
 - (void)sceneDidDisconnect:(UIScene *)s { (void)s; if (g_host_up) dm_host_shutdown("iOS scene disconnected"); }
 @end
