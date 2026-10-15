@@ -17,6 +17,8 @@ run: \
 	$(B)/t_oe \
 	$(B)/t_romfs_validate \
 	$(B)/t_swkbd \
+	$(B)/t_thread_exit \
+	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
 	$(B)/t_touch
 	$(B)/t_altstack
@@ -32,6 +34,11 @@ run: \
 	$(B)/t_oe 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
 	$(B)/t_swkbd
+	$(B)/t_thread_exit
+	@status=0; $(B)/t_thread_exit_old > $(B)/t_thread_exit_old.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "touched the retired guest stack" $(B)/t_thread_exit_old.log; then \
+	   cat $(B)/t_thread_exit_old.log; echo "t_thread_exit_old: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_thread_exit_old: the pre-fix exit faults on the retired guest stack, as expected"
 	$(B)/t_thread_leak
 	$(B)/t_touch
 
@@ -66,6 +73,11 @@ $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_swkbd.c ../hle_swkbd.c
+T_THREAD_EXIT_SRC = t_thread_exit.c t_thread_exit_guest.S ../hle_thread.c ../thread.c ../entry.S
+$(B)/t_thread_exit: $(T_THREAD_EXIT_SRC) ../dm.h | $(B)
+	clang -O1 -g -Wall -Wno-unused-function -I.. -o $@ $(T_THREAD_EXIT_SRC)
+$(B)/t_thread_exit_old: $(T_THREAD_EXIT_SRC) ../dm.h | $(B)
+	clang -O1 -g -Wall -Wno-unused-function -DDM_TEST_EXIT_ON_GUEST_STACK -I.. -o $@ $(T_THREAD_EXIT_SRC)
 $(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_thread_leak.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h ../game.h | $(B)

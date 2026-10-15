@@ -12,6 +12,7 @@
 #include "dm.h"
 #include <errno.h>
 #include <sched.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -49,6 +50,10 @@ typedef struct thr {
     uint64_t nsvc;             // SVC count (for the state dump)
     mach_port_t mport;         // Host thread port (to get CPU time)
     uint32_t qos;
+    // Host context saved in thread_main before switching to the guest stack. ExitThread jumps back here before publishing the exit: the SDK unmaps
+    // the guest's alias stack as soon as WaitThread returns, so the publication and the pthread TSD destructors must run on the host pthread stack
+    sigjmp_buf host_exit;
+    int host_exit_valid;       // Touched only by the owning thread; the main thread (svc_thread_main_init) never has a saved context
     // Pausing (SetThreadActivity / GetThreadContext3, used by the IL2CPP GC to stop the world): see the "thread pausing" section of this file
     uint64_t tsd;              // This thread's tpidrro_el0 (TSD base): to read the K18 (guest x18) / KTLS (tpidr_el0) slots
     _Atomic int in_svc;        // Currently inside an svc gate (set / cleared on gate_dispatch entry / exit)
@@ -260,8 +265,25 @@ uint64_t svc_thread_context3(uint64_t *regs) { regs[0] = get_context3((uint8_t *
 extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);   // entry.S
 void crash_thread_init(void);
 void guest_thread_init(void);   // thread.c: the single place that sets the per-thread TSD slots (gate, x18, TLS, TLR)
+static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads chain and free
+    for (thr_t **p = &g_all; *p; p = &(*p)->all) if (*p == t) { *p = t->all; break; }
+    pthread_cond_destroy(&t->cv); free(t);
+}
+static const char *thr_name(thr_t *t, char *buf, size_t n);
+static void wake_sync_waiters(void);
+// Publish the exit: record the time, mark exited and wake synchronization waiters. Once G is released a waiter may close the handle and free t,
+// and the guest may unmap the guest stack, so the caller must neither touch t nor run on the guest stack afterwards
+static void thread_publish_exit(thr_t *t) {
+    t->exit_ns = now_ns();
+    pthread_mutex_lock(&G);
+    t->exited = 1;
+    wake_sync_waiters();
+    pthread_setspecific(g_keythr, NULL);
+    if (t->closed) thr_free(t);
+    pthread_mutex_unlock(&G);
+}
 static void *thread_main(void *p) {
-    thr_t *t = p;
+    thr_t *const t = p;   // Never modified, so its value is well defined after siglongjmp
     pthread_setspecific(g_keythr, t);
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
@@ -271,23 +293,25 @@ static void *thread_main(void *p) {
     crash_thread_init();
     guest_thread_init();
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); pthread_mutex_unlock(&G);
+    // ExitThread lands here through siglongjmp, back on this host stack with the callee-saved registers restored; the abandoned guest frames need
+    // no unwinding (the SDK has finished its own teardown before ExitThread). The signal mask is not saved or restored
+    if (sigsetjmp(t->host_exit, 0)) {
+        t->host_exit_valid = 0;
+        thread_publish_exit(t);
+        return NULL;   // pthread TSD destructors (TLS / TLR blocks, the signal alternate stack) run on this host stack
+    }
+    t->host_exit_valid = 1;
     dm_thread_enter(t->entry, t->arg, t->stack_top);   // Does not return: the guest must exit through ExitThread
     die("guest thread entry returned");
 }
-static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads chain and free
-    for (thr_t **p = &g_all; *p; p = &(*p)->all) if (*p == t) { *p = t->all; break; }
-    pthread_cond_destroy(&t->cv); free(t);
-}
-static const char *thr_name(thr_t *t, char *buf, size_t n);
-static void thread_exit(thr_t *t) {
-    t->exit_ns = now_ns();
-    // No logging here: the exit happens on the guest thread's own stack (some are only a dozen or so KiB), and a printf with floating point would blow the stack (real-device smoke test: SIGBUS when LibcurlResolver exits, backtrace fprintf → __dtoa). Only the time is recorded, and it is printed later in the state dump
-    pthread_mutex_lock(&G);
-    t->exited = 1;
-    for (thr_t *w = g_wait; w; ) { thr_t *n = w->next; if (w->wkind == 4) wake(w, -1); w = n; }   // Synchronization waiters re-check
-    pthread_setspecific(g_keythr, NULL);
-    if (t->closed) thr_free(t);
-    pthread_mutex_unlock(&G);
+// ExitThread. A thread started by thread_main leaves the guest stack first, doing nothing on it before the jump (no clock reads, logging or locks):
+// the guest stack can be a dozen KiB and is unmapped as soon as a waiter returns. The main thread runs nnMain on its native host stack, so it
+// publishes in place and exits. (Fix from TommyLau/botw-mobile 4a9b641, MIT; upstream d2r-mobile published and exited on the guest stack.)
+static _Noreturn void thread_exit(thr_t *t) {
+#ifndef DM_TEST_EXIT_ON_GUEST_STACK   // negative control of the unit test t_thread_exit only: publishes and exits on the guest stack as before the fix
+    if (t->host_exit_valid) siglongjmp(t->host_exit, 1);
+#endif
+    thread_publish_exit(t);
     pthread_exit(NULL);
 }
 void dm_thread_returned(void) { die("guest thread entry function returned (Horizon requires ExitThread)"); }
