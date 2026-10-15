@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 module_t g_mod[MAX_MOD];
 int g_nmod;
@@ -56,5 +57,34 @@ int main(void) {
         nvn_dirty_remove_range(live[i]);
         munmap(live[i], 4096);
     }
+
+    // Adjacent pools sharing a host page (pools are 4 KB aligned, host pages 16 KB). From seedds/nxnative c2c0105 (MIT): there, the first page of
+    // an ASTC texture pool was shared with a small preceding pool, judged untracked, and the textures were re-uploaded on every use
+    size_t pg = (size_t)getpagesize();
+    uint8_t *blk = mmap(NULL, 4 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (blk == MAP_FAILED) { perror("mmap"); exit(2); }
+    uint8_t *pa = blk, *pb = blk + pg - 0x1000;               // pool A covers the start of page 0, pool B starts in the last 4 KB of page 0
+    size_t na = pg - 0x1000, nb = 2 * pg, tex = pg + 0x800;   // the texture in B spans the shared page and the next one
+    nvn_dirty_add_range(pa, na);
+    nvn_dirty_add_range(pb, nb);
+    EXPECT("shared page: a texture in the later pool is tracked", 1, nvn_dirty_tracked(pb, tex));
+    nvn_dirty_protect(pb, tex);
+    stamp = nvn_dirty_now();
+    EXPECT("shared page: protected, nobody writes: clean", 0, nvn_dirty_since(pb, tex, stamp));
+    pb[0x10] = 3;
+    EXPECT("shared page: the game writes B's part: B's texture dirty", 1, nvn_dirty_since(pb, tex, stamp));
+    nvn_dirty_protect(pb, tex);
+    stamp = nvn_dirty_now();
+    pa[0x10] = 4;   // same host page, A's part: the page is read-only, the fault must be claimed through B's range or it is taken for a crash
+    EXPECT("shared page: the game writes A's part: B's texture dirty (conservative)", 1, nvn_dirty_since(pb, tex, stamp));
+    nvn_dirty_protect(pb, tex);
+    stamp = nvn_dirty_now();
+    dm_guest_write_prepare(pa, 0x20); pa[0x20] = 5;   // the host writes into A (a file read, a GPU result): the shared page must release B's protection too
+    EXPECT("shared page: host write into A: B's texture dirty", 1, nvn_dirty_since(pb, tex, stamp));
+    nvn_dirty_remove_range(pb);
+    EXPECT("shared page: A still tracked after B is destroyed (matched by pool start)", 1, nvn_dirty_tracked(pa, na));
+    EXPECT("shared page: B no longer tracked after it is destroyed", 0, nvn_dirty_tracked(pb, tex));
+    nvn_dirty_remove_range(pa);
+    munmap(blk, 4 * pg);
     return g_fail != 0;
 }
