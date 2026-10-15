@@ -1739,12 +1739,6 @@ static pthread_mutex_t g_rmu = PTHREAD_MUTEX_INITIALIZER;
 // ---------- Shader mapping table: Switch control section hash → PC metallib (produced by gfx/tools/shader_map.py) ----------
 static NSMutableDictionary<NSString *, NSArray *> *g_shmap;
 static NSString *g_shmap_path, *g_msl_dir;
-static NSString *exe_rel(const char *rel) {
-    char buf[4096]; uint32_t n = sizeof buf;
-    if (_NSGetExecutablePath(buf, &n)) return nil;
-    char *dir = dirname(buf);
-    return [NSString stringWithFormat:@"%s/%s", dir, rel];
-}
 // Shader stage map (gfx/tools/shmap_from_capture.py): Switch control section key → stage; the shaders themselves are translations of the game's own
 // Switch shaders built offline by gfx/tools/dmsh_build.py (<key>_b.metallib + reflection JSON)
 static void shmap_load(void) {
@@ -1763,7 +1757,7 @@ static void shmap_load(void) {
     g_shmap_path = path;
     const char *m = getenv("DM_MSL_DIR");
     // Library directory = <DM_MSL_DIR or default cache>/b-<translation chain version>: the version comes from this source tree's dmsh_chain.h (tools/dmsh_chain.py); a host built from an old source tree only accepts libraries of the old version
-    g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [NSString stringWithFormat:@"%s%s/build/cache/metal_shader_cache", getenv("DM_ROOT") ?: getenv("HOME"), getenv("DM_ROOT") ? "" : "/dm-work"], DMSH_CHAIN];
+    g_msl_dir = [NSString stringWithFormat:@"%@/b-%s", m ? @(m) : [@(getenv("DM_ROOT") ?: getenv("HOME")) stringByAppendingPathComponent:getenv("DM_ROOT") ? @"build/cache/metal_shader_cache" : @"dm-work/build/cache/metal_shader_cache"], DMSH_CHAIN];
     if (![NSFileManager.defaultManager fileExistsAtPath:g_msl_dir]) MLOG("[red] shader library directory %s does not exist: translation chain version %s of this source tree has not been packaged yet (gfx/tools/dmsh_build.py)", g_msl_dir.UTF8String, DMSH_CHAIN);
     NSString *cp = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"c1_full.tsv"];   // Same directory as the mapping table (Mac: gfx/nvn; iOS: dm/ inside the App, copied along by run.sh)
     NSString *ct = cp ? [NSString stringWithContentsOfFile:cp encoding:NSUTF8StringEncoding error:nil] : nil;

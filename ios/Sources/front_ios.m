@@ -147,7 +147,7 @@ static UIViewController *top_controller(void) {   // key window first; else a wi
 int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
     if (!g_layer) return -1;
     NSString *t = title && *title ? @(title) : @"Enter text";
-    NSString *msg = [NSString stringWithFormat:@"%s%s%s", sub ? sub : "", sub && *sub && guide && *guide ? "\n" : "", guide ? guide : ""];
+    NSString *msg = [NSString stringWithFormat:@"%@%@%@", sub ? @(sub) : @"", sub && *sub && guide && *guide ? @"\n" : @"", guide ? @(guide) : @""];
     NSString *init = initial ? @(initial) : @"", *ph = guide && *guide ? @(guide) : nil;
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     __block int r = 0; __block NSString *text = nil;

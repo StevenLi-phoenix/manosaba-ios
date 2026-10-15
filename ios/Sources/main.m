@@ -241,9 +241,9 @@ static void host_start(NSString *romfs) {
     DmMissingVC *m = [DmMissingVC new];
     __weak SceneDelegate *ws_ = self; m.retry = ^{ [ws_ showGameOrMissing:YES]; };
     self.window.rootViewController = m;
-    m.label.text = [NSString stringWithFormat:@"%s %s\n\nThe game data is missing or incomplete:\n%s\n\nCopy the RomFS of your own copy of the game into the folder "
+    m.label.text = [NSString stringWithFormat:@"%@ %@\n\nThe game data is missing or incomplete:\n%@\n\nCopy the RomFS of your own copy of the game into the folder "
                     "\"RomFS\" of this app (Files app → On My iPhone), and the console's shared fonts into \"sysfont\". Then tap Retry.",
-                    dm_game.title, dm_game.version, why];
+                    @(dm_game.title), @(dm_game.version), @(why)];
 }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
     (void)s; (void)o;

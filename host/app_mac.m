@@ -18,7 +18,7 @@ static NSString *romfs_root(NSString *dir, NSString **why) {
         NSString *d = sub.length ? [dir stringByAppendingPathComponent:sub] : dir;
         if (dm_romfs_validate(d.fileSystemRepresentation, w, sizeof w)) return d;
     }
-    if (why) *why = [NSString stringWithFormat:@"\"%@\" is not the RomFS of %s %s: %s", dir.lastPathComponent, dm_game.title, dm_game.version, w];
+    if (why) *why = [NSString stringWithFormat:@"\"%@\" is not the RomFS of %@ %@: %@", dir.lastPathComponent, @(dm_game.title), @(dm_game.version), @(w)];
     return nil;
 }
 static void alert(NSString *title, NSString *text) {
@@ -30,7 +30,7 @@ static NSString *pick_romfs(NSString *first_why) {
     for (;;) {
         NSOpenPanel *p = [NSOpenPanel openPanel];
         p.canChooseDirectories = YES; p.canChooseFiles = NO; p.allowsMultipleSelection = NO; p.prompt = @"Use";
-        p.message = why ? [NSString stringWithFormat:@"%@\nChoose the RomFS folder again.", why] : [NSString stringWithFormat:@"Choose the RomFS folder of %s %s.", dm_game.title, dm_game.version];
+        p.message = why ? [NSString stringWithFormat:@"%@\nChoose the RomFS folder again.", why] : [NSString stringWithFormat:@"Choose the RomFS folder of %@ %@.", @(dm_game.title), @(dm_game.version)];
         if ([p runModal] != NSModalResponseOK) return nil;
         NSString *w = nil, *r = romfs_root(p.URL.path, &w);
         if (r) return r;

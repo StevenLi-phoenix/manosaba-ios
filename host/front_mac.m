@@ -64,7 +64,7 @@ static NSString *share_logs(NSString *to) {
     int n = 0; for (NSString *f in @[@"host.log", @"host.prev.log"]) { NSData *d = [NSData dataWithContentsOfFile:[logd stringByAppendingPathComponent:f] options:NSDataReadingMappedIfSafe error:nil]; if (d) { [scrub(d) writeToFile:[dir stringByAppendingPathComponent:f] atomically:YES]; n++; } }
     NSString *bt = [NSString stringWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"build.txt"] encoding:NSUTF8StringEncoding error:nil] ?: @"";
     char hw[64] = "?"; size_t hn = sizeof hw; sysctlbyname("hw.model", hw, &hn, NULL, 0); NSProcessInfo *pi = NSProcessInfo.processInfo;
-    NSString *info = [NSString stringWithFormat:@"%s %s (macOS) %@ (%@)\n%@\n%@\nmacOS %@\n%@  %.0f GB\n%@\n", dm_game.title, dm_game.version, ver, build, inf[@"CFBundleIdentifier"] ?: @"",
+    NSString *info = [NSString stringWithFormat:@"%@ %@ (macOS) %@ (%@)\n%@\n%@\nmacOS %@\n%@  %.0f GB\n%@\n", @(dm_game.title), @(dm_game.version), ver, build, inf[@"CFBundleIdentifier"] ?: @"",
         [bt stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet], pi.operatingSystemVersionString, @(hw), pi.physicalMemory / 1073741824.0,
         [NSLocale.preferredLanguages componentsJoinedByString:@","]];
     [[scrub([info dataUsingEncoding:NSUTF8StringEncoding]) copy] writeToFile:[dir stringByAppendingPathComponent:@"info.txt"] atomically:YES];
@@ -212,7 +212,7 @@ void front_run(void (*guest)(void)) {
         {   // menu bar: app (Quit Cmd-Q) / View (Full Screen Ctrl-Cmd-F) / Help (controls, share log)
             NSMenu *bar = [NSMenu new];
             NSMenu *(^add)(NSString *) = ^NSMenu *(NSString *t) { NSMenuItem *it = [NSMenuItem new]; [bar addItem:it]; NSMenu *m = [[NSMenu alloc] initWithTitle:t]; it.submenu = m; return m; };
-            [[add(@"") addItemWithTitle:[NSString stringWithFormat:@"Quit %s", dm_game.title] action:@selector(quit:) keyEquivalent:@"q"] setTarget:ctl];
+            [[add(@"") addItemWithTitle:[NSString stringWithFormat:@"Quit %@", @(dm_game.title)] action:@selector(quit:) keyEquivalent:@"q"] setTarget:ctl];
             NSMenuItem *fs = [add(@"View") addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]; fs.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
             NSMenu *hm = add(@"Help"); [[hm addItemWithTitle:@"Controls" action:@selector(keys:) keyEquivalent:@""] setTarget:ctl]; [[hm addItemWithTitle:@"Share Log…" action:@selector(share:) keyEquivalent:@""] setTarget:ctl];
             NSApp.mainMenu = bar;
@@ -272,7 +272,7 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
     dispatch_sync(dispatch_get_main_queue(), ^{
         NSAlert *a = [NSAlert new];
         a.messageText = title && *title ? @(title) : @"Input";
-        a.informativeText = [NSString stringWithFormat:@"%s%s%s", sub ? sub : "", sub && *sub && guide && *guide ? "\n" : "", guide ? guide : ""];
+        a.informativeText = [NSString stringWithFormat:@"%@%@%@", sub ? @(sub) : @"", sub && *sub && guide && *guide ? @"\n" : @"", guide ? @(guide) : @""];
         [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
         NSTextField *f = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
         f.stringValue = initial ? @(initial) : @"";

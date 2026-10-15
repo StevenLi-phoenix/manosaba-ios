@@ -88,4 +88,5 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_LANG` | Override the profile's language |
 | `DM_MOVIE=1` (`2` = trace), `DM_TOUCH_LOG=1`, `DM_FS=1`, `DM_THROWLOG=1`, `DM_HLECOUNT=<file>` | Movie, touch, file system, managed exception and HLE call logging |
 
-Graphics switches are listed in [gfx/README.md](../gfx/README.md).
+The Mac app (`tools/mac_app.sh`) gets no shell environment when started from Finder; pass variables with `open --env DM_NVN_SHOT=… <app>` or run
+`<app>/Contents/MacOS/<id>` directly. Graphics switches are listed in [gfx/README.md](../gfx/README.md).
