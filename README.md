@@ -21,6 +21,11 @@ Verified on a Mac (Apple silicon, macOS 26) and on an iPhone 17 Pro (iOS 26), in
 - boot, title screen, new game, story scenes with sprites, CG, text and UI, the opening movie, a trial including presenting evidence;
 - native touch input (one rewriter rule turns on Unity's touchscreen device): scripted touches on the Mac, by hand on the iPhone;
 - saving and loading, with transactional commits; iCloud sync of the save files (needs a paid developer account's entitlements; not tested);
+- memory over a long session: finalized render targets used to stay alive in the texture ID view cache (about 800 MB within three minutes of a
+  trial on the Mac; an iPhone session ended without a crash report after about 40 minutes near the memory limit). Fixed: a 16-minute iPhone
+  session through scene changes and a trip to the background stayed between 1.2 and 1.5 GB resident, with no upward trend;
+- graphics settings in the Settings app (frame rate 60 / 30 fps, render resolution, MetalFX upscaling): 720p with MetalFX used on the iPhone;
+  30 fps not yet tried there. On the Mac the render resolution barely changes this game's GPU load; 30 fps is the setting that lowers it;
 - rewrite equivalence: `verify/regress.sh --fuzz` passes on all three modules.
 
 Not verified or known open: compute shader dispatch at run time (the game's compute shaders are Unity's built-in skinning, blend shape, virtual
