@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PreferenceSpecifiers</key>
+	<array>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Diagnostics</string>
+			<key>FooterText</key>
+			<string>Shows the last lines of the app's log over the game. Touches pass through it.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Show log on screen</string>
+			<key>Key</key>
+			<string>dm.log_overlay</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Only [red] lines</string>
+			<key>Key</key>
+			<string>dm.log_overlay_red</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Lines</string>
+			<key>Key</key>
+			<string>dm.log_overlay_lines</string>
+			<key>DefaultValue</key>
+			<integer>14</integer>
+			<key>Titles</key>
+			<array>
+				<string>8</string>
+				<string>14</string>
+				<string>24</string>
+			</array>
+			<key>Values</key>
+			<array>
+				<integer>8</integer>
+				<integer>14</integer>
+				<integer>24</integer>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

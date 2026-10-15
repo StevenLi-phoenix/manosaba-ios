@@ -48,8 +48,9 @@ What `build` puts into the app (`Gen/`, generated, not committed):
   what and where.
 - **Saves**: `Documents/save` (transactional, committed atomically). With iCloud entitlements the profile's `save_sync` files are synced
   (`host/cloud.m`).
-- **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Launched with `DM_LOG_PORT=<port>`, the
-  app also serves its log over USB: `iproxy <local> <port>`, then `tools/logport.py tail <local>`.
+- **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Settings app → this app → "Show log on
+  screen" draws the last lines over the game while playing ("Only [red] lines", "Lines": 8 / 14 / 24; touches pass through). Launched with
+  `DM_LOG_PORT=<port>`, the app also serves its log over USB: `iproxy <local> <port>`, then `tools/logport.py tail <local>`.
 - **Lifecycle**: in the background the guest clock, audio and graphics are suspended and pending iCloud uploads are flushed.
 
 ## Files
@@ -58,6 +59,7 @@ What `build` puts into the app (`Gen/`, generated, not committed):
 |---|---|
 | `Sources/main.m` | App and scene delegates, log, finding the game data, starting the host |
 | `Sources/front_ios.m` | The front end (`host/front.h`): Metal layer, touches, controllers, lifecycle |
+| `Sources/log_overlay.m`, `Settings.bundle` | On-screen log and its switches in the Settings app |
 | `project.yml` | xcodegen spec; `tools/project_free.py` / `tools/project_m3.py` derive the free-account and iOS 18 variants |
 | `run.sh`, `tools/local_env.sh` | Build / install / launch; reads `local.env` (or `~/.config/dm-ios/local.env`) |
 | `tools/gen_build.py`, `tools/gen_embed.py` | Host sources from `host/Makefile`; the product embedded in the executable |

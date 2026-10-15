@@ -6,8 +6,16 @@ CUTS = {
     # each `mov w0, #constant; ret`). Input init 0x9d6240 builds the Input System backend 0x9d5920 with (0x50() controller styles, 0x60() controller
     # count, 0x20() touchscreen, 0x70()), and only when the touchscreen argument is 1 (0x9d5a2c) does it create the touchscreen device 0x9d5d40, whose
     # update 0x9d6070 reads nn::hid::GetTouchScreenStates<16> every frame. The game ships with 0x20 returning 0; returning 1 gives native touch
+    #
+    # Presenting evidence in a trial: the witch book page shows its "present" button (WitchTrialsButton) only off console. The shared
+    # WitchBookPageBase<,>.ControlPresentEvidenceUi 0x200c6e0 calls Show() 0x18ad1c0 when the mode is on and !Platform.IsConsole (0x21a8b00),
+    # otherwise Hide() 0x18ad210; on Switch the player presses A (Naninovel/Submit = <NPad>/buttonEast) instead, which a touch screen does not have.
+    # ProfilePage overrides it (0x191d520) to also turn the button's TrueShadow on under the same !IsConsole test. Both IsConsole calls answer 0
+    # here; the platform itself stays NintendoSwitch (CurrentPlatform also names the Addressables catalog path and selects the save configuration).
     'd81467ff90dcee10ab82759d16731cc1': [
         (0x20, 'e0031f2a', '20008052', 'player setting "touchscreen" 0x20: mov w0, wzr → mov w0, #1, so the Input System backend creates its touchscreen device'),
+        (0x191d5b0, '542d2294', '00008052', 'ProfilePage.ControlPresentEvidenceUi: bl Platform.IsConsole → mov w0, #0 (present button shadow as off console)'),
+        (0x200c734, 'f3700694', '00008052', 'WitchBookPageBase.ControlPresentEvidenceUi: bl Platform.IsConsole → mov w0, #0 (show the touchable present button)'),
     ],
 }
 OBS = {}

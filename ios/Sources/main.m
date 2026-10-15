@@ -30,10 +30,13 @@ void front_ios_lifecycle_install(void);
 void front_ios_focus_event(int ev);
 unsigned long long mtl_gpu_allocated_mb(void);
 void plog(const char *fmt, ...);
+void dm_log_overlay_attach(UIView *view);   // log_overlay.m
+void dm_log_overlay_refresh(void);
 
 // ---------- Log ----------
 static int g_log = -1, g_log_tee, g_log_pipe[2] = {-1, -1};
 static char g_log_path[1024];
+int dm_log_fd(void) { return g_log; }   // log_overlay.m reads the same file
 static void write_all(int fd, const char *p, size_t n) {
     while (n) { ssize_t w = write(fd, p, n); if (w > 0) { p += w; n -= (size_t)w; } else if (w < 0 && errno == EINTR) continue; else break; }
 }
@@ -230,6 +233,7 @@ static void host_start(NSString *romfs) {
         self.romfs = rf;
         DmGameVC *vc = [DmGameVC new]; vc.view = front_ios_view(ws.effectiveGeometry.coordinateSpace.bounds, ws.screen.nativeScale);
         self.window.rootViewController = vc;
+        dm_log_overlay_attach(vc.view);
         if (retry) { host_start(rf); front_ios_focus_event(2); front_ios_focus_event(3); }   // at launch sceneWillEnterForeground starts it
         return;
     }
@@ -256,7 +260,7 @@ static void host_start(NSString *romfs) {
     if (!g_host_up) host_start(self.romfs);
     front_ios_focus_event(2);
 }
-- (void)sceneDidBecomeActive:(UIScene *)s { (void)s; if (g_host_up) front_ios_focus_event(3); }
+- (void)sceneDidBecomeActive:(UIScene *)s { (void)s; dm_log_overlay_refresh(); if (g_host_up) front_ios_focus_event(3); }
 // Scene gone / app terminating: orderly host shutdown. (Swiping away a suspended app is a SIGKILL: neither of these runs.)
 - (void)sceneDidDisconnect:(UIScene *)s { (void)s; if (g_host_up) dm_host_shutdown("iOS scene disconnected"); }
 @end

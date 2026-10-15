@@ -26,6 +26,14 @@ reads `nn::hid` touch states. One `CUTS` rule in `rules.py` flips that constant 
 setting was located). After that, touches arrive in screen pixels; the host maps them through the window crop the game sets
 (`nvnWindowSetCrop`).
 
+## Console-only UI
+
+A game built for Switch may hide controls that a mouse or touch player needs, because the console player has buttons for them. manosaba's
+library asks `Platform.IsConsole` at run time (`Application.platform` → its own platform enum); the witch book hid its "present evidence" button
+that way, and on a phone there was no way to present. Find such checks by their call sites (`IsConsole`, `CurrentPlatform`, …) and flip only
+the UI ones with a cut: the same platform value often also selects asset catalog paths and the save configuration. The Input System action
+asset (a JSON string in `global-metadata.dat`, from the generated `*Actions` class) shows which console button an action is bound to.
+
 ## Other notes
 
 - **Graphics**: Unity binds vertex and fragment shaders as separate single-stage programs and copies NVN objects by value; the graphics layer
