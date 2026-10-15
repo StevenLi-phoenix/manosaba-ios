@@ -18,6 +18,7 @@ ssize_t pwrite(int, const void *, size_t, off_t);
 
 struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; } void dm_prof_mark(const char *s) { (void)s; }   // stubs for log timestamps and the read path (not used by the write path)
 void dm_prof_add(int id, uint64_t ns, uint64_t b) { (void)id; (void)ns; (void)b; } void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
+void dm_fs_save_poison(int e);
 extern int g_nfail, g_lasterr;                                        // front-end notification count (the strong implementation in t_fs_stub.c replaces the weak one in hle_fs.c)
 static int g_mode, g_calls;                   // 0 write normally; 1 always return 0; 2 write only 3 bytes the first time
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off) {
@@ -109,6 +110,56 @@ int main(void) {
     CHECK(h_fs_MountSave("save", NULL) == RES_OK, "remount");
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "new"), "working a is back to the committed new");
     snprintf(p, sizeof p, "%s/b", work); CHECK(same(p, "7"), "working b = the committed 7");
+
+    // From upstream d2r-mobile b94670c (MIT): failing steps of a save transaction no longer end the process
+    printf("6 failed steps do not exit (DM_TEST_FS_FAILAT)\n");
+    unsetenv("DM_TEST_FS_FAIL");
+    // 6a re-cloning after a refused commit fails: no exit, the working directory is left alone, the committed version is unchanged; the next commit
+    //    is refused again and re-clones; the transaction after that commits
+    setenv("DM_TEST_FS_FAILAT", "reclone:1", 1);
+    CHECK(write_save("save:/a", "bad") == RES_OK, "write a=bad");
+    dm_fs_save_poison(ENOSPC); int nf0 = g_nfail;
+    CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "refused (re-clone injected to fail), still running, front end told once");
+    snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "new"), "committed a is still new");
+    snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "bad"), "the working directory was not deleted (a is still bad)");
+    CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 2, "still tainted: the next commit is refused as well");
+    snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "new"), "this time the re-clone worked: working a is back to new");
+    snprintf(p, sizeof p, "%s.re", work); CHECK(access(p, F_OK) != 0, "no .re left over");
+    CHECK(write_save("save:/a", "good") == RES_OK && h_fs_Commit("save") == RES_OK, "next transaction writes a=good and commits");
+    snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "good"), "committed a = good");
+    // 6b writing the guest name after a rename fails and so does the undo: no exit; the file is in the transactional save, so this transaction's
+    //    commit is refused and the committed version is unchanged; after the re-clone everything works
+    setenv("DM_TEST_FS_FAILAT", "guestname:1,renameback:1", 1);
+    h_fs_CreateFile("save:/c", 0); CHECK(write_save("save:/c", "c") == RES_OK, "write c");
+    CHECK(h_fs_RenameFile("save:/c", "save:/d") != RES_OK, "rename c → d fails (both steps injected), still running");
+    nf0 = g_nfail; CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "this transaction's commit is refused");
+    snprintf(p, sizeof p, "%s/c", save); CHECK(access(p, F_OK) != 0, "no c in the committed directory");
+    snprintf(p, sizeof p, "%s/d", save); CHECK(access(p, F_OK) != 0, "no d in the committed directory");
+    snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "good"), "committed a is still good");
+    CHECK(write_save("save:/a", "ok2") == RES_OK && h_fs_Commit("save") == RES_OK, "the next transaction commits");
+    // 6c cloning the working directory at mount fails: no exit; the committed directory is mounted read-only. Reads work, writes fail, commits are
+    //    no-ops, the committed version is unchanged, the front end is told once; the next normal mount works as before
+    setenv("DM_TEST_FS_FAILAT", "mountclone:1", 1); g_nmnt = 0; nf0 = g_nfail;
+    snprintf(p, sizeof p, "rm -rf '%s'", work); system(p);
+    CHECK(h_fs_MountSave("save", NULL) == RES_OK && g_nfail == nf0 + 1, "the mount succeeds, the front end is told once (%d times)", g_nfail - nf0);
+    CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok2"), "the committed a=ok2 reads on the read-only mount (read %s)", got);
+    CHECK(write_save("save:/a", "zzz") != RES_OK, "writes fail");
+    // 6d (this host): creating what exists on a read-only mount answers "already exists"; null handles (a failed open) fail cleanly
+    CHECK(h_fs_CreateFile("save:/a", 0) == RES_PATH_EXISTS, "CreateFile of an existing file on the read-only mount → PathAlreadyExists");
+    CHECK(h_fs_CreateFile("save:/zz", 0) == RES_FAIL, "CreateFile of a new file on the read-only mount → failure");
+    CHECK(h_fs_CreateDirectory("save:/a") == RES_PATH_EXISTS, "CreateDirectory over an existing entry → PathAlreadyExists");
+    { size_t n0 = 99; int64_t sz0 = -1, dn = 99; DirectoryEntry de[2];
+      CHECK(h_fs_ReadFile(&n0, 0, 0, got, sizeof got) == RES_FAIL && n0 == 0, "ReadFile on the null handle → failure, 0 bytes");
+      CHECK(h_fs_WriteFile(0, 0, "x", 1, NULL) == RES_FAIL, "WriteFile on the null handle → failure");
+      CHECK(h_fs_GetFileSize(&sz0, 0) == RES_FAIL && h_fs_SetFileSize(0, 1) == RES_FAIL, "GetFileSize / SetFileSize on the null handle → failure");
+      h_fs_CloseFile(0);
+      CHECK(h_fs_ReadDirectory(&dn, de, 0, 2) == RES_FAIL && dn == 0, "ReadDirectory on the null handle → failure, 0 entries");
+      h_fs_CloseDirectory(0); CHECK(1, "CloseFile / CloseDirectory on the null handle return"); }
+    CHECK(h_fs_Commit("save") == RES_OK, "commit is a no-op");
+    snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok2"), "committed a is still ok2");
+    unsetenv("DM_TEST_FS_FAILAT"); g_nmnt = 0;
+    CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "without the injection the remount is transactional again: a=ok3 commits");
+    snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "committed a = ok3");
 
     // Language switch rewriting the settings file (settings_lang_apply): expected values computed by hand from the rule -- only when it "does not match the switch" are Language / VoiceLanguage changed to 0 (English) or 8 (Simplified Chinese); other keys and other languages are untouched
 
