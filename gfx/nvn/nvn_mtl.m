@@ -4939,6 +4939,7 @@ static struct {   // present thread only
 #endif
     id old[8]; int old_i;   // replaced scalers and outputs: kept for four more replacements (at most 3 presents are in flight, one replacement per present)
     int broken, state;      // broken: MetalFX unavailable here, bilinear from now on; state: what was logged last (1 upscaling, 2 not needed, 3 crop not at origin)
+    NSUInteger log_cw, log_ch, log_ow, log_oh;   // the content → output sizes last logged
 } g_fx;
 static void fx_retire(id o) {
     if (!o) return;
@@ -4983,7 +4984,7 @@ static int fx_ready(id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
 #if !DM_NVN_M3
     [g_fx.rs addAllocation:out]; [g_fx.rs commit];
 #endif
-    MLOG("MetalFX spatial upscaling %lux%lu → %lux%lu (format %lu)", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh, (unsigned long)src.pixelFormat);
+    MLOG("MetalFX spatial scaler for a %lux%lu texture → %lux%lu (format %lu)", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh, (unsigned long)src.pixelFormat);
     return 1;
 }
 static void fx_state(int st) {
@@ -5009,6 +5010,10 @@ static id<MTLTexture> fx_apply(CBUF cb, id<MTLTexture> src0, const int crop[4], 
     if (ow <= cw && oh <= ch) { fx_state(2); return nil; }
     if (!fx_ready(src, ow, oh)) return nil;
     fx_state(1);
+    if (cw != g_fx.log_cw || ch != g_fx.log_ch || ow != g_fx.log_ow || oh != g_fx.log_oh) {   // the crop changes without a new scaler (e.g. the game lowers its resolution)
+        g_fx.log_cw = cw; g_fx.log_ch = ch; g_fx.log_ow = ow; g_fx.log_oh = oh;
+        MLOG("MetalFX upscales the game's %lux%lu picture to %lux%lu on screen", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh);
+    }
     id<MTLFXSpatialScalerBase> sc = g_fx.scaler;
     sc.colorTexture = src; sc.inputContentWidth = cw; sc.inputContentHeight = ch; sc.outputTexture = g_fx.out;
 #if DM_NVN_M3
