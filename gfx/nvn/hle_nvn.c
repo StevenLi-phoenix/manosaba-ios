@@ -914,12 +914,18 @@ static const char *const g_nops[] = {
     "nvnCommandBufferDispatchComputeIndirect",
     "nvnCommandBufferSetDepthBounds",
     "nvnCommandBufferDownsampleTextureView",
-    "nvnCommandBufferWaitSync",
+    "nvnCommandBufferWaitSync",    // A GPU-side wait on a sync object (CPU waits go through nvnSyncWait, which really waits on the fence). Sync objects come only
+                                   // from QueueFenceSync and WindowAcquireTexture, whose fence value is "the highest already submitted when recorded", and the
+                                   // command buffer holding WaitSync is submitted after it to the same queue. There is one Metal command stream queue
+                                   // (stream_queue_once in nvn_mtl.m): Metal 4 puts a "wait for all earlier stages on the queue" barrier at the start of each
+                                   // encoder, and the older API tracks every resource (useResource for argument block references), so both are already in
+                                   // order and a no-op is correct. A second queue (async compute, say) would make this a real wait
     "nvnCommandBufferSetShaderScratchMemory",
     "nvnCommandBufferPushDebugGroupDynamic",
     "nvnCommandBufferPopDebugGroup",
     "nvnCommandBufferInsertDebugMarkerDynamic",
-    "nvnCommandBufferWaitEvent",
+    "nvnCommandBufferWaitEvent",   // Waits for an earlier SignalEvent in the same command stream or a CPU EventSignal. One queue executes in order and the GPU
+                                   // never passes earlier commands, so a no-op is correct (waiting for a signal issued later would hang a real Switch too)
     "nvnWindowFinalize",
     "nvnCommandBufferSaveZCullData", "nvnCommandBufferRestoreZCullData",   // ZCull: see the textures section
     "nvnCommandBufferSetPointSize",   // Point size comes from the shader's [[point_size]] output (handled by the translation chain)

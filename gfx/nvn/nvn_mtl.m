@@ -82,6 +82,10 @@ static id<MTLCommandQueue> g_q;
 static id<MTL4CommandQueue> g_q4;
 static dispatch_queue_t g_feedback_q;
 #endif
+// Only one command stream queue: the game's command buffers and the presents all go to it (Metal 4: g_q4; older API: g_q; in Metal 4 builds g_q only
+// serves CPU-synchronous readback / screenshots / teardown). WaitSync and WaitEvent being correct as no-ops rests on this (g_nops in hle_nvn.c):
+// every command stream queue is created through here, and a second one aborts
+static void stream_queue_once(void) { static int n; if (++n > 1) MDIE("[red] command stream queue #%d created: the no-op WaitSync / WaitEvent rely on a single queue (g_nops in hle_nvn.c); make them real waits before adding a queue", n); }
 static _Atomic uint32_t g_present_qos;
 #define ALLOC_MAX 8
 static int g_alloc_n, g_alloc_cur;   // in-flight slots of the main submission (Metal 4: one command allocator per slot; older API: used only to limit the number of in-flight submissions)
@@ -300,6 +304,9 @@ void mtl_init(void) {
     if (!g_dev) MDIE("no Metal device");
     if (!g_dev.hasUnifiedMemory) MDIE("a unified-memory device is required (zero-copy memory pools)");
     g_q = [g_dev newCommandQueue];
+#if DM_NVN_M3
+    stream_queue_once();
+#endif
     MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
     rd.initialCapacity = 4096;
     NSError *re = nil;
@@ -313,6 +320,7 @@ void mtl_init(void) {
     MTL4CommandQueueDescriptor *q4d = [MTL4CommandQueueDescriptor new]; q4d.feedbackQueue = g_feedback_q;
     g_q4 = [g_dev newMTL4CommandQueueWithDescriptor:q4d error:&re];
     if (!g_q4) MDIE("failed to create MTL4CommandQueue");
+    stream_queue_once();
     [g_q4 addResidencySet:g_res];
 #endif
     g_alloc_n = 3;
@@ -603,7 +611,13 @@ static void blit_note(void);   // Per-pass dump: a copy / buffer update ended th
 #if DM_NVN_M3
 static BENC blit(void) { blit_note(); rp_end(); if (!g_blit) { g_blit = enc_b_begin(g_cb); } return g_blit; }
 #else
-static BENC blit(void) { blit_note(); rp_end(); if (!g_blit) { g_blit = enc_b_begin(g_cb); [g_blit barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice]; } return g_blit; }
+// A reused blit encoder also needs a barrier between two copies: Metal 4 does not keep the commands of one encoder in recording order, and the
+// queue barrier at encoder creation covers only earlier encoders (Apple: "Synchronizing stages within a pass"). Without it a write-then-read or two
+// writes to one range may overlap (seen upstream in t_nvn 5c, once in three runs). The blit encoder is a compute encoder on Metal 4: both stages
+static BENC blit(void) { blit_note(); rp_end();
+    if (!g_blit) { g_blit = enc_b_begin(g_cb); [g_blit barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice]; }
+    else [g_blit barrierAfterEncoderStages:MTLStageBlit | MTLStageDispatch beforeEncoderStages:MTLStageBlit | MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice];
+    return g_blit; }
 #endif
 
 void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {

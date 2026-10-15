@@ -200,6 +200,32 @@ int main(void) {
         P(nvnMemoryPoolFinalize)(&hp); free(heap);
     }
 
+    // 5c. Consecutive copies in one blit encoder must keep recording order: Metal 4 does not order the commands within one encoder, so reusing the
+    //     encoder needs a barrier between copies (nvn_mtl.m blit()). Each round: A→D, B→D (two writes to one range: the later one must stay), D→E
+    //     (write then read: must read B). 16 rounds of 16 MiB blocks back to back make a reorder likely (from upstream d2r-mobile)
+    {
+        size_t big = 16u << 20, pgsz = 16384; int rounds = 16;
+        uint8_t *heap; posix_memalign((void **)&heap, pgsz, 4 * big);
+        uint8_t *ba = heap, *bb = heap + big, *bd = heap + 2 * big, *be = heap + 3 * big;
+        memset(ba, 0x11, big); memset(bb, 0x22, big); memset(bd, 0, big); memset(be, 0, big);
+        NVNmemoryPoolBuilder hb; NVNmemoryPool hp; P(nvnMemoryPoolBuilderSetDefaults)(&hb); P(nvnMemoryPoolBuilderSetStorage)(&hb, heap, 4 * big);
+        P(nvnMemoryPoolInitialize)(&hp, &hb);
+        P(nvnCommandBufferBeginRecording)(&cb);
+        for (int r = 0; r < rounds; r++) {
+            P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)ba, (NVNbufferAddress)bd, big, 0);
+            P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)bb, (NVNbufferAddress)bd, big, 0);
+            P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)bd, (NVNbufferAddress)be, big, 0);
+        }
+        NVNcommandHandle hc = P(nvnCommandBufferEndRecording)(&cb);
+        NVNsync sc; P(nvnSyncInitialize)(&sc, &dev);
+        P(nvnQueueSubmitCommands)(&q, 1, &hc); P(nvnQueueFenceSync)(&q, &sc, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
+        EXPECT("consecutive copies: wait satisfied after submit (1)", 1, P(nvnSyncWait)(&sc, 10000000000ull));
+        size_t bad_d = 0, bad_e = 0; for (size_t i = 0; i < big; i += 4096) { bad_d += bd[i] != 0x22; bad_e += be[i] != 0x22; }
+        EXPECT("two writes to one range: the later write B stays (4096 samples)", 0, bad_d);
+        EXPECT("write then read: the read sees the later write B (4096 samples)", 0, bad_e);
+        P(nvnMemoryPoolFinalize)(&hp); free(heap);
+    }
+
     // 6. Sync / window / present
     NVNsync s1, s2; P(nvnSyncInitialize)(&s1, &dev); P(nvnSyncInitialize)(&s2, &dev);
     EXPECT("wait on unfenced sync = timeout(2)", 2, P(nvnSyncWait)(&s1, 0));
