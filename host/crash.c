@@ -123,6 +123,21 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
         int is_write = (int)((uc->uc_mcontext->__es.__esr >> 6) & 1);   // The WnR bit of ESR
         for (int i = 0; i < g_nfault_hook; i++) if (g_fault_hook[i](si->si_addr, is_write, uc)) return;
     }
+    // Another thread may hold the stderr lock (stuck, or stopped in the middle of a write): the fprintf below would then hang with it, the
+    // process would neither exit nor say why, and the log would end mid-run with nothing. If the lock cannot be taken within 1 s, write a single
+    // line with write() (pc / lr as module offsets) and exit. ftrylockfile succeeds when this thread holds the lock itself (file locks are
+    // recursive). (From seedds/nxnative 03e7cfc, MIT.)
+    for (int i = 0; ftrylockfile(stderr); i++) {
+        if (i < 100) { usleep(10000); continue; }
+        char b[256]; int n = snprintf(b, sizeof b, "[dm] CRASH sig=%d (stderr held by another thread for 1 s: no register dump)", sig);
+        uint64_t at[2] = {uc->uc_mcontext->__ss.__pc, uc->uc_mcontext->__ss.__lr};
+        for (int k = 0; k < 2; k++) { module_t *m = module_of((void *)at[k]);
+            n += m ? snprintf(b + n, sizeof b - n, " %s=%s+%#llx", k ? "lr" : "pc", m->name, at[k] - (uint64_t)m->base) : snprintf(b + n, sizeof b - n, " %s=%#llx", k ? "lr" : "pc", at[k]); }
+        n += snprintf(b + n, sizeof b - n, "\n");
+        if (write(2, b, (size_t)n) < 0) {}
+        _exit(128 + sig);
+    }
+    funlockfile(stderr);
     fprintf(stderr, "[dm] CRASH sig=%d", sig);
     off("addr", (uint64_t)si->si_addr); off("pc", uc->uc_mcontext->__ss.__pc); off("lr", uc->uc_mcontext->__ss.__lr);
     fprintf(stderr, " sp=%#llx\n", uc->uc_mcontext->__ss.__sp);

@@ -10,6 +10,7 @@ run: \
 	$(B)/t_cloudsync \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
+	$(B)/t_crash_stderr \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
 	$(B)/t_hid_receipt \
@@ -27,6 +28,7 @@ run: \
 	TMPDIR="$(abspath $(B))" $(B)/t_cloudsync 2>/dev/null
 	$(B)/t_condvar
 	$(B)/t_condvar_old
+	$(B)/t_crash_stderr
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
@@ -55,6 +57,8 @@ $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -g -fsanitize=thread -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_cloudsync: t_cloudsync.c ../cloudsync.c ../cloud.h ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../cloudsync.c
+$(B)/t_crash_stderr: t_crash_stderr.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../crash.c
 $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
