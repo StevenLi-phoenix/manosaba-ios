@@ -1,9 +1,10 @@
-# Host build. GAME selects the game directory games/<GAME>/ (default manosaba): its game.json becomes gen/game_profile.c (tools/gen_game.py)
+# Host build. GAME selects the game directory games/<GAME>/ (default manosaba): its game.json becomes gen/<GAME>/game_profile.c (tools/gen_game.py)
 # and its C / Objective-C sources, if any, are built in. ios/tools/gen_build.py takes the iOS app's sources, include paths and frameworks from the
 # compile command below (make -n), so the iOS app builds the same host.
 GAME ?= manosaba
 DM_ROOT ?= $(HOME)/dm-work
 GAMEDIR := ../games/$(GAME)
+PROFILE := gen/$(GAME)/game_profile.c
 ifeq ($(wildcard $(GAMEDIR)/game.json),)
 $(error no game profile $(GAMEDIR)/game.json)
 endif
@@ -22,7 +23,7 @@ SRC = \
 	front_mac.m \
 	game.c \
 	gamepad.m \
-	gen/game_profile.c \
+	$(PROFILE) \
 	hle.c \
 	loader.c \
 	main.c \
@@ -41,17 +42,23 @@ FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework 
 INCLUDES = -I. -I../gfx/nvn/include -I$(GAMEDIR)
 .DEFAULT_GOAL := dmhost
 
-gen/game_profile.c: $(GAMEDIR)/game.json ../tools/gen_game.py
-	@mkdir -p gen
+$(PROFILE): $(GAMEDIR)/game.json ../tools/gen_game.py
+	@mkdir -p $(dir $@)
 	python3 ../tools/gen_game.py $< $@.tmp && mv $@.tmp $@
+profile: $(PROFILE)
+# The game the last host was built for, rewritten only when GAME changes: switching games relinks even when no source changed
+gen/last_game: FORCE
+	@mkdir -p gen; [ "$$(cat $@ 2>/dev/null)" = "$(GAME)" ] || echo "$(GAME)" > $@
+FORCE:
+.PHONY: FORCE profile
 
-dmhost: $(SRC) $(GFX) $(HDR)
+dmhost: $(SRC) $(GFX) $(HDR) gen/last_game
 	clang $(CFLAGS) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS)
 
 # Older-API host (graphics backend without Metal 4, macOS 15; see DM_NVN_M3 in gfx/nvn/nvn_mtl.m): same sources, one more switch. make dmhost_m3
 MACOS_MIN_M3 ?= 15.0
 CFLAGS_M3 = $(subst -mmacosx-version-min=$(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN_M3),$(CFLAGS)) -DDM_NVN_M3=1
-dmhost_m3: $(SRC) $(GFX) $(HDR)
+dmhost_m3: $(SRC) $(GFX) $(HDR) gen/last_game
 	clang $(CFLAGS_M3) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS)
 
 print-macos-min:

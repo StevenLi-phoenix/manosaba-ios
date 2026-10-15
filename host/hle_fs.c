@@ -49,7 +49,7 @@ static _Atomic uint64_t g_txn_first_ns;     // time of this transaction's first 
 // and the front end is notified (front_save_failed); the next transaction (the game's next full save rewrite) is attempted as usual and committed if it succeeds. g_save_poison = errno of the first failure in this transaction (0 = none).
 static _Atomic int g_save_poison;
 static void save_poison(int e) { int z = 0; atomic_compare_exchange_strong(&g_save_poison, &z, e ? e : EIO); }
-void dm_fs_save_poison(int e) { save_poison(e); }   // for the pre-commit hook: a side file (Chronicle / pouch) that failed to write also counts as a write failure of this transaction -- if the commit went ahead as usual, the items would no longer be in the character save and would not be in the side file either
+void dm_fs_save_poison(int e) { save_poison(e); }   // game.h: a side file written by the pre-commit hook that failed to write also counts as a write failure of this transaction -- if the commit went ahead as usual, the items would no longer be in the character save and would not be in the side file either
 // The default weak implementation only logs (Mac); the iOS front end provides a strong implementation of the same name that shows a native alert. Called on the game thread, the front end switches to the main thread itself
 __attribute__((weak)) void front_save_failed(int err) { LOG("front_save_failed(errno=%d): no front end handler (weak default)", err); }
 // DM_FSLOG=<file>: each ReadFile logs one TSV line "seconds since boot\tguest path\toffset\tlength\tguest buffer address" (which bytes boot read, for offline reverse lookup against the manifest)
@@ -222,8 +222,9 @@ static Result err_res(const char *op, const char *path) {
 // ---------- Mount ----------
 HLE_FORCE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", "fsp-srv; rom reads the host directory directly, minimal cache", Result, h_fs_QueryRomCache, size_t *out) { *out = 0x1000; return RES_OK; }
 HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", Result, h_fs_MountRom, const char *name, void *cache, size_t sz) {
-    (void)cache; (void)sz; char b[1024];
-    Result r = mount(name, envdir("DM_ROMFS", "data/switch/3.3.94012/Update/RomFS", b, sizeof b), 1);
+    (void)cache; (void)sz;
+    const char *rom = getenv("DM_ROMFS"); if (!rom) die("DM_ROMFS is not set and the game profile has no workspace.romfs");
+    Result r = mount(name, rom, 1);
     if (r == RES_OK && getenv("DM_ROMFS_OVERLAY")) {
         PATH_LOCK();
         for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name)) {
@@ -257,7 +258,8 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv; transactional save: the working tree
     int i = 0; while (i < g_nmnt && strcmp(g_mnt[i].name, name)) i++;
     if (i == g_nmnt || !g_mnt[i].commit[0]) { pthread_mutex_unlock(&g_lock); return RES_OK; }   // non-transactional mount: nothing to commit
     uint64_t tc0 = clock_gettime_nsec_np(CLOCK_MONOTONIC), tw0 = atomic_exchange(&g_txn_first_ns, 0);
-    uint64_t tc1 = clock_gettime_nsec_np(CLOCK_MONOTONIC);   // side files written into the working directory are swapped in atomically together with this commit
+    dm_game_save_precommit(g_mnt[i].dir);                     // game hook (game.h): side files written into the working directory are swapped in with this commit
+    uint64_t tc1 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
     int perr = atomic_exchange(&g_save_poison, 0);
     if (perr) {                                                         // a write failed in this transaction: refuse the commit, discard the working directory
         char torn[512] = ""; size_t tl = 0; DIR *d0 = opendir(g_mnt[i].dir); struct dirent *e0;   // record files truncated to 0 bytes (the damage that would enter the save if committed as usual)
@@ -287,7 +289,7 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv; transactional save: the working tree
     static int n; if (r == RES_OK) { uint64_t tc2 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
         LOG("save commit #%d: %s swapped into %s (%d save writes so far) (hook %llu us, clone + swap %llu us, %llu us since the first write of the transaction)", ++n, g_mnt[i].dir, g_mnt[i].commit, atomic_load(&g_save_writes),
             (unsigned long long)((tc1 - tc0) / 1000), (unsigned long long)((tc2 - tc1) / 1000), (unsigned long long)(tw0 ? (tc2 - tw0) / 1000 : 0)); atomic_fetch_add(&g_save_commits, 1);
-        if (g_dm_save_commit_hook) g_dm_save_commit_hook(g_mnt[i].commit); }   // iCloud sync (cloud_ios.m): called with the lock held, that side only takes a clonefile snapshot
+        if (g_dm_save_commit_hook) g_dm_save_commit_hook(g_mnt[i].commit); }   // iCloud sync (cloud.m): called with the lock held, that side only takes a clonefile snapshot
     pthread_mutex_unlock(&g_lock);
     return r;
 }
@@ -478,7 +480,7 @@ HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → close
 }
 
 // ---------- APIs other games use (Unity: RAM disk, read-without-count, directory counts, add-on content probing ...) ----------
-// Same mount table and host paths as above; D2R references none of them (HLE_FORCE_OPT)
+// Same mount table and host paths as above; optional takeovers (HLE_FORCE_OPT), since not every game imports them
 HLE_FORCE_OPT("_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", "fs library allocator: the host allocates nothing on the guest heap, ignored (the original asks fsp-srv about the access log first)", void, h_fs_SetAllocator, void *a, void *f) { (void)a; (void)f; }
 HLE_FORCE_OPT("_ZN2nn2fs25EnableGlobalFileDataCacheEPvm", "global file data cache: host reads use the page cache, ignored", void, h_fs_GlobalCache, void *buf, size_t sz) { (void)buf; (void)sz; }
 HLE_FORCE_OPT("_ZN2nn2fs20GetRamDiskBufferSizeEm", "RAM disk: contents in a host temporary directory, minimal guest buffer", size_t, h_fs_RamDiskBufSize, size_t sz) { (void)sz; return 0x1000; }

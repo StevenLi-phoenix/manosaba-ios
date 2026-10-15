@@ -54,8 +54,8 @@ for off, ob, nb, why in cuts:
     assert len(ob) == len(nb) and IMG[off:off + len(ob)] == ob, f'cut {off:#x}: original bytes differ ({bytes(IMG[off:off + len(ob)]).hex()})'
     IMG[off:off + len(nb)] = nb
 # Key page indices are fixed; the key page content is written by the loader as "actual key number × 8".
-KEYS = {'K18': 508, 'KTLS': 509, 'KTLR': 510, 'KGATE': 511, 'KRES0': 506, 'KRES1': 507, 'KASPECT': 505, 'KASPECTUI': 504}   # KRES0 / KRES1 / KASPECT / KASPECTUI: the four parameter slots of PARAMS (host: g_keyparam[0..3])
-KEY_INDEX = {k: i for i, k in enumerate(('K18', 'KTLS', 'KTLR', 'KGATE', 'KRES0', 'KRES1', 'KASPECT', 'KASPECTUI'))}
+# KPARAM0..3: the four parameter slots of PARAMS (host: g_keyparam[0..3])
+KEY_INDEX = {k: i for i, k in enumerate(('K18', 'KTLS', 'KTLR', 'KGATE', 'KPARAM0', 'KPARAM1', 'KPARAM2', 'KPARAM3'))}
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM); md.detail = True
 patch = bytearray(); fix = []; gates = []; stats = {}

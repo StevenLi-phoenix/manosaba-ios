@@ -1,41 +1,37 @@
-# 改写结构核对：不跑代码，逐字核对改写器产物。分母用独立反汇编器（llvm-objdump）重数，不依赖改写器自己的 capstone 扫描。
-# 用法：structck.py <改写产物目录> <模块> <NSO>     输出末行 STRUCT <模块> OK|FAIL ...，退出码 0/1
-# 核对项：
-#  ⓪ 已登记剪口（cuts.tsv）：构建号对得上，原映像该处 == 原字节、改写映像 == 新字节、理由非空，不与改写点 / 窗口重叠；剪口引入的宿主调用门（svc #N≥0x80）按 hle.h 登记行核号、偏移与形态（入口形 svc;ret 在函数入口 / 调用点形原指令是 bl 且目标符登记）
-#  ① 非 text 段除剪口外与原映像逐字节相同，映像尾到补丁区之间全 0
-#  ② text 改动的字 == 改写点头（sites.tsv 非 J 行 + 窗口起点）∪ text 内剪口，改写点头都是跳进补丁区的 B
-#  ③ 独立分母：llvm-objdump 读原 text，x18/w18 操作数、tpidr_el0 读写、tpidrro_el0 读、svc、cntpct/cntvct
-#     全部落在改写点或窗口内；反向，每个改写点都在独立集合里（窗口起点除外）
-#  ④ 补丁区里不再有 x18/w18、tpidr_el0、svc、cntpct/cntvct
-#  ⑤ 宿主门（svc / 计时）块逐字等于模板，gates.tsv 一一对上（返回点、种类、svc 号 / 目标寄存器、原地址）
-#  ⑧ 参数门（params.tsv）：原两字为 64 位 movz/movk 造常数、新两字 = mrs tpidrro / ldr 键槽、中间不碰该寄存器、区间无分支目标、键号登记、同键原值唯一
-#  ⑦ 已登记观测门（obs.tsv）：原映像该处 == 登记原指令字；原指令可搬（非 PC 相对 / 非分支 / 不涉 x18 / 不读写系统寄存器，capstone 判）；
-#     可在函数中间（门 ABI 全存回，gatefn 核）；不与改写点 / 窗口 / 剪口重叠；门块逐字 = 模板（svc 门同构前半 + 原指令 + b 回 off+4），gates.tsv 记 obs 行
-#  ⑩ 跳板出口：每个跳进补丁区的 b，补丁块回 text 的出口只能是 原处+4 / 吸收段尾 / 窗口尾 / 段内原指令的分支目标（已登记剪口放行并列出）
-#  ⑪ 剪口引入的分支门（hle.h 登记「分支门」行）：块逐字 = 模板、两路恢复 x8、gates.tsv 对上
-#  ⑥ 线程槽：表头四个键号互不相同且 < 512；补丁区每条 mrs xN, tpidrro_el0 之后（跳过不写 xN 的 adrp/add）都是 ldr/str xM,[xN,#键号×8]
-# Rewrite structural check: no code is run, the rewriter's build output is checked word by word. Denominators are recounted with an independent disassembler (llvm-objdump), not relying on the rewriter's own capstone scan.
-# Usage: structck.py <rewrite build output dir> <module> <NSO>     last output line STRUCT <module> OK|FAIL ..., exit code 0/1
+# Rewrite structural check: no code is run, the rewriter's build output is checked word by word. Denominators are recounted with an independent
+# disassembler (llvm-objdump; Xcode's by default, LLVM_BIN overrides), not relying on the rewriter's own capstone scan.
+# Usage: structck.py <build output dir> <module> <NSO>     last output line STRUCT <module> OK|FAIL ..., exit code 0/1
 # Checks:
-#  ⓪ Registered cuts (cuts.tsv): build ID matches, original image at that site == original bytes, rewritten image == new bytes, reason non-empty, no overlap with rewrite sites / windows; host-call gates introduced by cuts (svc #N≥0x80) have number, offset and form checked against the hle.h registry row (entry form svc;ret at a function entry / call-site form where the original instruction is bl and the target matches the registration)
+#  ⓪ Cuts (cuts.tsv): build ID matches, original image at that site == original bytes, rewritten image == new bytes, reason non-empty, no overlap with
+#     rewrite sites / windows; host calls introduced by cuts (svc #N, N = 0x80–0xff) are rewritten into gates and have entry form (svc ; ret at a function
+#     entry) or call-site form (a single bl replaced)
 #  ① Non-text segments are byte-for-byte identical to the original image except for cuts; everything from the end of the image to the patch area is 0
 #  ② Changed words in text == rewrite site heads (non-J rows of sites.tsv + window starts) ∪ cuts inside text; all rewrite site heads are a B into the patch area
 #  ③ Independent denominator: llvm-objdump reads the original text; x18/w18 operands, tpidr_el0 reads/writes, tpidrro_el0 reads, svc, cntpct/cntvct
 #     all fall within rewrite sites or windows; conversely, every rewrite site is in the independent set (except window starts)
 #  ④ The patch area no longer contains x18/w18, tpidr_el0, svc, cntpct/cntvct
 #  ⑤ Host gate (svc / timer) blocks equal the template word for word, and match gates.tsv one to one (return point, kind, svc number / destination register, original address)
-#  ⑧ Parameter gates (params.tsv): the two original words build a constant with 64-bit movz/movk, the two new words = mrs tpidrro / ldr key slot, the register is not touched in between, no branch target in the range, key number registered, a unique original value per key
-#  ⑦ Registered observation gates (obs.tsv): original image at that site == the registered original instruction word; the original instruction is relocatable (not PC-relative / not a branch / does not involve x18 / does not read or write system registers, judged by capstone);
-#     may be in the middle of a function (the gate ABI saves and restores everything, checked by gatefn); no overlap with rewrite sites / windows / cuts; the gate block = the template word for word (the same first half as an svc gate + original instruction + b back to off+4), gates.tsv records an obs row
-#  ⑩ Trampoline exits: for every b jumping into the patch area, the patch block's exits back to text may only be original site+4 / end of the absorbed span / end of the window / a branch target of an original instruction within the span (registered cuts are let through and listed)
-#  ⑪ Branch gates introduced by cuts (hle.h registry 「分支门」(branch gate) rows): block = template word for word, x8 restored on both paths, matches gates.tsv
-#  ⑥ Thread slots: the four key numbers in the header are mutually distinct and < 512; every mrs xN, tpidrro_el0 in the patch area is followed (skipping adrp/add that do not write xN) by ldr/str xM,[xN,#key number×8]
+#  ⑥ Thread slots: the key page indices in the header are the eight known keys, 0..7; every mrs xN, tpidrro_el0 in the patch area is followed (skipping
+#     adrp/add that do not write xN) by the key page indirect slot sequence, and the slot access counts match the sites
+#  ⑦ Observation gates (obs.tsv): original image at that site == the registered original instruction word; the original instruction is relocatable (not
+#     PC-relative / not a branch / does not involve x18 / does not read or write system registers, judged by capstone); may be in the middle of a function
+#     (the gate ABI saves and restores everything, checked by gatefn); no overlap with rewrite sites / windows / cuts; the gate block = the template word
+#     for word (the same first half as an svc gate + original instruction + b back to off+4), gates.tsv records an obs row
+#  ⑧ Parameter gates (params.tsv): the two original words build a constant with movz/movk, the two new words = trampoline branch / nop, the register is not
+#     touched in between, no branch target in the range, key registered, a unique original value per key, no constant mask downstream
+#  ⑨ Temporary registers: every non-original destination register in a patch block has a matching red-zone save/restore pair at the same offset
+#  ⑩ Trampoline exits: for every b jumping into the patch area, the patch block's exits back to text may only be original site+4 / end of the absorbed
+#     span / end of the window / a branch target of an original instruction within the span (cuts are let through and listed)
 import sys, os, re, struct, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 import nsoimg
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # 工作区根目录（游戏文件、产物、运行现场都在它下面） | Workspace root (game files, build outputs and run artifacts are all under it)
 
-LLVM = os.environ.get('LLVM_BIN', '/opt/homebrew/opt/llvm@23/bin')
+def _llvm_bin():
+    if os.environ.get('LLVM_BIN'): return os.environ['LLVM_BIN']
+    try: return os.path.dirname(subprocess.run(['xcrun', '--find', 'llvm-objdump'], capture_output=True, text=True, check=True).stdout.strip())
+    except (OSError, subprocess.CalledProcessError): sys.exit('structck: no llvm-objdump (install Xcode or set LLVM_BIN to a directory holding llvm-objdump)')
+LLVM = _llvm_bin()
 out_dir, mod, nso = sys.argv[1:4]
 orig = nsoimg.load(nso)
 h = nsoimg.header(out_dir, mod)
@@ -102,10 +98,7 @@ inwin = set(o for lo, hi in wins for o in range(lo, hi, 4))
 cuts = []; bid = None
 for l in open(f'{out_dir}/{mod}.cuts.tsv'):
     if l.startswith('# BUILD_ID'): bid = l.split()[-1]; continue
-    f = l.rstrip('\n').split('\t')
-    if len(f) == 4: f = f[:3] + ['全'] + f[3:]                      # 旧 4 列格式：作用域缺省「全」 | Old 4-column format: scope defaults to 「全」(all)
-    off, ob, nb, scope, why = f[:5]
-    if scope not in ('全', '仅宿主'): bad(f'剪口 {off} 作用域不认识：{scope}')
+    off, ob, nb, why = l.rstrip('\n').split('\t', 3)
     cuts.append((int(off, 16), bytes.fromhex(ob), bytes.fromhex(nb), why))
 if bid != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad(f'cuts.tsv 构建号 {bid} 与 NSO 不符')
 cutb = set()
@@ -116,49 +109,29 @@ for off, ob, nb, why in cuts:
         if pat[off + k:off + k + len(nb[k:k + 4])] != nb[k:k + 4]: bad(f'剪口 {off:#x}+{k} 改写映像不是新字节'); break
     if not why.strip() or len(ob) != len(nb): bad(f'剪口 {off:#x} 理由为空或长度不等')
     cutb |= set(range(off, off + len(ob)))
-# 剪口产生的宿主调用门：剪口新字节里解出 svc #N 的那个字（N ≥ 0x80，须在 hle.h 宿主调用号登记表 SVC_HOST_*）
-# Host-call gates produced by cuts: the word in the cut's new bytes that decodes to svc #N (N ≥ 0x80, must be in the hle.h host-call number registry SVC_HOST_*)
+# Host-call gates produced by cuts: a word in the cut's new bytes that decodes to svc #N (N = 0x80–0xff; the handler is registered at run time by the
+# game's hooks, host/hle.h dm_host_call_register). The form is read from the bytes:
+#   entry form: new bytes = svc #N ; ret at an eh_frame function entry - the gate saves and restores x30, ret returns to the original caller;
+#   call-site form: the original instruction is a bl and the cut replaces that single word with svc #N; the gate returns to off+4 (checked by the final b of the ⑤ template).
+#   Register rationale for the call-site form: at a bl, per AAPCS the callee could clobber x9..x17, x30 and NZCV anyway, so the gate's side effects on
+#   these do not change caller-visible behavior; the x0..x7 return values and x19..x28 / sp are preserved by the host gate contract (checked gate by gate by gatefn).
 _hostcall = {}
-_reg = {int(v, 16) for v in re.findall(r'SVC_HOST_\w+\s*=\s*(0x[0-9a-fA-F]+)', open(os.path.join(os.path.dirname(__file__), '..', 'host', 'hle.h')).read())}
+def _bl(w, o): return o + 4 * (((w & 0x3FFFFFF) ^ 0x2000000) - 0x2000000) if w & 0xFC000000 == 0x94000000 else None
+_fstarts = None
 for off, ob, nb, why in cuts:
     for k in range(0, len(nb), 4):
         w = int.from_bytes(nb[k:k + 4], 'little')
-        if w & 0xFFE0001F == 0xD4000001:
-            n = (w >> 5) & 0xFFFF; a = off + k
-            if n < 0x80: bad(f'剪口 {off:#x} 引入 svc #{n:#x}：0x80 以下是 Horizon 号段，剪口不得占用')
-            elif n not in _reg: bad(f'剪口 {off:#x} 引入 svc #{n:#x}：未在 hle.h 宿主调用号登记表')
-            elif sites.get(a) != 'svc': bad(f'剪口 {off:#x} 引入的 svc #{n:#x} 没被改写成宿主门（sites.tsv 无 {a:#x} svc）')
-            _hostcall[a] = n
-# 宿主调用门的形态按 hle.h 登记表那一行核（「号 … 剪口（main 偏移）」列）：
-#   入口形（「…入口」）：新字节 = svc #N ; ret，偏移是 eh_frame 函数入口——门保存恢复 x30，ret 回原调用者；
-#   调用点形（「bl 0x目标 …」）：原指令必须是 bl 且目标 = 登记目标，新字节 = 单条 svc #N，门返回 off+4（⑤ 模板的末条 b 核）。
-#   调用点形的寄存器理由：bl 处按 AAPCS 被调函数本可破坏 x9..x17、x16/x17、x30 与 NZCV，所以门在这些上的副作用不改变调用方可见行为；
-#   x0..x7 返回值与 x19..x28 / sp 由宿主门契约保持（gatefn 逐门核）。
-# The form of a host-call gate is checked against its row in the hle.h registry (the 「号 … 剪口（main 偏移）」(number ... cut (main offset)) column):
-#   entry form (「…入口」(... entry)): new bytes = svc #N ; ret, the offset is an eh_frame function entry - the gate saves and restores x30, ret returns to the original caller;
-#   call-site form (「bl 0x目标 …」(bl 0x<target> ...)): the original instruction must be bl with target = the registered target, new bytes = a single svc #N, the gate returns to off+4 (checked by the final b of the ⑤ template).
-#   Register rationale for the call-site form: at a bl, per AAPCS the callee could clobber x9..x17, x16/x17, x30 and NZCV anyway, so the gate's side effects on these do not change caller-visible behavior;
-#   the x0..x7 return values and x19..x28 / sp are preserved by the host gate contract (checked gate by gate by gatefn).
-_hreg = {}
-for l in open(os.path.join(os.path.dirname(__file__), '..', 'host', 'hle.h'), encoding='utf-8'):
-    m = re.match(r'//\s+(0x[0-9a-fA-F]+)\s.*?\s(0x[0-9a-fA-F]+)（([^）]*)', l)
-    if m: _hreg[int(m[1], 16)] = (int(m[2], 16), m[3])
-def _bl(w, o): return o + 4 * (((w & 0x3FFFFFF) ^ 0x2000000) - 0x2000000) if w & 0xFC000000 == 0x94000000 else None
-for a, n in _hostcall.items():
-    if n not in _hreg: bad(f'宿主调用 svc #{n:#x}：hle.h 登记表没有对应行'); continue
-    roff, form = _hreg[n]
-    if mod != 'main' or roff != a: bad(f'宿主调用 svc #{n:#x} 在 {mod} {a:#x}，登记表写 main {roff:#x}'); continue
-    nbw = next(c[2] for c in cuts if c[0] <= a < c[0] + len(c[2]))
-    mt = re.search(r'\bbl (0x[0-9a-fA-F]+)', form)
-    if mt:
-        t = _bl(W(orig, a), a)
-        if t is None: bad(f'宿主调用 svc #{n:#x} {a:#x}：登记为调用点形，原指令 {W(orig, a):#010x} 不是 bl')
-        elif t != int(mt[1], 16): bad(f'宿主调用 svc #{n:#x} {a:#x}：原 bl 目标 {t:#x} ≠ 登记 {mt[1]}')
-        if len(nbw) != 4: bad(f'宿主调用 svc #{n:#x} {a:#x}：调用点形剪口只许换这一条指令')
-    elif '入口' in form:
-        if a not in set(nsoimg.func_starts(orig, TE)): bad(f'宿主调用 svc #{n:#x} {a:#x}：登记为入口形，不是 eh_frame 函数入口')
-        if nbw[4:8] != (0xD65F03C0).to_bytes(4, 'little'): bad(f'宿主调用 svc #{n:#x} {a:#x}：入口形新字节不是 svc ; ret')
-    else: bad(f'宿主调用 svc #{n:#x}：登记表形态认不出（须含「bl 0x目标」或「入口」）：{form}')
+        if w & 0xFFE0001F != 0xD4000001: continue
+        n = (w >> 5) & 0xFFFF; a = off + k
+        if not 0x80 <= n <= 0xFF: bad(f'cut {off:#x} introduces svc #{n:#x}: host calls are 0x80–0xff (below 0x80 is Horizon\'s range)'); continue
+        if sites.get(a) != 'svc': bad(f'cut {off:#x}: svc #{n:#x} was not rewritten into a host gate (sites.tsv has no {a:#x} svc)')
+        _hostcall[a] = n
+        if nb[k + 4:k + 8] == (0xD65F03C0).to_bytes(4, 'little'):
+            if _fstarts is None: _fstarts = set(nsoimg.func_starts(orig, TE))
+            if a not in _fstarts: bad(f'host call svc #{n:#x} {a:#x}: entry form (svc ; ret) but not an eh_frame function entry')
+        elif _bl(W(orig, a), a) is not None:
+            if len(nb) != 4: bad(f'host call svc #{n:#x} {a:#x}: a call-site cut may replace only that one bl')
+        else: bad(f'host call svc #{n:#x} {a:#x}: neither entry form (svc ; ret at a function entry) nor call-site form (replaces a bl)')
 if cutb & {a + i for a in list(sites) + list(inwin) if a not in _hostcall for i in range(4)}: bad('剪口与改写点 / 窗口重叠')
 ncut_code = sum(1 for c in cuts if c[0] < TE); ncut_data = len(cuts) - ncut_code
 obs = []
@@ -216,7 +189,7 @@ def cached_dis(blob):
     """原映像是固定数据：相关行按 sha 缓存（llvm 换版本另起键），只在首次付反汇编的十来秒。 | The original image is fixed data: relevant lines are cached by sha (a new llvm version gets a new key), so the ten-odd seconds of disassembly are paid only the first time."""
     import hashlib, json
     cd = os.environ.get('DM_VCACHE', os.path.join(DM_ROOT, 'build/cache/dm/verify'))
-    ver = os.path.basename(os.path.dirname(LLVM.rstrip('/')))
+    ver = hashlib.sha256(subprocess.run([f'{LLVM}/llvm-objdump', '--version'], capture_output=True).stdout).hexdigest()[:8]
     p = os.path.join(cd, f'{mod}.{hashlib.sha256(blob).hexdigest()[:16]}.{ver}.json')
     if os.path.exists(p): return {int(k): v for k, v in json.load(open(p)).items()}
     d = llvm_dis(blob, 0)
@@ -323,33 +296,12 @@ for off, oid, ow, why in obs:
         bad(f'观测门块不符键页模板 {off:#x}'); continue
     if gates.get(ks[0] + 12) != ('obs', oid, off): bad(f'观测门行不符 {off:#x}：表 {gates.get(ks[0] + 12)}')
     seen.add(ks[0] + 12)
-# ⑪ 剪口引入的分支门（hle.h 登记表形态「分支门：x8≠0 跳 0x目标，否则执行原指令回 0x原处+4」）：原处换成 B 进补丁区，块逐字 =
-#   stp x8,xzr,[sp,#-16]! ; stp x29,x30,[sp,#-16]! ; 键页取 KGATE ; ldr x30,[x30] ; ldr x29,[sp] ; blr x30 ; ldp x29,x30 ; cbz w8,+12 ;
-#   ldp x8,xzr ; b 目标 ; ldp x8,xzr ; 原指令 ; b 原处+4 —— x8 两路都恢复为原值，宿主结果只用于选路；gates.tsv 记 (svc, 号, 原处)
-# ⑪ Branch gates introduced by cuts (hle.h registry form 「分支门：x8≠0 跳 0x目标，否则执行原指令回 0x原处+4」(branch gate: x8≠0 jumps to 0x<target>, otherwise executes the original instruction and returns to 0x<original site>+4)): the original site is replaced with a B into the patch area, and the block equals word for word
-#   stp x8,xzr,[sp,#-16]! ; stp x29,x30,[sp,#-16]! ; fetch KGATE via key page ; ldr x30,[x30] ; ldr x29,[sp] ; blr x30 ; ldp x29,x30 ; cbz w8,+12 ;
-#   ldp x8,xzr ; b target ; ldp x8,xzr ; original instruction ; b original site+4 - x8 is restored to its original value on both paths, the host result is only used to pick the path; gates.tsv records (svc, number, original site)
-nbranch = 0
-for n, (roff, form) in _hreg.items():
-    if not form.startswith('分支门'): continue
-    cut = next((c for c in cuts if c[0] == roff), None)
-    if cut is None: continue                                       # 本产物没开这扇私有门 | This build output does not enable this private gate
-    mt, mb = re.search(r'跳 (0x[0-9a-fA-F]+)', form), re.search(r'回 (0x[0-9a-fA-F]+)', form)
-    if not mt or not mb or int(mb[1], 16) != roff + 4: bad(f'分支门 svc #{n:#x}：登记表形态缺跳转目标或回点 ≠ 原处+4：{form}'); continue
-    tgt = int(mt[1], 16); s_ = btarget(roff); ks = keyseq(s_ + 8) if s_ is not None else None
-    if s_ is None or not (PO <= s_ < len(pat)) or W(pat, s_) != 0xA9BF7FE8 or W(pat, s_ + 4) != 0xA9BF7BFD or not ks or ks[1] != KEY.get('KGATE') \
-            or W(pat, ks[0]) & 0xFFC00000 != 0xF9400000 or W(pat, ks[0] + 4) != LDR_X29_SP or W(pat, ks[0] + 8) != 0xD63F03C0 or W(pat, ks[0] + 12) != 0xA8C17BFD \
-            or W(pat, ks[0] + 16) != 0x34000068 or W(pat, ks[0] + 20) != 0xA8C17FE8 or W(pat, ks[0] + 24) != B(ks[0] + 24, tgt) \
-            or W(pat, ks[0] + 28) != 0xA8C17FE8 or W(pat, ks[0] + 32) != W(orig, roff) or W(pat, ks[0] + 36) != B(ks[0] + 36, roff + 4):
-        bad(f'分支门 svc #{n:#x} {roff:#x}：块不符模板'); continue
-    if gates.get(ks[0] + 12) != ('svc', n, roff): bad(f'分支门 svc #{n:#x} gates.tsv 行不符：{gates.get(ks[0] + 12)}')
-    seen.add(ks[0] + 12); nbranch += 1
 if set(gates) != seen: bad(f'gates.tsv 有多余行 {len(set(gates) - seen)}')
 
 # ⑥ 线程槽
 # ⑥ Thread slots
 _base = {'K18', 'KTLS', 'KTLR', 'KGATE'}; _extra = set(KEY) - _base   # 额外键 = 参数门键（KRES* / KASPECT* …；改写器全局键表，三模块表头都列）：须是 K 开头大写名、键号低于基础四键 | Extra keys = parameter-gate keys (KRES* / KASPECT* ...; the rewriter's global key table, listed in the headers of all three modules): must be uppercase names starting with K, with key numbers below the four base keys
-if set(KEY) != {'K18', 'KTLS', 'KTLR', 'KGATE', 'KRES0', 'KRES1', 'KASPECT', 'KASPECTUI'} \
+if set(KEY) != {'K18', 'KTLS', 'KTLR', 'KGATE', 'KPARAM0', 'KPARAM1', 'KPARAM2', 'KPARAM3'} \
         or not {k for *_, k in params} <= set(KEY) or set(KEY.values()) != set(range(8)):
     bad(f'表头键页下标不合规：{KEY}（须含八个键且下标恰为 0..7）')
 kv = {v: k for k, v in KEY.items()}; nk = {}
@@ -364,7 +316,7 @@ expected = {}
 for kind in sites.values():
     key = {'x18': 'K18', 'W': 'K18', 'tpidr_r': 'KTLS', 'tpidr_w': 'KTLS', 'tpidrro_r': 'KTLR'}.get(kind)
     if key: expected[key] = expected.get(key, 0) + 1
-expected['KGATE'] = len(gsites) + len(obs) + nbranch
+expected['KGATE'] = len(gsites) + len(obs)
 for _, _, _, key in params: expected[key] = expected.get(key, 0) + 1
 if any(nk.get(k, 0) != v for k, v in expected.items()) or any(k not in expected and v for k, v in nk.items()):
     bad(f'键页槽访问计数不符：期望 {expected} 实际 {nk}')

@@ -14,8 +14,8 @@
 module_t g_mod[MAX_MOD];
 int g_nmod;
 pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
-pthread_key_t g_keyparam[4];   // rewriter PARAMS slots (key page entries KRES0, KRES1, KASPECT, KASPECTUI), dm.h          // resolution parameter slots (rewriter PARAMS, KRES0 handheld / KRES1 docked); 0 and not allocated if the build output lacks them
-enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_KRES0, KEY_KRES1, KEY_KASPECT, KEY_KASPECTUI, KEY_N };
+pthread_key_t g_keyparam[4];   // rewriter PARAMS slots (key page entries KPARAM0..3), dm.h
+enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_KPARAM0, KEY_N = KEY_KPARAM0 + 4 };
 
 uint64_t resolve_import(module_t *m, const char *name, int weak);
 void gate_register(uint64_t ret_addr, const char *kind, int arg, uint64_t orig);
@@ -23,7 +23,7 @@ void gate_register(uint64_t ret_addr, const char *kind, int arg, uint64_t orig);
 static pthread_key_t key_value(unsigned i) {
     switch (i) {
     case KEY_K18: return g_key18; case KEY_KTLS: return g_keytls; case KEY_KTLR: return g_keytlr;
-    case KEY_KGATE: return g_keygate; default: return g_keyparam[i - KEY_KRES0];
+    case KEY_KGATE: return g_keygate; default: return g_keyparam[i - KEY_KPARAM0];
     }
 }
 static void create_keys(void) {
@@ -156,7 +156,7 @@ static void read_layout(module_t *m, const char *dir) {
     char path[1024]; snprintf(path, sizeof path, "%s/%s.fixups.tsv", dir, m->name);
     FILE *f = fopen(path, "r");
     if (!f) die("open %s", path);
-    static const char *kn[8] = {"K18", "KTLS", "KTLR", "KGATE", "KRES0", "KRES1", "KASPECT", "KASPECTUI"};
+    static const char *kn[8] = {"K18", "KTLS", "KTLR", "KGATE", "KPARAM0", "KPARAM1", "KPARAM2", "KPARAM3"};
     char line[256], key[32]; unsigned long v; unsigned seen = 0;
     while (fgets(line, sizeof line, f)) {
         if (sscanf(line, "# %31s %lx", key, &v) != 2) die("%s: product from an old rewriter; rebuild it with the current one (PRODUCT)", path);

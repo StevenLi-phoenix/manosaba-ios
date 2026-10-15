@@ -26,10 +26,12 @@
   },
   "save_sync": ["Saves_v1/GameSave*.nson", "Saves_v1/GameAutoSave*.nson", "Saves_v1/GlobalSave.nson"],
   "workspace": {
+    "exefs": "data/switch/manosaba-2.0.4b/ExeFS",
     "romfs": "data/switch/manosaba-2.0.4b/RomFS",
     "sysfont": "data/switch/sysfont",
     "product": "build/cache/dm/out/manosaba-2.0.4b-r1-keypage",
     "shader_map": "build/mano/shader_map.tsv",
+    "shader_capture": "shextract",
     "c1": "build/mano/c1_full.tsv",
     "msl_mac": "build/cache/metal_shader_cache",
     "msl_ios": "build/ios/dmsh_b",

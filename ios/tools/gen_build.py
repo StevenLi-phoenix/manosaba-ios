@@ -5,6 +5,7 @@
 # Usage: gen_build.py <host dir> <Gen dir> <game>
 import os, shlex, subprocess, sys
 host, gen, game = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2]), sys.argv[3]
+subprocess.run(['make', '-s', '-C', host, 'profile', f'GAME={game}'], check=True)   # the generated profile source must exist (make -n only prints)
 cmd = subprocess.run(['make', '-s', '-n', '-B', '-C', host, 'dmhost', f'GAME={game}'], capture_output=True, text=True, check=True).stdout
 toks = shlex.split(next(l for l in cmd.splitlines() if l.lstrip().startswith('clang')))
 srcs, incs, defs, fws = [], [], [], []

@@ -40,7 +40,7 @@ extern module_t g_mod[MAX_MOD];
 extern int g_nmod;
 // Thread-local slots the rewritten guest code reads through the key page (the loader writes the key numbers there): K18 = the Switch's x18,
 // KTLS = tpidr_el0, KTLR = tpidrro_el0 (ThreadLocalRegion), KGATE = host gate entry; g_keyparam = the four parameter slots of the rewriter's PARAMS
-// rules (key page entries KRES0, KRES1, KASPECT, KASPECTUI), for a game's own hooks; unused slots read 0
+// rules (key page entries KPARAM0..3), for a game's own hooks; unused slots read 0
 extern pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 extern pthread_key_t g_keyparam[4];
 

@@ -1,7 +1,7 @@
 # Host unit tests, seconds: make -C host/tests run (build output in build/, not committed)
 B = build
 GAME ?= manosaba
-GEN = ../gen/game_profile.c
+GEN = ../gen/$(GAME)/game_profile.c
 # One per line, alphabetical
 run: \
 	$(B)/t_altstack \
@@ -36,7 +36,7 @@ run: \
 	$(B)/t_touch
 
 $(GEN):
-	$(MAKE) -C .. GAME=$(GAME) gen/game_profile.c
+	$(MAKE) -C .. GAME=$(GAME) profile
 
 $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../crash.c

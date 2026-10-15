@@ -64,7 +64,7 @@ static void host_preload(int argc, char **argv) {
     g_t0_ns = proc_start_mono_ns();
     flags_init();
     dm_prof_mark("0 process creation -> host main (dyld)");
-    if (argc < 2) die("usage: dmhost <dir> [module...] [-- game arguments...]");
+    dm_game_env_defaults();
     g_argv[0] = (char *)dm_game.id;
     LOG("game %s %s (%s), main build %s", dm_game.id, dm_game.version, dm_game.engine, dm_game.main_build_id);
     // Time zone: the game converts absolute to local time through the host libc (nn::time::ToCalendarTime / ToPosixTime in hle_time.c, and the guest
@@ -81,13 +81,17 @@ static void host_preload(int argc, char **argv) {
     }
     { void dm_term_install(void); dm_term_install(); }   // SIGTERM: graceful exit (hle_lifecycle.c)
     { void crash_set_dump_hook(void (*)(void)); void svc_thread_dump(void); crash_set_dump_hook(svc_thread_dump); }   // dump guest threads on a crash
-    const char *names[MAX_MOD]; int n = 0;
-    int i = 2;
+    // dmhost [<product dir> [module...]] [-- game arguments...]: without a directory, the profile's workspace.product under DM_ROOT
+    const char *names[MAX_MOD]; int n = 0; char prod[1024]; const char *dir;
+    int i = 1;
+    if (argc >= 2 && strcmp(argv[1], "--")) dir = argv[i++];
+    else if (dm_game.ws.product) dir = dm_game_ws_path(dm_game.ws.product, prod, sizeof prod);
+    else die("usage: dmhost <product dir> [module...] [-- game arguments...] (the game profile has no workspace.product)");
     for (; i < argc && strcmp(argv[i], "--") && n < MAX_MOD; i++) names[n++] = argv[i];
     if (i < argc && !strcmp(argv[i], "--")) for (i++; i < argc && g_argc < 63; i++) g_argv[g_argc++] = argv[i];
     static char mods[256];   // no modules on the command line: the profile's list
     if (!n) { strlcpy(mods, dm_game.modules, sizeof mods); for (char *save, *t = strtok_r(mods, " ", &save); t && n < MAX_MOD; t = strtok_r(NULL, " ", &save)) names[n++] = t; }
-    load_modules(argv[1], names, n);
+    load_modules(dir, names, n);
     probe_install();   // DM_PROBE probes (diagnostics)
     hid_keys_init();   // DM_KEYS scripted input
     stubs_report();
