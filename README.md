@@ -16,17 +16,17 @@ translated shaders, the app icon) is generated on your machine and stays out of 
 
 ## Status (manosaba 2.0.4b)
 
-Verified on a Mac (Apple silicon, macOS 26) and on an iPhone 17 Pro (iOS 26):
+Verified on a Mac (Apple silicon, macOS 26) and on an iPhone 17 Pro (iOS 26), including the reorganized iOS app:
 
-- boot, title screen, new game, story scenes with sprites, CG, text and UI, the opening movie;
+- boot, title screen, new game, story scenes with sprites, CG, text and UI, the opening movie, a trial including presenting evidence;
 - native touch input (one rewriter rule turns on Unity's touchscreen device): scripted touches on the Mac, by hand on the iPhone;
 - saving and loading, with transactional commits; iCloud sync of the save files (needs a paid developer account's entitlements; not tested);
 - rewrite equivalence: `verify/regress.sh --fuzz` passes on all three modules.
 
-Not verified or known open: compute shader dispatch at run time (the opening story uses none); 13 NVN functions the game looks up that the layer
-does not know yet (returned as NULL; no effect seen so far); an intermittent texture crash seen on the iPhone, likely fixed by an NVN struct size
-correction (unconfirmed); keyboard, mouse and game controller input not tested with this game; the reorganized iOS shell has been built but not
-yet re-tested on the device.
+Not verified or known open: compute shader dispatch at run time (the game's compute shaders are Unity's built-in skinning, blend shape, virtual
+texturing and probe debug kernels; no dispatch happens in the story or in a trial); 13 NVN functions the game looks up that the layer does not
+know (returned as NULL: this build stores the pointers but never calls them); an intermittent texture crash seen early on the iPhone, likely
+fixed by an NVN struct size correction (not seen since, unconfirmed); keyboard, mouse and game controller input not tested with this game.
 
 ## How it works
 
