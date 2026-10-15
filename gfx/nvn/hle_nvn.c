@@ -93,7 +93,15 @@ static void *nvn_lookup(const char *name) {
     nvn_init_slots();
     for (unsigned i = 0; i < NVN_NFUNC; i++)
         if (!strcmp(nvn_names[i], name)) return nvn_thunk[i];
-    LOG("[red] NVN address lookup of unknown name: %s", name ? name : "(null)");
+    // Not a failure: the game looks up names this host's table does not have (manosaba: 13 newer ones, e.g. the *Deferred binds, each looked up
+    // twice at startup) and copes with NULL. Logged once per name, not red; a call to a name the table has but the host does not implement is red
+    // (nvn_unimpl_c)
+    static char seen[64][64]; static int nseen; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    int again = 0; for (int i = 0; i < nseen; i++) if (name && !strcmp(seen[i], name)) again = 1;
+    if (!again && name && nseen < 64) snprintf(seen[nseen++], sizeof seen[0], "%s", name);
+    pthread_mutex_unlock(&mu);
+    if (!again) LOG("[nvn] address lookup of %s: not in this host's NVN table, answered NULL", name ? name : "(null)");
     return NULL;
 }
 
