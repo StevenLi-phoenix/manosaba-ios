@@ -1,8 +1,8 @@
 # NVN → Metal object mapping
 
-This document lists what each kind of NVN (the Switch's native graphics interface) object and command lands on in Metal within D2R Mobile's graphics layer. For the overall structure of the graphics layer see [README.md](README.md).
+This document lists what each kind of NVN (the Switch's native graphics interface) object and command lands on in Metal in this graphics layer. For the overall structure of the graphics layer see [README.md](README.md).
 
-Scope: the 216 NVN functions that have call sites in the game's main program (listed in `nvn/nvn_slots.tsv`). The remaining 307 are connected to a red-reporting stub that, when called, prints `[red] unimplemented NVN function called: <name>` in the log.
+Scope: the 262 implemented NVN functions (`NVN(...)` in `nvn/hle_nvn.c`) of the 523 names in `nvn/names.txt`. The others are connected to a red-reporting stub that, when called, prints `[red] unimplemented NVN function called: <name>` in the log.
 
 Two conventions that run through the whole table:
 
@@ -14,13 +14,13 @@ Two conventions that run through the whole table:
 | NVN object | Metal implementation | Key points |
 |---|---|---|
 | Device | `MTLDevice` (unified memory required) | The device properties returned by `nvnDeviceGetInteger` are still given to the game with the Tegra X1's values (`g_devinfo` in `hle_nvn.c`) |
-| MemoryPool | `newBufferWithBytesNoCopy` on game memory | Pages on Apple silicon are 16 KiB and pools are not guaranteed to be aligned to that: the start is rounded down and the end rounded up to page boundaries before the buffer is created, and the buffers of adjacent pools are allowed to overlap (`mtl_pool_add()`; the approach is verified by `metal/probe/p_nocopy.m`) |
+| MemoryPool | `newBufferWithBytesNoCopy` on game memory | Pages on Apple silicon are 16 KiB and pools are not guaranteed to be aligned to that: the start is rounded down and the end rounded up to page boundaries before the buffer is created, and the buffers of adjacent pools are allowed to overlap (`mtl_pool_add()`) |
 | Buffer address (`NVNbufferAddress`) | (`MTLBuffer`, offset) | Looked up in the pools' interval table |
 | Texture | `MTLTexture` | The game's packaged textures are in block-linear layout and are deswizzled at upload; format mapping and deswizzling are in `tex/`. After the game rewrites pool memory the texture is uploaded again, which is detected by the write-protection dirty page tracking of `nvn/nvn_dirty.c`. `ReadTexels`: packaged textures are deswizzled and read directly from pool memory, and textures written by the GPU are read back from the `MTLTexture` |
 | TextureView | `newTextureViewWithPixelFormat:textureType:levels:slices:` | — |
 | Sampler | `MTLSamplerState` | For border color Metal has only three presets (transparent black, opaque black, opaque white); the nearest one to the border color NVN gives is chosen |
 | TexturePool / SamplerPool | A host-side table: descriptor number → texture / sampler | The value of a separate texture handle is the descriptor number |
-| Program | One `MTLFunction` per stage | Keyed by the hash of the shader's control section and loaded from the offline-translated `<key>_b.metallib`; nothing is translated at run time. For the translation chain see the README |
+| Program | One `MTLFunction` per stage | Keyed by the hash of the shader's control section and loaded from the offline-translated `<key>_b.metallib`; nothing is translated at run time. For the translation chain see the README. A game may bind all stages in one program or one single-stage program per stage (Unity); both are combined per draw |
 | State objects (Blend / Color / ChannelMask / Multisample / Polygon / DepthStencil / VertexAttrib / VertexStream) | Fields of the render pipeline descriptor + `MTLDepthStencilState` + encoder state | The game copies these small structures by value, and the host side packs them in place with bit fields. Render pipelines and depth-stencil states are cached by state hash |
 | CommandBuffer | A record stream recorded in the game's command memory | Replayed at submit time |
 | Queue | Metal command queue | `SubmitCommands` = replay and submit |
@@ -36,11 +36,11 @@ Two conventions that run through the whole table:
 | ClearColor / ClearDepthStencil | Same as above | Clears in the middle of a pass, and color clears with a partial mask or partial scissor, are not implemented and report red when encountered |
 | ClearTexture / ClearTextureui | Clears one texture on its own | Some forms are not implemented and report red when encountered |
 | BindProgram and the various state Bind* calls | Recorded into the current state; the pipeline is fetched as needed before the next draw | — |
-| BindUniformBuffer(s) / BindStorageBuffer(s) / BindSeparateTextures / BindSeparateSamplers / BindImages | Fills the argument buffer according to the shader's reflection json | For how slot numbers correspond to the constant sections in the shader see "Shader translation chain" in the README |
+| BindUniformBuffer(s) / BindStorageBuffer(s) / BindSeparateTextures / BindSeparateSamplers / BindImages | Fills the argument buffer according to the shader's reflection json | For how slot numbers correspond to the constant sections in the shader see "Shaders" in the README |
 | BindVertexBuffers | Vertex buffer = (`MTLBuffer`, offset) | — |
 | SetViewports / SetScissor / SetDepthRange / Stencil* / SetBlendColor / SetPolygonOffsetClamp | The corresponding setting on the encoder | — |
 | DrawArrays / DrawElementsInstanced | Draw / indexed draw | Metal has no quad primitive: non-indexed quads are drawn as two triangles using the shared indices 0,1,2,0,2,3; indexed quads and 8-bit indices are not implemented and report red when encountered |
-| DispatchCompute | Compute encoder, with the thread group size taken from the reflection json | The 4 compute shaders embedded in the main program use the hand-written versions in `nvn/nvn_builtin.h` |
+| DispatchCompute | Compute encoder, with the thread group size taken from the reflection json | Shaders embedded in the game executable are captured like any other (`DM_SHDUMP`, or the engine extractor) |
 | CopyBufferToBuffer / UpdateUniformBuffer | Buffer copies inserted in order into the command stream | The data of `UpdateUniformBuffer` is copied into command memory at record time, because NVN allows the caller to modify the original data after recording |
 | CopyBufferToTexture / CopyTextureToBuffer / CopyTextureToTexture | Texture copies | Some forms of texture-to-texture are not implemented and report red when encountered |
 | ReportCounter / ResetCounter | The counter's value is written back after the GPU completes | The "samples passed" kind is implemented with Metal's visibility result buffer |
@@ -72,5 +72,6 @@ A texture slot with nothing bound is given a dummy texture, whose type and pixel
 ## 4. Adding a function that is not implemented yet
 
 1. In `nvn/hle_nvn.c`, write the implementation with the `NVN(name, return type, parameters…)` macro. The macro does a signature check against `nvn/nvn_protos.h` and registers the implementation in the slot table; if the name is not in `nvn/names.txt`, the program aborts at startup.
+   A name the game asks for that is not in `names.txt` (the log says `NVN address lookup of unknown name`) must first be appended there; then regenerate `nvn/nvn_protos.h` and `nvn/nvn_thunks.S` with `tools/gen_protos.py nvn/include/nvn.h nvn/names.txt nvn/nvn_protos.h` (implementing a name needs its prototype in `nvn.h`; a name without one gets only a named stub).
 2. If it is a command: add the record format in `nvn/nvn_obj.h`, write the recording in `hle_nvn.c`, and write the replay in `nvn/nvn_mtl.m`.
 3. Add a test in `tests/`, then `make -C gfx/tests run`.

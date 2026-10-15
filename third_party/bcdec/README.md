@@ -1,2 +1,5 @@
-来源：https://github.com/iOrange/bcdec 提交 80859ed（版本 0.985），未改动。许可见 LICENSE（MIT 或公有领域二选一）。
-用途：不支持 BC 压缩格式的显卡上，翻译层把 BC 贴图在 CPU 上解压（gfx/tex/nvn_bcdec.c）。
+# bcdec
+
+Source: <https://github.com/iOrange/bcdec>, commit `80859ed` (version 0.985), unmodified. License: see `LICENSE` (MIT or Unlicense, your choice).
+
+Used by `gfx/tex/nvn_bcdec.c` to decompress BC textures on the CPU when the GPU does not support BC formats.
