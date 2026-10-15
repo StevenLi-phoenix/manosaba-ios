@@ -140,7 +140,8 @@ static id<MTLBuffer> m3_buf(uint64_t gpu, NSUInteger *off) {
 }
 #endif
 // Test switch DM_RES_CENSUS=1 (not normally on): records every object that has entered the residency set (weak references); on the tick of the memory readout line it reports the count and size of those "still in the residency set" and those "removed from the residency set but not yet destroyed".
-// The latter = GPU memory we no longer use but someone still holds a reference to (for example an autorelease pool on a guest thread that is never drained)
+// The latter = GPU memory we no longer use but someone still holds a reference to (for example a texture ID's cached view, or an autorelease pool on a guest thread that is never drained);
+// the first three such textures are named, for `leaks --traceTree=<address>`
 static NSHashTable *g_res_ever; static int g_res_census = -1;
 static void res_add(id<MTLResource> r) {
     if (!r) return;
@@ -293,7 +294,10 @@ static void udc_selftest(void) {
         MLOG("UDC self-test %s %s %lux%lu first value %08x, differing from first value %lu / %lu", g_dev.name.UTF8String, depth ? "Depth32F_S8" : "RGBA8", (unsigned long)w, (unsigned long)h, px[0], (unsigned long)bad, (unsigned long)(w * h));
     }
 }
-void mtl_init(void) {
+// Entry points the game's threads reach outside a submission run inside their own autorelease pool (@autoreleasepool at the top of each): guest
+// threads have no pool, and an autorelease with none creates a thread-level pool that is never drained (seen holding retired textures autoreleased
+// in mtl_init and WriteTexels; OBJC_DEBUG_MISSING_POOLS=YES lists what is still missed). Submissions push their own pool (mtl_sub_begin)
+void mtl_init(void) { @autoreleasepool {
     if (g_dev) return;
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
@@ -363,7 +367,7 @@ void mtl_init(void) {
     if (!g_nvn_deswz_gpu) MLOG("[red] GPU deswizzle init failed, swizzled textures fall back to the CPU");
     MLOG("Metal device %s", g_dev.name.UTF8String);
     udc_selftest();
-}
+} }
 
 static _Atomic uint64_t g_reg_gen = 1;   // Change generation of memory pool / texture / sampler registration: one of the invalidation conditions for argument buffer reuse
 // On-demand residency of memory pools: putting a zero-copy buffer into the residency set makes iOS read the whole pool into memory and pin it as wired (not counted in footprint and never paged out), even a pool the game never uses -
@@ -381,7 +385,7 @@ static void cb_committed(void) {   // called after the main submission / upload 
     pthread_mutex_lock(&g_mu); uint64_t n = ++g_cb_commits, at = g_pool_res_at; if (at) g_pool_res_at = 0; pthread_mutex_unlock(&g_mu);
     if (at) MLOG("on-demand memory pool residency: the first command buffer committed after that is #%llu (residency set committed before #%llu)", (unsigned long long)n, (unsigned long long)at);
 }
-void mtl_pool_add(const void *mem, uint64_t size) {
+void mtl_pool_add(const void *mem, uint64_t size) { @autoreleasepool {
     mtl_init(); g_reg_gen++;
     uintptr_t pg = (uintptr_t)getpagesize(), lo = (uintptr_t)mem, hi = lo + size;
     uintptr_t a = lo & ~(pg - 1), b = (hi + pg - 1) & ~(pg - 1);
@@ -393,9 +397,9 @@ void mtl_pool_add(const void *mem, uint64_t size) {
     g_pool_adds++;
     [g_keep addObject:buf];
     pthread_mutex_unlock(&g_mu);
-}
+} }
 
-void mtl_pool_del(const void *mem) {
+void mtl_pool_del(const void *mem) { @autoreleasepool {
     g_reg_gen++;
     id<MTLBuffer> gone = nil;
     pthread_mutex_lock(&g_mu);
@@ -403,7 +407,7 @@ void mtl_pool_del(const void *mem) {
         if (g_pools[i].key == mem) { gone = g_pools[i].buf; [g_keep removeObject:gone]; g_pools[i] = g_pools[--g_npool]; break; }
     pthread_mutex_unlock(&g_mu);
     defer_obj_release(gone);   // retire: release after the submissions that used it complete, and remove from the residency set (it used to be only removed from g_keep - the residency set holds it strongly, so the zero-copy buffer object was never destroyed)
-}
+} }
 
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     int ok = 0;
@@ -789,7 +793,7 @@ uint64_t mtl_sub_commit(void) {
 uint64_t mtl_last_fence(void) { return g_fence; }
 int mtl_last_commit_error(void) { return atomic_load(&g_last_commit_error); }
 
-int mtl_wait(uint64_t fence, uint64_t timeout_ns) {
+int mtl_wait(uint64_t fence, uint64_t timeout_ns) { @autoreleasepool {
     struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl);
     uint64_t ns = (uint64_t)dl.tv_nsec + (timeout_ns > 3600000000000ull ? 3600000000000ull : timeout_ns);
     dl.tv_sec += ns / 1000000000ull; dl.tv_nsec = ns % 1000000000ull;
@@ -799,16 +803,16 @@ int mtl_wait(uint64_t fence, uint64_t timeout_ns) {
     int ok = g_done >= fence;
     pthread_mutex_unlock(&g_mu);
     return ok;
-}
+} }
 
 static void mtl_finish_gpu(void) {
     if (g_fence) mtl_wait(g_fence, UINT64_MAX);
     while (atomic_load(&g_up_pending)) usleep(1000);
 }
 void mtl_present_flush(void);
-void mtl_finish(void) { mtl_present_flush(); mtl_finish_gpu(); }   // Queue semantics: already-enqueued presents also count as queue work
+void mtl_finish(void) { @autoreleasepool { mtl_present_flush(); mtl_finish_gpu(); } }   // Queue semantics: already-enqueued presents also count as queue work
 static void present_drop_for_suspend(void);
-void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); mtl_init(); id<MTLCommandBuffer> cb = q_cb(); [cb commit]; [cb waitUntilCompleted]; mtl_finish_gpu(); }
+void mtl_drain(void) { @autoreleasepool { present_drop_for_suspend(); mtl_present_flush(); mtl_init(); id<MTLCommandBuffer> cb = q_cb(); [cb commit]; [cb waitUntilCompleted]; mtl_finish_gpu(); } }
 
 // ================= Render replay =================
 #include "../../host/front.h"
@@ -1311,7 +1315,9 @@ static void res_census(unsigned long long frame, unsigned long long rss_mb) {
         unsigned long nl[2] = {0, 0}, nr[2] = {0, 0}; unsigned long long bl[2] = {0, 0}, br[2] = {0, 0};   // [0] textures [1] buffers; l = in the residency set, r = retired but not destroyed
         pthread_mutex_lock(&g_res_mu);
         for (id o in g_res_ever.allObjects) { int k = [o conformsToProtocol:@protocol(MTLBuffer)] ? 1 : 0; unsigned long long b = (unsigned long long)[(id<MTLResource>)o allocatedSize];
-            if ([g_res_objects containsObject:o]) { nl[k]++; bl[k] += b; } else { nr[k]++; br[k] += b; } }
+            if ([g_res_objects containsObject:o]) { nl[k]++; bl[k] += b; } else { nr[k]++; br[k] += b;
+                if (!k && nr[0] <= 3) { id<MTLTexture> t = o; MLOG("residency census: retired texture still alive %p %lux%lu format %lu usage %#lx (%llu MB)", (__bridge void *)o,
+                    (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.pixelFormat, (unsigned long)t.usage, b >> 20); } } }
         pthread_mutex_unlock(&g_res_mu);
         MLOG("residency census up to frame %llu: RSS %llu MB, GPU allocated %llu MB; in the residency set: %lu textures %llu MB, %lu buffers %llu MB; retired but not destroyed: %lu textures %llu MB, %lu buffers %llu MB", frame, rss_mb, (unsigned long long)(g_dev.currentAllocatedSize >> 20),
              nl[0], bl[0] >> 20, nl[1], bl[1] >> 20, nr[0], br[0] >> 20, nr[1], br[1] >> 20);
@@ -1337,7 +1343,8 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
 }
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads) { *uploads = g_pkg_uploads; *reuploads = g_pkg_reuploads; }
 uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }
-void mtl_tex_release(tex_t *t) { if (t->serial) serial_del(t->serial); }
+static void treg_drop_views(uint64_t serial);
+void mtl_tex_release(tex_t *t) { @autoreleasepool { if (t->serial) { serial_del(t->serial); treg_drop_views(t->serial); } } }
 
 // ---------- Render passes: SetRenderTargets opens a new pass; clears before the first command in the pass are folded into the load action ----------
 static struct {
@@ -1988,27 +1995,40 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
     if (p->serial) serial_put(p->serial, o);
     return o;
 }
-void mtl_prog_release(prog_t *p) { if (p->serial) serial_del(p->serial); }
+void mtl_prog_release(prog_t *p) { @autoreleasepool { if (p->serial) serial_del(p->serial); } }
 
 // ---------- Descriptor pool: texture ID / sampler ID → object ----------
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
-typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; } treg_t;
+// fin: the texture this entry names was finalized (nvnTextureFinalize) while the ID stayed registered
+typedef struct { tex_t t; int ok, fin; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty; } treg_t;
 static treg_t *g_treg; static int g_ntreg;
 // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
 // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
 static _Atomic uint64_t g_tser[1 << 20];
 static samp_par *g_sreg; static uint8_t *g_sreg_ok; static void **g_sview; static uint64_t *g_srid; static int g_nsreg;   // g_sview: sampler ID → MTLSamplerState (retained)
-void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
+void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) { @autoreleasepool {
     int id_ = tid; if (id_ < 0) return;
     pthread_mutex_lock(&g_rmu);
     if (id_ >= g_ntreg) { int n = id_ + 1024; g_treg = realloc(g_treg, n * sizeof *g_treg); memset(g_treg + g_ntreg, 0, (n - g_ntreg) * sizeof *g_treg); g_ntreg = n; }
     g_reg_gen++;
     if (g_treg[id_].view) { defer_obj_unref((__bridge id)g_treg[id_].view); CFRelease(g_treg[id_].view); g_treg[id_].view = NULL; g_treg[id_].view_id = g_treg[id_].view_rid = 0; }
-    g_treg[id_].ok = t != NULL; if (t) g_treg[id_].t = *t; g_treg[id_].has_v = v != NULL; if (v) g_treg[id_].v = *v;
+    g_treg[id_].ok = t != NULL; g_treg[id_].fin = 0; if (t) g_treg[id_].t = *t; g_treg[id_].has_v = v != NULL; if (v) g_treg[id_].v = *v;
     if (id_ < (1 << 20)) atomic_store_explicit(&g_tser[id_], t ? t->serial : 0, memory_order_release);
     pthread_mutex_unlock(&g_rmu);
+} }
+// The texture of a serial was finalized: drop the views that texture IDs still cache for it. A cached view is a strong reference (a view also keeps its
+// base texture), and the game need not register those IDs again or use them before it exits: a finalized render target stayed allocated until then
+// (Mac, a trial scene: ~800 MB of retired render targets within three minutes. An iPhone session ended without a crash report near its memory limit)
+static void treg_drop_views(uint64_t serial) {
+    pthread_mutex_lock(&g_rmu);
+    for (int i = 1; i < g_ntreg && i < (1 << 20); i++) {
+        if (atomic_load_explicit(&g_tser[i], memory_order_relaxed) != serial || !g_treg[i].ok) continue;
+        g_treg[i].fin = 1;
+        if (g_treg[i].view) { defer_obj_unref((__bridge id)g_treg[i].view); CFRelease(g_treg[i].view); g_treg[i].view = NULL; g_treg[i].view_id = g_treg[i].view_rid = 0; }
+    }
+    pthread_mutex_unlock(&g_rmu);
 }
-void mtl_reg_samp(int sid, const samp_par *sp) {
+void mtl_reg_samp(int sid, const samp_par *sp) { @autoreleasepool {
     int id_ = sid; if (id_ < 0) return;
     pthread_mutex_lock(&g_rmu);
     if (id_ >= g_nsreg) { int n = id_ + 256; g_sreg = realloc(g_sreg, n * sizeof *g_sreg); g_sreg_ok = realloc(g_sreg_ok, n); g_sview = realloc(g_sview, n * sizeof *g_sview); g_srid = realloc(g_srid, n * sizeof *g_srid);
@@ -2017,7 +2037,7 @@ void mtl_reg_samp(int sid, const samp_par *sp) {
     g_reg_gen++;
     g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
     pthread_mutex_unlock(&g_rmu);
-}
+} }
 static MTLTextureType ttype(int target, int fallback) {
     switch (target) { case 0: return MTLTextureType1D; case 1: case 7: return MTLTextureType2D; case 2: return MTLTextureType3D;
         case 3: return MTLTextureType1DArray; case 4: return MTLTextureType2DArray; case 5: return MTLTextureType2DMultisample;
@@ -2040,6 +2060,9 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
         if (cur == v || v.parentTexture == cur) { rp->view_ser = sg; rp->view_dirty = dg; return v; }
         defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; v = nil;
     }
+    // The game uses an ID whose texture it finalized (undefined in NVN): its descriptor still names that storage, so the texture is created again from the
+    // snapshot (as before), but nothing will finalize it again
+    if (rp->fin) { RED_ONCE(67, "texture ID %d used after its texture (serial %llu) was finalized: created again", tid, (unsigned long long)rp->t.serial); rp->fin = 0; }
     treg_t r = *rp;
     id<MTLTexture> base = tex_mtl(&rp->t);
     if (!base) return nil;
@@ -2470,12 +2493,12 @@ static void warm_worker(NSArray<NSString *> *paths) {
 }
 // Wait for the background warm-up to finish (at most timeout_ms): returns how many milliseconds were actually waited, 0 if it is not running. On first install the system shader cache is fully cold; if warm-up is slower than the player entering a run,
 // pipelines not yet warmed are compiled on the spot on the submit thread = in-run stutter; the loading screen on entering a run blocks the player anyway, so let it load a little longer (called where hle_nvn.c presents).
-int mtl_warm_wait(int timeout_ms) {
+int mtl_warm_wait(int timeout_ms) { @autoreleasepool {
     if (!atomic_load(&g_warm_running)) return 0;
     uint64_t t0 = bp_now();
     while (atomic_load(&g_warm_running) && (bp_now() - t0) / 1000000ull < (uint64_t)timeout_ms) usleep(2000);
     return (int)((bp_now() - t0) / 1000000ull) + 1;
-}
+} }
 static void warm_start(void) {
     if (g_warm_started++) return;
     const char *e = getenv("DM_PSO_MANIFEST");
@@ -4202,7 +4225,7 @@ static void copy_t2b(const p_copy_b2t *c) {
             enc_b_copy_texture_buffer(b, t, layer0 + c->r.zoffset + z, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, 0), MTLSizeMake(c->r.width, c->r.height, 1), (__bridge id<MTLBuffer>)mb, mo + z * img, row, img);
 }
 // CPU texture read (ReadTexels): for packaged textures the pool memory is the ground truth, de-layout and read directly; the rest are read back from the MTLTexture by blit (the caller has already waited for the GPU per NVN rules)
-void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img) {
+void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img) { @autoreleasepool {
     xv_check(t->serial, level, layer0, "CPU readback");
     PD("U cpu_read ser=%llu lv%u sl%u xyz=%d,%d,%d size=%d,%d,%d dst=%p row=%lu img=%lu", t->serial, level, layer0, r->xoffset, r->yoffset, r->zoffset, r->width, r->height, r->depth, dst, (unsigned long)row, (unsigned long)img);
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
@@ -4231,10 +4254,10 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
                 sourceSize:MTLSizeMake(r->width, r->height, 1) toBuffer:buf destinationOffset:z * wb * hb destinationBytesPerRow:wb destinationBytesPerImage:wb * hb];
     enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
     for (int z = 0; z < nz; z++) for (size_t y = 0; y < hb; y++) memcpy(dst + z * img + y * row, (uint8_t *)buf.contents + z * wb * hb + y * wb, wb);
-}
+} }
 // CPU texture write (WriteTexels): for packaged textures the pool memory is the ground truth -- deswizzle this level / layer, patch the region, swizzle back; the pool write triggers a re-upload through dirty-page tracking;
 // the rest are blitted into the MTLTexture through a shared staging buffer, committed synchronously (later submissions are queued after it on the same queue)
-void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img) {
+void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img) { @autoreleasepool {
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
     if (!bpb) { RED_ONCE(64, "WriteTexels unknown format %#x", t->d.format); return; }
     size_t wb = (size_t)((r->width + bw - 1) / bw) * bpb, hb = (r->height + bh - 1) / bh, x0 = (size_t)(r->xoffset / bw) * bpb, y0 = r->yoffset / bh;
@@ -4264,7 +4287,7 @@ void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVN
         [b copyFromBuffer:buf sourceOffset:z * wb * hb sourceBytesPerRow:wb sourceBytesPerImage:wb * hb sourceSize:MTLSizeMake(r->width, r->height, 1)
                 toTexture:mt destinationSlice:is3d ? 0 : layer0 + r->zoffset + z destinationLevel:level destinationOrigin:MTLOriginMake(r->xoffset, r->yoffset, is3d ? r->zoffset + z : 0)];
     enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
-}
+} }
 static void copy_b2t(const p_copy_b2t *c) {
     if (c->tex) zskip_del(c->tex->serial);
     id<MTLTexture> t = tex_mtl(c->tex);
@@ -4557,7 +4580,7 @@ static int present_encode_m4(CBUF cb, id<MTLTexture> src, id<MTLTexture> dst, co
 // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
 // with the same encoding as the present (present_encode) into an offscreen texture of the same size as the swapchain, and after the GPU finishes hands out a CGImage in the completion callback (the callback does not block the present). Guarded by g_shotq_mu
 static void (^g_grab_cb)(CGImageRef img);
-void mtl_grab_next_present(void (^cb)(CGImageRef img)) { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; pthread_mutex_unlock(&g_shotq_mu); }
+void mtl_grab_next_present(void (^cb)(CGImageRef img)) { @autoreleasepool { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; pthread_mutex_unlock(&g_shotq_mu); } }
 static void grab_present(id<MTLTexture> src, const int crop[4], CGSize sz) {
     pthread_mutex_lock(&g_shotq_mu); void (^cb)(CGImageRef) = g_grab_cb; g_grab_cb = nil; pthread_mutex_unlock(&g_shotq_mu);
     if (!cb) return;
@@ -5184,7 +5207,7 @@ void mtl_link_pause(int on);
 // When turned on, also clear the frames already queued: the system first stops the display-link callback and only afterwards notifies about going to the background, and in that gap the game has already filled the swapchain and is stuck at "before acquiring the next texture, wait for its previous present to be processed"
 // (hle_nvn.c nvnWindowAcquireTexture -> mtl_present_wait). Without clearing, the game cannot advance a single tick during those 2.5 seconds of waiting for the save, and the save is not written (the same pattern three times in player logs: 3 frames queued, 0 submits)
 void mtl_present_discard(int on) { atomic_store(&g_present_discard, on != 0); if (on) present_drop_for_suspend(); }
-uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
+uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) { @autoreleasepool {
     if (atomic_load(&g_present_discard)) return 0;   // Ticket number 0 = no pending present; the swapchain texture acquire does not wait
     if (t) { xv_check(t->serial, 0, 0, "present"); if (g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = t->serial; }
     static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, present_start);
@@ -5203,10 +5226,10 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     pthread_cond_broadcast(&g_pq_cv);
     pthread_mutex_unlock(&g_pq_mu);
     return tk;
-}
+} }
 // Do not wait during discard: the frame enqueued only after the flag was set (the present thread had just passed the flag check) has nobody to take it, and waiting for it would stall again; it is left for the following mtl_drain to clear
 // Do not wait indefinitely in display-link mode: see the note at STALL_NS. Only frames "not yet taken by the display link" are dropped; the one already on its way to the screen is waited for until handed to the GPU (same dropping as when entering the background)
-void mtl_present_wait(uint64_t tk) {
+void mtl_present_wait(uint64_t tk) { @autoreleasepool {
     pthread_mutex_lock(&g_pq_mu);
     while (g_pq_done < tk && !atomic_load(&g_present_discard)) {
         if (!g_link_owns_layer) { pthread_cond_wait(&g_pq_cv, &g_pq_mu); continue; }
@@ -5236,7 +5259,7 @@ void mtl_present_wait(uint64_t tk) {
         if (active && !g_stall_red && now - from >= STALL_RED_NS) { g_stall_red = 1; MLOG("[red] display link has not called back for %.1f s in a row while active, presenting relies entirely on fallback frame drops, the picture is frozen", (now - from) / 1e9); }
     }
     pthread_mutex_unlock(&g_pq_mu);
-}
+} }
 // Wait until all queued presents have been processed (used by mtl_finish = nvnQueueFinish etc.): goes through mtl_present_wait, so there is still a fallback when the display link stops (real device: the game called QueueFinish once while the display link was stopped,
 // and this used to wait here without a timeout; nobody took the 3 queued frames and the game stalled; those two runs on Mac did not hit this call)
 double mtl_link_tick_age_ms(void) { uint64_t t = __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED); return t ? (now_ns() - t) / 1e6 : -1; }   // front ends log it next to volume / route changes
@@ -5250,7 +5273,7 @@ uint64_t mtl_udc_saved_bytes(void) { return g_udc_saved_bytes; }
 int mtl_has_window(void) { return front_metal_layer() != NULL; }
 int mtl_link_active(void) { return link_on(); }
 void mtl_link_pause(int on) { CAMetalDisplayLink *l = g_link; if (l) l.paused = on != 0; }   // For testing (DM_TEST_BG): imitates the system stopping the display-link callback in the background
-int mtl_link_wait_tick(uint64_t timeout_ns) {
+int mtl_link_wait_tick(uint64_t timeout_ns) { @autoreleasepool {
     if (!mtl_link_active()) return 0;
     // Wait for the display link only when running faster than the display: if a display-link tick has already passed since the previous frame started work (this frame is already behind), start immediately instead of waiting in vain for the next display-link tick --
     // otherwise when the frame time is slightly more than one display-link period it would "miss the tick -> wait another whole tick", locking the frame rate straight to half (measured on Mac under windowed load: runs of dropped frames)
@@ -5264,7 +5287,7 @@ int mtl_link_wait_tick(uint64_t timeout_ns) {
     while (g_link_tick_n < started_tick + step) if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) { pthread_mutex_unlock(&g_link_mu); return 0; }
     started_tick = g_link_tick_n;
     pthread_mutex_unlock(&g_link_mu); return 1;
-}
+} }
 
 
 
