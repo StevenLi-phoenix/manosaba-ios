@@ -1,18 +1,10 @@
-# 函数级差分模糊台：对每个含改写点的函数，Switch 原映像在 Unicorn 里整函数跑 = 真值，改写映像同输入整函数跑 = 被测，比终态。
-# 用法：fnfuzz.py <改写产物目录> <模块> <NSO> [--seed 1] [--trials 6] [--budget 200000] [--jobs N] [--mutate 200] [--funcs a,b,..] [--tsv 文件]
-# 装法：两份映像同址装载、同样应用 RELATIVE/ABS64/GLOB_DAT/JUMP_SLOT 重定位；导入符号指向陷阱页（每符号 16 字节）。
-# 一次试验在以下事件停：返回哨兵（ret）、调导入（import:名）、宿主门（gate：原映像执行 svc / 读 cntpct 处，改写映像进 KGATE 哨兵）、访存异常、指令预算用完。
-# 两边停在同一事件（ret / 同名 import / 同一 gate 原址）才算「有效」，此时比：x0–x30（x18 比槽值）、sp、nzcv、v0–v31、tpidr、
-# 全部写过的地址的终值（不比当前 sp 以下的死栈与 TSD）。改写映像在门处多压的 x29/x30 按模板还原后再比。
-# 不等价报 DIFF；有效试验为 0 的函数列 NOEFF（射程缺口，不算失败但要报）。任一边停下时 sp 出了栈区记「sp越界」不比较（输入不现实）。
-# 变异自检：抽 mutate 个普通改写块把替换指令改成 nop，统计「被执行到的」里有几个被判出分歧。
 # Function-level differential fuzzing bench: for each function containing a rewrite site, the original Switch image run as a whole function in Unicorn = ground truth, the rewritten image run as a whole function with the same input = under test; final states are compared.
 # Usage: fnfuzz.py <rewrite build output dir> <module> <NSO> [--seed 1] [--trials 6] [--budget 200000] [--jobs N] [--mutate 200] [--funcs a,b,..] [--tsv file]
 # Loading: both images are loaded at the same address with the same RELATIVE/ABS64/GLOB_DAT/JUMP_SLOT relocations applied; imported symbols point at a trap page (16 bytes per symbol).
 # A trial stops on one of these events: return sentinel (ret), call to an import (import:name), host gate (gate: where the original image executes svc / reads cntpct, the rewritten image enters the KGATE sentinel), memory access fault, instruction budget exhausted.
 # Only when both sides stop on the same event (ret / same-named import / same gate original address) is the trial "effective"; then compare: x0–x30 (x18 against the slot value), sp, nzcv, v0–v31, tpidr,
 # the final values of all written addresses (dead stack below the current sp and the TSD are not compared). The extra x29/x30 the rewritten image pushes at a gate are restored per the template before comparing.
-# Non-equivalence is reported as DIFF; functions with 0 effective trials are listed as NOEFF (a coverage gap, not a failure but must be reported). If sp is outside the stack area when either side stops, it is recorded as 「sp越界」(sp out of bounds) and not compared (unrealistic input).
+# Non-equivalence is reported as DIFF; functions with 0 effective trials are listed as NOEFF (a coverage gap, not a failure but must be reported). If sp is outside the stack area when either side stops, it is recorded as "sp_oob" (sp out of bounds) and not compared (unrealistic input).
 # Mutation self-check: draw mutate ordinary rewrite blocks and change the replaced instruction to nop, then count how many of those "actually executed" are judged divergent.
 import sys, os, struct, random, argparse, bisect, multiprocessing as mp
 from unicorn import *
@@ -31,8 +23,8 @@ ap.add_argument('--mutate', type=int, default=200); ap.add_argument('--funcs'); 
 A = ap.parse_args()
 
 IB = 0x100000000
-ARENA, ARENA_SZ = 0x10000000, 0x1000000      # 随机堆：一半的 8 字节字是指回堆内的指针 | Random heap: half of the 8-byte words are pointers back into the heap
-STK, STK_SZ = 0x20000000, 0x100000; SP0 = STK + STK_SZ - 0x10000   # sp 以上留 64 KB 给栈传参 | 64 KB kept above sp for stack-passed arguments
+ARENA, ARENA_SZ = 0x10000000, 0x1000000      # Random heap: half of the 8-byte words are pointers back into the heap
+STK, STK_SZ = 0x20000000, 0x100000; SP0 = STK + STK_SZ - 0x10000   # 64 KB kept above sp for stack-passed arguments
 TSD = 0x30000000
 TRAP = 0x300000000; RET = 0x400000000; GATE = 0x500000000
 hdr = nsoimg.header(A.dir, A.mod)
@@ -44,7 +36,6 @@ KEY_PAGE_OFF = hdr['KEY_PAGE_OFF']
 orig = bytearray(nsoimg.load(A.nso))
 pat = bytearray(open(f'{A.dir}/{A.mod}.patched.bin', 'rb').read())
 
-# ---- 重定位（两份映像一样）----
 # ---- Relocations (identical for both images) ----
 imports = {}
 for off, typ, name, val, add in nsoimg.relocs(bytes(orig)):
@@ -55,7 +46,6 @@ for off, typ, name, val, add in nsoimg.relocs(bytes(orig)):
 iname = {i: n for n, i in imports.items()}
 TRAP_SZ = (16 * len(imports) + 0xFFFF) & ~0xFFFF or 0x10000
 
-# ---- 改写点与函数 ----
 # ---- Rewrite sites and functions ----
 sites = {}
 for l in open(f'{A.dir}/{A.mod}.sites.tsv'):
@@ -96,14 +86,18 @@ class Emu:
         self.patched, self.image, self.arena0 = patched, bytes(image), arena0
         u = self.u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         u.mem_map(IB, PO); u.mem_write(IB, self.image[:PO])
-        u.mem_map(IB + PO, PAGE(len(pat)) - PO, UC_PROT_EXEC)     # 补丁区：两边同址同权限（原映像这段全 0），数据读写都异常 | Patch area: same address and same permissions on both sides (all zeros in the original image), data reads and writes both fault
+        u.mem_map(IB + PO, PAGE(len(pat)) - PO, UC_PROT_EXEC)     # Patch area: same address and same permissions on both sides (all zeros in the original image), data reads and writes both fault
         if patched: u.mem_write(IB + PO, self.image[PO:])
-        RW = UC_PROT_READ | UC_PROT_WRITE                      # 堆 / 栈 / TSD 不可执行：间接调用落进随机数据时两边同样取指异常 | Heap / stack / TSD are non-executable: when an indirect call lands in random data, both sides take the same instruction fetch fault
+        RW = UC_PROT_READ | UC_PROT_WRITE                      # Heap / stack / TSD are non-executable: when an indirect call lands in random data, both sides take the same instruction fetch fault
         u.mem_map(ARENA, ARENA_SZ, RW); u.mem_write(ARENA, arena0)
         u.mem_map(STK, STK_SZ, RW); u.mem_map(TSD, 0x10000, RW)
         for base, sz in ((TRAP, TRAP_SZ), (RET, 0x10000), (GATE, 0x10000)): u.mem_map(base, sz, UC_PROT_EXEC | UC_PROT_READ)
         self.w = []; self.fault = None; self.stop = None; self.hit = set()
-        u.hook_add(UC_HOOK_MEM_WRITE, lambda uc, acc, addr, size, val, d: self.w.append((addr, size)))
+        self.wpatch, self.wcode = set(), set()   # bytes written from the patch area (rewrite blocks' red-zone scratch) / from anywhere else
+        def wr(uc, acc, addr, size, val, d):
+            self.w.append((addr, size))
+            if self.patched: (self.wpatch if uc.reg_read(UC_ARM64_REG_PC) >= IB + PO else self.wcode).update(range(addr, addr + size))
+        u.hook_add(UC_HOOK_MEM_WRITE, wr)
         def bad(uc, acc, addr, size, val, d): self.fault = (acc, addr); return False
         u.hook_add(UC_HOOK_MEM_INVALID, bad)
         def at(reason):
@@ -113,12 +107,11 @@ class Emu:
         u.hook_add(UC_HOOK_CODE, at(lambda a: ('ret',)), begin=RET, end=RET + 0xFFFF)
         if patched:
             u.hook_add(UC_HOOK_CODE, at(lambda a: ('gate', self.gate_site())), begin=GATE, end=GATE + 0xFFFF)
-            for a, s in mut.items():           # 变异块是否被执行 | Whether the mutated block was executed
+            for a, s in mut.items():           # Whether the mutated block was executed
                 u.hook_add(UC_HOOK_CODE, lambda uc, addr, size, d: self.hit.add(addr), begin=IB + s, end=IB + s)
         else:
             for g in gsites: u.hook_add(UC_HOOK_CODE, at(lambda a: ('gate', a - IB)), begin=IB + g, end=IB + g)
     def gate_site(self):
-        # 门块：stp x29,x30,[sp,#-16]! ; 键页取 KGATE ; ldr x29,[sp] ; blr x30 ← 返回点，块尾 b 原址+4
         # Gate block: stp x29,x30,[sp,#-16]! ; fetch KGATE via key page ; ldr x29,[sp] ; blr x30 ← return point, block ends with b original address+4
         r = self.u.reg_read(UC_ARM64_REG_X30) - IB
         return btarget(pat, r + 4) - 4
@@ -127,14 +120,14 @@ class Emu:
             if ARENA <= a < ARENA + ARENA_SZ: self.u.mem_write(a, self.arena0[a - ARENA:a - ARENA + s])
             elif IB <= a < IB + PO: self.u.mem_write(a, self.image[a - IB:a - IB + s])
             elif STK <= a < STK + STK_SZ: self.u.mem_write(a, bytes(s))
-        self.w.clear(); self.fault = None; self.stop = None
+        self.w.clear(); self.wpatch.clear(); self.wcode.clear(); self.fault = None; self.stop = None
     def run(self, fn, init, budget):
         u = self.u; self.restore()
         for r, v in zip(GP, init['g']): u.reg_write(r, v)
         for r, v in zip(VR, init['v']): u.reg_write(r, v)
         u.reg_write(UC_ARM64_REG_X30, RET)
         u.reg_write(UC_ARM64_REG_SP, SP0); u.reg_write(UC_ARM64_REG_NZCV, init['nzcv'])
-        u.reg_write(UC_ARM64_REG_FPCR, 0); u.reg_write(UC_ARM64_REG_FPSR, 0)   # 每次试验从同一浮点控制 / 状态起，不跨函数泄漏 | Every trial starts from the same floating-point control / status, no leakage across functions
+        u.reg_write(UC_ARM64_REG_FPCR, 0); u.reg_write(UC_ARM64_REG_FPSR, 0)   # Every trial starts from the same floating-point control / status, no leakage across functions
         u.mem_write(SP0, init['stk'])
         if self.patched:
             u.reg_write(UC_ARM64_REG_TPIDRRO_EL0, TSD)
@@ -155,17 +148,21 @@ class Emu:
         if self.patched:
             rq = lambda a: struct.unpack('<Q', u.mem_read(a, 8))[0]
             g[18] = rq(TSD + 8 * K18); tp = rq(TSD + 8 * KTLS)
-            if self.stop[0] == 'gate': sp += 16   # 门块 blr 前已还原 x29（r26），活寄存器直接比；x30 是门返回点，下面置空 | The gate block has already restored x29 before blr (r26), live registers are compared directly; x30 is the gate return point and is cleared below
-        if self.stop[0] in ('gate', 'import'): g[30] = None   # 门 / 导入处的 x30 是各自的返回点，不可比 | x30 at a gate / import is each side's own return point, not comparable
+            if self.stop[0] == 'gate': sp += 16   # The gate block has already restored x29 before blr (r26), live registers are compared directly; x30 is the gate return point and is cleared below
+        if self.stop[0] in ('gate', 'import'): g[30] = None   # x30 at a gate / import is each side's own return point, not comparable
         if self.stop[0] == 'gate' and not self.patched: g[30] = None
         return {'stop': self.stop, 'g': g, 'sp': sp, 'nzcv': u.reg_read(UC_ARM64_REG_NZCV), 'tp': tp,
                 'v': [u.reg_read(r) for r in VR]}
 
 def mem_diff(eo, ep, sp):
-    addrs = set()
+    addrs, worig = set(), set()
+    for a, s in eo.w: worig.update(range(a, a + s))
     for a, s in eo.w + ep.w:
         for x in range(a, a + s):
             if not (STK <= x < sp) and not (TSD <= x < TSD + 0x10000): addrs.add(x)
+    # Red-zone scratch of the rewrite blocks: below the entry sp the stack holds nothing at entry, so a byte the original never wrote and the
+    # rewritten image wrote only from the patch area is leftover scratch that a later frame (after sp moved down) has not initialized yet
+    addrs -= {x for x in ep.wpatch - ep.wcode - worig if STK <= x < SP0}
     for x in sorted(addrs):
         if eo.u.mem_read(x, 1) != ep.u.mem_read(x, 1): return x
     return None
@@ -198,22 +195,22 @@ def work(job):
         for t in range(A.trials):
             init = init_state(rng)
             so = eo.run(fn, init, A.budget); ep.hit.clear()
-            sp_ = ep.run(fn, init, A.budget * 4)          # 改写件每个改写点多跑几条指令 | The rewritten image runs a few more instructions per rewrite site
+            sp_ = ep.run(fn, init, A.budget * 4)          # The rewritten image runs a few more instructions per rewrite site
             st['n'] += 1; st['hit'] |= ep.hit
             k = so['stop'][0]; st['stops'][k] = st['stops'].get(k, 0) + 1
             if so['stop'][0] in ('budget',) or sp_['stop'][0] == 'budget': continue
             if not (STK <= so['sp'] <= STK + STK_SZ and STK <= sp_['sp'] <= STK + STK_SZ):
-                st['stops']['sp越界'] = st['stops'].get('sp越界', 0) + 1; continue   # 随机长度的变长栈分配把 sp 推出栈区：真实运行不会发生，改写块用 sp 下方红区（苹果 ABI 128 字节）在此会先异常 | A variable-length stack allocation of random length pushes sp out of the stack area: cannot happen in a real run; the rewrite block uses the red zone below sp (Apple ABI, 128 bytes) and would fault first here
+                st['stops']['sp_oob'] = st['stops'].get('sp_oob', 0) + 1; continue   # A variable-length stack allocation of random length pushes sp out of the stack area: cannot happen in a real run; the rewrite block uses the red zone below sp (Apple ABI, 128 bytes) and would fault first here
             if so['stop'][0] == 'fault' and sp_['stop'][0] == 'fault':
-                if so['stop'][1][1] != sp_['stop'][1][1]: st['diffs'].append((t, 'fault地址', so['stop'], sp_['stop']))
+                if so['stop'][1][1] != sp_['stop'][1][1]: st['diffs'].append((t, 'fault_addr', so['stop'], sp_['stop']))
                 continue
-            if so['stop'] != sp_['stop']: st['diffs'].append((t, '停点', so['stop'], sp_['stop'])); continue
+            if so['stop'] != sp_['stop']: st['diffs'].append((t, 'stop', so['stop'], sp_['stop'])); continue
             st['eff'] += 1
             fl = [k for k in ('g', 'sp', 'nzcv', 'tp', 'v') if so[k] != sp_[k]]
             if 'g' in fl: fl[fl.index('g')] = 'x' + ','.join(str(i) for i in range(31) if so['g'][i] != sp_['g'][i])
             m = mem_diff(eo, ep, so['sp'])
             if m is not None: fl.append(f'mem@{m:#x}')
-            if fl: st['diffs'].append((t, '终态', so['stop'], fl))
+            if fl: st['diffs'].append((t, 'final_state', so['stop'], fl))
         out.append((fn, st))
     return out
 
@@ -245,6 +242,6 @@ if __name__ == '__main__':
             if IB + sa in s['hit']:
                 hit += 1; caught += bool(s['diffs'])
     ok = not bad
-    print(f'FNFUZZ {A.mod} {"OK" if ok else "FAIL"} 函数={len(res)} 试验={n} 有效={eff} 停点={stops} 有效≥1函数={len(res) - len(noeff)} '
-          f'零有效函数={len(noeff)} 分歧函数={len(bad)} 变异={len(mut)} 被执行={hit} 抓到={caught} seed={A.seed} trials={A.trials}', flush=True)
+    print(f'FNFUZZ {A.mod} {"OK" if ok else "FAIL"} funcs={len(res)} total_trials={n} eff_trials={eff} stops={stops} funcs_eff_ge1={len(res) - len(noeff)} '
+          f'zero_eff_funcs={len(noeff)} diff_funcs={len(bad)} mutations={len(mut)} executed={hit} caught={caught} seed={A.seed} trials={A.trials}', flush=True)
     sys.exit(0 if ok else 1)

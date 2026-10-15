@@ -25,7 +25,7 @@
 import sys, os, re, struct, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 import nsoimg
-DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # 工作区根目录（游戏文件、产物、运行现场都在它下面） | Workspace root (game files, build outputs and run artifacts are all under it)
+DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 
 def _llvm_bin():
     if os.environ.get('LLVM_BIN'): return os.environ['LLVM_BIN']
@@ -54,7 +54,7 @@ def elf_wrap(blob, path):
         f.write(ehdr + blob + shstr + bytes(sh_off - str_off - len(shstr)))
         f.write(bytes(64) + sh(1, 1, 6, text_off, len(blob), 4) + sh(7, 3, 0, str_off, len(shstr), 1))
 def llvm_dis(blob, base):
-    """按原始字节反汇编，返回相关行 {偏移: 小写指令文本}。 | Disassemble from raw bytes and return the relevant lines {offset: lowercase instruction text}."""
+    """Disassemble from raw bytes and return the relevant lines {offset: lowercase instruction text}."""
     with tempfile.TemporaryDirectory() as td:
         b, e = os.path.join(td, 'x.bin'), os.path.join(td, 'x.elf')
         open(b, 'wb').write(blob)
@@ -62,7 +62,6 @@ def llvm_dis(blob, base):
             subprocess.run([f'{LLVM}/llvm-objcopy', '-I', 'binary', '-O', 'elf64-littleaarch64',
                             '--rename-section', '.data=.text,code', b, e], check=True)
         else: elf_wrap(blob, e)
-        # 只留可能相关的行（x18/w18、tpidr、svc、cnt?ct），几百万行的筛选交给 grep
         # Keep only potentially relevant lines (x18/w18, tpidr, svc, cnt?ct); filtering millions of lines is left to grep
         od = subprocess.Popen([f'{LLVM}/llvm-objdump', '-d', '--no-show-raw-insn', e], stdout=subprocess.PIPE)
         r = subprocess.run(['/usr/bin/grep', '-iE', r'[xw]18|tpidr|svc|cnt[pv]ct'], stdin=od.stdout, capture_output=True, text=True)
@@ -93,21 +92,20 @@ for l in open(f'{out_dir}/{mod}.sites.tsv'):
     else: sites[a] = f[1]
 inwin = set(o for lo, hi in wins for o in range(lo, hi, 4))
 
-# ⓪ 已登记剪口
 # ⓪ Registered cuts
 cuts = []; bid = None
 for l in open(f'{out_dir}/{mod}.cuts.tsv'):
     if l.startswith('# BUILD_ID'): bid = l.split()[-1]; continue
     off, ob, nb, why = l.rstrip('\n').split('\t', 3)
     cuts.append((int(off, 16), bytes.fromhex(ob), bytes.fromhex(nb), why))
-if bid != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad(f'cuts.tsv 构建号 {bid} 与 NSO 不符')
+if bid != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad(f'cuts.tsv build ID {bid} does not match the NSO')
 cutb = set()
 for off, ob, nb, why in cuts:
-    if orig[off:off + len(ob)] != ob: bad(f'剪口 {off:#x} 原字节不符')
-    for k in range(0, len(nb), 4):                               # 新字节里的 svc 字随后被改写成门（头是 B），按改写点核，这里跳过 | The svc words in the new bytes are subsequently rewritten into gates (head is B) and checked as rewrite sites; skipped here
+    if orig[off:off + len(ob)] != ob: bad(f'cut {off:#x}: original bytes do not match')
+    for k in range(0, len(nb), 4):                               # The svc words in the new bytes are subsequently rewritten into gates (head is B) and checked as rewrite sites; skipped here
         if int.from_bytes(nb[k:k + 4], 'little') & 0xFFE0001F == 0xD4000001: continue
-        if pat[off + k:off + k + len(nb[k:k + 4])] != nb[k:k + 4]: bad(f'剪口 {off:#x}+{k} 改写映像不是新字节'); break
-    if not why.strip() or len(ob) != len(nb): bad(f'剪口 {off:#x} 理由为空或长度不等')
+        if pat[off + k:off + k + len(nb[k:k + 4])] != nb[k:k + 4]: bad(f'cut {off:#x}+{k}: rewritten image is not the new bytes'); break
+    if not why.strip() or len(ob) != len(nb): bad(f'cut {off:#x}: empty reason or unequal lengths')
     cutb |= set(range(off, off + len(ob)))
 # Host-call gates produced by cuts: a word in the cut's new bytes that decodes to svc #N (N = 0x80–0xff; the handler is registered at run time by the
 # game's hooks, host/hle.h dm_host_call_register). The form is read from the bytes:
@@ -132,48 +130,46 @@ for off, ob, nb, why in cuts:
         elif _bl(W(orig, a), a) is not None:
             if len(nb) != 4: bad(f'host call svc #{n:#x} {a:#x}: a call-site cut may replace only that one bl')
         else: bad(f'host call svc #{n:#x} {a:#x}: neither entry form (svc ; ret at a function entry) nor call-site form (replaces a bl)')
-if cutb & {a + i for a in list(sites) + list(inwin) if a not in _hostcall for i in range(4)}: bad('剪口与改写点 / 窗口重叠')
+if cutb & {a + i for a in list(sites) + list(inwin) if a not in _hostcall for i in range(4)}: bad('cuts overlap rewrite sites / windows')
 ncut_code = sum(1 for c in cuts if c[0] < TE); ncut_data = len(cuts) - ncut_code
 obs = []
 obs_p = f'{out_dir}/{mod}.obs.tsv'
 if os.path.exists(obs_p):
     for l in open(obs_p, encoding='utf-8'):
         if l.startswith('# BUILD_ID'):
-            if l.split()[-1] != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad('obs.tsv 构建号与 NSO 不符')
+            if l.split()[-1] != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad('obs.tsv build ID does not match the NSO')
             continue
         off, oid, ow, why = l.rstrip('\n').split('\t', 3); obs.append((int(off, 16), int(oid), int(ow, 16), why))
 obs_heads = {o for o, *_ in obs}
-params = []                                                          # 参数门（params.tsv，r11 起）：(A 偏移, B 偏移, 寄存器号, 键名) | Parameter gates (params.tsv, since r11): (A offset, B offset, register number, key name)
+params = []                                                          # Parameter gates (params.tsv, since r11): (A offset, B offset, register number, key name)
 par_p = f'{out_dir}/{mod}.params.tsv'
 if os.path.exists(par_p):
     for l in open(par_p, encoding='utf-8'):
         if l.startswith('# BUILD_ID'):
-            if l.split()[-1] != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad('params.tsv 构建号与 NSO 不符')
+            if l.split()[-1] != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad('params.tsv build ID does not match the NSO')
             continue
         a, b, r, k, why = l.rstrip('\n').split('\t', 4)
-        if not why.strip(): bad(f'参数门 {a} 理由为空')
+        if not why.strip(): bad(f'parameter gate {a}: empty reason')
         params.append((int(a, 16), int(b, 16), int(r.lstrip('x')), k))
 par_words = {o for a, b, r, k in params for o in (a, b)}
 
-# ① 非 text 段：先整块比，块不同再逐字节，差异只许落在剪口里（剪口字节已在 ⓪ 按应有值核过）
 # ① Non-text segments: compare whole blocks first, then byte by byte where blocks differ; differences may only fall inside cuts (cut bytes were already checked against their expected values in ⓪)
 nd = []
 for blk in range(TE, len(orig), 4096):
     e = min(blk + 4096, len(orig))
     if pat[blk:e] != orig[blk:e]: nd += [o for o in range(blk, e) if pat[o] != orig[o] and o not in cutb]
-if nd: bad(f'非 text 段与原映像不同（剪口以外）{len(nd)} 字节 例 {[hex(x) for x in nd[:5]]}')
-if any(pat[len(orig):PO]): bad('映像尾到补丁区之间非 0')
+if nd: bad(f'non-text segments differ from the original image (outside cuts): {len(nd)} bytes, e.g. {[hex(x) for x in nd[:5]]}')
+if any(pat[len(orig):PO]): bad('non-zero bytes between the end of the image and the patch area')
 
-# ② text 改动 == 改写点头
 # ② text changes == rewrite site heads
 diff = set()
-for blk in range(0, TE & ~3, 4096):                    # 先整块比，块不同再逐字 | Compare whole blocks first, then word by word where blocks differ
+for blk in range(0, TE & ~3, 4096):                    # Compare whole blocks first, then word by word where blocks differ
     e = min(blk + 4096, TE & ~3)
     if orig[blk:e] != pat[blk:e]: diff |= {o for o in range(blk, e, 4) if W(orig, o) != W(pat, o)}
 heads = set(sites)
 cutw = {o & ~3 for o in cutb if o < TE}
-_exp = (heads | obs_heads | par_words) - cutw; _got = diff - cutw                # 剪口里的宿主调用门头在剪口字节里，按剪口核 | Host-call gate heads inside cuts are within the cut bytes and are checked as cuts
-if _got != _exp: bad(f'text 改动与改写点不一致：多改 {len(_got - _exp)} 漏改 {len(_exp - _got)} 例 {[hex(x) for x in sorted(_got ^ _exp)[:5]]}')
+_exp = (heads | obs_heads | par_words) - cutw; _got = diff - cutw                # Host-call gate heads inside cuts are within the cut bytes and are checked as cuts
+if _got != _exp: bad(f'text changes do not match rewrite sites: {len(_got - _exp)} extra, {len(_exp - _got)} missing, e.g. {[hex(x) for x in sorted(_got ^ _exp)[:5]]}')
 def btarget(o):
     w = W(pat, o)
     if w & 0xFC000000 != 0x14000000: return None
@@ -181,12 +177,11 @@ def btarget(o):
     if imm & 0x2000000: imm -= 0x4000000
     return o + 4 * imm
 nb = [a for a in heads | obs_heads if not (btarget(a) is not None and PO <= btarget(a) < len(pat))]
-if nb: bad(f'改写点头不是跳进补丁区的 B：{len(nb)} 例 {[hex(x) for x in nb[:5]]}')
+if nb: bad(f'rewrite site heads that are not a B into the patch area: {len(nb)}, e.g. {[hex(x) for x in nb[:5]]}')
 
-# ③ 独立分母
 # ③ Independent denominator
 def cached_dis(blob):
-    """原映像是固定数据：相关行按 sha 缓存（llvm 换版本另起键），只在首次付反汇编的十来秒。 | The original image is fixed data: relevant lines are cached by sha (a new llvm version gets a new key), so the ten-odd seconds of disassembly are paid only the first time."""
+    """The original image is fixed data: relevant lines are cached by sha (a new llvm version gets a new key), so the ten-odd seconds of disassembly are paid only the first time."""
     import hashlib, json
     cd = os.environ.get('DM_VCACHE', os.path.join(DM_ROOT, 'build/cache/dm/verify'))
     ver = hashlib.sha256(subprocess.run([f'{LLVM}/llvm-objdump', '--version'], capture_output=True).stdout).hexdigest()[:8]
@@ -202,20 +197,18 @@ for o, t in D.items():
     k = sysk(t)
     if k: ind[o] = k
 miss = sorted(o for o in ind if o not in sites and o not in inwin)
-if miss: bad(f'独立反汇编有、改写点没覆盖：{len(miss)} 例 {[(hex(x), D[x]) for x in miss[:5]]}')
-extra = sorted(a for a, k in sites.items() if k != 'W' and a not in ind and a not in _hostcall)   # 剪口引入的 svc 不在原映像里 | The svc introduced by a cut is not in the original image
-if extra: bad(f'改写点不在独立集合里：{len(extra)} 例 {[(hex(x), D.get(x)) for x in extra[:5]]}')
+if miss: bad(f'in the independent disassembly but not covered by rewrite sites: {len(miss)}, e.g. {[(hex(x), D[x]) for x in miss[:5]]}')
+extra = sorted(a for a, k in sites.items() if k != 'W' and a not in ind and a not in _hostcall)   # The svc introduced by a cut is not in the original image
+if extra: bad(f'rewrite sites not in the independent set: {len(extra)}, e.g. {[(hex(x), D.get(x)) for x in extra[:5]]}')
 kmis = sorted(a for a, k in sites.items() if k != 'W' and a in ind and ind[a] != k)
-if kmis: bad(f'改写点种类与独立判读不同：{len(kmis)} 例 {[(hex(x), sites[x], D[x]) for x in kmis[:5]]}')
+if kmis: bad(f'rewrite site kind differs from the independent reading: {len(kmis)}, e.g. {[(hex(x), sites[x], D[x]) for x in kmis[:5]]}')
 nwin_ref = sum(1 for o in ind if o in inwin)
 
-# ④ 补丁区干净
 # ④ Patch area is clean
 P = llvm_dis(pat[PO:], PO)
 left = sorted(o for o, t in P.items() if RX18.search(t) or sysk(t) not in (None, 'tpidrro_r'))
-if left: bad(f'补丁区残留 x18/系统寄存器/svc：{len(left)} 例 {[(hex(x), P[x]) for x in left[:5]]}')
+if left: bad(f'patch area still contains x18/system registers/svc: {len(left)}, e.g. {[(hex(x), P[x]) for x in left[:5]]}')
 
-# ⑤ 宿主门
 # ⑤ Host gates
 KEY = {k[4:-4]: v for k, v in h.items() if k.startswith('KEY_') and k.endswith('_IDX')}
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
@@ -253,7 +246,6 @@ gates = {}
 for l in open(f'{out_dir}/{mod}.gates.tsv'):
     r, k, arg, oa = l.split(); gates[int(r, 16)] = (k, int(arg), int(oa, 16))
 def B(frm, to): return 0x14000000 | (((to - frm) >> 2) & 0x3FFFFFF)
-# 门块 blr 前须有 ldr x29,[sp]：键页取槽借用的 x29 还原成客体原值，宿主读到的 x29 才是真帧指针（r26，见 patch_nso emit_gate_call）
 # The gate block must have ldr x29,[sp] before blr: the x29 borrowed for fetching the slot via the key page is restored to the guest's original value, so the x29 the host reads is the real frame pointer (r26, see patch_nso emit_gate_call)
 LDR_X29_SP = 0xF94003FD
 gsites = sorted(a for a, k in sites.items() if k in ('svc', 'cntpct', 'cntvct'))
@@ -264,53 +256,49 @@ for a in gsites:
     if W(pat, s) != 0xA9BF7BFD or not ks or ks[1] != KEY.get('KGATE') \
             or W(pat, ks[0]) & 0xFFC00000 != 0xF9400000 or W(pat, ks[0] + 4) != LDR_X29_SP or W(pat, ks[0] + 8) != 0xD63F03C0 \
             or W(pat, ks[0] + 12) != 0xA8C17BFD or W(pat, ks[0] + 16) != B(ks[0] + 16, a + 4):
-        bad(f'门块不符键页模板 {a:#x}'); continue
+        bad(f'gate block does not match the key page template {a:#x}'); continue
     arg = (ow >> 5) & 0xFFFF if sites[a] == 'svc' else ow & 31
     g = gates.get(ks[0] + 12)
-    if g != (sites[a], arg, a): bad(f'gates.tsv 不符 {a:#x}：表 {g} 期望 {(sites[a], arg, a)}')
+    if g != (sites[a], arg, a): bad(f'gates.tsv mismatch {a:#x}: table {g} expected {(sites[a], arg, a)}')
     seen.add(ks[0] + 12)
-# ⑦ 观测门
 # ⑦ Observation gates
 import bisect as _bs
 _starts = set(nsoimg.func_starts(orig, TE))
 _busy = {a + i for a in list(sites) + list(inwin) for i in range(4)} | cutb
 for off, oid, ow, why in obs:
-    if W(orig, off) != ow: bad(f'观测门 {off:#x} 原指令字不符：映像 {W(orig, off):08x} 登记 {ow:08x}'); continue
+    if W(orig, off) != ow: bad(f'observation gate {off:#x}: original instruction word mismatch: image {W(orig, off):08x} registered {ow:08x}'); continue
     ins = next(_md.disasm(struct.pack('<I', ow), off), None)
     m = ins.mnemonic if ins else '?'
     if ins is None or m in ('adr', 'adrp', 'b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz', 'svc', 'mrs', 'msr', 'eret') or m.startswith('b.') \
        or (m.startswith('ldr') and '[' not in ins.op_str) or RX18.search(ins.op_str or ''):
-        bad(f'观测门 {off:#x} 原指令不可搬：{m} {ins.op_str if ins else ""}')
-    # 不再要求函数入口：_dm_gate 存回 x0–x17、x19–x30、q0–q31 与 NZCV/FPSR/FPCR，函数中间的活寄存器不受影响；
-    # 这条 ABI 由 gatefn 功能核（桩故意破坏 x9–x17 与 NZCV，核全部恢复），不在这里按位置近似
+        bad(f'observation gate {off:#x}: original instruction is not relocatable: {m} {ins.op_str if ins else ""}')
     # Function entry is no longer required: _dm_gate saves and restores x0–x17, x19–x30, q0–q31 and NZCV/FPSR/FPCR, so live registers in the middle of a function are unaffected;
     # this ABI is checked functionally by gatefn (the stub deliberately clobbers x9–x17 and NZCV, and full restoration is checked), not approximated here by position
-    if set(range(off, off + 4)) & _busy: bad(f'观测门 {off:#x} 与改写点 / 窗口 / 剪口重叠')
+    if set(range(off, off + 4)) & _busy: bad(f'observation gate {off:#x} overlaps rewrite sites / windows / cuts')
     s_ = btarget(off)
-    if s_ is None or not (PO <= s_ < len(pat)): bad(f'观测门头 {off:#x} 不是跳进补丁区的 B'); continue
+    if s_ is None or not (PO <= s_ < len(pat)): bad(f'observation gate head {off:#x} is not a B into the patch area'); continue
     ks = keyseq(s_ + 4)
     if W(pat, s_) != 0xA9BF7BFD or not ks or ks[1] != KEY.get('KGATE') \
             or W(pat, ks[0]) & 0xFFC00000 != 0xF9400000 or W(pat, ks[0] + 4) != LDR_X29_SP or W(pat, ks[0] + 8) != 0xD63F03C0 \
             or W(pat, ks[0] + 12) != 0xA8C17BFD or W(pat, ks[0] + 16) != ow \
             or W(pat, ks[0] + 20) != B(ks[0] + 20, off + 4):
-        bad(f'观测门块不符键页模板 {off:#x}'); continue
-    if gates.get(ks[0] + 12) != ('obs', oid, off): bad(f'观测门行不符 {off:#x}：表 {gates.get(ks[0] + 12)}')
+        bad(f'observation gate block does not match the key page template {off:#x}'); continue
+    if gates.get(ks[0] + 12) != ('obs', oid, off): bad(f'observation gate row mismatch {off:#x}: table {gates.get(ks[0] + 12)}')
     seen.add(ks[0] + 12)
-if set(gates) != seen: bad(f'gates.tsv 有多余行 {len(set(gates) - seen)}')
+if set(gates) != seen: bad(f'gates.tsv has extra rows: {len(set(gates) - seen)}')
 
-# ⑥ 线程槽
 # ⑥ Thread slots
-_base = {'K18', 'KTLS', 'KTLR', 'KGATE'}; _extra = set(KEY) - _base   # 额外键 = 参数门键（KRES* / KASPECT* …；改写器全局键表，三模块表头都列）：须是 K 开头大写名、键号低于基础四键 | Extra keys = parameter-gate keys (KRES* / KASPECT* ...; the rewriter's global key table, listed in the headers of all three modules): must be uppercase names starting with K, with key numbers below the four base keys
+_base = {'K18', 'KTLS', 'KTLR', 'KGATE'}; _extra = set(KEY) - _base   # Extra keys = parameter-gate keys (KRES* / KASPECT* ...; the rewriter's global key table, listed in the headers of all three modules): must be uppercase names starting with K, with key numbers below the four base keys
 if set(KEY) != {'K18', 'KTLS', 'KTLR', 'KGATE', 'KPARAM0', 'KPARAM1', 'KPARAM2', 'KPARAM3'} \
         or not {k for *_, k in params} <= set(KEY) or set(KEY.values()) != set(range(8)):
-    bad(f'表头键页下标不合规：{KEY}（须含八个键且下标恰为 0..7）')
+    bad(f'header key page indices are invalid: {KEY} (must contain eight keys with indices exactly 0..7)')
 kv = {v: k for k, v in KEY.items()}; nk = {}
 for o in range(PO, len(pat) - 4, 4):
     w = W(pat, o)
     if w & 0xFFFFFFE0 != 0xD53BD060: continue           # mrs xN, tpidrro_el0
     n = w & 31; ks = keyseq(o); k = kv.get(ks[1]) if ks else None
     if not ks or k is None:
-        bad(f'补丁区 {o:#x} 读 tpidrro 后不是键页间接槽序列'); continue
+        bad(f'patch area {o:#x}: tpidrro read is not followed by the key page indirect slot sequence'); continue
     nk[k] = nk.get(k, 0) + 1
 expected = {}
 for kind in sites.values():
@@ -319,12 +307,8 @@ for kind in sites.values():
 expected['KGATE'] = len(gsites) + len(obs)
 for _, _, _, key in params: expected[key] = expected.get(key, 0) + 1
 if any(nk.get(k, 0) != v for k, v in expected.items()) or any(k not in expected and v for k, v in nk.items()):
-    bad(f'键页槽访问计数不符：期望 {expected} 实际 {nk}')
+    bad(f'key page slot access counts do not match: expected {expected} actual {nk}')
 
-# ⑧ 参数门（PARAMS，仅宿主）：原处 movz xR,#lo / movk xR,#hi,lsl #32 造的 64 位常数，等长换成 mrs xR,tpidrro_el0 / ldr xR,[xR,#键*8]
-#   核：A 原字是 64 位 movz（hw=0）写 xR、B 原字是 64 位 movk（hw=2）写 xR；新字逐位 = 模板；A、B 之间的指令不读写 xR；
-#   (A, B] 不是任何直接分支的目标、也不是函数入口（否则从中间进来的路径会拿到槽指针而不是常数）；键号在表头登记；不与改写点 / 剪口 / 观测门重叠。
-#   宿主给槽原值（宽高打包 = 下列常数）时语义与原两条逐位等价：B 之后 xR 同值，A、B 之间无人读 xR。
 # ⑧ Parameter gates (PARAMS, host only): a 64-bit constant originally built by movz xR,#lo / movk xR,#hi,lsl #32 is replaced at equal length by mrs xR,tpidrro_el0 / ldr xR,[xR,#key*8]
 #   Checks: original word A is a 64-bit movz (hw=0) writing xR, original word B is a 64-bit movk (hw=2) writing xR; the new words = the template bit for bit; instructions between A and B do not read or write xR;
 #   (A, B] is not the target of any direct branch nor a function entry (otherwise a path entering in the middle would get the slot pointer instead of the constant); the key number is registered in the header; no overlap with rewrite sites / cuts / observation gates.
@@ -334,7 +318,7 @@ if params:
     import capstone
     _cs = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM); _cs.detail = True
     _tg = set()
-    for o in range(0, TE & ~3, 4):                                  # 全 text 直接分支目标 | Direct branch targets across all of text
+    for o in range(0, TE & ~3, 4):                                  # Direct branch targets across all of text
         w = W(orig, o)
         if w & 0x7C000000 == 0x14000000: d = ((w & 0x3FFFFFF) ^ 0x2000000) - 0x2000000; _tg.add(o + 4 * d)
         elif w & 0xFF000010 == 0x54000000 or w & 0x7E000000 == 0x34000000: d = (((w >> 5) & 0x7FFFF) ^ 0x40000) - 0x40000; _tg.add(o + 4 * d)
@@ -343,37 +327,32 @@ if params:
     _busy8 = {a for a in sites} | set(inwin) | obs_heads | {o & ~3 for o in cutb}
     for a, b, r, k in params:
         wa, wb = W(orig, a), W(orig, b)
-        # 两种原指令对：64 位 movz xR,#lo / movk xR,#hi,lsl #32（KRES*）；32 位 movz wR,#lo / movk wR,#hi,lsl #16（KASPECT*，原值 = hi<<16|lo，
-        # 写 w 寄存器高 32 位清零 ⇒ 宿主槽须按 u32 位模式存、高 32 位为 0（运行期约束，静态核不到，见 platform thread.c）
         # Two kinds of original instruction pair: 64-bit movz xR,#lo / movk xR,#hi,lsl #32 (KRES*); 32-bit movz wR,#lo / movk wR,#hi,lsl #16 (KASPECT*, original value = hi<<16|lo,
         # writing a w register zeroes the upper 32 bits ⇒ the host slot must be stored as a u32 bit pattern with the upper 32 bits 0 (a runtime constraint that cannot be checked statically, see platform thread.c)
         w64 = wa & 0xFFE00000 == 0xD2800000 and wb & 0xFFE00000 == 0xF2C00000
         w32 = wa & 0xFFE00000 == 0x52800000 and wb & 0xFFE00000 == 0x72A00000
         if not (w64 or w32) or wa & 31 != r or wb & 31 != r:
-            bad(f'参数门 {a:#x}/{b:#x}：原指令 {wa:#010x}/{wb:#010x} 不是 movz/movk 造常数对（64 位 lsl #32 或 32 位 lsl #16）写 x{r}')
-        if not a < b: bad(f'参数门 {a:#x}/{b:#x} 顺序不对')
-        if k not in KEY: bad(f'参数门 {a:#x} 键 {k} 未在表头登记'); continue
+            bad(f'parameter gate {a:#x}/{b:#x}: original instructions {wa:#010x}/{wb:#010x} are not a movz/movk constant-building pair (64-bit lsl #32 or 32-bit lsl #16) writing x{r}')
+        if not a < b: bad(f'parameter gate {a:#x}/{b:#x}: wrong order')
+        if k not in KEY: bad(f'parameter gate {a:#x}: key {k} is not registered in the header'); continue
         s = btarget(a); ks = paramseq(s, r) if s is not None else None
         ok = ks and ks[1] == KEY[k] and W(pat, b) == 0xD503201F
-        if not ok: bad(f'参数门 {a:#x}/{b:#x}：键页间接模板不符')
+        if not ok: bad(f'parameter gate {a:#x}/{b:#x}: key page indirect template mismatch')
         for o in range(a + 4, b, 4):
             ins = next(_cs.disasm(orig[o:o + 4], o), None)
-            if ins is None: bad(f'参数门 {a:#x}：中间 {o:#x} 解不出'); continue
+            if ins is None: bad(f'parameter gate {a:#x}: {o:#x} in between cannot be decoded'); continue
             rr, ww = ins.regs_access()
             names = {ins.reg_name(x) for x in rr + ww}
-            if f'x{r}' in names or f'w{r}' in names: bad(f'参数门 {a:#x}：中间 {o:#x} {ins.mnemonic} {ins.op_str} 读写 x{r}')
+            if f'x{r}' in names or f'w{r}' in names: bad(f'parameter gate {a:#x}: {o:#x} {ins.mnemonic} {ins.op_str} in between reads/writes x{r}')
         bt = sorted(t for t in _tg if a < t <= b) + sorted(t for t in _fs if a < t <= b)
-        if bt: bad(f'参数门 {a:#x}..{b:#x}：区间内有分支目标 / 函数入口 {[hex(x) for x in bt[:4]]}')
-        if {a, b} & _busy8: bad(f'参数门 {a:#x}/{b:#x} 与改写点 / 窗口 / 观测门 / 剪口重叠')
+        if bt: bad(f'parameter gate {a:#x}..{b:#x}: branch target / function entry inside the range {[hex(x) for x in bt[:4]]}')
+        if {a, b} & _busy8: bad(f'parameter gate {a:#x}/{b:#x} overlaps rewrite sites / windows / observation gates / cuts')
         par_const[(a, k)] = ((wb >> 5) & 0xFFFF) << (16 if w32 else 32) | ((wa >> 5) & 0xFFFF)
     _kc = {}
     for (a, k), v in par_const.items(): _kc.setdefault(k, set()).add(v)
     for k, vs in _kc.items():
-        if len(vs) != 1: bad(f'参数门键 {k} 对应多个原常数 {[hex(v) for v in vs]}（同一槽给不出唯一原值）')
-    print('参数门 ' + ', '.join(f'{a:#x}={k}:原值 {v:#x}' for (a, k), v in par_const.items()))
-    # 参数寄存器的下游不得再被常数掩码：编译器会把「值只可能是这几个常数」折进后续指令——运行模式通知处理 0xe10e48 的
-    # mov w9,#0x740; and x9,x25,x9 就是 1280|1600 推出的掩码，换成参数后宽度被掩成 768 / 64。从每个参数位起按函数内线性顺序做污点传播
-    # （mov / csel 类传递，其余写入清除；不跟分支，属保守近似），被污染的寄存器遇到 and / ands / bic 且另一操作数是立即数或 mov 立即数造的寄存器即报
+        if len(vs) != 1: bad(f'parameter gate key {k} maps to several original constants {[hex(v) for v in vs]} (one slot cannot give a unique original value)')
+    print('parameter gates ' + ', '.join(f'{a:#x}={k}:original {v:#x}' for (a, k), v in par_const.items()))
     # Downstream of a parameter register there must be no further masking by a constant: the compiler folds "the value can only be one of these constants" into later instructions - in the operation mode notification handler at 0xe10e48,
     # mov w9,#0x740; and x9,x25,x9 is exactly a mask derived from 1280|1600, and once replaced by a parameter the width gets masked to 768 / 64. From each parameter site, do taint propagation in linear order within the function
     # (mov / csel kinds propagate, other writes clear; branches are not followed, a conservative approximation); report when a tainted register meets and / ands / bic whose other operand is an immediate or a register built by a mov immediate
@@ -397,7 +376,7 @@ if params:
             m = ins.mnemonic
             if m in ('and', 'ands', 'bic', 'bics') and rd & taint:
                 imm = any(op.type == capstone.arm64.ARM64_OP_IMM for op in ins.operands)
-                if imm or (rd - taint) & set(const): bad(f'参数门下游常数掩码 {o:#x}：{m} {ins.op_str}（函数 {f0:#x}，被参数寄存器污染的值再被常数掩码）')
+                if imm or (rd - taint) & set(const): bad(f'constant mask downstream of a parameter gate {o:#x}: {m} {ins.op_str} (function {f0:#x}, a value tainted by the parameter register is masked by a constant again)')
             if m in ('mov', 'csel', 'csinc', 'csinv', 'csneg') and rd & taint: taint |= wr; [const.pop(x, None) for x in wr]
             else:
                 taint -= wr
@@ -406,7 +385,6 @@ if params:
                     if isimm: const[x] = ins.operands[1].imm
                     else: const.pop(x, None)
 
-# ⑨ 临时寄存器静态检查：每个补丁块的非原指令目的寄存器必须有同偏移红区存取配对。
 # ⑨ Static check of temporary registers: every non-original-instruction destination register in a patch block must have a matching red-zone save/restore pair at the same offset.
 import capstone
 def _writes(ins):
@@ -446,7 +424,7 @@ for a, allowed in static_entries:
     if s is None: continue
     if next(_md.disasm(orig[a:a + 4], a), None) is not None and W(orig, a) == 0x9100025F:          # mov sp, x18
         static_seen += 1; n_movsp += 1
-        if not _movsp_ok(a, s): bad(f'mov sp, x18 块 {a:#x} 不是模板')
+        if not _movsp_ok(a, s): bad(f'mov sp, x18 block {a:#x} is not the template')
         continue
     block = _block(s); static_seen += 1
     if not allowed:
@@ -475,13 +453,9 @@ for a, allowed in static_entries:
         dead = any(ins.mnemonic in ('br', 'blr') and ins.operands and ins.reg_name(ins.operands[0].reg) in (reg, reg[1:]) for ins in block)
         ok = dead or any(sd == rd and si < min(wi, default=10**9) and ri > max(wi, default=-1)
                  for sd, si in saved.get(reg, []) for rd, ri in restored.get(reg, []))
-        if not ok: bad(f'临时寄存器 {a:#x}：块写 {reg}，原目的寄存器外且无同偏移存取配对')
-print(f'STATIC {mod} scanned={static_seen} violations={sum(1 for x in fails if x.startswith("临时寄存器"))} mov_sp_template={n_movsp}')
+        if not ok: bad(f'temp register {a:#x}: block writes {reg}, which is not an original destination register and has no save/restore pair at the same offset')
+print(f'STATIC {mod} scanned={static_seen} violations={sum(1 for x in fails if x.startswith("temp register"))} mov_sp_template={n_movsp}')
 
-# ⑩ 跳板出口（切掌机崩溃：参数门跳板回到 B+4，越过 A、B 之间未改的原指令和另一个跳板头）：
-#   text 里每条跳进补丁区的 b（跳板头 a）沿补丁块走遍全部回 text 的出口（顺序 b 与条件分支，bl 视为返回，ret / br 不算回 text）。
-#   合法出口：a+4；越过的字全是被改写吸收的字（≠ 原字且不是别的跳板头，如参数门 B 处的 nop）后的地址；
-#   窗口（W 行 [lo, hi)）头：hi 与窗口内原指令自己的分支目标；非窗口头：连续吸收段内原指令自己的分支目标。
 # ⑩ Trampoline exits (the handheld-switch crash: the parameter-gate trampoline returned to B+4, skipping the unmodified original instructions between A and B and another trampoline head):
 #   for every b in text that jumps into the patch area (trampoline head a), follow the patch block through all exits back to text (sequential b and conditional branches; bl is treated as returning; ret / br do not count as returning to text).
 #   Legal exits: a+4; the address after skipped words that are all words absorbed by the rewrite (≠ the original word and not another trampoline head, e.g. the nop at parameter-gate B);
@@ -522,14 +496,14 @@ for a in sorted(_heads):
     legal |= {t for o in seg for t in [_bt(W(orig, o), o)] if t is not None}
     for t in _exits(btarget(a)):
         nexit += 1
-        if t not in legal and a in _cutoff: _cutex.append(f'{a:#x}→{t:#x}'); continue   # 已登记剪口（带理由，故意改控制流）：放行并列出 | Registered cuts (with a reason, deliberately changing control flow): let through and listed
-        if t not in legal: bad(f'跳板出口 {a:#x} → {t:#x}：既不是 {a + 4:#x} / 吸收段尾 / 窗口尾，也不是段内原指令的分支目标（越过未改原指令或别的跳板头）')
-print(f'EXITS {mod} 跳板头={len(_heads)} 出口={nexit} 已登记剪口改控制流出口={_cutex}')
+        if t not in legal and a in _cutoff: _cutex.append(f'{a:#x}→{t:#x}'); continue   # Registered cuts (with a reason, deliberately changing control flow): let through and listed
+        if t not in legal: bad(f'trampoline exit {a:#x} → {t:#x}: neither {a + 4:#x} / end of the absorbed span / end of the window, nor a branch target of an original instruction in the span (skips unmodified original instructions or another trampoline head)')
+print(f'EXITS {mod} tramp_heads={len(_heads)} exits={nexit} cut_exits={_cutex}')
 
 cnt = {}
-if _hostcall: print(f'剪口引入宿主调用门 {len(_hostcall)} 个：' + ', '.join(f"{a:#x}=svc#{n:#x}" for a, n in _hostcall.items()))
+if _hostcall: print(f'cuts introduce {len(_hostcall)} host-call gates: ' + ', '.join(f"{a:#x}=svc#{n:#x}" for a, n in _hostcall.items()))
 for k in sites.values(): cnt[k] = cnt.get(k, 0) + 1
-print(f'STRUCT {mod} {"OK" if not fails else "FAIL"} 改写点={len(sites)} {cnt} 跳转表={jumps} 函数指针跳转={fnptr} 窗口内x18引用={nwin_ref} '
-      f'已登记剪口={len(cuts)}(代码{ncut_code}/数据{ncut_data}) 观测门={len(obs)} 参数门={len(params)} '
-      f'独立分母={len(ind)} text改动字={len(diff)} 门={len(gsites)} 槽访问={nk} 失败项={len(fails)}')
+print(f'STRUCT {mod} {"OK" if not fails else "FAIL"} sites={len(sites)} {cnt} jump_tables={jumps} fnptr_jumps={fnptr} x18_in_windows={nwin_ref} '
+      f'cuts={len(cuts)}(code{ncut_code}/data{ncut_data}) obs_gates={len(obs)} param_gates={len(params)} '
+      f'indep_denom={len(ind)} text_words_changed={len(diff)} gates={len(gsites)} slot_accesses={nk} failures={len(fails)}')
 sys.exit(1 if fails else 0)

@@ -24,7 +24,7 @@ HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE
 // save slot showed that date (Naninovel GameStateMap.SaveDateTime). That clock caches GetCurrentTime and extrapolates with GetSystemTick, re-reading only when
 // the context changes (SDK docs: the context changes when the clock is corrected, adjusted or reset).
 // Context: 0x20 bytes (the game compares all 0x20); only the first 8 are set, to wall-clock minus guest-clock nanoseconds. It is re-reported only after it moves
-// by more than 2 s, which happens when the guest clock stops while wall time goes on (iOS background, DM_TICK_HOLD) or the wall clock is changed; the game then
+// by more than 2 s, which happens when the guest clock stops while wall time goes on (iOS background, system keyboard) or the wall clock is changed; the game then
 // re-reads the time. Under DM_FIXED_TIME it is constant.
 HLE_FORCE_OPT("_ZN2nn4time23StandardUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE", "user clock context from the host wall clock vs the guest clock",
               Result, h_time_GetSystemClockContext, uint8_t *out) {

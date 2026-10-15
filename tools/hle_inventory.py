@@ -15,10 +15,10 @@ def body_of(src, start):
 def feat(b):
     s = re.sub(r'\s+', ' ', b)
     f = []
-    if re.fullmatch(r'\{ ?(\(void\)[^;]*; ?)*return (RES_OK|0|RES_FAIL|0x[0-9a-fA-F]+u?|1|true|false); ?\}', s): f.append('只返回常量')
-    if 'RES_FAIL' in s: f.append('含失败返回')
-    if re.search(r'LOG\(|die\(', s): f.append('有日志/中止')
-    if len(s) < 60: f.append('极短')
+    if re.fullmatch(r'\{ ?(\(void\)[^;]*; ?)*return (RES_OK|0|RES_FAIL|0x[0-9a-fA-F]+u?|1|true|false); ?\}', s): f.append('returns-constant')
+    if 'RES_FAIL' in s: f.append('has-failure-return')
+    if re.search(r'LOG\(|die\(', s): f.append('has-log/abort')
+    if len(s) < 60: f.append('very-short')
     return ','.join(f)
 for fn in sorted(glob.glob(os.path.join(H, 'hle_*.c'))):
     src = open(fn, encoding='utf-8').read()
@@ -27,11 +27,11 @@ for fn in sorted(glob.glob(os.path.join(H, 'hle_*.c'))):
     for m in re.finditer(r'(?<![_A-Z])HLE\(\s*"([^"]+)"\s*,\s*([^,]+),\s*(\w+)', src):
         b = body_of(src, m.end()); rows.append(('HLE', os.path.basename(fn), src[:m.start()].count('\n') + 1, m.group(1), m.group(3), '', b.count('\n') + 1, feat(b)))
 src = open(os.path.join(H, 'hle_table.c'), encoding='utf-8').read()
-for n in re.findall(r'\bL\((\w+)\)', src): rows.append(('LIBC', 'hle_table.c', 0, n, n, 'libc 直通', 0, ''))
+for n in re.findall(r'\bL\((\w+)\)', src): rows.append(('LIBC', 'hle_table.c', 0, n, n, 'libc passthrough', 0, ''))
 out = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdout'
 with open(out, 'w', encoding='utf-8') as f:
-    f.write('类别\t文件\t行\t改编名\tC名\t理由\t体行数\t特征\n')
+    f.write('category\tfile\tline\tmangled_name\tc_name\treason\tbody_lines\tfeatures\n')
     for r in rows: f.write('\t'.join(map(str, r)) + '\n')
 from collections import Counter
-print('条目', len(rows), Counter(r[0] for r in rows), file=sys.stderr)
-print('只返回常量 / 极短：', sum(1 for r in rows if '只返回常量' in r[7]), file=sys.stderr)
+print('entries', len(rows), Counter(r[0] for r in rows), file=sys.stderr)
+print('returns-constant / very-short:', sum(1 for r in rows if 'returns-constant' in r[7]), file=sys.stderr)

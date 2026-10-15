@@ -1,3 +1,5 @@
+# NSO → memory image (segments at their memory offsets, LZ4 segments decompressed, .bss zero-filled): the <module>.orig.bin input of sdis.py.
+# Usage: nso.py <NSO file> <output .bin>   prints the segment table, .bss size and module ID
 import sys,struct,lz4.block
 d=open(sys.argv[1],'rb').read()
 flags=struct.unpack_from('<I',d,0xc)[0]

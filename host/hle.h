@@ -18,7 +18,7 @@ void *objmap_get(const void *guest);
 void objmap_put(const void *guest, void *host);
 void *objmap_del(const void *guest);
 uint64_t now_ns(void);
-uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while DM_TICK_HOLD is frozen)
+uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen)
 int dm_detclock_enabled(void);
 void dm_guest_clock_advanced(void);
 uint64_t dm_guest_frame(void);        // Incremented each time the host presents a frame; unaffected by machine load

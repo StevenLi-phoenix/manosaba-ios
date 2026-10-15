@@ -59,7 +59,7 @@ void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 int gate_svc_present(int num);
 uint64_t now_ns(void);
-uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while DM_TICK_HOLD is frozen)
+uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen)
 int dm_detclock_enabled(void);
 void dm_guest_clock_advanced(void);
 void guest_clock_freeze(int on);

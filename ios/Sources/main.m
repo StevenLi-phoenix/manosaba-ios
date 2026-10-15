@@ -2,7 +2,7 @@
 //   Log: stderr (the host's LOG) goes to Documents/boot.launch.txt; when the scene first comes to the foreground it becomes boot.txt and the previous
 //   boot.txt is kept as boot.previous.txt (a launch by the system in the background must not replace the last session's log).
 //   DM_LOG_PORT=<port>: also serve the log on 127.0.0.1:<port> (tools/logport.py through iproxy); "dump" dumps state, "quit" exits.
-//   Game data (the player's own dump): RomFS in Library/Application Support/romfs (pushed with devicectl, tools/push_data.sh) or Documents/RomFS (Files
+//   Game data (the player's own dump): RomFS in Library/Application Support/romfs (ios/run.sh push-data) or Documents/RomFS (Files
 //   app); the console's shared fonts in .../sysfont or Documents/sysfont. Checked against the game profile (romfs_validate.c); when missing, a page
 //   says what is missing and where it goes.
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
