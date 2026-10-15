@@ -1788,6 +1788,7 @@ static void shmap_load(void) {
 }
 
 @interface NvShader : NSObject { @public id<MTLFunction> fn; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, range_ro; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
+    id<MTLLibrary> vi_lib; NSString *vi_entry; uint32_t vi_mask; NSMutableDictionary<NSNumber *, id<MTLFunction>> *vi_fns;   // integer vertex input variant (dmsh_build.py vi_variant): locations that can be specialized
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn; } @end   // bflib: readable-tile version <key>_bf (merge B step 2)
@@ -1914,6 +1915,7 @@ static NvShader *shader_load(NSString *pc, int stage) {
     if (nvn_refl_from_json(j, &o->rf, err, sizeof err)) { MLOG("[red] shader %s reflection conversion failed: %s", pc.UTF8String, err); return nil; }
     if (rt_range_on()) o->range_ro=rt_range_bindings_ro(j);
     o->fn = [lib newFunctionWithName:j[@"entry"]]; o->stage = stage; strlcpy(o->key, pc.UTF8String, sizeof o->key);
+    if ([j[@"vi_entry"] isKindOfClass:NSString.class]) { o->vi_lib = lib; o->vi_entry = j[@"vi_entry"]; for (NSNumber *l in j[@"vi_int"]) if (l.intValue >= 0 && l.intValue < 16) o->vi_mask |= 1u << l.intValue; }
     if (o->rf.nb) {
         o->ae = [o->fn newArgumentEncoderWithBufferIndex:o->rf.abi];
         int max_aid = -1;
@@ -2209,6 +2211,32 @@ static MTLVertexFormat vfmt(int f) {
     }
     return MTLVertexFormatInvalid;
 }
+// Integer vertex formats meeting a float shader input. Maxwell hands integer attributes to the shader unconverted (the raw 32-bit integers), and the
+// translated shaders keep attributes in float registers and bit-cast where the original used integer instructions. Metal refuses an integer format
+// for a float input ("Cannot convert attribute"), so 32-bit integer formats are fetched as the float format of the same width: the shader sees the same
+// bits. 8 / 16-bit integer formats would need widening that no float vertex format does: they stay as they are (and fail visibly, logged once)
+static MTLVertexFormat vfmt_for_float_input(MTLVertexFormat f) {
+    switch (f) {
+        case MTLVertexFormatUInt: case MTLVertexFormatInt: return MTLVertexFormatFloat;
+        case MTLVertexFormatUInt2: case MTLVertexFormatInt2: return MTLVertexFormatFloat2;
+        case MTLVertexFormatUInt3: case MTLVertexFormatInt3: return MTLVertexFormatFloat3;
+        case MTLVertexFormatUInt4: case MTLVertexFormatInt4: return MTLVertexFormatFloat4;
+        default: return f;
+    }
+}
+static int vfmt_is_int(MTLVertexFormat f) {
+    switch (f) {
+        case MTLVertexFormatUChar: case MTLVertexFormatChar: case MTLVertexFormatUChar2: case MTLVertexFormatChar2: case MTLVertexFormatUChar3: case MTLVertexFormatChar3:
+        case MTLVertexFormatUChar4: case MTLVertexFormatChar4: case MTLVertexFormatUShort: case MTLVertexFormatShort: case MTLVertexFormatUShort2: case MTLVertexFormatShort2:
+        case MTLVertexFormatUShort3: case MTLVertexFormatShort3: case MTLVertexFormatUShort4: case MTLVertexFormatShort4: case MTLVertexFormatUInt: case MTLVertexFormatInt:
+        case MTLVertexFormatUInt2: case MTLVertexFormatInt2: case MTLVertexFormatUInt3: case MTLVertexFormatInt3: case MTLVertexFormatUInt4: case MTLVertexFormatInt4: return 1;
+        default: return 0;
+    }
+}
+static int vfmt_is_signed(MTLVertexFormat f) {
+    switch (f) { case MTLVertexFormatChar: case MTLVertexFormatChar2: case MTLVertexFormatChar3: case MTLVertexFormatChar4: case MTLVertexFormatShort: case MTLVertexFormatShort2:
+        case MTLVertexFormatShort3: case MTLVertexFormatShort4: case MTLVertexFormatInt: case MTLVertexFormatInt2: case MTLVertexFormatInt3: case MTLVertexFormatInt4: return 1; default: return 0; }
+}
 static MTLBlendFactor bfac(int f) {
     switch (f) { case 1: return MTLBlendFactorZero; case 2: return MTLBlendFactorOne; case 3: return MTLBlendFactorSourceColor; case 4: return MTLBlendFactorOneMinusSourceColor;
         case 5: return MTLBlendFactorSourceAlpha; case 6: return MTLBlendFactorOneMinusSourceAlpha; case 7: return MTLBlendFactorDestinationAlpha; case 8: return MTLBlendFactorOneMinusDestinationAlpha;
@@ -2225,6 +2253,21 @@ static os_unfair_lock g_fz_fn_lock = OS_UNFAIR_LOCK_INIT;
 static NSMutableDictionary<NSString *, id<MTLFunction>> *g_bf_fn_cache;
 static NSMutableDictionary<NSString *, id<MTLLibrary>> *g_bf_lib_cache;
 static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
+static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // keys whose pipeline failed to build: not rebuilt on every draw (each attempt is a synchronous compile)
+// The main0_vi variant specialized for these unsigned / signed locations (function constants 128 + loc / 144 + loc, dmsh_build.py vi_variant); cached per
+// shader. pso_desc also runs on the warm-up threads, hence the lock
+static id<MTLFunction> vi_function(NvShader *vs, uint32_t u, uint32_t sg) {
+    NSNumber *key = @((uint64_t)u | (uint64_t)sg << 32);
+    @synchronized (vs) {
+        id<MTLFunction> f = vs->vi_fns[key]; if (f) return f;
+        MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new]; bool t = true;
+        for (int l = 0; l < 16; l++) { if (u >> l & 1) [cv setConstantValue:&t type:MTLDataTypeBool atIndex:128 + l]; if (sg >> l & 1) [cv setConstantValue:&t type:MTLDataTypeBool atIndex:144 + l]; }
+        NSError *e = nil; f = [vs->vi_lib newFunctionWithName:vs->vi_entry constantValues:cv error:&e];
+        if (!f) { MLOG("[red] vertex shader %s: specializing %s failed: %s", vs->key, vs->vi_entry.UTF8String, e.localizedDescription.UTF8String); return nil; }
+        if (!vs->vi_fns) vs->vi_fns = [NSMutableDictionary dictionary];
+        vs->vi_fns[key] = f; return f;
+    }
+}
 static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvShader *fs, id<MTLFunction> fsfn, int merged) {
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : fs ? fs->fn : nil;
@@ -2258,7 +2301,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
     }
     d.depthAttachmentPixelFormat = (MTLPixelFormat)k->dfmt; d.stencilAttachmentPixelFormat = (MTLPixelFormat)k->sfmt;
     MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
-    const nvn_refl *rf = &vs->rf;
+    const nvn_refl *rf = &vs->rf; uint32_t vi_u = 0, vi_s = 0;
     for (int v = 0; v < rf->nv; v++) {
         int loc = rf->v[v].loc, a = rf->v[v].nvn;   // Metal slot loc ← NVN attribute a
         MTLVertexFormat vf = a < 16 ? vfmt(k->attr[a].fmt) : MTLVertexFormatInvalid;
@@ -2272,12 +2315,26 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
             continue;
         }
         int st = k->attr[a].stream;
+        if (rf->v[v].ct == NVN_CT_FLOAT && vfmt_is_int(vf)) {
+            // Integer format, float input: the shader's main0_vi variant takes it as uint / int (same bits); without a variant, 32-bit formats are fetched as
+            // float of the same width (same bits as well); anything else cannot be expressed and the pipeline fails (logged once per shader)
+            const char *how;
+            if (loc < 16 && (vs->vi_mask >> loc & 1)) { if (vfmt_is_signed(vf)) vi_s |= 1u << loc; else vi_u |= 1u << loc; how = "specialized variant main0_vi"; }
+            else { MTLVertexFormat ff = vfmt_for_float_input(vf); how = ff == vf ? NULL : "fetched as float of the same width (same bits)"; vf = ff; }
+            static char seen[64][24]; static int nseen; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;   // one line per vertex shader
+            pthread_mutex_lock(&mu); int dup = 0; for (int i = 0; i < nseen; i++) if (!strcmp(seen[i], vs->key)) dup = 1;
+            if (!dup && nseen < 64) strlcpy(seen[nseen++], vs->key, sizeof seen[0]);
+            pthread_mutex_unlock(&mu);
+            if (!dup) MLOG("%svertex shader %s: NVN attribute %d (format %#x) is integer, the shader input is float: %s", how ? "" : "[red] ", vs->key, a, k->attr[a].fmt,
+                           how ? how : "no variant and no float format of the same width, the pipeline will fail");
+        }
         vd.attributes[loc].format = vf; vd.attributes[loc].offset = k->attr[a].offset; vd.attributes[loc].bufferIndex = 16 + st;
         vd.layouts[16 + st].stride = k->stream[st].stride ? k->stream[st].stride : 4;
         vd.layouts[16 + st].stepFunction = k->stream[st].stride == 0 ? MTLVertexStepFunctionConstant : k->stream[st].divisor ? MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex;
         vd.layouts[16 + st].stepRate = k->stream[st].stride == 0 ? 0 : k->stream[st].divisor ? k->stream[st].divisor : 1;
     }
     d.vertexDescriptor = vd;
+    if (vi_u | vi_s) { id<MTLFunction> f = vi_function(vs, vi_u, vi_s); if (f) d.vertexFunction = f; }
     return d;
 }
 // Pipeline key: current state S + pass formats (normal pass; a merged pass additionally carries lmap / specialized function, filled in by pso_get)
@@ -2328,6 +2385,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRen
     if (g_pso_lmap) { memcpy(k.lmap, g_pso_lmap, 8); k.fsfn = (__bridge void *)g_pso_fsfn; }
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
     if (cached) return cached;
+    if (hm_get_id(&g_pso_fail, &k)) return nil;
     id<MTLRenderPipelineState> ps;
     NSError *e = nil; uint64_t bt = bp_now();
     ps = g_pso_lmap ? nil : pso_pend_take(&k);
@@ -2338,7 +2396,8 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRen
         ps = [g_dev newRenderPipelineStateWithDescriptor:d error:&e];
     }
     g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
-    if (!ps) { MLOG("[red] failed to create render pipeline: %s", e.localizedDescription.UTF8String); return nil; }
+    if (!ps) { MLOG("[red] failed to create render pipeline (vertex %s, fragment %s): %s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String);
+        hm_put_id(&g_pso_fail, &k, (id)kCFBooleanTrue); return nil; }
     pso_skey sk; char shex[sizeof sk * 2 + 1]; pso_skey_from(&k, vs, fs, g_pso_lmap != NULL, g_pso_lmap ? &g_pso_fz : NULL, &sk); pso_skey_hex(&sk, shex);
     pso_record("R\t%s\n", shex);
     pso_user_record("R\t%s\n", shex);
@@ -4939,7 +4998,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
             double b[300]; memcpy(b, e2e, sizeof b);
             for (int i = 1; i < 300; i++) { double v = b[i]; int j = i - 1; while (j >= 0 && b[j] > v) { b[j + 1] = b[j]; j--; } b[j + 1] = v; }
             MLOG("display link up to %llu: ticks 300, presents %llu, empty ticks %llu, stale frames dropped by coalescing %llu; submit lead before target on-screen time p50 %.3f ms / min %.3f ms; game enqueue to target on-screen time p50 %.3f ms / min %.3f / max %.3f ms",
-                 (unsigned long long)g_link_tick_n, (unsigned long long)g_present_n, (unsigned long long)(g_link_tick_n - g_present_n),
+                 (unsigned long long)g_link_tick_n, (unsigned long long)lead_n, (unsigned long long)(g_link_tick_n - lead_n),   // only frames presented through the display link (not those presented with our own drawables during a rescue)
                  (unsigned long long)g_link_dropped, a[149], a[0], b[149], b[0], b[299]);
         }
     }
@@ -4992,6 +5051,13 @@ static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], 
 static uint64_t g_stall_t0, g_stall_drop, g_stall_n; static int g_stall_red, g_stall_logged;
 // The display link watchdog only recognizes the "active" state: when the App loses active status (pulling down Control Center / notifications, incoming call, system popup) and in the background the system does not call back anyway, and the picture is covered too -- the frame-drop fallback stays as before,
 // but it is not counted as stuck and no failure is reported; the stall is measured from the later of "the most recent callback / the most recent activation" (A16 logs: 8–17 seconds inactive and 17 seconds in the background were both reported as "stuck in foreground")
+// Rescue (from upstream d2r-mobile): once the display link has been silent for LINK_RESCUE_NS while active, stop waiting for it and let the present
+// thread acquire drawables itself (mode 0, no display-link callback), so the picture keeps moving; after g_rescue_back_ns switch back to the display
+// link once more, doubling that interval (cap 60 s) each time it stalls again. Seen on iPhones after pressing a volume button: the display link stopped
+// while active and never came back, and the fallback alone dropped every frame for 80 s (a frozen "black screen"). Changed under g_pq_mu; the mode
+// switch itself happens in link_sync on the game's present thread
+#define LINK_RESCUE_NS 500000000ull
+static int g_rescue_mode; static uint64_t g_rescue_back_at, g_rescue_back_ns = 3000000000ull, g_rescue_n;
 __attribute__((weak)) int dm_focus_now(void) { return 1; }   // The host's hle_oe.c provides the strong definition; when graphics unit tests do not link the host it is treated as always active
 __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 @implementation NvMetalDisplayLinkDelegate
@@ -5049,7 +5115,11 @@ static void *link_main(void *arg) {   // Display link thread: started when switc
     return NULL;
 }
 static void link_sync(void) {   // Called every frame by the game's present thread: aligns the display link object's state to g_dm_present_link and the power-saving mode (can change at run time)
-    static int applied; int want = g_dm_present_link;
+    static int applied;
+    if (g_rescue_mode && now_ns() >= g_rescue_back_at) {   // rescue period over: try the display link again (stall timing restarts, so the old stall does not trigger another rescue at once)
+        pthread_mutex_lock(&g_pq_mu); g_dm_present_link = g_rescue_mode; g_rescue_mode = 0; g_stall_t0 = 0; g_link_tick_ns = now_ns(); pthread_mutex_unlock(&g_pq_mu);
+        MLOG("display link: rescue period over, back to pacing mode %d (frame %llu)", g_dm_present_link, (unsigned long long)atomic_load(&g_cur_frame)); }
+    int want = g_dm_present_link;
     if (want < 0 || want > 2) { g_dm_present_link = applied == 3 ? 1 : applied; return; }
     if (want && mtl_fps_target() == 30) want = 3;   // Power-saving mode: display link at 30 Hz
     if (want == applied) return;
@@ -5158,12 +5228,18 @@ void mtl_present_wait(uint64_t tk) {
         int active = dm_focus_now() == 1; uint64_t since = dm_focus_in_since(), from = g_stall_t0 > since ? g_stall_t0 : since;
         if (active && !g_stall_logged && now - from >= STALL_NS) { g_stall_logged = 1;
             MLOG("display link has not called back for %.0f ms (while active): dropping %llu queued frames not yet on screen, the game continues (stall #%llu; back to normal automatically when the link returns)", (now - from) / 1e6, (unsigned long long)n, (unsigned long long)g_stall_n); }
+        if (active && !g_rescue_mode && g_dm_present_link && now - from >= LINK_RESCUE_NS) {
+            g_rescue_mode = g_dm_present_link; g_dm_present_link = 0; g_rescue_n++; g_rescue_back_at = now + g_rescue_back_ns;
+            MLOG("display link silent for %.0f ms while active: presenting with our own drawables (rescue #%llu), back to the display link in %.0f s", (now - from) / 1e6, (unsigned long long)g_rescue_n, g_rescue_back_ns / 1e9);
+            if (g_rescue_back_ns < 60000000000ull) g_rescue_back_ns *= 2;
+        }
         if (active && !g_stall_red && now - from >= STALL_RED_NS) { g_stall_red = 1; MLOG("[red] display link has not called back for %.1f s in a row while active, presenting relies entirely on fallback frame drops, the picture is frozen", (now - from) / 1e9); }
     }
     pthread_mutex_unlock(&g_pq_mu);
 }
 // Wait until all queued presents have been processed (used by mtl_finish = nvnQueueFinish etc.): goes through mtl_present_wait, so there is still a fallback when the display link stops (real device: the game called QueueFinish once while the display link was stopped,
 // and this used to wait here without a timeout; nobody took the 3 queued frames and the game stalled; those two runs on Mac did not hit this call)
+double mtl_link_tick_age_ms(void) { uint64_t t = __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED); return t ? (now_ns() - t) / 1e6 : -1; }   // front ends log it next to volume / route changes
 void mtl_present_flush(void) { pthread_mutex_lock(&g_pq_mu); uint64_t h = g_pq_in; pthread_mutex_unlock(&g_pq_mu); mtl_present_wait(h); }
 void mtl_stats(uint64_t *passes, uint64_t *draws) { *passes = g_stat_pass; *draws = g_stat_draw; }
 void mtl_args_stats(uint64_t *enc, uint64_t *reuse) { *enc = g_stat_args_enc; *reuse = g_stat_args_reuse; }

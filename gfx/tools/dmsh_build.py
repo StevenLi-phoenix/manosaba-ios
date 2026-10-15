@@ -373,6 +373,47 @@ RULES = []   # MSL rewrite rules attached by shader name (function, applicabilit
 CODE_FP = hashlib.sha256(source_without_rule_bodies().encode() + b''.join(b'\0' + open(m.__file__, 'rb').read() for m in (dmsh_chain,) + ((ios_metal,) if IOSOUT else ()))).hexdigest()
 TOOL_FP = tool_fingerprint().encode()
 
+# Integer vertex inputs. The translated vertex shaders declare every input as float and bit-cast where the original used it as an integer (Maxwell hands
+# integer attributes over unconverted). When the game's vertex format is an integer one, Metal refuses that float input on iOS ("Cannot convert
+# attribute"; macOS converts the value instead, which breaks the bit-cast). For vertex shaders that bit-cast an input component (as_type<int / uint>),
+# a second entry main0_vi is appended whose such inputs can be declared uint / int instead, each chosen by a function constant (VI_U + location /
+# VI_S + location); it hands the shader the same bits again with as_type<float>. main0 stays exactly as before; the host specializes main0_vi only
+# for an integer format (nvn_mtl.m pso_desc). Returns (source with the variant, sorted locations) or (source, []).
+VI_U, VI_S = 128, 144
+def vi_variant(src):
+    st = re.search(r'struct main0_in\n\{\n(.*?)\n\};\n', src, re.S)
+    fn = re.search(r'^vertex (\w+) main0\(main0_in in \[\[stage_in\]\](.*?)\)\n\{\n(.*?)\n\}\n', src, re.S | re.M)
+    if not st or not fn: return src, []
+    members = {m.group(2): (m.group(1), int(m.group(3))) for m in re.finditer(r'^\s*(float[234]?) (m_\w+) \[\[attribute\((\d+)\)\]\];$', st.group(1), re.M)}
+    body = fn.group(3)
+    var = {v: mem for v, mem in re.findall(r'\bfloat[234]? (_\d+) = in\.(m_\w+)(?:\.[xyzw]+)?;', body)}
+    used = set()
+    for x in re.findall(r'as_type<u?int[234]?>\((_\d+|in\.m_\w+)', body):
+        mem = x[3:] if x.startswith('in.') else var.get(x)
+        if mem in members: used.add(mem)
+    if not used: return src, []
+    locs = sorted(members[n][1] for n in used)
+    out = ['', '// Integer vertex inputs (dmsh_build.py vi_variant): specialized by the host only for integer vertex formats']
+    for L in locs:
+        out += [f'constant bool dm_vi{L}_u [[function_constant({VI_U + L})]];', f'constant bool dm_vi{L}_s [[function_constant({VI_S + L})]];',
+                f'constant bool dm_vi{L}_un = is_function_constant_defined(dm_vi{L}_u) && dm_vi{L}_u;',
+                f'constant bool dm_vi{L}_sn = is_function_constant_defined(dm_vi{L}_s) && dm_vi{L}_s;',
+                f'constant bool dm_vi{L}_f = !dm_vi{L}_un && !dm_vi{L}_sn;']
+    lines = []
+    for ln in st.group(1).split('\n'):
+        m = re.match(r'^(\s*)(float([234]?)) (m_\w+) \[\[attribute\((\d+)\)\]\];$', ln)
+        if m and m.group(4) in used:
+            ind, t, n, nm, L = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+            lines += [f'{ind}{t} {nm} [[attribute({L}), function_constant(dm_vi{L}_f)]];', f'{ind}uint{n} {nm}_u [[attribute({L}), function_constant(dm_vi{L}_un)]];',
+                      f'{ind}int{n} {nm}_s [[attribute({L}), function_constant(dm_vi{L}_sn)]];']
+        else: lines.append(ln)
+    out += ['struct main0_in_vi', '{', *lines, '};', '']
+    pro = ''.join(f'    {members[n][0]} dm_in_{n} = dm_vi{members[n][1]}_un ? as_type<{members[n][0]}>(in.{n}_u) : dm_vi{members[n][1]}_sn ? as_type<{members[n][0]}>(in.{n}_s) : in.{n};\n'
+                  for n in sorted(used, key=lambda n: members[n][1]))
+    body_vi = re.sub(r'\bin\.(m_\w+)\b', lambda m: 'dm_in_' + m.group(1) if m.group(1) in used else m.group(0), body)
+    out.append(f'vertex {fn.group(1)} main0_vi(main0_in_vi in [[stage_in]]{fn.group(2)})\n{{\n{pro}{body_vi}\n}}\n')
+    return src + '\n'.join(out), locs
+
 def finish(key, w, j, c1):
     res = json.load(open(os.path.join(w, key + '.res.json')))
     msl = os.path.join(w, key + '.metal'); air = msl[:-6] + '.air'; lib = os.path.join(out, key + '_b.metallib')
@@ -380,6 +421,10 @@ def finish(key, w, j, c1):
     if r.returncode: return 'MSL failed', r.stderr.strip()[:160], None
     src, iq = img_size_queries(open(msl).read())
     if iq: open(msl, 'w').write(src); res['notes'].append('image size queries moved to the image argument: ' + ' '.join(iq))
+    vi_locs = []
+    if j['stage'] == 'vs':   # the variant goes into the compiled source only; everything below analyzes the original (src)
+        vsrc, vi_locs = vi_variant(src)
+        if vi_locs: open(msl, 'w').write(vsrc); res['notes'].append('integer vertex input variant main0_vi: locations ' + ' '.join(map(str, vi_locs)))
     try:
         subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', msl, '-o', air], check=True)
         tmp_lib = lib + '.tmp-' + str(os.getpid())
@@ -402,6 +447,7 @@ def finish(key, w, j, c1):
             'bindings': reflect(key, j['stage'], src, res),
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
             'raster': raster_facts(j['stage'], src)}
+    if vi_locs: refl['vi_entry'] = 'main0_vi'; refl['vi_int'] = vi_locs
     write_refl(key, refl)
     fetch_finish(key, src, refl)
     return 'ok', '', refl

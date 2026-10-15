@@ -86,6 +86,17 @@ static __weak DmMetalView *g_view;
 @end
 
 // Frame rate hint for ProMotion screens: 60 Hz, or 30 Hz while the graphics layer is in its power-saving mode
+// System volume changes are logged with the time since the display link's last callback: after a volume button press the display link was seen to
+// stop while active (nvn_mtl.m rescue), and the log otherwise does not show when the button was pressed
+double mtl_link_tick_age_ms(void);
+@interface DmVolumeWatch : NSObject
+@end
+@implementation DmVolumeWatch
+- (void)observeValueForKeyPath:(NSString *)k ofObject:(id)o change:(NSDictionary *)c context:(void *)x {
+    (void)k; (void)o; (void)x;
+    LOG("front: system volume %.2f → %.2f (display link last called back %.0f ms ago)", [c[NSKeyValueChangeOldKey] doubleValue], [c[NSKeyValueChangeNewKey] doubleValue], mtl_link_tick_age_ms());
+}
+@end
 @interface DmRateHint : NSObject
 - (void)tick:(CADisplayLink *)l;
 @end
@@ -237,6 +248,10 @@ void front_ios_lifecycle_install(void) {
         g_audio_intr = 0; [AVAudioSession.sharedInstance setActive:YES error:nil]; audio_apply();
         LOG("front: audio interruption ended%s", g_audio_bg ? " (still in the background)" : "");
     }];
+    static DmVolumeWatch *vw; vw = [DmVolumeWatch new];
+    [as addObserver:vw forKeyPath:@"outputVolume" options:NSKeyValueObservingOptionOld | NSKeyValueObservingOptionNew context:NULL];
+    [nc addObserverForName:AVAudioSessionRouteChangeNotification object:as queue:mq usingBlock:^(NSNotification *n) {
+        LOG("front: audio route changed, reason %lu (display link last called back %.0f ms ago)", (unsigned long)[n.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue], mtl_link_tick_age_ms()); }];
     // Test switch DM_TEST_BG=<start s>,<duration s>[;...]: simulated "enter background → return" through the same handlers
     const char *tb = getenv("DM_TEST_BG"); double tb_at, tb_dur;
     for (const char *tp = tb; tp && sscanf(tp, "%lf,%lf", &tb_at, &tb_dur) == 2; tp = strchr(tp, ';') ? strchr(tp, ';') + 1 : NULL) {
