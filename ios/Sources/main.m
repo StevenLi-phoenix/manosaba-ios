@@ -219,8 +219,13 @@ static void host_start(NSString *romfs) {
 @interface DmGameVC : UIViewController
 @end
 @implementation DmGameVC
+// The system edge gestures are deferred (the first swipe from an edge only shows the home indicator / grabber, the second acts), and the home
+// indicator is NOT set to auto-hide: auto-hide takes precedence over the deferral and brings the indicator back at full brightness on every tap
+// anywhere (iPad mini, iOS 18.6.2; the same reports in Unity's forum thread "Option to hide iPhone X home indicator + Edge Protection", 2017-18).
+// With the deferral alone, taps never bring it back and leaving takes a second swipe; the indicator stays faint on that iPad, and is not shown at
+// all on an iPhone 17 Pro (iOS 26.4)
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
-- (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
+- (BOOL)prefersHomeIndicatorAutoHidden { return NO; }
 - (BOOL)prefersStatusBarHidden { return YES; }
 @end
 // Shown instead of the game when the game data is missing: what is missing and where it goes; Retry checks again
