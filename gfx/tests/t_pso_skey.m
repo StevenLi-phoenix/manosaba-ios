@@ -1,4 +1,3 @@
-// 可序列化管线键单测：pso_skey 十六进制往返逐字节一致，篡改 / 长度错 / 非法字符被识别（期望由构造直接给出）。
 // Serializable pipeline key unit tests: the pso_skey hex round trip is byte-identical; tampering / wrong length / illegal characters are detected (expectations given directly by construction).
 #import <Foundation/Foundation.h>
 #include <assert.h>
@@ -28,6 +27,6 @@ int main(void) {
         hex[0] = hex[0] == '0' ? '1' : '0'; assert(pso_skey_parse(hex, &b) == 0); assert(memcmp(&a, &b, sizeof a) != 0);
         assert(pso_skey_parse(hex + 1, &b) == -1); hex[0] = 'g'; assert(pso_skey_parse(hex, &b) == -1);
     }
-    puts("PSO_SKEY OK 3 例往返一致；篡改一字符不等、缺位 / 非法字符拒收");
+    puts("PSO_SKEY OK 3 cases round-trip identical; one tampered character differs, missing digit / illegal character rejected");
     return 0;
 }

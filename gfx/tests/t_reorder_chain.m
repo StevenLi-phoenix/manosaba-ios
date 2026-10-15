@@ -1,5 +1,3 @@
-// 固定命令链实验：生产 mtl_exec，手写常量着色器和闭式期望；不含生产重排器。
-// G 完整模板块、M 小视图+复制、U 混合、R 模板 resolve；只交换 G/M。
 // Fixed command chain experiment: production mtl_exec, hand-written constant shaders and closed-form expectations; does not include the production reorderer.
 // G full stencil block, M small view + copy, U blend, R stencil resolve; only G/M are swapped.
 #include "../nvn/nvn_mtl.m"
@@ -10,7 +8,7 @@ void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 static int fail, count, all_independent;
 #define EXPECT(n,w,v) do { uint64_t a=(w), b=(v); count++; \
-    printf("%s 期望 %llu → 真结果 %llu %s\n",n,(unsigned long long)a,(unsigned long long)b,a==b?"✓":"✗"); fail+=a!=b; } while(0)
+    printf("%s expected %llu → got %llu %s\n",n,(unsigned long long)a,(unsigned long long)b,a==b?"✓":"✗"); fail+=a!=b; } while(0)
 typedef struct { uint8_t *p; size_t n; int width; } chain;
 static chain make_chain(void) {
     chain c={0}; if(posix_memalign((void **)&c.p,getpagesize(),65536)) abort();
@@ -35,7 +33,6 @@ static void rt(chain *c, const tex_t *t, unsigned lv, const tex_t *ds) {
     emit(c,OP_SET_RT,&r,sizeof r);
     p_viewports v={.n=1}; v.v[0][2]=v.v[0][3]=MAX(t->d.width>>lv,1u); emit(c,OP_VIEWPORTS,&v,sizeof v);
     c->width=(int)v.v[0][2];
-    // clear的剪裁覆盖基尺寸，兼容现有scissor_full；每次draw再显式取实际mip尺寸。
     // The clear's scissor covers the base size, compatible with the existing scissor_full; each draw then explicitly takes the actual mip size.
     p_scissor sc={0,0,(int)t->d.width,(int)t->d.height}; emit(c,OP_SCISSOR,&sc,sizeof sc);
 }
@@ -76,7 +73,7 @@ static result execute(chain *c, const tex_t *a, const tex_t *b, const tex_t *out
     for(int k=0;k<4;k++) { buf[k]=[g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
         [blit() copyFromTexture:tex_mtl(t[k]) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1)
           toBuffer:buf[k] destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256]; }
-    uint64_t f=mtl_sub_commit(); EXPECT("生产提交完成",1,mtl_wait(f,5000000000ull)); EXPECT("提交反馈无错误",0,mtl_last_commit_error());
+    uint64_t f=mtl_sub_commit(); EXPECT("production submit completed",1,mtl_wait(f,5000000000ull)); EXPECT("no error in submit feedback",0,mtl_last_commit_error());
     result r={0}; uint8_t *dst[4]={r.a,r.b,r.c,r.e}; for(int k=0;k<4;k++) memcpy(dst[k],buf[k].contents,256);
     if(q) r.query=*q; mtl_pool_del(c->p); free(c->p); return r;
 }
@@ -123,12 +120,12 @@ static uint64_t query_case(int reordered, int mode) {
     if(mode!=1) emit(&c,OP_RESET_COUNTER,&type,8);
     clear(&c,&b,0,NULL,0,0,0); draw_prog(&c,1,0);
     if(reordered) { clear(&c,&a,0,NULL,0,0,0); draw_prog(&c,0,0); }
-    if(mode==2) {   // 两块计数都在任何report之前被后继reset抹去；只报告新的4x4绘制。 | both blocks' counts are wiped by the subsequent reset before any report; only the new 4x4 draw is reported.
+    if(mode==2) {   // both blocks' counts are wiped by the subsequent reset before any report; only the new 4x4 draw is reported.
         emit(&c,OP_RESET_COUNTER,&type,8); clear(&c,&b,0,NULL,0,0,0); draw_prog(&c,1,0); }
     uint64_t report[2]={type,(uint64_t)q}; emit(&c,OP_REPORT_COUNTER,report,sizeof report); emit(&c,OP_END,NULL,0);
     state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); mtl_exec(c.p);
-    EXPECT("查询完成",1,mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("查询提交反馈无错误",0,mtl_last_commit_error());
-    const char *names[]={"查询","同区间查询","后继reset覆盖查询"};
+    EXPECT("query completed",1,mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("no error in query submit feedback",0,mtl_last_commit_error());
+    const char *names[]={"query","same_interval_query","later_reset_overrides_query"};
     save_raw(names[mode],reordered,q,sizeof q); mtl_pool_del(c.p); free(c.p); return q[0];
 }
 static void uniform_case(int reordered,uint8_t pixels[256]) {
@@ -140,10 +137,9 @@ static void uniform_case(int reordered,uint8_t pixels[256]) {
     if(!reordered) { clear(&c,&a,0,NULL,0,0,0); draw_prog(&c,4,0); }
     struct { uint64_t dst,n; float color[4]; } update={(uint64_t)mem,16,{0}}; memcpy(update.color,green,16); emit(&c,OP_UPDATE_UB,&update,sizeof update);
     if(reordered) { clear(&c,&a,0,NULL,0,0,0); draw_prog(&c,4,0); }
-    clear(&c,&b,0,NULL,0,0,0); draw_prog(&c,4,0); result r=execute(&c,&a,&b,&out,&e,NULL); save_result("UB写",reordered,&r); memcpy(pixels,r.a,256);
-    uniform_pixels("UB更新后的第二绘制始终绿色",r.b,0,255,0,255); mtl_pool_del(mem); free(mem);
+    clear(&c,&b,0,NULL,0,0,0); draw_prog(&c,4,0); result r=execute(&c,&a,&b,&out,&e,NULL); save_result("UB_write",reordered,&r); memcpy(pixels,r.a,256);
+    uniform_pixels("second draw after the UB update is always green",r.b,0,255,0,255); mtl_pool_del(mem); free(mem);
 }
-// view的可访问区间不能只看base：shader读相对第二级/第二层，G写该子资源。
 // A view's accessible range cannot be judged by base alone: the shader reads relative to the second level/second layer, and G writes that subresource.
 static void slice_rt(chain *c,const tex_t *t,int lv,int sl) {
     p_set_rt r={.n=1}; r.color[0]=t; r.has_cview[0]=1;
@@ -171,12 +167,11 @@ static result range_case(int array,int reordered) {
     id<MTLCommandBuffer> cb=[g_q commandBuffer]; id<MTLBlitCommandEncoder> bl=[cb blitCommandEncoder];
     [bl copyFromTexture:tex_mtl(&a) sourceSlice:array?1:0 sourceLevel:array?0:1 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(w,w,1)
       toBuffer:buf destinationOffset:0 destinationBytesPerRow:w*4 destinationBytesPerImage:w*w*4]; [bl endEncoding]; [cb commit]; [cb waitUntilCompleted];
-    EXPECT("第二子资源读回GPU完成",4,cb.status); uint8_t blue[4]={0,0,255,255}; unsigned bad=0;
+    EXPECT("second subresource readback GPU completed",4,cb.status); uint8_t blue[4]={0,0,255,255}; unsigned bad=0;
     for(NSUInteger i=0;i<w*w;i++) bad+=memcmp((const uint8_t *)buf.contents+4*i,blue,4)!=0;
-    EXPECT("G第二子资源逐像素蓝",0,bad); save_raw(array?"整slice写目标":"整mip写目标",reordered,buf.contents,w*w*4);
+    EXPECT("G second subresource blue per pixel",0,bad); save_raw(array?"whole_slice_write_target":"whole_mip_write_target",reordered,buf.contents,w*w*4);
     return r;
 }
-// 附件不交仍会通过继承的程序产生依赖；只演示显式补齐program，不冒充完整S/R快照。
 // Disjoint attachments can still create a dependency through an inherited program; this only demonstrates explicitly filling in the program and does not pass itself off as a full S/R snapshot.
 static result state_case(int restored,int reordered) {
     tex_t a=texture(8,1,0),b=texture(8,1,0),out=texture(8,1,0),e=texture(8,1,0); chain c=make_chain();
@@ -198,7 +193,6 @@ static result exit_state_case(int restored,int reordered) {
     p_draw d={NVN_DRAW_PRIMITIVE_TRIANGLES,0,3}; emit(&c,OP_DRAW,&d,sizeof d);
     return execute(&c,&a,&b,&out,&e,NULL);
 }
-// 写掩码不交也不够：IncrementWrap的隐含读包含低位，低位清零会改变向bit1的进位。
 // Disjoint write masks are not enough either: the implicit read of IncrementWrap includes the low bits, and clearing the low bits changes the carry into bit1.
 static result stencil_carry_case(int reordered) {
     tex_t a=texture(8,1,0),b=texture(8,1,0),out=texture(8,1,0),e=texture(8,1,0),ds=texture(8,1,1); chain c=make_chain();
@@ -210,7 +204,6 @@ static result stencil_carry_case(int reordered) {
     mask.mask=0xffffffffu; state(&c,2,&mask,sizeof mask); rt(&c,&out,0,&ds); stencil(&c,1,NVN_STENCIL_FUNC_EQUAL,1,2,0,2); draw_prog(&c,7,0);
     return execute(&c,&a,&b,&out,&e,NULL);
 }
-// G写入藏在真实CALL/JUMP目标；跳转列表用跳回地址保持原执行路径与块内顺序。
 // The G write is hidden in a real CALL/JUMP target; the jump list uses return addresses to preserve the original execution path and in-block order.
 static result control_case(int jump,int reordered) {
     tex_t a=texture(8,1,0),b=texture(8,1,0),out=texture(8,1,0),e=texture(8,1,0); int tid=bind_view(&a,0);
@@ -226,7 +219,7 @@ static result control_case(int jump,int reordered) {
 static void compare_pair(const char *name,const result *o,const result *r,unsigned different) {
     save_result(name,0,o); save_result(name,1,r); unsigned bad=0;
     for(int k=0;k<1024;k+=4) bad+=memcmp((const uint8_t *)o+k,(const uint8_t *)r+k,4)!=0;
-    EXPECT("完整区间/状态/控制流不同像素（256分母）",all_independent?0:different,bad);
+    EXPECT("full range / state / control flow differing pixels (out of 256)",all_independent?0:different,bad);
 }
 int main(int argc,char **argv) { @autoreleasepool {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -245,39 +238,39 @@ int main(int argc,char **argv) { @autoreleasepool {
         p->sh[1]=[NvShader new]; NvShader *f=p->sh[1]; f->fn=[lib newFunctionWithName:fn[i]]; f->stage=1;
         if(i>=2&&i!=7) { f->rf.nb=1; f->rf.b[0]=(nvn_rbind){.kind=i==4?NVN_RB_CBUF:NVN_RB_TEX,.dtt=i==6?3:2}; f->ae=[f->fn newArgumentEncoderWithBufferIndex:0]; }
         pg[i].serial=4000+i; serial_put(pg[i].serial,p); }
-    const char *names[]={"独立mip复制","同mip反例","模板不交位","模板交位反例","复制读源反例","块内次序反例"};
+    const char *names[]={"independent_mip_copy","same_mip_negative","stencil_disjoint_bits","stencil_overlapping_bits_negative","copy_reads_source_negative","in_block_order_negative"};
     for(int mode=0;mode<6;mode++) { printf("CASE %s\n",names[mode]); result o=render_case(mode,0),r=render_case(mode,1);
         save_result(names[mode],0,&o); save_result(names[mode],1,&r);
-        int same=mode==SAME_MIP; uniform_pixels("原序闭式resolve",o.c,0,same?0:128,same?255:128,128);
+        int same=mode==SAME_MIP; uniform_pixels("original order closed-form resolve",o.c,0,same?0:128,same?255:128,128);
         uint8_t cr=mode==INTERNAL_ORDER?128:0,cg=mode==SAME_MIP||mode==STENCIL_DEPENDENT?0:128,cb=mode==INTERNAL_ORDER?0:128;
-        uniform_pixels("候选闭式resolve",r.c,cr,cg,cb,128);
-        uniform_pixels("原序独立/依赖复制结果",o.e,0,0,255,255);
-        uniform_pixels("候选复制结果",r.e,0,0,mode==COPY_DEPENDENT?0:255,255);
+        uniform_pixels("candidate closed-form resolve",r.c,cr,cg,cb,128);
+        uniform_pixels("original order independent/dependent copy result",o.e,0,0,255,255);
+        uniform_pixels("candidate copy result",r.e,0,0,mode==COPY_DEPENDENT?0:255,255);
         unsigned different=0; const uint8_t *x=(const uint8_t *)&o,*y=(const uint8_t *)&r;
         for(int k=0;k<1024;k+=4) different+=memcmp(x+k,y+k,4)!=0;
-        EXPECT("重排不同像素（4附件256像素分母）",all_independent?0:mode==INDEPENDENT||mode==STENCIL_INDEPENDENT?0:mode==COPY_DEPENDENT?64:mode==INTERNAL_ORDER?128:192,different);
+        EXPECT("reorder differing pixels (4 attachments, out of 256 pixels)",all_independent?0:mode==INDEPENDENT||mode==STENCIL_INDEPENDENT?0:mode==COPY_DEPENDENT?64:mode==INTERNAL_ORDER?128:192,different);
     }
-    uint64_t q0=query_case(0,0),q1=query_case(1,0); EXPECT("reset原区间4x4通过采样",16,q0); EXPECT("跨reset反例4x4+8x8通过采样",80,q1);
-    EXPECT("查询生命周期不能当独立",all_independent?1:0,q0==q1);
-    uint8_t u0[256],u1[256]; uniform_case(0,u0); uniform_case(1,u1); uniform_pixels("UB原序首绘红",u0,255,0,0,255); uniform_pixels("跨UB写首绘绿",u1,0,255,0,255);
-    EXPECT("UB写不能跨绘制搬动",all_independent?1:0,!memcmp(u0,u1,256));
-    for(int array=0;array<2;array++) { const char *name=array?"整slice范围":"整mip范围"; printf("CASE %s\n",name);
-        result o=range_case(array,0),r=range_case(array,1); uniform_pixels("范围原序第二子资源蓝",o.b,0,0,255,255);
-        uniform_pixels("范围候选第二子资源绿",r.b,0,255,0,255); compare_pair(name,&o,&r,64); }
-    for(int restored=0;restored<2;restored++) { const char *name=restored?"入口程序显式补齐":"入口程序继承"; printf("CASE %s\n",name);
-        result o=state_case(restored,0),r=state_case(restored,1); uniform_pixels("继承原序蓝",o.b,0,0,255,255);
-        uniform_pixels("候选显式补齐蓝/未补齐红",r.b,restored?0:255,0,restored?255:0,255); compare_pair(name,&o,&r,restored?0:64); }
-    for(int restored=0;restored<2;restored++) { const char *name=restored?"出口程序显式补齐":"出口程序继承"; printf("CASE %s\n",name);
-        result o=exit_state_case(restored,0),r=exit_state_case(restored,1); uniform_pixels("后续原序继承蓝",o.c,0,0,255,255);
-        uniform_pixels("后续候选显式补齐蓝/未补齐红",r.c,restored?0:255,0,restored?255:0,255); compare_pair(name,&o,&r,restored?0:64); }
-    for(int jump=0;jump<2;jump++) { const char *name=jump?"JUMP隐藏写":"CALL隐藏写"; printf("CASE %s\n",name);
-        result o=control_case(jump,0),r=control_case(jump,1); uniform_pixels("控制原序蓝",o.b,0,0,255,255);
-        uniform_pixels("控制候选先读黑",r.b,0,0,0,255); compare_pair(name,&o,&r,64); }
-    q0=query_case(0,1); q1=query_case(1,1); EXPECT("同epoch原序通过采样64+16",80,q0); EXPECT("同epoch换序通过采样16+64",80,q1);
-    EXPECT("同epoch固定两绘制换序保持报告80",1,q0==q1);
-    q0=query_case(0,2); q1=query_case(1,2); EXPECT("后继reset覆盖原未报告计数",16,q0); EXPECT("后继reset覆盖候选未报告计数",16,q1);
-    EXPECT("本固定后继reset支配report，交换前后所报16相同",1,q0==q1);
-    printf("CASE 模板隐含进位读\n"); result co=stencil_carry_case(0),cr=stencil_carry_case(1);
-    uniform_pixels("低位先清导致bit1为0",co.c,0,0,0,255); uniform_pixels("先增进位导致bit1为1",cr.c,0,255,0,255); compare_pair("模板隐含进位读",&co,&cr,64);
-    printf("== %d 项，失败 %d ==\n",count,fail); return fail!=0;
+    uint64_t q0=query_case(0,0),q1=query_case(1,0); EXPECT("reset, original interval 4x4 samples passed",16,q0); EXPECT("across reset negative 4x4+8x8 samples passed",80,q1);
+    EXPECT("query lifetime cannot be treated as independent",all_independent?1:0,q0==q1);
+    uint8_t u0[256],u1[256]; uniform_case(0,u0); uniform_case(1,u1); uniform_pixels("UB original order first draw red",u0,255,0,0,255); uniform_pixels("across UB write first draw green",u1,0,255,0,255);
+    EXPECT("UB write cannot be moved across draws",all_independent?1:0,!memcmp(u0,u1,256));
+    for(int array=0;array<2;array++) { const char *name=array?"whole_slice_range":"whole_mip_range"; printf("CASE %s\n",name);
+        result o=range_case(array,0),r=range_case(array,1); uniform_pixels("range original order second subresource blue",o.b,0,0,255,255);
+        uniform_pixels("range candidate second subresource green",r.b,0,255,0,255); compare_pair(name,&o,&r,64); }
+    for(int restored=0;restored<2;restored++) { const char *name=restored?"entry_program_explicitly_restored":"entry_program_inherited"; printf("CASE %s\n",name);
+        result o=state_case(restored,0),r=state_case(restored,1); uniform_pixels("inherited original order blue",o.b,0,0,255,255);
+        uniform_pixels("candidate explicitly restored blue / not restored red",r.b,restored?0:255,0,restored?255:0,255); compare_pair(name,&o,&r,restored?0:64); }
+    for(int restored=0;restored<2;restored++) { const char *name=restored?"exit_program_explicitly_restored":"exit_program_inherited"; printf("CASE %s\n",name);
+        result o=exit_state_case(restored,0),r=exit_state_case(restored,1); uniform_pixels("following original order inherited blue",o.c,0,0,255,255);
+        uniform_pixels("following candidate explicitly restored blue / not restored red",r.c,restored?0:255,0,restored?255:0,255); compare_pair(name,&o,&r,restored?0:64); }
+    for(int jump=0;jump<2;jump++) { const char *name=jump?"JUMP_hidden_write":"CALL_hidden_write"; printf("CASE %s\n",name);
+        result o=control_case(jump,0),r=control_case(jump,1); uniform_pixels("control original order blue",o.b,0,0,255,255);
+        uniform_pixels("control candidate reads first, black",r.b,0,0,0,255); compare_pair(name,&o,&r,64); }
+    q0=query_case(0,1); q1=query_case(1,1); EXPECT("same epoch original order samples passed 64+16",80,q0); EXPECT("same epoch swapped order samples passed 16+64",80,q1);
+    EXPECT("same epoch fixed two draws swapped keeps report 80",1,q0==q1);
+    q0=query_case(0,2); q1=query_case(1,2); EXPECT("later reset overrides original unreported count",16,q0); EXPECT("later reset overrides candidate unreported count",16,q1);
+    EXPECT("in this fixture the later reset dominates the report, the reported 16 is the same before and after the swap",1,q0==q1);
+    printf("CASE stencil_implicit_carry_read\n"); result co=stencil_carry_case(0),cr=stencil_carry_case(1);
+    uniform_pixels("low bits cleared first makes bit1 0",co.c,0,0,0,255); uniform_pixels("increment first carries, making bit1 1",cr.c,0,255,0,255); compare_pair("stencil_implicit_carry_read",&co,&cr,64);
+    printf("== %d checks, %d failed ==\n",count,fail); return fail!=0;
 } }

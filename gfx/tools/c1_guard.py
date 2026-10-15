@@ -28,7 +28,7 @@ def bounded(index, definitions):
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit(f"用法：{sys.argv[0]} <dmsh_b 版本目录> <输出 tsv>")
+        raise SystemExit(f"usage: {sys.argv[0]} <shader cache b-<version> dir> <output tsv>")
     version_dir, output = map(os.path.abspath, sys.argv[1:])
     keys = []
     for name in sorted(os.listdir(version_dir)):
@@ -49,7 +49,7 @@ def main():
         stream.write(f"# chain {os.path.basename(version_dir)} {stamp}\n")
         for key in keys:
             stream.write(key + "\n")
-    print(f"未证有界：{len(keys)} 个着色器")
+    print(f"c1 index not proven bounded: {len(keys)} shaders")
 
 
 if __name__ == "__main__":

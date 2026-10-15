@@ -13,7 +13,7 @@ void crash_install(void);
 static int g_fail;
 #define EXPECT(name, want, got) do { \
     long long want_ = (long long)(want), got_ = (long long)(got); \
-    printf("%-52s 期望 %-4lld → 真结果 %-4lld %s\n", name, want_, got_, want_ == got_ ? "✓" : "✗"); \
+    printf("%-52s expected %-4lld → got %-4lld %s\n", name, want_, got_, want_ == got_ ? "✓" : "✗"); \
     if (want_ != got_) g_fail++; \
 } while (0)
 
@@ -38,7 +38,7 @@ int main(void) {
     nvn_dirty_protect(reused, 4096);
     uint64_t stamp = nvn_dirty_now();
     ((volatile uint8_t *)reused)[0] = 1;
-    EXPECT("累计 65 次销池后新池写入被判脏", 1, nvn_dirty_since(reused, 4096, stamp));
+    EXPECT("after 65 pool destructions in total, a write to a new pool is judged dirty", 1, nvn_dirty_since(reused, 4096, stamp));
     nvn_dirty_remove_range(reused);
     munmap(reused, 4096);
 
@@ -51,7 +51,7 @@ int main(void) {
     nvn_dirty_protect(overflow, 4096);
     stamp = nvn_dirty_now();
     ((volatile uint8_t *)overflow)[0] = 2;
-    EXPECT("同时存活超过上限的池保守判脏", 1, nvn_dirty_since(overflow, 4096, stamp));
+    EXPECT("a pool beyond the limit of pools alive at once is conservatively judged dirty", 1, nvn_dirty_since(overflow, 4096, stamp));
     for (int i = 0; i < 300; i++) {
         nvn_dirty_remove_range(live[i]);
         munmap(live[i], 4096);

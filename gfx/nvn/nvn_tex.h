@@ -1,26 +1,24 @@
-// NVN 贴图存储布局（Tegra X1 块线性），见 nvn_tex.c。
 // NVN texture storage layout (Tegra X1 block-linear), see nvn_tex.c.
 #pragma once
 #include <stdint.h>
 
 typedef struct {
-    int target, format, flags, samples;   // NVNtextureTarget / NVNformat / NVNtextureFlags / 采样数（0 或 1 = 单采样） | NVNtextureTarget / NVNformat / NVNtextureFlags / sample count (0 or 1 = single-sampled)
+    int target, format, flags, samples;   // NVNtextureTarget / NVNformat / NVNtextureFlags / sample count (0 or 1 = single-sampled)
     uint32_t width, height, depth, levels, stride;
-    int pkg_block_h;                      // 预排布贴图布局参数第 0 字节（块高 log2）+ 1；0 = 按自动算法 | Byte 0 of the packaged texture layout parameters (log2 of block height) + 1; 0 = use the automatic algorithm
-    uint8_t swz_set, swz[4];              // 贴图 swizzle（NVNtextureSwizzle，数值与 MTLTextureSwizzle 相同）；swz_set = 0 视为恒等 | Texture swizzle (NVNtextureSwizzle, same numeric values as MTLTextureSwizzle); swz_set = 0 means identity
-    uint8_t ds_mode;                      // 深度模板贴图的采样内容：0 深度 1 模板（NVNtextureDepthStencilMode） | What a depth-stencil texture samples: 0 depth, 1 stencil (NVNtextureDepthStencilMode)
+    int pkg_block_h;                      // Byte 0 of the packaged texture layout parameters (log2 of block height) + 1; 0 = use the automatic algorithm
+    uint8_t swz_set, swz[4];              // Texture swizzle (NVNtextureSwizzle, same numeric values as MTLTextureSwizzle); swz_set = 0 means identity
+    uint8_t ds_mode;                      // What a depth-stencil texture samples: 0 depth, 1 stencil (NVNtextureDepthStencilMode)
 } nvn_texdesc;
 
 typedef struct {
-    uint64_t size, layer_size;            // 总存储字节、每层字节 | Total storage bytes, bytes per layer
-    uint32_t align, layers, bpb;          // 对齐、层数、每块字节 | Alignment, layer count, bytes per block
-    unsigned tileH, tileD;                // 块高 / 块深（log2 GOB 数） | Block height / block depth (log2 of the GOB count)
+    uint64_t size, layer_size;            // Total storage bytes, bytes per layer
+    uint32_t align, layers, bpb;          // Alignment, layer count, bytes per block
+    unsigned tileH, tileD;                // Block height / block depth (log2 of the GOB count)
 } nvn_texlayout;
 
 void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o);
 uint64_t nvn_tex_level_offset(const nvn_texdesc *d, unsigned level);
-int nvn_fmt_bpb(int format, int *bw, int *bh);   // 每块字节（0 = 未知格式），块宽高 | Bytes per block (0 = unknown format), block width and height
-// 第 level 级实际使用的块高 / 块深（log2 GOB 数）：贴图级块高按该级行数（块行）收缩，解排布逐级用它
+int nvn_fmt_bpb(int format, int *bw, int *bh);   // Bytes per block (0 = unknown format), block width and height
 // Block height / block depth actually used by level `level` (log2 of the GOB count): the per-level block height shrinks with that level's row count (block rows), and deswizzling uses it level by level
 void nvn_tex_level_tiles(const nvn_texdesc *d, unsigned level, unsigned *tileH, unsigned *tileD);
 // Whether Metal can create a texture with this description. Limits from Apple's Metal Feature Set Tables (Apple3–Apple9; Apple10 allows 32768 for 1D / 2D / cube,

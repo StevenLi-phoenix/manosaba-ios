@@ -1,5 +1,3 @@
-// nn::vi（显示层）：真机经 vi 服务开显示、建图层、取原生窗口句柄；句柄交给 NVN 的窗口 builder。
-// 宿主：返回宿主静态对象；接 Metal 时原生窗口对应前端的 CAMetalLayer（front_metal_layer()）。
 // nn::vi (display layer): on a real device, the vi service is used to open the display, create a layer and get the native window handle; the handle is passed to NVN's window builder.
 // Host: returns host static objects; when hooking up Metal, the native window corresponds to the front end's CAMetalLayer (front_metal_layer()).
 #include "../host/hle.h"
@@ -7,14 +5,14 @@
 static struct { uint32_t magic; } g_display = {0x50534944}, g_layer = {0x5259414c};
 static struct { uint32_t magic; void *layer; } g_native = {0x4e49574e, 0};
 
-HLE_FORCE("_ZN2nn2vi10InitializeEv", "显示服务初始化；宿主无 vi 服务", void, h_vi_Init, void) {}
-HLE_FORCE("_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE", "开默认显示；宿主给静态对象", Result, h_vi_OpenDisp, void **out) {
+HLE_FORCE("_ZN2nn2vi10InitializeEv", "display service init; the host has no vi service", void, h_vi_Init, void) {}
+HLE_FORCE("_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE", "open the default display; the host returns a static object", Result, h_vi_OpenDisp, void **out) {
     *out = &g_display; return RES_OK;
 }
-HLE_FORCE("_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE", "建图层；宿主给静态对象", Result, h_vi_CreateLayer, void **out, void *disp) {
+HLE_FORCE("_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE", "create a layer; the host returns a static object", Result, h_vi_CreateLayer, void **out, void *disp) {
     (void)disp; *out = &g_layer; return RES_OK;
 }
-HLE_FORCE("_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE", "原生窗口句柄，交给 NVN 窗口 builder；宿主给静态对象", Result, h_vi_GetNative, void **out, void *layer) {
+HLE_FORCE("_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE", "native window handle, passed to the NVN window builder; the host returns a static object", Result, h_vi_GetNative, void **out, void *layer) {
     (void)layer; *out = &g_native; return RES_OK;
 }
 
@@ -34,10 +32,10 @@ static void *vsync_thread(void *a) {
     }
     return NULL;
 }
-static void vsync_start(void) { pthread_t th; if (pthread_create(&th, NULL, vsync_thread, NULL)) die("vsync 线程起不来"); pthread_detach(th); }
-HLE_FORCE_OPT("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", "显示垂直同步事件：绑内核事件，宿主线程按 60 Hz 触发", Result, h_vi_VsyncEv, void *ev, void *disp) {
+static void vsync_start(void) { pthread_t th; if (pthread_create(&th, NULL, vsync_thread, NULL)) die("cannot start the vsync thread"); pthread_detach(th); }
+HLE_FORCE_OPT("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", "display vsync event: bound to a kernel event, signaled at 60 Hz by a host thread", Result, h_vi_VsyncEv, void *ev, void *disp) {
     (void)disp;
-    if (g_vsync_ev && g_vsync_ev != ev) LOG("【红】vi::GetDisplayVsyncEvent 第二个事件 %p（只驱动第一个 %p）", ev, g_vsync_ev);
+    if (g_vsync_ev && g_vsync_ev != ev) LOG("[red] vi::GetDisplayVsyncEvent: second event %p (only the first, %p, is driven)", ev, g_vsync_ev);
     if (!g_vsync_ev) { hle_bind_system_event(ev, 1); g_vsync_ev = ev; pthread_once(&g_vsync_once, vsync_start); }
     return RES_OK;
 }
