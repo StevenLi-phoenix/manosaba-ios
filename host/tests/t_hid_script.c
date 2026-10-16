@@ -12,6 +12,8 @@ void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 static uint64_t clock_ns = 1000000000ull;
 uint64_t now_ns(void) { return clock_ns; }
 uint64_t guest_ns(void) { return clock_ns; }
+static uint64_t frame_now;
+uint64_t dm_nvn_frame_count(void) { return frame_now; }
 static int opmode = 1;
 int dm_opmode(void) { return opmode; }
 int touch_fill(void *out, uint64_t now) { (void)out; (void)now; return 0; }
@@ -37,6 +39,16 @@ int main(void) {
     int calls = g_tcalls; at(4.06); rd(); CHECK(g_tcalls == calls, "unchanged touch set: not pushed again");
     at(4.2); rd(); CHECK(g_tn == 0, "touch item over: all lifted");
 
+    setup("A@f100+10,B@f200,X@2");   // frame items next to a time item
+    at(0); frame_now = 99; CHECK(rd().buttons == 0, "frame items: nothing before frame 100");
+    frame_now = 100; CHECK(rd().buttons == DM_BTN_A, "A from frame 100");
+    at(50); frame_now = 109; CHECK(rd().buttons == DM_BTN_A, "A held through frame 109, whatever the seconds");
+    frame_now = 110; CHECK(rd().buttons == 0, "A released at frame 110 (hold 10 frames)");
+    frame_now = 211; CHECK(rd().buttons == DM_BTN_B, "B with the default hold of 12 frames: still at frame 211");
+    frame_now = 212; CHECK(rd().buttons == 0, "B released at frame 212");
+    at(2.1); frame_now = 0; CHECK(rd().buttons == DM_BTN_X, "a time item in the same script still goes by seconds");
+    frame_now = 0;
+
     setup("");
     at(10); dm_input_set(DM_BTN_B, 100, -200, 0, 0); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_B && s.lx == 100 && s.ly == -200, "front end buttons and stick"); }
     dm_input_set(DM_BTN_X, 0, 0, 0, 0); dm_input_set(0, 0, 0, 0, 0);
@@ -56,6 +68,9 @@ int main(void) {
     p = fork();
     if (!p) { freopen("/dev/null", "w", stderr); setup("A1"); _exit(0); }
     waitpid(p, &st, 0); CHECK(WIFSIGNALED(st), "item without @ aborts");
+    p = fork();
+    if (!p) { freopen("/dev/null", "w", stderr); setup("A@fx"); _exit(0); }
+    waitpid(p, &st, 0); CHECK(WIFSIGNALED(st), "f without a frame number aborts");
 
     printf("t_hid_script: %d checks, %d failed\n", checks, fails);
     return fails != 0;

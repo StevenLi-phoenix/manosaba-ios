@@ -45,8 +45,10 @@ static uint32_t style_of(uint32_t id) {
 }
 
 // ---------- Scripted input DM_KEYS (inject without a window) ----------
-// Comma separated items key@seconds[+hold seconds], time counted from host start; hold defaults to 0.2 s.
-//   DM_KEYS="A@8,A@12+0.5" = A at 8 s, A held 0.5 s at 12 s.
+// Comma separated items key@seconds[+hold seconds], time counted from host start; hold defaults to 0.2 s. key@f<frame>[+hold frames] counts presented
+// frames instead (dm_nvn_frame_count; hold defaults to 12 frames): when the machine is busy, seconds drift from the game's progress and frames do not
+// (after nxnative d6cd8a8).
+//   DM_KEYS="A@8,A@12+0.5" = A at 8 s, A held 0.5 s at 12 s; "A@f3600" = A at frame 3600 for 12 frames.
 // Key names = DM_BTN_* of dm_input.h without the prefix, plus left stick pseudo-keys LSL / LSR / LSU / LSD (stick pushed fully while held), plus touch
 // T<x>:<y> = one finger at normalized picture coordinates (origin top left) while held. Script keys are ORed with what the front end publishes.
 #define K(n) {DM_BTN_##n, #n}
@@ -56,7 +58,7 @@ static const struct { uint32_t mask; const char *name; } k_names[] = {
 enum { PK_LSL = 1u << 24, PK_LSR = 1u << 25, PK_LSU = 1u << 26, PK_LSD = 1u << 27, PK_MASK = 0xFu << 24, PK_TOUCH = 1u << 28 };   // outside the button bits
 static const struct { uint32_t mask; const char *name; } k_stick[] = {{PK_LSL, "LSL"}, {PK_LSR, "LSR"}, {PK_LSU, "LSU"}, {PK_LSD, "LSD"}};
 #define KMAX 256
-static struct { uint32_t mask; uint64_t t0, t1; float tx, ty; } g_keys[KMAX];
+static struct { uint32_t mask; uint64_t t0, t1; float tx, ty; int frame; } g_keys[KMAX];   // frame: t0 / t1 are frame numbers
 static int g_nkeys;
 static uint64_t g_kbase;
 static void keys_parse(void) {
@@ -74,12 +76,12 @@ static void keys_parse(void) {
         for (int i = 0; i < (int)(sizeof k_names / sizeof *k_names); i++) if (!strcmp(tok, k_names[i].name)) mask = k_names[i].mask;
         for (int i = 0; i < 4; i++) if (!strcmp(tok, k_stick[i].name)) mask = k_stick[i].mask;
         if (!mask) die("DM_KEYS: unknown key \"%s\"", tok);
-        const char *v = at + 1;
-        if (!((*v >= '0' && *v <= '9') || *v == '.')) die("DM_KEYS item \"%s@%s\": expected seconds after @", tok, v);
+        const char *v = at + 1; int frame = *v == 'f'; v += frame;
+        if (!((*v >= '0' && *v <= '9') || *v == '.')) die("DM_KEYS item \"%s@%s\": expected seconds or f<frame> after @", tok, at + 1);
         char *plus = strchr(v, '+');
-        double t = atof(v), d = plus ? atof(plus + 1) : 0.2;
+        double t = atof(v), d = plus ? atof(plus + 1) : frame ? 12 : 0.2, u = frame ? 1 : 1e9;
         if (g_nkeys == KMAX) die("DM_KEYS: more than %d items", KMAX);
-        g_keys[g_nkeys++] = (typeof(g_keys[0])){mask, (uint64_t)(t * 1e9), (uint64_t)((t + d) * 1e9), tx, ty};
+        g_keys[g_nkeys++] = (typeof(g_keys[0])){mask, (uint64_t)(t * u), (uint64_t)((t + d) * u), tx, ty, frame};
     }
     if (g_nkeys) LOG("hid script: %d timed items", g_nkeys);
 }
@@ -87,10 +89,10 @@ static pthread_once_t g_kone = PTHREAD_ONCE_INIT;
 void hid_keys_init(void) { pthread_once(&g_kone, keys_parse); }
 static uint64_t keys_now(void) {
     pthread_once(&g_kone, keys_parse);
-    uint64_t t = now_ns() - g_kbase, m = 0;
+    uint64_t t = now_ns() - g_kbase, m = 0, f = g_nkeys ? dm_nvn_frame_count() : 0;
     // Touch items active now are pushed to the touchscreen as one set (hle_touch.c), only when the set changes
     dm_touch act[16]; int na = 0; uint32_t on = 0;
-    for (int i = 0; i < g_nkeys; i++) if (t >= g_keys[i].t0 && t < g_keys[i].t1) {
+    for (int i = 0; i < g_nkeys; i++) if ((g_keys[i].frame ? f : t) >= g_keys[i].t0 && (g_keys[i].frame ? f : t) < g_keys[i].t1) {
         if (!(g_keys[i].mask & PK_TOUCH)) { m |= g_keys[i].mask; continue; }
         if (na < 16) { act[na] = (dm_touch){(uint32_t)na, g_keys[i].tx, g_keys[i].ty}; on |= 1u << i % 32; na++; }
     }

@@ -83,7 +83,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_SAVE`, `DM_TEMP` | Save directory (required) and temporary storage |
 | `DM_ROMFS`, `DM_SYSFONT` | RomFS and system font directories (default: the profile's workspace) |
 | `DM_WINDOW=1`, `DM_AUDIO=1` | Open a window; play sound |
-| `DM_KEYS` | Scripted input, e.g. `A@10+0.2` (press A at 10 s for 0.2 s), `T0.5:0.5@15+0.1` (touch at normalized x, y) |
+| `DM_KEYS` | Scripted input, e.g. `A@10+0.2` (press A at 10 s for 0.2 s), `T0.5:0.5@15+0.1` (touch at normalized x, y), `A@f3600+12` (at presented frame 3600 for 12 frames: does not drift when the machine is busy), left stick `LSL` / `LSR` / `LSU` / `LSD` |
 | `DM_WATCH=<s>` | Stop after that many seconds (exit 142) |
 | `DM_LANG` | Override the profile's language |
 | `DM_MOVIE=1` (`2` = trace), `DM_TOUCH_LOG=1`, `DM_FS=1`, `DM_THROWLOG=1`, `DM_HLECOUNT=<file>` | Movie, touch, file system, managed exception and HLE call logging |

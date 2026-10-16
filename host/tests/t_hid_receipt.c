@@ -10,6 +10,7 @@ void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 static uint64_t clock_ns=1000000000ull;
 uint64_t now_ns(void) { return clock_ns; }
 uint64_t guest_ns(void) { return clock_ns; }
+uint64_t dm_nvn_frame_count(void) { return 0; }
 static int opmode=1;
 int dm_opmode(void) { return opmode; }
 int touch_fill(void *p, uint64_t n) { (void)p;(void)n;return 0; }
