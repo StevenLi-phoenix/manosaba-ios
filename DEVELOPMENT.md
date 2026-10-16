@@ -6,8 +6,7 @@ does not hold (and must not: keys, dumps, anything derived from the game) is lis
 ## Restoring a working copy
 
 ```sh
-git clone https://github.com/iceorange-dev/manosaba-ios.git "manosaba ios" && cd "manosaba ios"
-git checkout -b manosaba-port origin/main                                  # the working branch tracks origin/main
+git clone https://github.com/iceorange-dev/manosaba-ios.git "manosaba ios" && cd "manosaba ios"   # work on main, which tracks origin/main
 git remote add upstream https://github.com/jhaizhou-ops/d2r-mobile.git      # fetch only, never push there
 ```
 
