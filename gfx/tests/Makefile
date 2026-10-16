@@ -21,6 +21,8 @@ t_pace: t_pace.c ../nvn/nvn_pace.h
 	clang -O1 -Wall -o $@ t_pace.c
 t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
 	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c
+t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
+	clang -O1 -Wall -Werror -o $@ t_pool_find.c
 t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_rt_srgb_view: t_rt_srgb_view.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -64,6 +66,7 @@ run: \
 	t_nvn \
 	t_pace \
 	t_pfv \
+	t_pool_find \
 	t_present_crop \
 	t_present_fx \
 	t_pso_skey \
@@ -83,6 +86,7 @@ run: \
 	./t_hmap
 	./t_cover
 	./t_copy_pitch
+	./t_pool_find
 	./t_fuse_check
 	./t_present_crop
 	MTL_DEBUG_LAYER=1 ./t_present_fx

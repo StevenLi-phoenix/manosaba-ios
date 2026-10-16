@@ -51,6 +51,7 @@
 #include "nvn_refl.h"
 #include "nvn_cover.h"
 #include "nvn_copy_pitch.h"
+#include "nvn_pool_find.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree
 #include "nvn_hmap.h"
 #include "../../host/dm.h"
@@ -256,6 +257,8 @@ void bf_want_note(const char *shader_key) {
 // ---------- Memory pools ----------
 typedef struct { uintptr_t lo, hi; uintptr_t base; __unsafe_unretained id<MTLBuffer> buf; uint64_t gpu; const void *key; int res; } pool_ent;   // res: already put in the residency set (on demand, see pool_res)
 static pool_ent *g_pools; static int g_npool, g_cap;
+_Static_assert(offsetof(pool_ent, lo) == 0 && offsetof(pool_ent, hi) == sizeof(uintptr_t), "nvn_pool_find.h reads lo, hi at the start of an entry");
+static pool_find_t g_pfind = {.last = -1};   // address → pool (nvn_pool_find.h); reset whenever g_pools changes, under g_mu
 static NSMutableArray *g_keep;                  // Holds the buffer references (pool_ent has non-owning pointers)
 static uint64_t g_pool_adds;
 
@@ -395,7 +398,7 @@ void mtl_pool_add(const void *mem, uint64_t size) { @autoreleasepool {
     if (!buf) MDIE("memory pool %p+%#llx: failed to create zero-copy buffer", mem, (unsigned long long)size);
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cap) { g_cap = g_cap ? g_cap * 2 : 64; g_pools = realloc(g_pools, g_cap * sizeof *g_pools); }
-    g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0};   // not in the residency set yet: put in the first time it is addressed (pool_res)
+    g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0}; pool_find_reset(&g_pfind);   // not in the residency set yet: put in the first time it is addressed (pool_res)
     g_pool_adds++;
     [g_keep addObject:buf];
     pthread_mutex_unlock(&g_mu);
@@ -406,7 +409,7 @@ void mtl_pool_del(const void *mem) { @autoreleasepool {
     id<MTLBuffer> gone = nil;
     pthread_mutex_lock(&g_mu);
     for (int i = 0; i < g_npool; i++)
-        if (g_pools[i].key == mem) { gone = g_pools[i].buf; [g_keep removeObject:gone]; g_pools[i] = g_pools[--g_npool]; break; }
+        if (g_pools[i].key == mem) { gone = g_pools[i].buf; [g_keep removeObject:gone]; g_pools[i] = g_pools[--g_npool]; pool_find_reset(&g_pfind); break; }
     pthread_mutex_unlock(&g_mu);
     defer_obj_release(gone);   // retire: release after the submissions that used it complete, and remove from the residency set (it used to be only removed from g_keep - the residency set holds it strongly, so the zero-copy buffer object was never destroyed)
 } }
@@ -414,20 +417,16 @@ void mtl_pool_del(const void *mem) { @autoreleasepool {
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     int ok = 0;
     pthread_mutex_lock(&g_mu);
-    for (int i = 0; i < g_npool; i++)
-        if (addr >= g_pools[i].lo && addr + len <= g_pools[i].hi) {
-            pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; ok = 1; break;
-        }
+    int i = pool_find(&g_pfind, g_pools, sizeof *g_pools, g_npool, addr, len);
+    if (i >= 0) { pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; ok = 1; }
     pthread_mutex_unlock(&g_mu);
     return ok;
 }
 int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {
     int ok = 0;
     pthread_mutex_lock(&g_mu);
-    for (int i = 0; i < g_npool; i++)
-        if (addr >= g_pools[i].lo && addr + len <= g_pools[i].hi) {
-            pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; *gpu = g_pools[i].gpu + *off; ok = 1; break;
-        }
+    int i = pool_find(&g_pfind, g_pools, sizeof *g_pools, g_npool, addr, len);
+    if (i >= 0) { pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; *gpu = g_pools[i].gpu + *off; ok = 1; }
     pthread_mutex_unlock(&g_mu);
     return ok;
 }
