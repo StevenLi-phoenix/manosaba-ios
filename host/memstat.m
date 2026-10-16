@@ -18,12 +18,21 @@
 #include "dm.h"
 
 void svc_guest_range(uint8_t **base, size_t *size);
-enum { C_GUEST, C_CODE, C_MALLOC, C_GPU, C_STACK, C_FILE, C_OTHER, NC };
-static const char *k_cls[NC] = {"guest", "code", "malloc", "gpu", "stack", "file", "other"};
+void dm_alias_stat(size_t *mapped_mb, size_t *host_mb);
+unsigned long long mtl_gpu_allocated_mb(void);
+void mtl_mem_census(char *out, size_t n);
+void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n);
+// guest = the rest of the guest address space block; g_alias / g_stack / g_heap = its alias region, stack region and heap (a VM region is counted
+// where it starts: the kernel may merge neighbouring regions with the same attributes across a boundary)
+enum { C_GUEST, C_CODE, C_MALLOC, C_GPU, C_STACK, C_FILE, C_OTHER, C_GALIAS, C_GSTACK, C_GHEAP, NC };
+static const char *k_cls[NC] = {"guest", "code", "malloc", "gpu", "stack", "file", "other", "g_alias", "g_stack", "g_heap"};
 
 static int classify(vm_address_t a, const vm_region_submap_info_data_64_t *in) {
     uint8_t *gb; size_t gs; svc_guest_range(&gb, &gs);
-    if (gb && a >= (vm_address_t)gb && a < (vm_address_t)gb + gs) return C_GUEST;
+    if (gb && a >= (vm_address_t)gb && a < (vm_address_t)gb + gs) {
+        uint8_t *al, *st, *hp; size_t aln, stn, hpn; svc_guest_layout(&al, &aln, &st, &stn, &hp, &hpn); uint8_t *p = (uint8_t *)a;
+        return p >= al && p < al + aln ? C_GALIAS : p >= st && p < st + stn ? C_GSTACK : p >= hp && p < hp + hpn ? C_GHEAP : C_GUEST;
+    }
     for (int i = 0; i < g_nmod; i++)
         if (a >= (vm_address_t)g_mod[i].base && a < (vm_address_t)g_mod[i].base + g_mod[i].size) return C_CODE;
     switch (in->user_tag) {
@@ -54,14 +63,10 @@ static void dump_regions(const char *path) {
     fclose(f);
 }
 
-static void sample(FILE *f, double t, id<MTLDevice> dev) {
-    task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
-    uint64_t fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? vi.phys_footprint : 0;
-    uint64_t avail = 0;
-#if TARGET_OS_IPHONE
-    avail = os_proc_available_memory();
-#endif
-    uint64_t virt[NC] = {0}, res[NC] = {0}, bill[NC] = {0};
+// Walk this process's VM regions: virtual / resident / charged per class (charged counts each object once). Serialized: the dedup table is shared
+// by the per-second sample and the low-memory watch
+static void walk(uint64_t virt[NC], uint64_t res[NC], uint64_t bill[NC]) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; pthread_mutex_lock(&mu);
     static uint32_t seen[1 << 16]; static uint32_t gen; gen++; if (!gen) { memset(seen, 0, sizeof seen); gen = 1; }   // Objects already counted in this sample (open addressing)
     vm_address_t a = 0; vm_size_t sz; natural_t depth = 0; vm_size_t pg = vm_page_size;
     for (;;) {
@@ -79,21 +84,35 @@ static void sample(FILE *f, double t, id<MTLDevice> dev) {
         }
         a += sz; continue;
     }
+    pthread_mutex_unlock(&mu);
+}
+
+static void sample(FILE *f, double t, id<MTLDevice> dev) {
+    task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+    uint64_t fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? vi.phys_footprint : 0;
+    uint64_t avail = 0;
+#if TARGET_OS_IPHONE
+    avail = os_proc_available_memory();
+#endif
+    uint64_t virt[NC] = {0}, res[NC] = {0}, bill[NC] = {0};
+    walk(virt, res, bill);
     uint64_t sum = 0; for (int c = 0; c < NC; c++) sum += bill[c];
+    size_t am, ah; dm_alias_stat(&am, &ah);
     fprintf(f, "%.0f\t%llu\t%llu\t%llu\t%llu\t%llu\t%lld\t%lld", t, fp >> 20, avail >> 20, (unsigned long long)(dev.currentAllocatedSize >> 20),
             vi.internal >> 20, vi.compressed >> 20, (vi.ledger_tag_graphics_footprint + vi.ledger_tag_graphics_footprint_compressed) >> 20,
             (long long)(vi.limit_bytes_remaining >> 20));
     for (int c = 0; c < NC; c++) fprintf(f, "\t%llu/%llu/%llu", virt[c] >> 20, res[c] >> 20, bill[c] >> 20);
-    fprintf(f, "\t%llu\t%lld\n", sum >> 20, ((int64_t)fp - (int64_t)sum) >> 20);
+    fprintf(f, "\t%llu\t%lld\t%zu\t%zu\t%llu\n", sum >> 20, ((int64_t)fp - (int64_t)sum) >> 20, am, ah, (unsigned long long)dm_nvn_frame_count());
     fflush(f);
 }
 
 static void *memstat_thread(void *p) {
     FILE *f = fopen((const char *)p, "w");
     if (!f) { LOG("memstat: cannot open %s", (const char *)p); return NULL; }
-    fprintf(f, "# MiB; kernel ledgers internal / compressed / graphics / headroom; class columns = virtual/resident/charged (objects counted once); charged_total = Σ private charged; unattributed = phys_footprint − charged_total\ns\tphys_footprint\tavailable\tmetal_alloc\tinternal\tcompressed\tgraphics\theadroom");
+    fprintf(f, "# MiB; kernel ledgers internal / compressed / graphics / headroom; class columns = virtual/resident/charged (objects counted once); charged_total = Σ private charged; unattributed = phys_footprint − charged_total; "
+               "alias_mapped / alias_hostpages = alias region mapped by the game / host pages that mapping keeps in use; frame = NVN frames presented\ns\tphys_footprint\tavailable\tmetal_alloc\tinternal\tcompressed\tgraphics\theadroom");
     for (int c = 0; c < NC; c++) fprintf(f, "\t%s", k_cls[c]);
-    fprintf(f, "\tcharged_total\tunattributed\n");
+    fprintf(f, "\tcharged_total\tunattributed\talias_mapped\talias_hostpages\tframe\n");
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();   // The same device object as the graphics backend (the system default device singleton)
     uint64_t t0 = now_ns();
     const char *ds = getenv("DM_MEMSTAT_DUMP"); int dump_at = ds ? atoi(ds) : -1;
@@ -110,6 +129,60 @@ __attribute__((constructor)) static void memstat_start(void) {
     if (*p != '/') { size_t n = strlen(getenv("HOME")) + strlen(p) + 16; path = malloc(n); snprintf(path, n, "%s/Documents/%s", getenv("HOME"), p); }   // Relative name → the container's Documents (the container path is not known before launch)
 #endif
     pthread_t th; pthread_create(&th, NULL, memstat_thread, path); pthread_detach(th);
+}
+
+// ---------- Low-memory watch: always on on iOS; on the Mac only with DM_TEST_MEM_LIMIT_MB=<MB>, which stands in for the iOS limit (limit − footprint) ----------
+// The system kills a process that crosses its memory limit with SIGKILL and may save no report at all, and the memory line is printed every 300
+// frames at most: a spike inside one scene load goes unrecorded (an iPad session ended this way two minutes into a trial's loading). This thread
+// reads the distance to the limit every 50 ms and logs one line each time it falls below the next step, re-arming a step once the distance is back
+// 256 MB above it. While below 1024 MB, dm_mem_low() lets the memory line ignore its line cap.
+#include <stdatomic.h>
+static _Atomic int g_mem_low;
+int dm_mem_low(void) { return atomic_load(&g_mem_low); }
+static void *memwatch_thread(void *p) {
+    long test_limit = (long)(intptr_t)p;
+    static const long step[] = {1024, 768, 512, 384, 256, 192, 128, 64}; enum { NSTEP = sizeof step / sizeof *step };
+    int armed[NSTEP]; for (int i = 0; i < NSTEP; i++) armed[i] = 1;
+    long last_fp = 0;
+    for (;;) {
+        usleep(50000);
+        task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+        long fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? (long)(vi.phys_footprint >> 20) : 0, left;
+#if TARGET_OS_IPHONE
+        (void)test_limit; left = (long)(os_proc_available_memory() >> 20);
+        if (!left) continue;   // no reading (not limited)
+#else
+        left = test_limit - fp;
+#endif
+        atomic_store(&g_mem_low, left < 1024);
+        for (int i = 0; i < NSTEP; i++) {
+            if (!armed[i] && left > step[i] + 256) armed[i] = 1;
+            if (!armed[i] || left >= step[i]) continue;
+            int j = i; while (j + 1 < NSTEP && left < step[j + 1]) armed[j++] = 0;   // a jump past several steps logs once, for the lowest
+            armed[j] = 0;
+            size_t am, ah; dm_alias_stat(&am, &ah);
+            LOG("memory low: %ld MB left to the system memory limit (below %ld MB) at frame %llu, %.1f s: footprint %ld MB (%+ld MB in the last 50 ms), Metal allocated %llu MB, "
+                "alias region mapped %zu MB in %zu MB of host pages", left, step[j], (unsigned long long)dm_nvn_frame_count(), (now_ns() - g_t0_ns) / 1e9,
+                fp, last_fp ? fp - last_fp : 0, mtl_gpu_allocated_mb(), am, ah);
+            // What the footprint is made of right now (one region walk, a few ms): charged per class; "GPU private" = footprint not in any VM region (Metal private storage)
+            uint64_t virt[NC] = {0}, res[NC] = {0}, bill[NC] = {0}, sum = 0; walk(virt, res, bill); for (int c = 0; c < NC; c++) sum += bill[c];
+            n = TASK_VM_INFO_COUNT; long fp2 = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? (long)(vi.phys_footprint >> 20) : fp;
+            LOG("memory low: breakdown: footprint %ld MB = guest %llu (alias region %llu, stack region %llu, heap %llu) + malloc %llu + code %llu + GPU-tagged regions %llu + other %llu + GPU private %lld MB; graphics ledger %llu MB, compressed %llu MB",
+                fp2, (bill[C_GUEST] + bill[C_GALIAS] + bill[C_GSTACK] + bill[C_GHEAP]) >> 20, bill[C_GALIAS] >> 20, bill[C_GSTACK] >> 20, bill[C_GHEAP] >> 20, bill[C_MALLOC] >> 20, bill[C_CODE] >> 20, bill[C_GPU] >> 20, (bill[C_STACK] + bill[C_FILE] + bill[C_OTHER]) >> 20,
+                (long long)fp2 - (long long)(sum >> 20), (vi.ledger_tag_graphics_footprint + vi.ledger_tag_graphics_footprint_compressed) >> 20, vi.compressed >> 20);
+            char census[1024]; mtl_mem_census(census, sizeof census); LOG("memory low: Metal objects: %s", census);
+            break;
+        }
+        last_fp = fp;
+    }
+    return NULL;
+}
+__attribute__((constructor)) static void memwatch_start(void) {
+    long limit = 0;
+#if !TARGET_OS_IPHONE
+    const char *e = getenv("DM_TEST_MEM_LIMIT_MB"); if (!e || (limit = atol(e)) <= 0) return;
+#endif
+    pthread_t th; pthread_create(&th, NULL, memwatch_thread, (void *)(intptr_t)limit); pthread_detach(th);
 }
 
 // ---------- Per-thread CPU: DM_THRCPU=<tsv path>[,interval in seconds (default 10)] (common to Mac / iOS; on iOS a relative name → the container's Documents) ----------

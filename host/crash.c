@@ -20,6 +20,7 @@ static _Atomic int g_watch_stage_idx;
 static char g_watch_stage[2][256] = {"boot", "boot"};
 static unsigned g_watch_stall;
 static void (*g_dump_hook)(void);
+__attribute__((weak)) void mtl_crash_note(void) {}   // nvn_mtl.m provides the real one; the host's unit tests link crash.c without the graphics layer
 static void (*g_wait_dump)(void);
 
 static uint64_t watch_now_ns(void) {
@@ -144,6 +145,7 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
     dm_backtrace(uc->uc_mcontext->__ss.__fp);
+    mtl_crash_note();   // the graphics layer's last copy handed to the driver (plain values recorded beforehand; no Objective-C here)
     if (g_dump_hook) g_dump_hook();
     _exit(128 + sig);
 }

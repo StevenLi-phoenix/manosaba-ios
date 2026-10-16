@@ -35,6 +35,9 @@ Not verified or known open: compute shader dispatch at run time (the game's comp
 texturing and probe debug kernels; no dispatch happens in the story or in a trial); 13 NVN functions the game looks up that the layer does not
 know (returned as NULL: this build stores the pointers but never calls them); an intermittent texture crash seen early on the iPhone, likely
 fixed by an NVN struct size correction (not seen since, unconfirmed); keyboard, mouse and game controller input not tested with this game.
+Memory on 8 GB iPads: without a paid account's increased memory limit the app may use about 3.4 GB on an iPad mini (A17 Pro). A trial's loading
+adds about 1.4 GB for a moment (the character render targets), and the game's own memory grows by some 30 MB per scene load over a long session,
+so after about two hours of play a trial's loading went past the limit and the system ended the app; restarting the app before then avoids it.
 
 ## How it works
 

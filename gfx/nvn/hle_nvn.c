@@ -386,11 +386,26 @@ static void read_texels(const tex_t *o, const view_t *v, const NVNcopyRegion *r,
     unsigned level = v && v->set_levels ? (unsigned)v->base_level : 0, layer0 = v && v->set_layers ? (unsigned)v->min_layer : 0;
     mtl_read_texels(o, level, layer0, r, dst, (size_t)row, (size_t)img);
 }
+// Concurrency check: the Metal layer's submission state (current command buffer, blit encoder, render state) and the texel paths are not locked
+// against each other; they rely on the game calling SubmitCommands / PresentTexture / Read|WriteTexels from one thread at a time. The first overlap
+// is logged once in red, naming both threads (a crash inside a copy encoder at a scene load was seen on the Mac)
+__attribute__((weak)) int thr_name_of(pthread_t pt, char *out, size_t n) { (void)pt; (void)out; (void)n; return 0; }   // host hle_thread.c (guest thread names); the graphics unit tests have none
+static _Atomic int g_gfx_in; static _Atomic uint64_t g_gfx_tid; static const char *_Atomic g_gfx_what; static char g_gfx_name[96];
+static void gfx_mt_enter(const char *what) {
+    uint64_t me; pthread_threadid_np(NULL, &me);
+    if (atomic_fetch_add(&g_gfx_in, 1)) {
+        static _Atomic int said; if (atomic_exchange(&said, 1)) return;
+        char nm[96] = "-"; thr_name_of(pthread_self(), nm, sizeof nm);
+        LOG("[red] [nvn] %s on thread %llu (%s) while %s runs on thread %llu (%s): two threads inside the Metal layer at once", what, (unsigned long long)me, nm,
+            atomic_load(&g_gfx_what), (unsigned long long)atomic_load(&g_gfx_tid), g_gfx_name);
+    } else { atomic_store(&g_gfx_tid, me); atomic_store(&g_gfx_what, what); if (!thr_name_of(pthread_self(), g_gfx_name, sizeof g_gfx_name)) strcpy(g_gfx_name, "-"); }
+}
+static void gfx_mt_leave(void) { atomic_fetch_sub(&g_gfx_in, 1); }
 NVN(nvnTextureReadTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, void *dst) {
-    read_texels(CTX(t), (const view_t *)v, r, dst, 0, 0);
+    gfx_mt_enter("ReadTexels"); read_texels(CTX(t), (const view_t *)v, r, dst, 0, 0); gfx_mt_leave();
 }
 NVN(nvnTextureReadTexelsStrided, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, void *dst, ptrdiff_t row, ptrdiff_t img) {
-    read_texels(CTX(t), (const view_t *)v, r, dst, row, img);
+    gfx_mt_enter("ReadTexelsStrided"); read_texels(CTX(t), (const view_t *)v, r, dst, row, img); gfx_mt_leave();
 }
 NVN(nvnTextureInvalidateTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }
 // CPU texture write (NVN WriteTexels): stride 0 = tightly packed (same as ReadTexels)
@@ -403,10 +418,10 @@ static void write_texels(const tex_t *o, const view_t *v, const NVNcopyRegion *r
     mtl_write_texels(o, level, layer0, r, src, (size_t)row, (size_t)img);
 }
 NVN(nvnTextureWriteTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const void *src) {
-    write_texels(CTX(t), (const view_t *)v, r, src, 0, 0);
+    gfx_mt_enter("WriteTexels"); write_texels(CTX(t), (const view_t *)v, r, src, 0, 0); gfx_mt_leave();
 }
 NVN(nvnTextureWriteTexelsStrided, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const void *src, ptrdiff_t row, ptrdiff_t img) {
-    write_texels(CTX(t), (const view_t *)v, r, src, row, img);
+    gfx_mt_enter("WriteTexelsStrided"); write_texels(CTX(t), (const view_t *)v, r, src, row, img); gfx_mt_leave();
 }
 NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }
 
@@ -533,7 +548,7 @@ NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *in
 NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
 // The queue waits on a sync object on the GPU: the host has a single Metal queue executing in submit order and the fence comes from an earlier submission, so the wait holds by construction
 NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) { (void)q; (void)s; return 1; }
-NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; mtl_finish(); }
+NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; gfx_mt_enter("QueueFinish"); mtl_finish(); gfx_mt_leave(); }
 
 // ---------- Command buffer: record into the game's command memory, perform CPU-visible side effects at submit ----------
 #define CB(c) ((cmd_t *)(c))
@@ -897,7 +912,7 @@ void dm_gfx_suspend(int on) {
     if (on) { mtl_drain(); LOG("[nvn] graphics suspended: in-flight GPU work drained"); } else LOG("[nvn] graphics resumed");
 }
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
-    gfx_enter();
+    gfx_enter(); gfx_mt_enter("SubmitCommands");
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
     mtl_sub_begin();
@@ -911,7 +926,7 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
     atomic_fetch_add(&g_cum_sub_cyc, y1 - y0); atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0); atomic_fetch_add(&g_cum_sub_wall_ns, dw);
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
-    gfx_leave();
+    gfx_mt_leave(); gfx_leave();
 }
 
 // Commands that only affect GPU state / only execute on the GPU: the null device only counts them (the thunk has already counted)
@@ -1230,7 +1245,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     present_cfg(o);
     gfx_enter();
     uint64_t t0 = now_ns();
+    gfx_mt_enter("PresentTexture");
     if (idx >= 0 && idx < o->ntex && idx < 4) o->ticket[idx] = mtl_present(CTX(o->tex[idx]), present_period(o) / 1e9, o->crop);   // enqueue only, return immediately
+    gfx_mt_leave();
     gfx_leave();
     atomic_fetch_add(&g_nvn_ns, now_ns() - t0);
     uint64_t f = g_frame, ps, dr; mtl_stats(&ps, &dr);

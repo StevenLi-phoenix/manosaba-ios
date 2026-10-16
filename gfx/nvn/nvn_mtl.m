@@ -1326,6 +1326,27 @@ static void res_census(unsigned long long frame, unsigned long long rss_mb) {
              nl[0], bl[0] >> 20, nl[1], bl[1] >> 20, nr[0], br[0] >> 20, nr[1], br[1] >> 20);
     }
 }
+void dm_alias_stat(size_t *mapped_mb, size_t *host_mb); int dm_mem_low(void);
+// Metal objects in the residency set by kind, for the low-memory watch (memstat.m; any thread): private render-target textures, other private textures,
+// shared buffers wrapping guest memory pools (no copy: their memory is the guest's), other buffers (upload staging and the like); count and MB each,
+// the deferred-release queue, and the five largest textures
+static int pf_is_depth_stencil(MTLPixelFormat f) { return f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float || f == MTLPixelFormatStencil8 || f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatX32_Stencil8; }
+void mtl_mem_census(char *out, size_t n) { @autoreleasepool {
+    unsigned long cnt[5] = {0}; unsigned long long mb[5] = {0}; struct { unsigned long long b; unsigned w, h, f, rt; } top[5] = {{0}};
+    pthread_mutex_lock(&g_mu); NSMutableSet *pools = [NSMutableSet set]; for (int i = 0; i < g_npool; i++) [pools addObject:g_pools[i].buf]; pthread_mutex_unlock(&g_mu);
+    pthread_mutex_lock(&g_res_mu); NSArray *all = g_res_objects.allObjects; pthread_mutex_unlock(&g_res_mu);
+    for (id o in all) {
+        unsigned long long b = (unsigned long long)[(id<MTLResource>)o allocatedSize]; int k;
+        if ([o conformsToProtocol:@protocol(MTLTexture)]) { id<MTLTexture> t = o; int rt = (t.usage & MTLTextureUsageRenderTarget) != 0, ds = pf_is_depth_stencil(t.pixelFormat); k = rt ? (ds ? 4 : 0) : 1;
+            for (int i = 0; i < 5; i++) if (b > top[i].b) { memmove(&top[i + 1], &top[i], (4 - i) * sizeof top[0]); top[i].b = b; top[i].w = (unsigned)t.width; top[i].h = (unsigned)t.height; top[i].f = (unsigned)t.pixelFormat; top[i].rt = rt; break; } }
+        else k = [pools containsObject:o] ? 2 : 3;
+        cnt[k]++; mb[k] += b;
+    }
+    pthread_mutex_lock(&g_deferred_mu); unsigned long nd = (unsigned long)g_deferred.count; pthread_mutex_unlock(&g_deferred_mu);
+    size_t o = (size_t)snprintf(out, n, "color render targets %lu / %llu MB, depth/stencil render targets %lu / %llu MB, other textures %lu / %llu MB, pool buffers %lu / %llu MB, other buffers %lu / %llu MB, deferred-release queue %lu; largest textures:",
+        cnt[0], mb[0] >> 20, cnt[4], mb[4] >> 20, cnt[1], mb[1] >> 20, cnt[2], mb[2] >> 20, cnt[3], mb[3] >> 20, nd);
+    for (int i = 0; i < 5 && top[i].b && o < n; i++) o += (size_t)snprintf(out + o, n - o, " %ux%u fmt %u%s %llu MB", top[i].w, top[i].h, top[i].f, top[i].rt ? " RT" : "", top[i].b >> 20);
+} }
 unsigned long long mtl_gpu_allocated_mb(void) { id<MTLDevice> d = g_dev; return d ? (unsigned long long)(d.currentAllocatedSize >> 20) : 0; }   // GPU allocated (0 before the graphics layer starts); callable from any thread
 void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_ok, unsigned long long heap_mb, unsigned long long heap_free_mb, unsigned long long heap_maxblk_kb) {
     if (g_res_census > 0) res_census(frame, rss_mb);
@@ -1333,7 +1354,8 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
     unsigned long long dr = rss_mb > last_rss ? rss_mb - last_rss : last_rss - rss_mb, dg = gpu > last_gpu ? gpu - last_gpu : last_gpu - gpu;
     unsigned long long dh = heap_free_mb > last_hfree ? heap_free_mb - last_hfree : last_hfree - heap_free_mb, hmax_mb = heap_maxblk_kb >> 10, dm = hmax_mb > last_hmax ? hmax_mb - last_hmax : last_hmax - hmax_mb;
     static int all = -1; if (all < 0) all = getenv("DM_MEM_STAT_ALL") != NULL;   // For measurement: printed every time, uncapped
-    if (!all && (lines >= 400 || (lines && dr < 64 && dg < 64 && dh < 16 && dm < 16 && frame - last_frame < 3000))) return; lines++; last_rss = rss_mb; last_gpu = gpu; last_frame = frame; last_hfree = heap_free_mb; last_hmax = hmax_mb;
+    int every = all || dm_mem_low();   // also within 1 GB of the iOS memory limit (memstat.m low-memory watch): past the line cap, since the last readouts before the system kills the process are the useful ones
+    if (!every && (lines >= 400 || (lines && dr < 64 && dg < 64 && dh < 16 && dm < 16 && frame - last_frame < 3000))) return; lines++; last_rss = rss_mb; last_gpu = gpu; last_frame = frame; last_hfree = heap_free_mb; last_hmax = hmax_mb;
     pthread_mutex_lock(&g_deferred_mu); unsigned long nd = (unsigned long)g_deferred.count; pthread_mutex_unlock(&g_deferred_mu);
     pthread_mutex_lock(&g_res_mu); unsigned long nr = (unsigned long)g_res_objects.count; pthread_mutex_unlock(&g_res_mu);
     int live = 0, peak = 0, cap = 0; nvn_dirty_stat(&live, &peak, &cap);
@@ -1341,8 +1363,9 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
 #if TARGET_OS_IPHONE
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
-    MLOG("memory up to frame %llu: RSS %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, memory pools %d (peak %d / tracking table capacity %d), texture re-uploads %llu in total; game heap %llu MB, free %llu MB, largest allocatable block %llu KB%s; headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, live, peak, cap, (unsigned long long)g_pkg_reuploads,
-        heap_mb, heap_free_mb, heap_maxblk_kb, heap_ok ? "" : " (not read)", avail);
+    size_t am, ah; dm_alias_stat(&am, &ah);
+    MLOG("memory up to frame %llu: RSS %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, memory pools %d (peak %d / tracking table capacity %d), texture re-uploads %llu in total; game heap %llu MB, free %llu MB, largest allocatable block %llu KB%s; alias region mapped %zu MB in %zu MB of host pages; headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, live, peak, cap, (unsigned long long)g_pkg_reuploads,
+        heap_mb, heap_free_mb, heap_maxblk_kb, heap_ok ? "" : " (not read)", am, ah, avail);
 }
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads) { *uploads = g_pkg_uploads; *reuploads = g_pkg_reuploads; }
 uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }
@@ -1452,6 +1475,8 @@ static void blit_note(void) { if (g_enc) PD("E %llu copy / buffer update ends th
 // Columns: kind  guest_addr  len  first_frame  tex_id  fmt  w×h
 __attribute__((weak)) void dm_shot_written(const char *path, int ok) { (void)path; (void)ok; }
 __attribute__((weak)) int dm_guest_heap_stat(unsigned long long *t, unsigned long long *f, unsigned long long *m) { (void)t; (void)f; (void)m; return 0; }   // hle_svc.c provides the strong definition (game main heap readout); the graphics unit tests do not link the host and cannot read it
+__attribute__((weak)) void dm_alias_stat(size_t *mapped_mb, size_t *host_mb) { *mapped_mb = *host_mb = 0; }   // hle_svc.c (alias region readout)
+__attribute__((weak)) int dm_mem_low(void) { return 0; }   // memstat.m (low-memory watch: under 1024 MB from the limit)
 __attribute__((weak)) void dm_guest_frame_tick(void) {}   // hle_os.c provides the strong definition (DM_DETCLOCK deterministic guest clock); a no-op when graphics unit tests do not link the host
 __attribute__((weak)) int dm_detclock_enabled(void) { return 0; }   // Same as above: the host's hle_os.c provides the strong definition; when graphics unit tests do not link the host, the deterministic clock is treated as off
 __attribute__((weak)) uint64_t guest_ns(void) { return 0; }          // Same as above: read only when the deterministic clock is on; never reached in graphics unit tests
@@ -4347,6 +4372,27 @@ void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVN
                 toTexture:mt destinationSlice:is3d ? 0 : layer0 + r->zoffset + z destinationLevel:level destinationOrigin:MTLOriginMake(r->xoffset, r->yoffset, is3d ? r->zoffset + z : 0)];
     enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
 } }
+// Last buffer→texture copy handed to the driver, for the crash report (crash.c calls mtl_crash_note; plain values only, written before each encode):
+// a crash inside the driver's copy encoder was seen a few times in repeated scene loads on the Mac, with a garbage or near-null address
+static struct { uint64_t seq, tid, ser, src, off, row, img, buf_len; const void *buf, *tex; unsigned w, h, d, arr, mips, pf, type, storage, usage, fmt, target, cw, ch, cz, x, y, slice, level, in_pools; } g_last_b2t;
+void mtl_crash_note(void) {
+    if (!g_last_b2t.seq) return;
+    fprintf(stderr, "[dm] last buffer→texture copy #%llu (thread %llu): texture %p ser=%llu %ux%ux%u array %u mips %u Metal format %u type %u storage %u usage %#x (NVN format %#x target %u); "
+            "buffer %p length %llu offset %llu (guest %#llx, %s the pool table); row %llu image %llu; region %ux%ux%u at %u,%u slice %u level %u\n",
+            (unsigned long long)g_last_b2t.seq, (unsigned long long)g_last_b2t.tid, g_last_b2t.tex, (unsigned long long)g_last_b2t.ser, g_last_b2t.w, g_last_b2t.h, g_last_b2t.d, g_last_b2t.arr, g_last_b2t.mips,
+            g_last_b2t.pf, g_last_b2t.type, g_last_b2t.storage, g_last_b2t.usage, g_last_b2t.fmt, g_last_b2t.target, g_last_b2t.buf, (unsigned long long)g_last_b2t.buf_len, (unsigned long long)g_last_b2t.off,
+            (unsigned long long)g_last_b2t.src, g_last_b2t.in_pools ? "in" : "NOT in", (unsigned long long)g_last_b2t.row, (unsigned long long)g_last_b2t.img, g_last_b2t.cw, g_last_b2t.ch, g_last_b2t.cz,
+            g_last_b2t.x, g_last_b2t.y, g_last_b2t.slice, g_last_b2t.level);
+}
+static int pool_buf_listed(const void *buf) { int hit = 0; pthread_mutex_lock(&g_mu); for (int i = 0; i < g_npool && !hit; i++) hit = (__bridge const void *)g_pools[i].buf == buf; pthread_mutex_unlock(&g_mu); return hit; }
+static void b2t_note(const p_copy_b2t *c, id<MTLTexture> t, id<MTLBuffer> b, uint64_t off, size_t row, size_t img, unsigned cz, unsigned slice, unsigned level) {
+    static uint64_t seq; uint64_t tid; pthread_threadid_np(NULL, &tid);
+    int listed = pool_buf_listed((__bridge const void *)b);
+    if (!listed) RED_ONCE(90, "buffer→texture copy: the source buffer %p is no longer in the memory pool table at encode time (texture ser=%llu)", (__bridge const void *)b, c->tex->serial);
+    g_last_b2t = (typeof(g_last_b2t)){++seq, tid, c->tex->serial, c->src, off, row, img, (uint64_t)b.length, (__bridge const void *)b, (__bridge const void *)t,
+        (unsigned)t.width, (unsigned)t.height, (unsigned)t.depth, (unsigned)t.arrayLength, (unsigned)t.mipmapLevelCount, (unsigned)t.pixelFormat, (unsigned)t.textureType, (unsigned)t.storageMode, (unsigned)t.usage,
+        c->tex->d.format, (unsigned)c->tex->d.target, c->r.width, c->r.height, cz, (unsigned)c->r.xoffset, (unsigned)c->r.yoffset, slice, level, (unsigned)listed};
+}
 static void copy_b2t(const p_copy_b2t *c) {
     if (c->tex) zskip_del(c->tex->serial);
     id<MTLTexture> t = tex_mtl(c->tex);
@@ -4374,11 +4420,14 @@ static void copy_b2t(const p_copy_b2t *c) {
         return;
     }
     BENC b = blit();
-    if (is3d)
+    if (is3d) {
+        b2t_note(c, t, (__bridge id<MTLBuffer>)mb, mo, row, img, (unsigned)nz, 0, level);
         enc_b_copy_buffer_texture(b, (__bridge id<MTLBuffer>)mb, mo, row, img, MTLSizeMake(c->r.width, c->r.height, nz), t, 0, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, c->r.zoffset));
-    else
-        for (int z = 0; z < nz; z++)
+    } else
+        for (int z = 0; z < nz; z++) {
+            b2t_note(c, t, (__bridge id<MTLBuffer>)mb, mo + z * img, row, img, 1, layer0 + c->r.zoffset + z, level);
             enc_b_copy_buffer_texture(b, (__bridge id<MTLBuffer>)mb, mo + z * img, row, img, MTLSizeMake(c->r.width, c->r.height, 1), t, layer0 + c->r.zoffset + z, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, 0));
+        }
 }
 
 // No BC + Legacy Device Pack: the game copies textures from files (already ASTC 4x4) whole into a BC3 texture array it creates itself (created as RGBA8 when there is no BC). On Switch the two formats have the same block size and

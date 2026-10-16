@@ -72,7 +72,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `cloud.m`, `cloud.h`, `cloudsync.c` | iCloud save sync of the profile's `save_sync` files (Mac app and iOS; file-level core in `cloudsync.c`) |
 | `crash.c` | Crash handler: guest backtrace, thread dump, watchdog (`DM_WATCH`) |
 | `diag.c` | Diagnostics: probes (`DM_PROBE`, `DM_THROWLOG`), boot timeline (`DM_BOOTPROF`), guest sampling (`DM_SAMPLE`), perf record |
-| `memstat.m` | Memory accounting (`DM_MEMSTAT`) |
+| `memstat.m` | Memory accounting (`DM_MEMSTAT`), low-memory watch |
 | `dm.h` | Common header |
 
 ## Common environment variables
@@ -87,6 +87,13 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_WATCH=<s>` | Stop after that many seconds (exit 142) |
 | `DM_LANG` | Override the profile's language |
 | `DM_MOVIE=1` (`2` = trace), `DM_TOUCH_LOG=1`, `DM_FS=1`, `DM_THROWLOG=1`, `DM_HLECOUNT=<file>` | Movie, touch, file system, managed exception and HLE call logging |
+| `DM_MEMSTAT=<tsv>` | Memory accounting once a second: footprint, distance to the iOS memory limit, Metal allocated, kernel ledgers, memory by kind (the guest's alias region, stack region and heap, malloc, code, GPU, …), alias region mapped and the host pages it keeps in use; on iOS a relative name is under Documents |
+| `DM_TEST_MEM_LIMIT_MB=<MB>` | Mac: stand in for an iOS memory limit (limit − footprint), so the `memory low:` lines below are written |
+| `DM_APP_POOL_ADD_MB=<MB>` | Application pool reported to the game: the Switch's 3285 MB plus this (default 512, may be negative). As on the console, MapPhysicalMemory fails with LimitReached past what the pool leaves after the images and the heap |
+
+On iOS the system ends a process that passes its memory limit without leaving a report of its own. The host reads the distance to the limit every
+50 ms and logs a `memory low:` line each time it falls below 1024, 768, 512, 384, 256, 192, 128 or 64 MB, with what the footprint is made of and
+the Metal objects by kind; below 1024 MB the periodic memory line is no longer capped.
 
 The Mac app (`tools/mac_app.sh`) gets no shell environment when started from Finder; pass variables with `open --env DM_NVN_SHOT=… <app>` or run
 `<app>/Contents/MacOS/<id>` directly. Graphics switches are listed in [gfx/README.md](../gfx/README.md).
