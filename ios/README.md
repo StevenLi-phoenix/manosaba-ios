@@ -50,7 +50,8 @@ and zips `Payload/DmIOS.app`. It needs `DM_BUNDLE_ID` but no team. A signing too
 profile) signs it on the way in; the signer's profile decides the entitlements, and the IPA brings none of its own: AltStore, for example, reads
 the entitlements in the app's signature (AltSign `ALTApplication.entitlementsString`) to decide which App ID features to turn on. Without iCloud
 entitlements there is no save sync (`host/cloud.m` asks for the default container at run time); everything else works as in a free-account
-build. Tools that change the bundle ID are fine: nothing in the app depends on it.
+build. Tools that change the bundle ID are fine: nothing in the app depends on it. Tried on 2026-10-16 with LCSign on an iPad Pro (iOS 18.5):
+it signed with every entitlement of its profile (increased memory limit included, `get-task-allow` false), and the app ran.
 
 - The iOS 26 build is compiled with `-mcpu=apple-a18`, the iOS 18 build (`DM_IOS_M3=1`) with `-mcpu=apple-a14`; build the one that fits the
   device's chip and iOS version.

@@ -93,8 +93,10 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
 ## Acknowledgements
 
 - **d2r-mobile** (jhaizhou, MIT): the architecture and most of the host, graphics layer and verification tools.
+- **d2r-mobile contributors** SepheTT (buffer ↔ texture copy strides) and BossaMelon (the declared launch screen).
 - **nxnative** (seedds, MIT) and **botw-mobile** (Tommy Lau, MIT), community ports built on d2r-mobile: the crash-report, dirty-page,
-  RomFS-index and thread-exit fixes credited in their commits.
+  RomFS-index and thread-exit fixes, and from nxnative the memory pool lookup index, compatible texture views, unwritten colour outputs
+  and frame-timed scripted input, credited in their commits.
 - **Ryujinx** (MIT): the shader translator in `third_party/ryujinx`.
 - **deko3d** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c`.
 - **nvn.h** (h1k421, MIT): NVN declarations in `gfx/nvn/include/nvn.h`.

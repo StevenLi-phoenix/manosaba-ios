@@ -80,6 +80,7 @@ Binding conventions used by the translation:
 | `nvn/nvn_dirty.c`, `nvn/nvn_dirty.h` | Write-protection dirty page tracking of game memory (which textures must be re-uploaded) |
 | `nvn/nvn_refl.m`, `nvn/nvn_refl.h` | Shader reflection JSON → fixed-size C arrays walked at draw time |
 | `nvn/nvn_hmap.h`, `nvn_cover.h`, `nvn_pace.h`, `nvn_pso_skey.h`, `nvn_count.h` | Hash table, full-coverage proof for draws, presentation pacer, pipeline manifest key, call counters |
+| `nvn/nvn_copy_pitch.h`, `nvn_pool_find.h`, `nvn_tex_fit.h` | Buffer ↔ texture copy strides, address → memory pool lookup, compatible views for a shader's declared texture type |
 | `nvn/include/nvn.h` | NVN declarations (third party; license in the file header) |
 | `nvn/names.txt`, `nvn/nvn_protos.h`, `nvn/dmsh_chain.h` | Known NVN names, generated signatures, translation chain version |
 | `tex/` | Texture format mapping, deswizzling, BC decompression ([tex/README.md](tex/README.md)) |
