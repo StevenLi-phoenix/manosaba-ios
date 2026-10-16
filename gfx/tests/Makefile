@@ -23,6 +23,8 @@ t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
 	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c
 t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
 	clang -O1 -Wall -Werror -o $@ t_pool_find.c
+t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
+	clang $(CFLAGS) -fobjc-arc -o $@ t_tex_fit.m -framework Metal -framework Foundation
 t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_rt_srgb_view: t_rt_srgb_view.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -75,6 +77,7 @@ run: \
 	t_rt_range \
 	t_rt_range_shape \
 	t_rt_srgb_view \
+	t_tex_fit \
 	t_ub \
 	t_xv \
 	t_zskip
@@ -107,6 +110,7 @@ run: \
 	./t_pso_skey
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view
+	MTL_DEBUG_LAYER=1 ./t_tex_fit
 .PHONY: run
 # The older-API build (DM_NVN_M3=1, macOS 15.0): the same tests built and run in a sibling tests_m3 directory
 run-m3:

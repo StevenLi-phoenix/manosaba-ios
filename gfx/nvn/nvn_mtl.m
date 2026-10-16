@@ -52,6 +52,7 @@
 #include "nvn_cover.h"
 #include "nvn_copy_pitch.h"
 #include "nvn_pool_find.h"
+#include "nvn_tex_fit.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree
 #include "nvn_hmap.h"
 #include "../../host/dm.h"
@@ -891,9 +892,12 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     d.width = t->d.width ? t->d.width : 1; d.height = t->d.height ? t->d.height : 1; d.depth = 1; d.arrayLength = 1;
     d.mipmapLevelCount = t->d.levels ? t->d.levels : 1;
     switch (t->d.target) {
-        case 0: d.textureType = MTLTextureType1D; d.height = 1; break;
+        // 1D / 1D array are created as one-row 2D / 2D array textures (nxnative 42a50ef): translated shaders never declare texture1d (none in manosaba's
+        // library) and sample them as 2D, and a Metal 1D texture bound to a texture2d argument is a type mismatch with undefined reads. On Maxwell a 2D
+        // sample of a 1D texture reads its one row
+        case 0: d.textureType = MTLTextureType2D; d.height = 1; break;
         case 2: d.textureType = MTLTextureType3D; d.depth = t->d.depth; break;
-        case 3: d.textureType = MTLTextureType1DArray; d.arrayLength = t->d.height; d.height = 1; break;
+        case 3: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.height; d.height = 1; break;
         case 4: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.depth; break;
         case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
         case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
@@ -2080,7 +2084,9 @@ void mtl_prog_release(prog_t *p) { @autoreleasepool { if (p->serial) serial_del(
 // ---------- Descriptor pool: texture ID / sampler ID → object ----------
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
 // fin: the texture this entry names was released after nvnTextureFinalize (fin_drain) while the ID stayed registered, at submission fin_sub
-typedef struct { tex_t t; int ok, fin; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, fin_sub; } treg_t;
+typedef struct { tex_t t; int ok, fin; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, fin_sub;
+                 void *alt, *alt_of; uint64_t alt_rid; uint8_t alt_type; } treg_t;   // alt: a view of another texture type for shaders that declare one (tex_fit), built from the view alt_of
+static void treg_alt_drop(treg_t *r) { if (r->alt) { defer_obj_unref((__bridge id)r->alt); CFRelease(r->alt); r->alt = r->alt_of = NULL; r->alt_rid = 0; } }
 static treg_t *g_treg; static int g_ntreg;
 // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
 // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
@@ -2092,6 +2098,7 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) { @autoreleasepool {
     if (id_ >= g_ntreg) { int n = id_ + 1024; g_treg = realloc(g_treg, n * sizeof *g_treg); memset(g_treg + g_ntreg, 0, (n - g_ntreg) * sizeof *g_treg); g_ntreg = n; }
     g_reg_gen++;
     if (g_treg[id_].view) { defer_obj_unref((__bridge id)g_treg[id_].view); CFRelease(g_treg[id_].view); g_treg[id_].view = NULL; g_treg[id_].view_id = g_treg[id_].view_rid = 0; }
+    treg_alt_drop(&g_treg[id_]);
     g_treg[id_].ok = t != NULL; g_treg[id_].fin = 0; if (t) g_treg[id_].t = *t; g_treg[id_].has_v = v != NULL; if (v) g_treg[id_].v = *v;
     if (id_ < (1 << 20)) atomic_store_explicit(&g_tser[id_], t ? t->serial : 0, memory_order_release);
     pthread_mutex_unlock(&g_rmu);
@@ -2105,6 +2112,7 @@ static void treg_drop_views(uint64_t serial) {
         if (atomic_load_explicit(&g_tser[i], memory_order_relaxed) != serial || !g_treg[i].ok) continue;
         g_treg[i].fin = 1; g_treg[i].fin_sub = g_sub_serial;
         if (g_treg[i].view) { defer_obj_unref((__bridge id)g_treg[i].view); CFRelease(g_treg[i].view); g_treg[i].view = NULL; g_treg[i].view_id = g_treg[i].view_rid = 0; }
+        treg_alt_drop(&g_treg[i]);
     }
     pthread_mutex_unlock(&g_rmu);
 }
@@ -2119,8 +2127,8 @@ void mtl_reg_samp(int sid, const samp_par *sp) { @autoreleasepool {
     pthread_mutex_unlock(&g_rmu);
 } }
 static MTLTextureType ttype(int target, int fallback) {
-    switch (target) { case 0: return MTLTextureType1D; case 1: case 7: return MTLTextureType2D; case 2: return MTLTextureType3D;
-        case 3: return MTLTextureType1DArray; case 4: return MTLTextureType2DArray; case 5: return MTLTextureType2DMultisample;
+    switch (target) { case 0: return MTLTextureType2D; case 1: case 7: return MTLTextureType2D; case 2: return MTLTextureType3D;   // 1D as one-row 2D (see where textures are created)
+        case 3: return MTLTextureType2DArray; case 4: return MTLTextureType2DArray; case 5: return MTLTextureType2DMultisample;
         case 6: return MTLTextureType2DMultisampleArray; case 8: return MTLTextureTypeCube; case 9: return MTLTextureTypeCubeArray; }
     return (MTLTextureType)fallback;
 }
@@ -2138,7 +2146,7 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
     if (v) {   // The serial table or guest memory has changed: check whether the base texture was re-uploaded and replaced; if so the view is invalidated
         id<MTLTexture> cur = tex_mtl(&rp->t);
         if (cur == v || v.parentTexture == cur) { rp->view_ser = sg; rp->view_dirty = dg; return v; }
-        defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; v = nil;
+        defer_obj_unref(v); CFRelease(rp->view); rp->view = NULL; rp->view_rid = 0; v = nil; treg_alt_drop(rp);
     }
     // The game uses an ID whose texture was released after its finalize and grace period: its descriptor still names that storage, so the texture is
     // created again from the snapshot (a render target comes back blank) and queued for release again, so it does not stay forever
@@ -2181,6 +2189,23 @@ static inline __attribute__((always_inline)) void *tex_fast(int tid) {
 static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
     if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && g_treg[tid].view_dirty == nvn_dirty_now()) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
     id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? t.gpuResourceID._impl : 0;
+}
+// The shader declares another texture type than the bound texture has: bind a compatible view (nxnative 42a50ef, seedds, MIT). Maxwell sample
+// instructions carry their own dimension (a non-array sample of a 2D array reads layer 0); on Metal a 2D array bound to a texture2d argument is a type
+// mismatch with undefined reads (nxnative measured one fixed value: Super Mario 3D World's one-layer 2D array pre-lighting buffer sampled as 2D washed
+// the whole picture out). The supported pairs are in nvn_tex_fit.h; any other mismatch is reported once and bound as it is. The view is kept with
+// the texture ID until its view changes. Caller holds g_rmu
+static id<MTLTexture> tex_fit(int tid, id<MTLTexture> t, MTLTextureType want, uint64_t *rid) {
+    MTLTextureType have = t.textureType; NSUInteger ns = nvn_tex_fit_slices(want, have, t.arrayLength);
+    if (!ns || tid <= 0 || tid >= g_ntreg) { RED_ONCE(69, "texture type mismatch: the shader declares %lu, the texture is %lu (texture ID %d); bound as it is", (unsigned long)want, (unsigned long)have, tid); return nil; }
+    treg_t *r = &g_treg[tid];
+    if (r->alt && r->alt_of == (__bridge void *)t && r->alt_type == (uint8_t)want) { *rid = r->alt_rid; return (__bridge id<MTLTexture>)r->alt; }
+    treg_alt_drop(r);
+    id<MTLTexture> v = nvn_tex_fit_view(t, want, ns);
+    if (!v) { RED_ONCE(70, "cannot create a compatible texture view %lu → %lu (texture ID %d)", (unsigned long)have, (unsigned long)want, tid); return nil; }
+    static uint64_t n_fit; if (!n_fit++) MLOG("texture bound as another type through a compatible view: %lu → %lu (texture ID %d; first of its kind, tex_fit)", (unsigned long)have, (unsigned long)want, tid);
+    r->alt = (void *)CFBridgingRetain(v); r->alt_of = (__bridge void *)t; r->alt_type = (uint8_t)want; r->alt_rid = v.gpuResourceID._impl;
+    *rid = r->alt_rid; return v;
 }
 static MTLSamplerAddressMode wrapm(int w) {
     switch (w) { case 0: case 7: return MTLSamplerAddressModeClampToEdge; case 1: return MTLSamplerAddressModeRepeat;
@@ -2398,8 +2423,13 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
         c.pixelFormat = (MTLPixelFormat)k->cfmt[i];
         int l = merged ? k->lmap[i] : i;
         uint32_t m = l == 0xff ? 0 : (k->chmask >> (4 * l)) & 0xf;
+        // An output the fragment shader does not write: zero write mask, no blending (nxnative 42a50ef). Maxwell writes only the targets in the shader's
+        // output map and leaves the others untouched, whatever the blend state and channel mask; on Metal an attachment the shader does not write gets
+        // undefined contents, blended in when blending is on
+        int unwritten = fs && fs->rf.color_known && !fsfn && l != 0xff && !(fs->rf.color_mask >> l & 1);
+        if (unwritten) m = 0;
         c.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) | (m & 4 ? MTLColorWriteMaskBlue : 0) | (m & 8 ? MTLColorWriteMaskAlpha : 0);
-        if (l != 0xff && k->blend_en >> l & 1) {
+        if (l != 0xff && k->blend_en >> l & 1 && !unwritten) {
             c.blendingEnabled = YES;
             c.sourceRGBBlendFactor = bfac(k->blend[l].src_rgb); c.destinationRGBBlendFactor = bfac(k->blend[l].dst_rgb);
             c.sourceAlphaBlendFactor = bfac(k->blend[l].src_a); c.destinationAlphaBlendFactor = bfac(k->blend[l].dst_a);
@@ -2771,6 +2801,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                        (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth,
                        (unsigned long)(t.parentTexture ? t.parentRelativeLevel : 0), (unsigned long)t.mipmapLevelCount,
                        (unsigned long)(t.parentTexture ? t.parentRelativeSlice : 0), (unsigned long)t.arrayLength, (unsigned long)t.textureType);
+            if (t && t.textureType != (MTLTextureType)b->decl_tt) { uint64_t r2 = 0; id<MTLTexture> fv = tex_fit(tid, t, (MTLTextureType)b->decl_tt, &r2); if (fv) { t = fv; trid = r2; } }
             if (!t) { t = dummy_tex(b->dtt, b->dpf); trid = g_dummy_tex_rid[b->dtt & 7][b->dpf & 3]; }
             slots[aid] = trid;
             USE(t, MTLResourceUsageRead);

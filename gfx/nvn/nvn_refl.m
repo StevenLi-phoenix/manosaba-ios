@@ -16,6 +16,12 @@ static void dummy_kind(NSString *t, uint8_t *tt, uint8_t *pf) {
     *tt = (uint8_t)y;
     *pf = [t hasPrefix:@"depth"] ? NVN_DPF_DEPTH : [t containsString:@"<uint"] ? NVN_DPF_UINT : [t containsString:@"<int"] ? NVN_DPF_SINT : NVN_DPF_FLOAT;
 }
+// The declared type exactly, for the type check at binding (dummy_kind folds the multisample types into 2D for the dummy textures)
+static uint8_t decl_type(NSString *t) {
+    if ([t hasPrefix:@"texture2d_ms_array"] || [t hasPrefix:@"depth2d_ms_array"]) return (uint8_t)MTLTextureType2DMultisampleArray;
+    if ([t hasPrefix:@"texture2d_ms"] || [t hasPrefix:@"depth2d_ms"]) return (uint8_t)MTLTextureType2DMultisample;
+    uint8_t tt, pf; dummy_kind(t, &tt, &pf); return tt;
+}
 
 int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
     memset(o, 0, sizeof *o);
@@ -33,7 +39,7 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             if ([k isEqualToString:@"cbuf"]) r->kind = NVN_RB_CBUF;
             else if ([k isEqualToString:@"samp"]) r->kind = NVN_RB_SAMP;
             else if ([k isEqualToString:@"samp_tex"]) r->kind = NVN_RB_SAMPT;
-            else if ([k isEqualToString:@"tex"]) { r->kind = NVN_RB_TEX; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf); }
+            else if ([k isEqualToString:@"tex"]) { r->kind = NVN_RB_TEX; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf); r->decl_tt = decl_type(b[@"msl_type"]); }
             else if ([k isEqualToString:@"img"]) { r->kind = NVN_RB_IMG; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf); }
             else if ([k isEqualToString:@"tbuf"]) { r->kind = NVN_RB_TBUF; uint8_t tt; dummy_kind(b[@"msl_type"], &tt, &r->dpf); }
             else if ([k isEqualToString:@"sbuf"]) { r->kind = NVN_RB_SBUFP; r->rw = [b[@"rw"] boolValue]; }
@@ -67,6 +73,7 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             if (ra[@"discard"]) o->may_discard = [ra[@"discard"] intValue] != 0;
             if (ra[@"sample_mask"]) o->writes_smask = [ra[@"sample_mask"] intValue] != 0;
             for (NSNumber *c in ra[@"colors"]) if (c.intValue >= 0 && c.intValue < 8) o->color_mask |= (uint8_t)(1u << c.intValue);
+            o->color_known = [ra[@"colors"] isKindOfClass:[NSArray class]];
         }
         memset(o->uv_attr, -1, sizeof o->uv_attr); memset(o->uv_aff_attr, -1, sizeof o->uv_aff_attr);
         NSDictionary *ua = [ra isKindOfClass:[NSDictionary class]] ? ra[@"uv_affine"] : nil;

@@ -16,6 +16,7 @@ enum { NVN_CT_FLOAT = 0, NVN_CT_UINT, NVN_CT_INT };                             
 typedef struct {
     uint8_t kind, rw;        // rw: storage buffer access is read_write / write / device
     uint8_t dtt, dpf;        // Dummy texture when the texture slot is unbound: MTLTextureType value, pixel class
+    uint8_t decl_tt;         // The texture type the shader declares (MTLTextureType, multisample included): the type check at binding (nvn_mtl.m tex_fit)
     uint16_t reg, aid;       // D3D register number, index within the argument buffer
 } nvn_rbind;
 typedef struct {
@@ -28,7 +29,7 @@ typedef struct {
     uint16_t c1_len;         // Length of the c1 constant segment (B; 0 / 256 / 512 / 768 across the whole library)
     // For the fully-covering-first-draw proof (dmsh_build.py raster_facts; missing field = not provable): vertex - position xyz taken as-is from attribute pos_attr (-1 = no), w is the constant 1 (pos_w1) or taken from the same attribute's .w;
     // fragment - may discard, writes sample_mask, bitmap of the color numbers written
-    int8_t pos_attr; uint8_t pos_w1, may_discard, writes_smask, color_mask;
+    int8_t pos_attr; uint8_t pos_w1, may_discard, writes_smask, color_mask, color_known;   // color_known: the reflection lists the colors (color_mask can be trusted)
     // Merge B step 2 (readable-tile version <key>_bf, dmsh_fetch.py): fragment - nfc redirectable samples (the i-th: texture slot fc_reg, interpolated output fc_locn),
     // bitmap fc_mixed of texture slots with mixed use (these slots must not be redirected to read the tile), nfo outputs (each with color number fo_color); vertex - .xy of interpolated output locn is taken as-is from attribute uv_attr[locn] (-1 = no)
     uint8_t nfc, fc_reg[32], fc_locn[32], nfo, fo_color[4]; uint64_t fc_mixed[2]; int8_t uv_attr[32];
