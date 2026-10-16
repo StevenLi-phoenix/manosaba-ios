@@ -159,9 +159,249 @@ void dm_host_call_register(int num, int (*fn)(uint64_t *regs)) {
     g_hcall[num - 0x80] = fn;
 }
 
+// ---------- Managed heap census (diagnostic): DM_HEAP_CENSUS=<second>[,<second>…] after start ----------
+// An IL2CPP object begins with a pointer to its Il2CppClass; the class holds its name and namespace strings at +0x10 / +0x18 and a field that
+// points back at the class itself (il2cpp-class-internals.h, "hack to pretend we are a MonoVTable"). Its offset is found at the first census,
+// the one most candidate words agree on. A census reads every mapped page of the alias region word by word, under the alias lock so no page
+// goes away meanwhile, and counts each word that points at a class as one object of that class (references held in other structures count too,
+// they are few). The 40 most numerous classes and the 40 that grew most since the previous census are logged.
+static int alias_readable(uint64_t a, size_t n) {   // caller holds g_alias_lock
+    uint64_t b = (uint64_t)(uintptr_t)g_alias;
+    if (a < b || a + n > b + g_alias_cap || a + n < a) return 0;
+    for (size_t i = (a - b) >> 12, e = (a + n - 1 - b) >> 12; i <= e; i++) if (!alias_bit(i)) return 0;
+    return 1;
+}
+static int census_byte_ok(uint64_t a) {   // a readable byte: a mapped alias page, or a module's read-only data (where IL2CPP keeps some names)
+    if (alias_readable(a, 1)) return 1;
+    for (int i = 0; i < g_nmod; i++) { uint64_t lo = (uint64_t)g_mod[i].base + g_mod[i].ro_off, hi = (uint64_t)g_mod[i].base + g_mod[i].data_off; if (a >= lo && a < hi) return 1; }
+    return 0;
+}
+static int census_str(uint64_t p, char *out, size_t n) {
+    if (!p || !census_byte_ok(p)) return 0;
+    size_t k = 0;
+    for (; k + 1 < n; k++) { if (!((p + k) & 0xfff) && !census_byte_ok(p + k)) break; char c = ((const char *)p)[k]; if (!c) break; if (c < 0x20 || c > 0x7e) return 0; out[k] = c; }
+    out[k] = 0; return k > 0;
+}
+enum { CEN_N = 1 << 17 };
+static struct cen_ent { uint64_t klass; uint32_t n, prev; } *g_cen;
+static int g_cen_self = -1;   // offset of the class's pointer to itself
+static void heap_census(int round) {
+    uint64_t t0 = now_ns();
+    pthread_mutex_lock(&g_alias_lock);
+    if (!g_alias_bits) { pthread_mutex_unlock(&g_alias_lock); return; }
+    size_t np = g_alias_cap >> 12; uint64_t b = (uint64_t)(uintptr_t)g_alias;
+    if (g_cen_self < 0) {   // find the offset: words pointing into the alias region whose target holds the same value at +off, with a name string at +0x10
+        uint32_t hits[32] = {0}; uint64_t seen = 0;
+        for (size_t i = 0; i < np && seen < 4000000; i++) if (alias_bit(i)) { const uint64_t *w = (const uint64_t *)(b + (i << 12));
+            for (int j = 0; j < 512; j++) { uint64_t v = w[j]; if ((v & 7) || !alias_readable(v, 0x140)) continue; seen++;
+                for (int o = 0; o < 32; o++) if (*(const uint64_t *)(v + 0x40 + 8 * o) == v) { char nm[64]; if (census_str(*(const uint64_t *)(v + 0x10), nm, sizeof nm)) hits[o]++; } } }
+        int best = 0; for (int o = 1; o < 32; o++) if (hits[o] > hits[best]) best = o;
+        g_cen_self = 0x40 + 8 * best;
+        LOG("heap census: class self-pointer at +%#x (%u candidate words agree; next best +%#x with %u)", g_cen_self, hits[best], 0x40 + 8 * (best ? 0 : 1), hits[best ? 0 : 1]);
+        if (!g_cen) g_cen = calloc(CEN_N, sizeof *g_cen);
+    }
+    for (size_t k = 0; k < CEN_N; k++) { g_cen[k].prev = g_cen[k].n; g_cen[k].n = 0; }
+    uint64_t words = 0, objs = 0;
+    for (size_t i = 0; i < np; i++) if (alias_bit(i)) { const uint64_t *w = (const uint64_t *)(b + (i << 12));
+        for (int j = 0; j < 512; j++) { uint64_t v = w[j]; words++;
+            if ((v & 7) || v < b || v >= b + g_alias_cap || !alias_bit((v - b) >> 12) || !alias_readable(v + g_cen_self, 8) || *(const uint64_t *)(v + g_cen_self) != v) continue;
+            size_t h = (size_t)((v >> 3) * 0x9E3779B97F4A7C15ull >> 47) & (CEN_N - 1);
+            while (g_cen[h].klass && g_cen[h].klass != v) h = (h + 1) & (CEN_N - 1);
+            g_cen[h].klass = v; g_cen[h].n++; objs++; } }
+    // the 40 most numerous and the 40 that grew most
+    struct { uint64_t k; uint32_t n, prev; } top[40] = {{0}}, grow[40] = {{0}};
+    for (size_t k = 0; k < CEN_N; k++) { struct cen_ent *e = &g_cen[k]; if (!e->klass) continue;
+        for (int t = 0; t < 40; t++) if (e->n > top[t].n) { memmove(&top[t + 1], &top[t], (39 - t) * sizeof top[0]); top[t].k = e->klass; top[t].n = e->n; top[t].prev = e->prev; break; }
+        int64_t d = (int64_t)e->n - e->prev;
+        for (int t = 0; t < 40 && round; t++) if (d > (int64_t)grow[t].n - grow[t].prev || !grow[t].k) { memmove(&grow[t + 1], &grow[t], (39 - t) * sizeof grow[0]); grow[t].k = e->klass; grow[t].n = e->n; grow[t].prev = e->prev; break; } }
+    LOG("heap census #%d at %.0f s: %llu words read, %llu class references, %.1f s", round, (t0 - g_t0_ns) / 1e9, (unsigned long long)words, (unsigned long long)objs, (now_ns() - t0) / 1e9);
+    for (int pass = 0; pass < 2; pass++) for (int t = 0; t < 40; t++) {
+        uint64_t k = pass ? grow[t].k : top[t].k; if (!k) break; uint32_t n = pass ? grow[t].n : top[t].n, pv = pass ? grow[t].prev : top[t].prev;
+        char nm[96] = "?", ns[96] = ""; census_str(*(const uint64_t *)(k + 0x10), nm, sizeof nm); census_str(*(const uint64_t *)(k + 0x18), ns, sizeof ns);
+        char dn[96] = ""; uint64_t decl = *(const uint64_t *)(k + 0x50); if (decl && alias_readable(decl + 0x10, 8)) census_str(*(const uint64_t *)(decl + 0x10), dn, sizeof dn);
+        LOG("heap census #%d %s %2d: %8u (%+d) %s%s%s%s%s", round, pass ? "growth" : "top", t + 1, n, (int)n - (int)pv, ns, *ns ? "." : "", *dn ? dn : "", *dn ? "/" : "", nm);
+    }
+    const char *watch = getenv("DM_HEAP_WATCH");   // class names whose counts are always printed (all classes of that name summed: generic instances share it)
+    for (const char *q = watch; q && *q; ) {
+        char want[96]; size_t n = strcspn(q, ","); snprintf(want, sizeof want, "%.*s", (int)n, q); q += n; if (*q) q++;
+        uint64_t cn = 0, cp = 0; int classes = 0;
+        for (size_t k = 0; k < CEN_N; k++) if (g_cen[k].klass) { char nm[96]; census_str(*(const uint64_t *)(g_cen[k].klass + 0x10), nm, sizeof nm); if (!strcmp(nm, want)) { cn += g_cen[k].n; cp += g_cen[k].prev; classes++; } }
+        LOG("heap census #%d watch %s: %llu (%+lld) in %d classes", round, want, (unsigned long long)cn, (long long)cn - (long long)cp, classes);
+    }
+    pthread_mutex_unlock(&g_alias_lock);
+}
+// Who keeps them (DM_HEAP_REFS=<class name>[,<class name>…], traced at the last census): up to 48 instances of each class are sampled; each level
+// scans the memory once for words pointing at the current set, takes the object around each such word (the nearest class pointer at or before
+// it, within 64 KB), and logs the referring classes; their objects are the next set. Ten levels or until nothing new refers.
+static int census_is_class(uint64_t w) { return !(w & 7) && alias_readable(w, (size_t)g_cen_self + 8) && *(const uint64_t *)(w + g_cen_self) == w; }
+static uint64_t census_header(uint64_t r) {   // the object holding the word at r: nearest preceding class pointer
+    uint64_t b = (uint64_t)(uintptr_t)g_alias;
+    for (uint64_t a = r & ~7ull, lim = a > b + 65536 ? a - 65536 : b; a >= lim; a -= 8) {
+        if (((a + 8) & 0xfff) == 0 && !alias_readable(a, 8)) return 0;
+        if (census_is_class(*(const uint64_t *)a)) return a;
+        if (a == lim) break;
+    }
+    return 0;
+}
+static void census_name(uint64_t k, char *out, size_t n) {
+    char nm[96] = "?", ns[96] = ""; census_str(*(const uint64_t *)(k + 0x10), nm, sizeof nm); census_str(*(const uint64_t *)(k + 0x18), ns, sizeof ns);
+    snprintf(out, n, "%s%s%s", ns, *ns ? "." : "", nm);
+}
+enum { REF_SET = 1 << 14 };
+static int ref_has(const uint64_t *set, uint64_t v) { size_t h = (size_t)((v >> 3) * 0x9E3779B97F4A7C15ull >> 50) & (REF_SET - 1); while (set[h]) { if (set[h] == v) return 1; h = (h + 1) & (REF_SET - 1); } return 0; }
+static int ref_put(uint64_t *set, uint64_t v) { size_t h = (size_t)((v >> 3) * 0x9E3779B97F4A7C15ull >> 50) & (REF_SET - 1); while (set[h]) { if (set[h] == v) return 0; h = (h + 1) & (REF_SET - 1); } set[h] = v; return 1; }
+// Static field storage (no object header: the census sees references from it as "outside any object"). Il2CppClass keeps instance_size and
+// static_fields_size and a static_fields pointer; their offsets are found by checking known classes (System.Object 16 bytes, System.Int32 20 bytes
+// boxed), and static_fields_size / static_fields are read relative to instance_size as in il2cpp-class-internals.h (+0x14 and −0x40).
+static struct sf_blk { uint64_t lo, hi, klass; } *g_sf; static size_t g_nsf; static int g_isz_off = -1;
+static int sf_cmp(const void *a, const void *b) { const struct sf_blk *x = a, *y = b; return x->lo < y->lo ? -1 : x->lo > y->lo; }
+static void sf_build(void) {
+    uint64_t obj = 0, i32 = 0;
+    for (size_t k = 0; k < CEN_N; k++) if (g_cen[k].klass) { char nm[96], ns[96] = ""; census_str(*(const uint64_t *)(g_cen[k].klass + 0x10), nm, sizeof nm); census_str(*(const uint64_t *)(g_cen[k].klass + 0x18), ns, sizeof ns);
+        if (!strcmp(ns, "System") && !strcmp(nm, "Object")) obj = g_cen[k].klass; if (!strcmp(ns, "System") && !strcmp(nm, "Int32")) i32 = g_cen[k].klass; }
+    if (g_isz_off < 0 && obj && i32 && alias_readable(obj, 0x140) && alias_readable(i32, 0x140))
+        for (int o = 0xc0; o < 0x130; o += 4) if (*(const uint32_t *)(obj + o) == 16 && *(const uint32_t *)(i32 + o) == 20) { g_isz_off = o; break; }
+    LOG("heap census: instance_size at +%#x (System.Object %s, System.Int32 %s)", g_isz_off, obj ? "found" : "missing", i32 ? "found" : "missing");
+    if (g_isz_off < 0) return;
+    free(g_sf); g_sf = calloc(CEN_N, sizeof *g_sf); g_nsf = 0;
+    for (size_t k = 0; k < CEN_N; k++) { uint64_t c = g_cen[k].klass; if (!c || !alias_readable(c, (size_t)g_isz_off + 0x18)) continue;
+        uint64_t sf = *(const uint64_t *)(c + g_isz_off - 0x40); uint32_t sz = *(const uint32_t *)(c + g_isz_off + 0x14);
+        if (sf && sz && sz < (1u << 24) && !(sf & 7) && alias_readable(sf, sz)) g_sf[g_nsf++] = (struct sf_blk){sf, sf + sz, c}; }
+    qsort(g_sf, g_nsf, sizeof *g_sf, sf_cmp);
+    LOG("heap census: %zu classes with static fields", g_nsf);
+}
+static uint64_t sf_find(uint64_t a, uint64_t *off) {   // the class whose static fields hold address a
+    size_t lo = 0, hi = g_nsf; while (lo < hi) { size_t m = (lo + hi) / 2; if (g_sf[m].lo <= a) lo = m + 1; else hi = m; }
+    if (lo && a < g_sf[lo - 1].hi) { *off = a - g_sf[lo - 1].lo; return g_sf[lo - 1].klass; } return 0;
+}
+static void heap_refs(const char *cls) {   // caller holds g_alias_lock
+    size_t np = g_alias_cap >> 12; uint64_t b = (uint64_t)(uintptr_t)g_alias;
+    uint64_t *cur = calloc(REF_SET, 8), *next = calloc(REF_SET, 8), *seen = calloc(REF_SET, 8); size_t ncur = 0;
+    struct { uint64_t k; uint32_t n, off; } *agg = calloc(4096, sizeof *agg);
+    // instances: words equal to a class pointer named cls
+    uint64_t klass[8]; int nk = 0;
+    for (size_t k = 0; k < CEN_N && nk < 8; k++) if (g_cen[k].klass) { char nm[96]; census_str(*(const uint64_t *)(g_cen[k].klass + 0x10), nm, sizeof nm); if (!strcmp(nm, cls)) klass[nk++] = g_cen[k].klass; }
+    if (!nk) { LOG("heap refs %s: no such class", cls); goto out; }
+    uint64_t found = 0;
+    for (size_t i = 0; i < np; i++) if (alias_bit(i)) { const uint64_t *w = (const uint64_t *)(b + (i << 12));
+        for (int j = 0; j < 512; j++) for (int q = 0; q < nk; q++) if (w[j] == klass[q]) { found++; if ((found % 37) == 1 && ncur < 48) { ref_put(cur, (uint64_t)&w[j]); ref_put(seen, (uint64_t)&w[j]); ncur++; } } }
+    LOG("heap refs %s: %llu instances, tracing %zu", cls, (unsigned long long)found, ncur);
+    for (int lvl = 1; lvl <= 10 && ncur; lvl++) {
+        memset(next, 0, REF_SET * 8); size_t nnext = 0, nagg = 0; uint64_t refs = 0, orphan = 0, orphan_at = 0;
+        memset(agg, 0, 4096 * sizeof *agg);
+        for (size_t i = 0; i < np; i++) if (alias_bit(i)) { const uint64_t *w = (const uint64_t *)(b + (i << 12));
+            for (int j = 0; j < 512; j++) { uint64_t v = w[j]; if ((v & 7) || v < b || v >= b + g_alias_cap || !ref_has(cur, v)) continue;
+                uint64_t r = (uint64_t)&w[j]; refs++;
+                { uint64_t so; uint64_t sk = g_sf ? sf_find(r, &so) : 0;
+                  if (sk) { char nm[200]; census_name(sk, nm, sizeof nm); static int said; if (said++ < 400) LOG("heap refs %s level %d: static field %s +%#llx", cls, lvl, nm, (unsigned long long)so); continue; } }
+                uint64_t h = census_header(r);
+                if (!h) { orphan++; orphan_at = r; continue; }
+                uint64_t k = *(const uint64_t *)h; uint32_t off = (uint32_t)(r - h);
+                size_t a = 0; while (a < nagg && agg[a].k != k) a++;
+                if (a == nagg && nagg < 4096) { agg[a].k = k; agg[a].off = off; nagg++; }
+                if (a < nagg) agg[a].n++;
+                if (nnext < REF_SET / 2 && ref_put(seen, h)) { ref_put(next, h); nnext++; } } }
+        LOG("heap refs %s level %d: %llu references from %zu classes, %llu outside any object (e.g. %#llx)", cls, lvl, (unsigned long long)refs, nagg, (unsigned long long)orphan, (unsigned long long)orphan_at);
+        for (int t = 0; t < 10; t++) { size_t best = SIZE_MAX; for (size_t a = 0; a < nagg; a++) if (agg[a].n && (best == SIZE_MAX || agg[a].n > agg[best].n)) best = a;
+            if (best == SIZE_MAX) break; char nm[200]; census_name(agg[best].k, nm, sizeof nm);
+            LOG("heap refs %s level %d: %6u from %s (e.g. field +%#x)", cls, lvl, agg[best].n, nm, agg[best].off); agg[best].n = 0; }
+        uint64_t *t = cur; cur = next; next = t; ncur = nnext;
+    }
+out:
+    free(cur); free(next); free(seen); free(agg);
+}
+// The string fields of a class's objects (DM_HEAP_STRINGS=<class name>, at the last census): for up to 2000 instances, every word in its first 0x80
+// bytes that points at a System.String is printed (as ASCII; other characters as '?'), one line per instance
+static void heap_strings(const char *cls) {   // caller holds g_alias_lock
+    size_t np = g_alias_cap >> 12; uint64_t b = (uint64_t)(uintptr_t)g_alias; uint64_t klass[8], strk = 0; int nk = 0;
+    for (size_t k = 0; k < CEN_N; k++) if (g_cen[k].klass) { char nm[96], ns[96] = ""; census_str(*(const uint64_t *)(g_cen[k].klass + 0x10), nm, sizeof nm); census_str(*(const uint64_t *)(g_cen[k].klass + 0x18), ns, sizeof ns);
+        if (!strcmp(nm, cls) && nk < 8) klass[nk++] = g_cen[k].klass; if (!strcmp(nm, "String") && !strcmp(ns, "System")) strk = g_cen[k].klass; }
+    if (!nk || !strk) { LOG("heap strings %s: class or System.String not found", cls); return; }
+    int shown = 0;
+    for (size_t i = 0; i < np && shown < 2000; i++) if (alias_bit(i)) { const uint64_t *w = (const uint64_t *)(b + (i << 12));
+        for (int j = 0; j < 512 && shown < 2000; j++) { int q = 0; while (q < nk && w[j] != klass[q]) q++; if (q == nk) continue;
+            uint64_t o = (uint64_t)&w[j]; if (!alias_readable(o, 0x80)) continue;
+            char line[600]; size_t lo = 0;
+            for (int f = 2; f < 16 && lo < sizeof line - 160; f++) { uint64_t v = ((const uint64_t *)o)[f];
+                if ((v & 7) || !alias_readable(v, 0x18) || *(const uint64_t *)v != strk) continue;
+                int32_t len = *(const int32_t *)(v + 0x10); if (len < 0 || len > 120 || !alias_readable(v + 0x14, (size_t)len * 2)) continue;
+                lo += (size_t)snprintf(line + lo, sizeof line - lo, " +%#x=\"", f * 8);
+                for (int c = 0; c < len && lo < sizeof line - 4; c++) { uint16_t ch = ((const uint16_t *)(v + 0x14))[c]; line[lo++] = ch >= 0x20 && ch < 0x7f ? (char)ch : '?'; }
+                line[lo++] = '"'; line[lo] = 0; }
+            LOG("heap strings %s %p:%s", cls, (void *)o, lo ? line : " (no string fields)"); shown++; } }
+}
+// A dictionary held by a class's objects (DM_HEAP_DICT=<class name>:<field offset>, at the last census): IL2CPP's Dictionary`2 keeps its entries
+// array at +0x18 and its count at +0x20; an entry of reference key and value is {hash, next, key at +8, value at +16}. Each entry is printed with
+// the key's and value's classes and first string field; a value that is itself a collection (HashSet / List / Dictionary) has its elements'
+// classes counted.
+static void census_obj_desc(uint64_t o, char *out, size_t n) {   // "<class> \"<first string field>\""
+    if (!o) { snprintf(out, n, "null"); return; }
+    if ((o & 7) || !alias_readable(o, 0x40) || !census_is_class(*(const uint64_t *)o)) { snprintf(out, n, "%#llx", (unsigned long long)o); return; }
+    char nm[200]; census_name(*(const uint64_t *)o, nm, sizeof nm); size_t lo = (size_t)snprintf(out, n, "%s", nm);
+    for (int f = 2; f < 8; f++) { uint64_t v = ((const uint64_t *)o)[f]; if ((v & 7) || !alias_readable(v, 0x18) || !census_is_class(*(const uint64_t *)v)) continue;
+        char vn[200]; census_name(*(const uint64_t *)v, vn, sizeof vn); if (strcmp(vn, "System.String")) continue;
+        int32_t len = *(const int32_t *)(v + 0x10); if (len <= 0 || len > 80 || !alias_readable(v + 0x14, (size_t)len * 2)) continue;
+        lo += (size_t)snprintf(out + lo, n - lo, " \""); for (int c = 0; c < len && lo + 3 < n; c++) { uint16_t ch = ((const uint16_t *)(v + 0x14))[c]; out[lo++] = ch >= 0x20 && ch < 0x7f ? (char)ch : '?'; }
+        if (lo + 2 < n) { out[lo++] = '"'; out[lo] = 0; } break; }
+}
+static void census_coll_desc(uint64_t c, char *out, size_t n) {   // element classes of a HashSet / List / Dictionary value
+    out[0] = 0; if (!c || (c & 7) || !alias_readable(c, 0x30) || !census_is_class(*(const uint64_t *)c)) return;
+    char nm[200]; census_name(*(const uint64_t *)c, nm, sizeof nm);
+    uint64_t arr = ((const uint64_t *)c)[nm[0] && strstr(nm, "List`1") ? 2 : 3]; int32_t cnt = *(const int32_t *)(c + (strstr(nm, "List`1") ? 0x18 : 0x20));
+    int stride = strstr(nm, "HashSet`1") ? 16 : strstr(nm, "List`1") ? 8 : strstr(nm, "Dictionary`2") ? 24 : 0, off = strstr(nm, "HashSet`1") ? 8 : strstr(nm, "Dictionary`2") ? 16 : 0;
+    if (!stride || !arr || !alias_readable(arr, 0x20)) return;
+    uint64_t len = *(const uint64_t *)(arr + 0x18); if (cnt < 0 || len > 100000 || !alias_readable(arr + 0x20, (size_t)len * stride)) return;
+    size_t lo = (size_t)snprintf(out, n, " [%s, %d]:", nm, cnt);
+    for (uint64_t i = 0; i < len && i < 64 && lo + 80 < n; i++) { uint64_t e = *(const uint64_t *)(arr + 0x20 + i * stride + off); if (!e) continue; char d[160]; census_obj_desc(e, d, sizeof d); lo += (size_t)snprintf(out + lo, n - lo, " %s;", d); }
+}
+static void heap_dict(const char *spec) {   // caller holds g_alias_lock
+    char cls[96]; unsigned off = 0; if (sscanf(spec, "%95[^:]:%x", cls, &off) != 2) { LOG("heap dict: expected <class>:<hex offset>, got %s", spec); return; }
+    size_t np = g_alias_cap >> 12; uint64_t b = (uint64_t)(uintptr_t)g_alias; uint64_t klass[8]; int nk = 0;
+    for (size_t k = 0; k < CEN_N && nk < 8; k++) if (g_cen[k].klass) { char nm[96]; census_str(*(const uint64_t *)(g_cen[k].klass + 0x10), nm, sizeof nm); if (!strcmp(nm, cls)) klass[nk++] = g_cen[k].klass; }
+    int inst = 0;
+    for (size_t i = 0; i < np && inst < 4; i++) if (alias_bit(i)) { const uint64_t *w = (const uint64_t *)(b + (i << 12));
+        for (int j = 0; j < 512 && inst < 4; j++) { int q = 0; while (q < nk && w[j] != klass[q]) q++; if (q == nk) continue;
+            uint64_t o = (uint64_t)&w[j]; if (!alias_readable(o, off + 8)) continue; uint64_t d = *(const uint64_t *)(o + off);
+            if (!d || (d & 7) || !alias_readable(d, 0x28) || !census_is_class(*(const uint64_t *)d)) continue;
+            char dn[200]; census_name(*(const uint64_t *)d, dn, sizeof dn); inst++;
+            uint64_t ent = *(const uint64_t *)(d + 0x18); int32_t cnt = *(const int32_t *)(d + 0x20);
+            LOG("heap dict %s %p +%#x: %s, count %d", cls, (void *)o, off, dn, cnt);
+            if (!ent || !alias_readable(ent, 0x20)) continue; uint64_t len = *(const uint64_t *)(ent + 0x18);
+            if (len > 200000 || !alias_readable(ent + 0x20, (size_t)len * 24)) continue;
+            for (uint64_t e = 0; e < len && e < (uint64_t)cnt + 64; e++) { const uint64_t *en = (const uint64_t *)(ent + 0x20 + e * 24); if (!en[1] && !en[2]) continue;
+                char kd[200], vd[200], cd[1200]; census_obj_desc(en[1], kd, sizeof kd); census_obj_desc(en[2], vd, sizeof vd); census_coll_desc(en[2], cd, sizeof cd);
+                LOG("heap dict %s [%llu] key %s → %s%s", cls, (unsigned long long)e, kd, vd, cd); } } }
+}
+static void *census_main(void *arg) {
+    const char *e = arg; int round = 0;
+    for (const char *p = e; *p; ) {
+        double at = atof(p); while (now_ns() - g_t0_ns < (uint64_t)(at * 1e9)) usleep(100000);
+        heap_census(round++);
+        p = strchr(p, ','); if (!p) break; p++;
+    }
+    if (g_cen && getenv("DM_HEAP_REFS")) { pthread_mutex_lock(&g_alias_lock); sf_build(); pthread_mutex_unlock(&g_alias_lock); }
+    const char *dicts = getenv("DM_HEAP_DICT");
+    if (dicts && g_cen) for (const char *q = dicts; *q; ) { char one[128]; size_t n = strcspn(q, ","); snprintf(one, sizeof one, "%.*s", (int)n, q);
+        pthread_mutex_lock(&g_alias_lock); heap_dict(one); pthread_mutex_unlock(&g_alias_lock); q += n; if (*q) q++; }
+    const char *strs = getenv("DM_HEAP_STRINGS");
+    if (strs && g_cen) { pthread_mutex_lock(&g_alias_lock); heap_strings(strs); pthread_mutex_unlock(&g_alias_lock); }
+    const char *refs = getenv("DM_HEAP_REFS");   // after the last census
+    if (refs && g_cen) for (const char *q = refs; *q; ) {
+        char cls[96]; size_t n = strcspn(q, ","); snprintf(cls, sizeof cls, "%.*s", (int)n, q);
+        pthread_mutex_lock(&g_alias_lock); heap_refs(cls); pthread_mutex_unlock(&g_alias_lock);
+        q += n; if (*q) q++;
+    }
+    return NULL;
+}
+static void census_start(void) {
+    static int done; if (done) return; done = 1;
+    const char *e = getenv("DM_HEAP_CENSUS"); if (!e || !*e) return;
+    pthread_t t; if (!pthread_create(&t, NULL, census_main, (void *)e)) pthread_detach(t);
+}
+
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT: svc counts by number
-    mem_init();
+    mem_init(); census_start();
     if (num >= 0x80 && num <= 0xff) {
         if (g_hcall[num - 0x80] && g_hcall[num - 0x80](regs)) return regs[0];
         die("host call %#x from %s has no handler (the product's cuts and the game's hooks disagree)", num, module_of((void *)orig_addr) ? module_of((void *)orig_addr)->name : "?");

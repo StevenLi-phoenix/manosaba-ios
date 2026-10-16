@@ -38,6 +38,10 @@ fixed by an NVN struct size correction (not seen since, unconfirmed); keyboard, 
 Memory on 8 GB iPads: without a paid account's increased memory limit the app may use about 3.4 GB on an iPad mini (A17 Pro). A trial's loading
 adds about 1.4 GB for a moment (the character render targets), and the game's own memory grows by some 30 MB per scene load over a long session,
 so after about two hours of play a trial's loading went past the limit and the system ended the app; restarting the app before then avoids it.
+The growth is the game's own: every save load builds a new set of Naninovel's script and resource managers and the old ones stay referenced,
+with their parsed scripts and UI objects (a census of the managed heap after 9 reloads of one save held up to 12 copies of the same scripts).
+The Switch version is reported to end with an error now and then in long sessions too, and version 2.0.4's notes say such errors were made less
+likely.
 
 ## How it works
 

@@ -41,3 +41,27 @@ HLE_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", "parental control, free co
 HLE_FORCE("_ZN2nn4pctl20EndFreeCommunicationEv", "parental control, free communication", void, h_pctl_End, void) {}
 
 // swkbd software keyboard: see hle_swkbd.c
+
+// ---------- libc getenv: the guest's environment ----------
+// The console gives an application no environment variables, but libraries still read settings from it: IL2CPP's garbage collector (Boehm) reads
+// GC_PRINT_STATS, GC_FREE_SPACE_DIVISOR, GC_MAXIMUM_HEAP_SIZE, … when it starts. DM_GUEST_ENV="NAME=value;NAME=value" gives the guest such
+// variables; any other name goes to the SDK's own getenv.
+#include <string.h>
+HLE_FORCE_OPT("getenv", "guest environment: DM_GUEST_ENV, then the SDK's getenv", char *, h_getenv, const char *name) {
+    static char *(*orig)(const char *); static char env[2048]; static int init;
+    if (!init) { init = 1; const char *e = getenv("DM_GUEST_ENV"); if (e) { snprintf(env, sizeof env, "%s", e); LOG("DM_GUEST_ENV: %s", env); }
+                 for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "sdk")) orig = (char *(*)(const char *))module_sym(&g_mod[i], "getenv"); }
+    size_t n = name ? strlen(name) : 0;
+    for (char *p = env; n && *p; ) {
+        char *end = strchr(p, ';'); size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len > n && p[n] == '=' && !strncmp(p, name, n)) {
+            static char val[16][256]; static int k; char *v = val[k++ & 15]; size_t vl = len - n - 1; if (vl > 255) vl = 255;
+            memcpy(v, p + n + 1, vl); v[vl] = 0;
+            { static int said; if (said++ < 32) LOG("guest getenv(\"%s\") = \"%s\" (DM_GUEST_ENV)", name, v); }
+            return v;
+        }
+        p += len + (end != NULL);
+    }
+    { static int said; if (env[0] && said++ < 32) LOG("guest getenv(\"%s\") → the SDK's", name ? name : "(null)"); }   // listed only when DM_GUEST_ENV is in use
+    return orig ? orig(name) : NULL;
+}
