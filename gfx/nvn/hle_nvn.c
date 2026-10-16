@@ -319,6 +319,7 @@ NVN(nvnTextureBuilderGetStorageAlignment, size_t, const NVNtextureBuilder *b) {
 }
 #define TX(t) ((tex_t *)(t))
 #define CTX(t) ((const tex_t *)(t))
+#define tex_snap(t) mtl_tex_snap(CTX(t))   // recorded commands point at a host copy of the texture (nvn_mtl.m)
 NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
     OLOG("TextureInitialize t=%p b=%p builder.off=%#llx", (void *)t, (const void *)b, (long long)s->off);
@@ -674,8 +675,8 @@ NVN(nvnCommandBufferSetRenderTargets, void, NVNcommandBuffer *c, int n, const NV
             for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] SetRT color object at index 0, 0xC0 bytes: %s", hx); } } } }
 
     p_set_rt *r = REC(c, OP_SET_RT, p_set_rt); r->n = n;
-    for (int i = 0; i < n; i++) { r->color[i] = ct ? (const tex_t *)ct[i] : NULL; copy_view(&r->cview[i], &r->has_cview[i], cv ? cv[i] : NULL); }
-    r->depth = (const tex_t *)dt; copy_view(&r->dview, &r->has_dview, dv);
+    for (int i = 0; i < n; i++) { r->color[i] = ct ? tex_snap(ct[i]) : NULL; copy_view(&r->cview[i], &r->has_cview[i], cv ? cv[i] : NULL); }
+    r->depth = tex_snap(dt); copy_view(&r->dview, &r->has_dview, dv);
 }
 NVN(nvnCommandBufferClearColor, void, NVNcommandBuffer *c, int index, const float *rgba, int mask) {
     p_clear_color *r = REC(c, OP_CLEAR_COLOR, p_clear_color); r->index = index; r->mask = mask; memcpy(r->rgba, rgba, 16);
@@ -778,22 +779,22 @@ NVN(nvnCommandBufferSetSamplerPool, void, NVNcommandBuffer *c, const NVNsamplerP
 
 NVN(nvnCommandBufferCopyBufferToTexture, void, NVNcommandBuffer *c, NVNbufferAddress src, const NVNtexture *t, const NVNtextureView *v,
     const NVNcopyRegion *r, int flags) {
-    p_copy_b2t *o = REC(c, OP_COPY_B2T, p_copy_b2t); o->src = src; o->tex = (const tex_t *)t; copy_view(&o->view, &o->has_view, v); o->r = *r; o->flags = flags;
+    p_copy_b2t *o = REC(c, OP_COPY_B2T, p_copy_b2t); o->src = src; o->tex = tex_snap(t); copy_view(&o->view, &o->has_view, v); o->r = *r; o->flags = flags;
 }
 NVN(nvnCommandBufferCopyTextureToBuffer, void, NVNcommandBuffer *c, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r,
     NVNbufferAddress dst, int flags) {
-    p_copy_b2t *o = REC(c, OP_COPY_T2B, p_copy_b2t); o->src = dst; o->tex = (const tex_t *)t; copy_view(&o->view, &o->has_view, v); o->r = *r; o->flags = flags;
+    p_copy_b2t *o = REC(c, OP_COPY_T2B, p_copy_b2t); o->src = dst; o->tex = tex_snap(t); copy_view(&o->view, &o->has_view, v); o->r = *r; o->flags = flags;
 }
 // Clear a texture region with the given value (float / unsigned integer versions; mask = channel write mask)
 NVN(nvnCommandBufferClearTexture, void, NVNcommandBuffer *c, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const float *rgba, int mask) {
-    p_clear_tex *o = REC(c, OP_CLEAR_TEX, p_clear_tex); o->tex = (const tex_t *)t; copy_view(&o->view, &o->has_view, v); o->r = *r; o->mask = mask; o->is_uint = 0; memcpy(o->c.f, rgba, 16);
+    p_clear_tex *o = REC(c, OP_CLEAR_TEX, p_clear_tex); o->tex = tex_snap(t); copy_view(&o->view, &o->has_view, v); o->r = *r; o->mask = mask; o->is_uint = 0; memcpy(o->c.f, rgba, 16);
 }
 NVN(nvnCommandBufferClearTextureui, void, NVNcommandBuffer *c, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const uint32_t *rgba, int mask) {
-    p_clear_tex *o = REC(c, OP_CLEAR_TEX, p_clear_tex); o->tex = (const tex_t *)t; copy_view(&o->view, &o->has_view, v); o->r = *r; o->mask = mask; o->is_uint = 1; memcpy(o->c.u, rgba, 16);
+    p_clear_tex *o = REC(c, OP_CLEAR_TEX, p_clear_tex); o->tex = tex_snap(t); copy_view(&o->view, &o->has_view, v); o->r = *r; o->mask = mask; o->is_uint = 1; memcpy(o->c.u, rgba, 16);
 }
 NVN(nvnCommandBufferCopyTextureToTexture, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtextureView *sv, const NVNcopyRegion *sr,
     const NVNtexture *d, const NVNtextureView *dv, const NVNcopyRegion *dr, int flags) {
-    p_copy_t2t *o = REC(c, OP_COPY_T2T, p_copy_t2t); o->src = (const tex_t *)s; o->dst = (const tex_t *)d;
+    p_copy_t2t *o = REC(c, OP_COPY_T2T, p_copy_t2t); o->src = tex_snap(s); o->dst = tex_snap(d);
     copy_view(&o->sv, &o->has_sv, sv); copy_view(&o->dv, &o->has_dv, dv); o->sr = *sr; o->dr = *dr; o->flags = flags;
 }
 NVN(nvnCommandBufferSetCopyRowStride, void, NVNcommandBuffer *c, ptrdiff_t st) { REC(c, OP_COPY_STRIDE, p_copy_stride)->stride = st; }

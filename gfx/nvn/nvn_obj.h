@@ -168,6 +168,8 @@ double mtl_presented_time(uint64_t n);
    // Actual presentation time (seconds) of the n-th present (counted from 1); 0 = not ready, −1 = dropped
 // Texture release (at Finalize)
 void mtl_tex_release(tex_t *t);
+const tex_t *mtl_tex_snap(const tex_t *t);   // Host copy of a texture object (by serial) for commands to record instead of the game's object
+uint64_t mtl_tex_snap_count(void);
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads);
 uint64_t mtl_pkg_miss(void);
 uint64_t mtl_upload_ns_take(void);   // Take and zero: time spent uploading packaged textures on the submit thread since last time   // DM_NVN_DIRTYCHECK diagnostic: number of missed detections   // Packaged textures: number of first uploads, number of re-uploads due to pool content changes

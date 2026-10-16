@@ -291,6 +291,35 @@ int main(void) {
         P(nvnMemoryPoolFinalize)(&rp);
     }
 
+    // 6b2. A texture finalized, and its object memory reused, after copies into and out of it were recorded and before they are submitted: NVN
+    //      commands carry what they need in command memory, so the copies still use that texture; replay must not read the reused object (it used
+    //      to: a garbage format at a scene load, a driver crash in a copy encoder). Its host copy is freed later, SNAP_KEEP submissions after release
+    {
+        static uint8_t fb[256 << 10] __attribute__((aligned(16384)));
+        NVNmemoryPoolBuilder fpb; NVNmemoryPool fp; P(nvnMemoryPoolBuilderSetDefaults)(&fpb); P(nvnMemoryPoolBuilderSetStorage)(&fpb, fb, sizeof fb);
+        P(nvnMemoryPoolInitialize)(&fp, &fpb);
+        uint8_t *stage = fb + 0x8000, *outb = fb + 0xC000;
+        for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) for (int c = 0; c < 4; c++) stage[(y * 8 + x) * 4 + c] = PX(x, y, c) ^ 0x3C;
+        NVNtextureBuilder b; NVNtexture tf; P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b);
+        P(nvnTextureBuilderSetWidth)(&b, 8); P(nvnTextureBuilderSetHeight)(&b, 4); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8);
+        P(nvnTextureBuilderSetStorage)(&b, &fp, 0); P(nvnTextureInitialize)(&tf, &b);
+        NVNcopyRegion all = {0, 0, 0, 8, 4, 1};
+        P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferSetCopyRowStride)(&cb, 0);
+        P(nvnCommandBufferCopyBufferToTexture)(&cb, (NVNbufferAddress)stage, &tf, NULL, &all, 0);
+        P(nvnCommandBufferCopyTextureToBuffer)(&cb, &tf, NULL, &all, (NVNbufferAddress)outb, 0);
+        NVNcommandHandle hf = P(nvnCommandBufferEndRecording)(&cb);
+        uint64_t snaps = mtl_tex_snap_count();
+        P(nvnTextureFinalize)(&tf); memset(&tf, 0xA5, sizeof tf);   // the game finalizes the object and reuses its memory before submitting
+        memset(outb, 0xEE, 128);
+        P(nvnQueueSubmitCommands)(&q, 1, &hf); P(nvnQueueFinish)(&q);
+        int bad = 0; for (int i = 0; i < 128; i++) bad += outb[i] != stage[i];
+        EXPECT("copies recorded before the texture was finalized and its object reused: written and read back byte for byte", 0, bad);
+        for (int i = 0; i < 640; i++) { P(nvnCommandBufferBeginRecording)(&cb); NVNcommandHandle he = P(nvnCommandBufferEndRecording)(&cb); P(nvnQueueSubmitCommands)(&q, 1, &he); }
+        P(nvnQueueFinish)(&q);
+        EXPECT("the texture's host copy is freed some submissions after its release", 1, (int)(snaps - mtl_tex_snap_count()) >= 1);
+        P(nvnMemoryPoolFinalize)(&fp);
+    }
+
     // 6c. Write-protected dirty pages: after a packaged texture is uploaded its pool pages are read-only; game write → page fault → mark dirty → re-upload on next use; a direct host read() write needs prepare first
     {
         static uint8_t wb_[256 << 10] __attribute__((aligned(16384)));

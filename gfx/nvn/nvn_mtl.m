@@ -1359,15 +1359,45 @@ static void fin_queue(uint64_t serial) {
     pthread_mutex_unlock(&g_fin_mu);
 }
 static void treg_drop_views(uint64_t serial);
+// Host copies of texture objects for recorded commands, one per serial (hle_nvn.c records them). A command (render targets, copies, clears) records
+// which texture it uses; NVN puts what a command needs into command memory when it is recorded, so the game may finalize or reuse its NVNtexture
+// before the command is submitted. Recording the game's pointer let replay read whatever was there by then (a garbage format at a scene load, a
+// driver crash in a copy encoder). Commands point at this copy instead; it is freed SNAP_KEEP submissions after the texture's release (fin_drain),
+// long after any command recorded before the finalize has been submitted
+enum { SNAP_BUCKETS = 4096, SNAP_KEEP = 600 };   // SNAP_KEEP: about 10 s at 60 fps
+typedef struct snap { struct snap *next; uint64_t due; tex_t t; } snap_t;
+static snap_t *g_snap[SNAP_BUCKETS], *g_snap_old; static pthread_mutex_t g_snap_mu = PTHREAD_MUTEX_INITIALIZER; static uint64_t g_snap_live;
+const tex_t *mtl_tex_snap(const tex_t *t) {
+    if (!t || !t->serial) return t;   // not a texture this layer initialized: kept as is (replay reports it)
+    pthread_mutex_lock(&g_snap_mu);
+    snap_t **b = &g_snap[t->serial % SNAP_BUCKETS], *e = *b;
+    while (e && e->t.serial != t->serial) e = e->next;
+    if (!e && (e = malloc(sizeof *e))) { e->t = *t; e->due = 0; e->next = *b; *b = e; g_snap_live++; }
+    pthread_mutex_unlock(&g_snap_mu);
+    return e ? &e->t : t;
+}
+static void tex_snap_retire(uint64_t serial, uint64_t due) {   // the texture was released: its copy is freed at submission index due
+    pthread_mutex_lock(&g_snap_mu);
+    for (snap_t **b = &g_snap[serial % SNAP_BUCKETS]; *b; b = &(*b)->next)
+        if ((*b)->t.serial == serial) { snap_t *e = *b; *b = e->next; e->due = due; e->next = g_snap_old; g_snap_old = e; break; }
+    pthread_mutex_unlock(&g_snap_mu);
+}
+static void tex_snap_reap(uint64_t now) {
+    pthread_mutex_lock(&g_snap_mu);
+    for (snap_t **b = &g_snap_old; *b;) if ((*b)->due <= now) { snap_t *e = *b; *b = e->next; free(e); g_snap_live--; } else b = &(*b)->next;
+    pthread_mutex_unlock(&g_snap_mu);
+}
+uint64_t mtl_tex_snap_count(void) { pthread_mutex_lock(&g_snap_mu); uint64_t n = g_snap_live; pthread_mutex_unlock(&g_snap_mu); return n; }
 static void fin_drain(void) {   // submit thread, at the start of a submission
     uint64_t due[64]; int n = 0;
+    tex_snap_reap(g_sub_serial);
     pthread_mutex_lock(&g_fin_mu);
     for (int i = 0; i < g_nfin;) {
         if (!g_fin[i].due) g_fin[i].due = g_sub_serial + FIN_GRACE;
         if (g_fin[i].due <= g_sub_serial && n < 64) { due[n++] = g_fin[i].serial; g_fin[i] = g_fin[--g_nfin]; } else i++;
     }
     pthread_mutex_unlock(&g_fin_mu);
-    for (int i = 0; i < n; i++) { serial_del(due[i]); treg_drop_views(due[i]); }
+    for (int i = 0; i < n; i++) { serial_del(due[i]); treg_drop_views(due[i]); tex_snap_retire(due[i], g_sub_serial + SNAP_KEEP); }
 }
 void mtl_tex_release(tex_t *t) { if (t->serial) fin_queue(t->serial); }
 
