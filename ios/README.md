@@ -22,6 +22,8 @@ VPN & Device Management.
 ```sh
 export DM_ROOT=~/dm-work
 ios/run.sh build            # generate Gen/ and the Xcode project, build (log: $DM_ROOT/run/ios/build.log)
+ios/run.sh ipa              # the same build unsigned: $DM_ROOT/run/ios/<game>-ios26.ipa (-ios18 with DM_IOS_M3=1), see below
+                            # DM_IPA_DATA=1: with the RomFS and system fonts inside (<game>-ios26-data.ipa)
 ios/run.sh install          # install on DM_DEVICE
 ios/run.sh push-data        # copy the profile's RomFS and system fonts into the app's Library/Application Support
 ios/run.sh launch [s]       # launch, wait s seconds (default 30), fetch Documents/boot.txt
@@ -41,11 +43,28 @@ What `build` puts into the app (`Gen/`, generated, not committed):
 | `shader_map.tsv`, `c1_full.tsv` | the profile's workspace |
 | `msl/b-<V>/` | iOS shader libraries of the current chain version |
 
+## Unsigned IPA
+
+`run.sh ipa` builds without signing (`CODE_SIGNING_ALLOWED=NO`, its own derived data `run/ios/dd-ipa`, so the signed build stays installable)
+and zips `Payload/DmIOS.app`. It needs `DM_BUNDLE_ID` but no team. A signing tool (AltStore, SideStore, Sideloadly, your own certificate and
+profile) signs it on the way in; the signer's profile decides the entitlements, and the IPA brings none of its own: AltStore, for example, reads
+the entitlements in the app's signature (AltSign `ALTApplication.entitlementsString`) to decide which App ID features to turn on. Without iCloud
+entitlements there is no save sync (`host/cloud.m` asks for the default container at run time); everything else works as in a free-account
+build. Tools that change the bundle ID are fine: nothing in the app depends on it.
+
+- The iOS 26 build is compiled with `-mcpu=apple-a18`, the iOS 18 build (`DM_IOS_M3=1`) with `-mcpu=apple-a14`; build the one that fits the
+  device's chip and iOS version.
+- The IPA contains the rewritten game code and the game's icon (with `DM_IPA_DATA=1` the whole game): it is for your own devices, from your
+  own dump. Do not publish it.
+- Without `DM_IPA_DATA=1` the game data is copied in afterwards as usual (Files app → `Documents/RomFS`, `Documents/sysfont`). With it, the
+  workspace's `romfs` and `sysfont` become `RomFS` and `sysfont` inside the app; the IPA is then as large as the game, and every install or
+  update carries all of it.
+
 ## On the device
 
-- **Game data**: RomFS in `Library/Application Support/romfs` (`push-data`) or `Documents/RomFS` (Files app; file sharing is on); system fonts in
-  `.../sysfont` or `Documents/sysfont`. The RomFS is checked against the profile before the game starts; if something is missing the app shows
-  what and where.
+- **Game data**: RomFS in `Library/Application Support/romfs` (`push-data`), `Documents/RomFS` (Files app; file sharing is on) or the app's
+  own `RomFS` (`run.sh ipa` with `DM_IPA_DATA=1`), the first complete one in that order; system fonts in `sysfont` in the same three places. The
+  RomFS is checked against the profile before the game starts; if something is missing the app shows what and where.
 - **Saves**: `Documents/save` (transactional, committed atomically). With iCloud entitlements the profile's `save_sync` files are synced
   (`host/cloud.m`).
 - **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Settings app → this app → "Show log on

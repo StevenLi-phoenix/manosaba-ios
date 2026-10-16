@@ -2,9 +2,9 @@
 //   Log: stderr (the host's LOG) goes to Documents/boot.launch.txt; when the scene first comes to the foreground it becomes boot.txt and the previous
 //   boot.txt is kept as boot.previous.txt (a launch by the system in the background must not replace the last session's log).
 //   DM_LOG_PORT=<port>: also serve the log on 127.0.0.1:<port> (tools/logport.py through iproxy); "dump" dumps state, "quit" exits.
-//   Game data (the player's own dump): RomFS in Library/Application Support/romfs (ios/run.sh push-data) or Documents/RomFS (Files
-//   app); the console's shared fonts in .../sysfont or Documents/sysfont. Checked against the game profile (romfs_validate.c); when missing, a page
-//   says what is missing and where it goes.
+//   Game data (the player's own dump): RomFS in Library/Application Support/romfs (ios/run.sh push-data), Documents/RomFS (Files app) or the
+//   app bundle's RomFS (ios/run.sh ipa with DM_IPA_DATA=1); the console's shared fonts in sysfont next to it. Checked against the game profile
+//   (romfs_validate.c); when missing, a page says what is missing and where it goes.
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
@@ -137,9 +137,11 @@ static void log_promote(void) {
 // ---------- Game data ----------
 static NSString *support_dir(void) { return NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0]; }
 static NSString *docs_dir(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]; }
+static NSString *bundle_dir(void) { return NSBundle.mainBundle.resourcePath; }   // read-only; holds the data only when packaged with it
 // The first RomFS that passes the profile's check; why = the reason of the last one tried
 static NSString *romfs_locate(char *why, size_t n) {
-    NSArray<NSString *> *cand = @[[support_dir() stringByAppendingPathComponent:@"romfs"], [docs_dir() stringByAppendingPathComponent:@"RomFS"]];
+    NSArray<NSString *> *cand = @[[support_dir() stringByAppendingPathComponent:@"romfs"], [docs_dir() stringByAppendingPathComponent:@"RomFS"],
+                                  [bundle_dir() stringByAppendingPathComponent:@"RomFS"]];
     snprintf(why, n, "no RomFS folder");
     for (NSString *d in cand) {
         if (![NSFileManager.defaultManager fileExistsAtPath:d]) continue;
@@ -149,7 +151,8 @@ static NSString *romfs_locate(char *why, size_t n) {
     return nil;
 }
 static NSString *sysfont_locate(void) {
-    for (NSString *d in @[[support_dir() stringByAppendingPathComponent:@"sysfont"], [docs_dir() stringByAppendingPathComponent:@"sysfont"]])
+    for (NSString *d in @[[support_dir() stringByAppendingPathComponent:@"sysfont"], [docs_dir() stringByAppendingPathComponent:@"sysfont"],
+                          [bundle_dir() stringByAppendingPathComponent:@"sysfont"]])
         if ([NSFileManager.defaultManager fileExistsAtPath:d]) return d;
     return nil;
 }

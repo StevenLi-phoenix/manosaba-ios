@@ -2,6 +2,8 @@
 # iOS app: build, install and run on a device. The game is DM_GAME (games/<id>/game.json); its workspace paths (product, shaders, icon, data) are
 # relative to DM_ROOT. Device and signing settings come from local.env (see local.env.example).
 #   run.sh build              generate Gen/ and the Xcode project, build the app (log: $DM_ROOT/run/ios/build.log)
+#   run.sh ipa                the same build unsigned, packaged as $DM_ROOT/run/ios/<game>-ios26.ipa (-ios18 with DM_IOS_M3=1) to sign yourself;
+#                             DM_IPA_DATA=1 also puts the workspace's RomFS and shared fonts into the app (<game>-ios26-data.ipa)
 #   run.sh install            install the built app
 #   run.sh launch [seconds]   launch it (ends a running instance), wait, then fetch Documents/boot.txt
 #   run.sh log                fetch Documents/boot.txt (or boot.launch.txt) now
@@ -22,8 +24,8 @@ DD=${DM_IOS_DD:-$R/dd}
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app
 CMD=${1:-}
 
-if [ "$CMD" = build ]; then
-  local_env_need DM_TEAM_ID DM_BUNDLE_ID || exit 1
+if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
+  if [ "$CMD" = ipa ]; then local_env_need DM_BUNDLE_ID || exit 1; else local_env_need DM_TEAM_ID DM_BUNDLE_ID || exit 1; fi
   OUT=$(ws product); MODS=$(get modules); TITLE=$(get title)
   rm -rf Gen; mkdir -p Gen/dm Gen/msl
   # Host sources, header paths and frameworks from host/Makefile; the game's modules as embedded code
@@ -54,6 +56,29 @@ if [ "$CMD" = build ]; then
   xcodegen generate -q --spec $SPEC >/dev/null; XG=$?; rm -f project_free.yml project_m3.yml
   [ $XG = 0 ] || { t "[red] xcodegen failed"; exit 1; }
   BN=$(git log -1 --format=%ct 2>/dev/null); [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] && BN=1; BN=${BN:-1}
+  if [ "$CMD" = ipa ]; then
+    # No signature and no entitlements: whoever installs it signs it with their own certificate and profile, which decide what the app may use
+    # (iCloud save sync, increased memory limit, ...). Its own derived data, so the signed build of run.sh build stays installable
+    DDI=$R/dd-ipa; OSV=ios26; [ "${DM_IOS_M3:-0}" = 1 ] && OSV=ios18
+    t "building $TITLE ($GAME) unsigned, build number $BN"
+    xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$DDI" \
+      CODE_SIGNING_ALLOWED=NO DM_BUILD_NUMBER=$BN ${DM_DEVICE_FAMILY:+DM_DEVICE_FAMILY=$DM_DEVICE_FAMILY} build > "$R/build.log" 2>&1 || {
+        t "[red] build failed (see $R/build.log)"; grep -E 'error:|BUILD FAILED' "$R/build.log" | head -20; exit 1; }
+    W=$R/ipa; IPA=$R/$GAME-$OSV.ipa; [ "${DM_IPA_DATA:-0}" = 1 ] && IPA=$R/$GAME-$OSV-data.ipa
+    rm -rf "$W" "$IPA"; mkdir -p "$W/Payload"
+    ditto "$DDI/Build/Products/Release-iphoneos/DmIOS.app" "$W/Payload/DmIOS.app" || { t "[red] copying the app failed"; exit 1; }
+    if [ "${DM_IPA_DATA:-0}" = 1 ]; then
+      # The game data inside the app (Sources/main.m looks there after Application Support and Documents); the app checks it at start as usual
+      for x in romfs:RomFS sysfont:sysfont; do
+        src=$(ws "${x%%:*}") && [ -d "$src" ] || { t "[red] no ${x%%:*} at ${src:-(workspace.${x%%:*} not set)}"; exit 1; }
+        src=$(cd "$src" && pwd -P)
+        t "adding $src as ${x##*:}"; ditto "$src" "$W/Payload/DmIOS.app/${x##*:}" || { t "[red] copying ${x%%:*} failed"; exit 1; }
+      done
+    fi
+    xattr -cr "$W/Payload"
+    (cd "$W" && zip -qryX "$IPA" Payload -x '*/.DS_Store') || { t "[red] zip failed"; exit 1; }
+    rm -rf "$W"; t "packaged $IPA ($(du -h "$IPA" | cut -f1))"; exit 0
+  fi
   DEST='generic/platform=iOS'
   if [ -n "$FREE" ]; then
     if [ -n "${DM_IOS_UDID:-}" ]; then DEST="id=$DM_IOS_UDID"; else t "free account: set DM_IOS_UDID and connect the phone, or signing has no device to target"; fi
@@ -94,5 +119,5 @@ push-data)
   done
   t "done"; exit 0 ;;
 *)
-  sed -n '2,11p' "$0"; exit 1 ;;
+  sed -n '2,13p' "$0"; exit 1 ;;
 esac
