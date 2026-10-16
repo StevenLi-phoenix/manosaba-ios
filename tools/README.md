@@ -23,3 +23,10 @@ Usage is in each file's header. Python tools need the packages in `requirements.
 | `sdis.py` | Disassembly of a memory image with symbols; symbol / cross-reference / caller / containing-function queries |
 | `sampagg.py` | Aggregates the host's guest thread sampling log (`DM_SAMPLE`) into hot functions and wait points |
 | `hle_inventory.py` | Lists every host implementation of a system function (`HLE`, `HLE_FORCE`, libc passthrough, svc) as TSV, for auditing |
+
+## Memory tests
+
+| File | What it does |
+|---|---|
+| `memstat_cycles.py` | One row per load cycle of the host's memory accounting (`DM_MEMSTAT`), for `games/manosaba/reload_loop.sh` |
+| `gc_stats.py` | The IL2CPP garbage collector's statistics from a host log (`DM_GUEST_ENV="GC_PRINT_STATS=1" DM_DBG=1`) |

@@ -76,6 +76,7 @@ likely.
 | Document | Covers |
 |---|---|
 | [PORTING.md](PORTING.md) | The workflow for a new game, from the dump to the device |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Restoring a working copy, test procedures, where the work stands, community ports to draw from |
 | [games/README.md](games/README.md) | Game directory: `game.json`, `rules.py`, C hooks |
 | [host/README.md](host/README.md) | Loader, services, files, environment variables |
 | [gfx/README.md](gfx/README.md), [gfx/nvn_metal_mapping.md](gfx/nvn_metal_mapping.md), [gfx/tex/README.md](gfx/tex/README.md) | Graphics layer, shader chain, NVN → Metal mapping, textures |
