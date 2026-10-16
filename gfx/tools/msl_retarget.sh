@@ -9,7 +9,11 @@ HERE=$(cd "$(dirname "$0")" && pwd); ROOT=${DM_ROOT:-$HOME/dm-work}
 SRC=${MSL_SRC:-$ROOT/build/cache/metal_shader_cache}   # the shader cache root the libraries are taken from (mac_app.sh passes the game's)
 V=$(sed -n 's/.*DMSH_CHAIN "\(.*\)".*/\1/p' "$HERE/../nvn/dmsh_chain.h"); S=$SRC/b-$V; CAS=$SRC/cas/variant
 [ -d "$S" ] || { echo "[red] no shader libraries at ${S} (run dmsh_build.py first)"; exit 2; }
-D=$OUTROOT/b-$V; rm -rf "$D"; mkdir -p "$D"; cp -c "$S"/*.json "$D"/
+D=$OUTROOT/b-$V; rm -rf "$D"; mkdir -p "$D"
+# The reflection .json files (thousands) are copied by directory, not passed as a "$S"/*.json glob: with a deep workspace path the expanded list
+# exceeds the system argument-length limit, cp fails as a whole and copies nothing, and the package then has libraries without reflections (every
+# shader fails to load; upstream d2r-mobile 1784563, #60). The check at the end makes sure every _b library has its reflection
+rsync -a --include='*.json' --exclude='*' "$S/" "$D/" || { echo "[red] copying the reflection json files failed"; exit 3; }
 one() { src=$1; dst=$2; t=$(mktemp -d); if xcrun -sdk macosx metal -c -mmacosx-version-min="$MIN" "$src" -o "$t/a.air" 2>"$t/err" && xcrun -sdk macosx metallib "$t/a.air" -o "$t/a.metallib" 2>>"$t/err"; then mv "$t/a.metallib" "$dst"; else echo "failed $(basename "$dst"): $(head -1 "$t/err" | cut -c1-120)"; fi; rm -rf "$t"; }
 export -f one; export MIN D S
 BAD=$(ls "$S" | grep '_b\.metal$' | sed 's/\.metal$//' | xargs -P 10 -I{} bash -c 'one "$S/{}.metal" "$D/{}.metallib"')
@@ -19,5 +23,6 @@ for f in "$S"/*_bf.metallib; do [ -f "$f" ] || continue; h=$(shasum -a 256 "$f" 
   if [ -n "$r" ]; then m=$D/$(basename "${f%.metallib}").metal; cp "$r/metal" "$m"; BAD="$BAD$(one "$m" "$D/$(basename "$f")")"; rm -f "$m"; else miss=$((miss+1)); fi; done
 rm -f "$T"
 have=$(ls "$D" | grep -c '\.metallib$'); want=$(ls "$S" | grep -c '\.metallib$')
-[ -z "$BAD" ] && [ "$miss" = 0 ] && [ "$have" = "$want" ] || { echo "[red] recompiling incomplete: ${have} / ${want} libraries, ${miss} _bf sources not found; ${BAD:0:300}"; exit 3; }
+nojson=$(ls "$D" | sed -n 's/_b\.metallib$//p' | while read -r k; do [ -f "$D/${k}_b.json" ] || echo "$k"; done | wc -l | tr -d ' ')
+[ -z "$BAD" ] && [ "$miss" = 0 ] && [ "$have" = "$want" ] && [ "$nojson" = 0 ] || { echo "[red] recompiling incomplete: ${have} / ${want} libraries, ${miss} _bf sources not found, ${nojson} reflection json files missing; ${BAD:0:300}"; exit 3; }
 echo "MSL_RETARGET ${D} (${have} libraries, macOS ${MIN})"
