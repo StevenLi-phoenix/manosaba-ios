@@ -33,7 +33,7 @@ targets:
         CFBundleDisplayName: $(DM_GAME_TITLE)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
-        UILaunchStoryboardName: ""
+        UILaunchScreen: {}                         # a declared launch screen: without one iPhones may run the app at a legacy compatibility size (d2r-mobile 21cf97b)
         UIFileSharingEnabled: true                 # the player copies the game data in with the Files app
         LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations:
