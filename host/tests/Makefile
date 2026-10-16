@@ -14,6 +14,7 @@ run: \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
+	$(B)/t_guest_mem \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_script \
 	$(B)/t_oe \
@@ -33,6 +34,7 @@ run: \
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
+	$(B)/t_guest_mem 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
 	$(B)/t_hid_script 2>/dev/null
 	$(B)/t_oe 2>/dev/null
@@ -71,6 +73,8 @@ $(B)/t_fs_index: t_fs_index.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_index.c ../game.c $(GEN)
 $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../game.c $(GEN)
+$(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
 $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
 $(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
