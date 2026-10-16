@@ -19,6 +19,8 @@ t_cover: t_cover.c ../nvn/nvn_cover.h
 	clang -O1 -Wall -o $@ t_cover.c
 t_pace: t_pace.c ../nvn/nvn_pace.h
 	clang -O1 -Wall -o $@ t_pace.c
+t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
+	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c
 t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_rt_srgb_view: t_rt_srgb_view.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -50,6 +52,7 @@ t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 run: \
+	t_copy_pitch \
 	t_cover \
 	t_defer_chain \
 	t_deswz_gpu \
@@ -79,6 +82,7 @@ run: \
 	./t_pace
 	./t_hmap
 	./t_cover
+	./t_copy_pitch
 	./t_fuse_check
 	./t_present_crop
 	MTL_DEBUG_LAYER=1 ./t_present_fx
