@@ -114,6 +114,7 @@ HLE_FORCE("nvnBootstrapLoader", "the whole NVN graphics interface is replaced by
 #define B(x) ((x) & 0xff)
 
 #include "nvn_obj.h"
+#include "nvn_hmap.h"
 
 // ---------- Device ----------
 NVN(nvnDeviceBuilderSetDefaults, void, NVNdeviceBuilder *b) { memset(b, 0, sizeof(dev_builder_t)); }
@@ -539,14 +540,26 @@ NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
     (void)d; memset(p, 0, sizeof(prog_t)); ((prog_t *)p)->magic = MAGIC('P', 'R', 'O', 'G'); return 1;
 }
 NVN(nvnProgramFinalize, void, NVNprogram *p) { mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; }
-// DM_SHDUMP=directory (sampling for offline translation): for each new shader write <key>.ctl (the 0x880-byte control section) and <key>.data (from data: 0x30 + the length recorded at control +0x704 + 0x100 bytes).
-// Key = first 16 hex digits of the control section's sha256 (the same key the replay layer looks libraries up by).
+// Shader key = the first 8 bytes of sha256(the 0x880-byte control section + the code area), the code area being the length at control +0x704 read
+// from data. The replay layer looks libraries up by it (16 hex digits); the offline tools name captures by it (shmap_from_capture.py, dmsh_build.py,
+// engines/unity/shader_extract.py). The control section alone does not identify a shader: it holds sizes and resource counts but no hash of the
+// code. Tears of the Kingdom showed 488 more code areas than its 2704 control sections in the first minute from boot, among them its bloom
+// upsampling shader (sample × c[3][0x60]) behind the same control section as one that adds c[3][0x20]; the build kept whichever was captured
+// first, so the bloom added a matrix row of an earlier pass and the title picture turned red. Same definition as nxnative's keys_hash (seedds, MIT).
 #include <CommonCrypto/CommonDigest.h>
 #include <sys/stat.h>
+static void shader_key(const NVNshaderData *sd, uint8_t key[8]) {
+    uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
+    uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX h; CC_SHA256_Init(&h);
+    CC_SHA256_Update(&h, sd->control, 0x880);
+    if (sd->data && len && len < (1u << 24)) CC_SHA256_Update(&h, (const void *)(uintptr_t)sd->data, len);
+    CC_SHA256_Final(md, &h); memcpy(key, md, 8);
+}
+// DM_SHDUMP=directory (sampling for offline translation): for each new shader write <key>.ctl (the 0x880-byte control section) and <key>.data (from data: 0x30 + the length recorded at control +0x704 + 0x100 bytes).
 static void shdump(const NVNshaderData *sd) {
     static const char *dir; static int init; if (!init) { dir = getenv("DM_SHDUMP"); init = 1; if (dir) mkdir(dir, 0755); }
     if (!dir || !sd->control) return;
-    uint8_t md[32]; CC_SHA256(sd->control, 0x880, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
+    uint8_t md[8]; shader_key(sd, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
     char p[1200]; snprintf(p, sizeof p, "%s/%s.ctl", dir, key);
     if (!access(p, F_OK)) return;
     uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
@@ -570,7 +583,20 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     if (n < 0 || n > 6) { LOG("[red] ProgramSetShaders: stage count %d", n); return 0; }
     for (int i = 0; i < n; i++) shdump(&sd[i]);
     mtl_prog_release(o); o->nstage = n; o->serial = nvn_new_serial();
-    for (int i = 0; i < n; i++) { uint8_t md[32]; CC_SHA256(sd[i].control, 0x880, md); memcpy(o->key[i], md, 8); o->kstage[i] = shader_stage(&sd[i]); }
+    for (int i = 0; i < n; i++) { shader_key(&sd[i], o->key[i]); o->kstage[i] = shader_stage(&sd[i]); }
+    // DM_SHDUMP also records which vertex and pixel shaders the game puts in one program (<dir>/pairs.tsv, one "vertex key<TAB>pixel key" line per
+    // new pair): the offline build pads a vertex shader with the outputs its paired pixel shaders read but it does not write (dmsh_build.py vs_pad;
+    // Metal refuses to link such a pair). Duplicates are filtered here as long as the process runs; the build deduplicates the file anyway
+    { static const char *dir; static int init; static nvn_hmap seen; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+      if (!init) { dir = getenv("DM_SHDUMP"); init = 1; }
+      int vs = -1, ps = -1; for (int i = 0; i < n; i++) { if (o->kstage[i] == 0) vs = i; else if (o->kstage[i] == 1) ps = i; }
+      if (dir && vs >= 0 && ps >= 0) {
+          uint8_t k[16]; memcpy(k, o->key[vs], 8); memcpy(k + 8, o->key[ps], 8);
+          pthread_mutex_lock(&mu); if (!seen.klen) nvn_hm_init(&seen, 16);
+          if (!nvn_hm_get(&seen, k)) { nvn_hm_put(&seen, k, (void *)1);
+              char pth[1200]; snprintf(pth, sizeof pth, "%s/pairs.tsv", dir); FILE *f = fopen(pth, "a");
+              if (f) { for (int j = 0; j < 8; j++) fprintf(f, "%02x", o->key[vs][j]); fputc('\t', f); for (int j = 0; j < 8; j++) fprintf(f, "%02x", o->key[ps][j]); fputc('\n', f); fclose(f); } }
+          pthread_mutex_unlock(&mu); } }
     OLOG("ProgramSetShaders %p n=%d data0=%#llx", (void *)p, n, n ? (unsigned long long)sd[0].data : 0ull);
     return 1;
 }
@@ -786,7 +812,8 @@ NVN(nvnCommandBufferCopyBufferToBuffer, void, NVNcommandBuffer *c, NVNbufferAddr
 }
 // uniform update: the data is copied into command memory at record time (NVN semantics: the caller may modify the original data after recording) and written into the buffer at submit
 NVN(nvnCommandBufferUpdateUniformBuffer, void, NVNcommandBuffer *c, NVNbufferAddress buf, size_t bufsz, ptrdiff_t off, size_t n, const void *data) {
-    (void)bufsz;
+    { static int dbg = -1; if (dbg < 0) dbg = getenv("DM_NVN_UBLOG") != NULL;   // diagnostic: the raw arguments
+      if (dbg) LOG("[ub] UpdateUniformBuffer buffer=%#llx size=%#zx offset=%#tx n=%#zx", (unsigned long long)buf, bufsz, off, n); }
     uint32_t sz = (uint32_t)(24 + n);
     uint8_t *p = cmd_alloc(CB(c), sz); put_hdr(p, OP_UPDATE_UB, (sz + 7) & ~7u);
     uint64_t dst = buf + off, nn = n; memcpy(p + 8, &dst, 8); memcpy(p + 16, &nn, 8); memcpy(p + 24, data, n);
@@ -843,11 +870,9 @@ NVN(nvnCommandBufferSetConservativeRasterEnable, void, NVNcommandBuffer *c, uint
 }
 // Not modelled yet, reported red once when they would change what is drawn: render enable (plain and conditional on a query result) draws always,
 // rasterizer discard is ignored. The tiled cache calls are hints for the console's binning rasterizer with no Metal counterpart. (nxnative)
-NVN(nvnCommandBufferSetRenderEnable, void, NVNcommandBuffer *c, uint32_t en) {
-    (void)c; static int red; if (!B(en) && !red++) LOG("[red] CommandBufferSetRenderEnable 0: not modelled, drawing continues");
-}
+NVN(nvnCommandBufferSetRenderEnable, void, NVNcommandBuffer *c, uint32_t en) { *REC(c, OP_RENDER_ENABLE, p_render_enable) = (p_render_enable){B(en) ? 1 : 0, 0}; }
 NVN(nvnCommandBufferSetRenderEnableConditional, void, NVNcommandBuffer *c, NVNconditionalRenderMode m, NVNbufferAddress a) {
-    (void)c; static int red; if (!red++) LOG("[red] CommandBufferSetRenderEnableConditional (mode %d, address %#llx): not modelled, drawing continues", (int)m, (unsigned long long)a);
+    *REC(c, OP_RENDER_ENABLE, p_render_enable) = (p_render_enable){m == NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_EQUAL ? 2 : 3, a};
 }
 NVN(nvnCommandBufferSetRasterizerDiscard, void, NVNcommandBuffer *c, uint32_t en) {
     (void)c; static int red; if (B(en) && !red++) LOG("[red] CommandBufferSetRasterizerDiscard 1: not modelled, fragments are still drawn");
@@ -856,8 +881,24 @@ NVN(nvnCommandBufferSetTiledCacheAction, void, NVNcommandBuffer *c, NVNtiledCach
 NVN(nvnCommandBufferSetTiledCacheTileSize, void, NVNcommandBuffer *c, int w, int h) { (void)c; (void)w; (void)h; }
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
+// The program's shaders as of recording: the console copies them into the command stream, and a game may give the same NVNprogram other shaders
+// (ProgramSetShaders again) before the recording is submitted or while it is still replayed. Tears of the Kingdom does (2142 SetShaders), and the
+// replay layer, which read the keys through the program pointer at submit, ran a bloom upsample with another program's pixel shader: it read the
+// vertex shader's matrix row as its bias and painted the title screen red. So the record points to an immutable copy of the key set, one per
+// distinct set, with its own serial (the replay layer resolves programs by serial). Programs without keys (unit-test objects) are recorded as they are
+static const prog_t *prog_snapshot(const prog_t *p) {
+    if (!p || !p->nstage) return p;
+    uint8_t k[1 + 6 * 8 + 6] = {0}; k[0] = (uint8_t)p->nstage; memcpy(k + 1, p->key, sizeof p->key); memcpy(k + 1 + 48, p->kstage, sizeof p->kstage);
+    static nvn_hmap snaps; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    if (!snaps.klen) nvn_hm_init(&snaps, sizeof k);
+    prog_t *c = nvn_hm_get(&snaps, k);
+    if (!c) { c = malloc(sizeof *c); *c = *p; c->magic = MAGIC('P', 'R', 'G', 'S'); c->serial = nvn_new_serial(); nvn_hm_put(&snaps, k, c); }
+    pthread_mutex_unlock(&mu);
+    return c;
+}
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
-    *REC(c, OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){(const prog_t *)p, stages};
+    *REC(c, OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){prog_snapshot((const prog_t *)p), stages};
 }
 static void bind_state(NVNcommandBuffer *c, int kind, const void *st, size_t n) { p_bind_state *r = REC(c, OP_BIND_STATE, p_bind_state); r->kind = kind; memcpy(r->bytes, st, n); }
 NVN(nvnCommandBufferBindBlendState, void, NVNcommandBuffer *c, const NVNblendState *st) { bind_state(c, 0, st, sizeof(blend_st)); }
@@ -879,6 +920,7 @@ NVN(nvnCommandBufferBindVertexBuffers, void, NVNcommandBuffer *c, int first, int
     p_bind_vbuf *r = RECN(c, OP_BIND_VBUF, p_bind_vbuf, r, n); r->first = first; r->n = n; memcpy(r->r, rg, sizeof *rg * n);
 }
 NVN(nvnCommandBufferBindUniformBuffer, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNbufferAddress a, size_t n) {
+    { static int dbg = -1; if (dbg < 0) dbg = getenv("DM_NVN_UBLOG") != NULL; if (dbg) LOG("[ub] BindUniformBuffer stage %d slot %d %#llx size %#zx", (int)st, i, (unsigned long long)a, n); }
     *REC(c, OP_BIND_UBO, p_bind_buf) = (p_bind_buf){st, i, a, n};
 }
 NVN(nvnCommandBufferBindUniformBuffers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *rg) {

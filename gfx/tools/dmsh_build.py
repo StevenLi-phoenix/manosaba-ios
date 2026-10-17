@@ -3,7 +3,8 @@
 # for the replay layer. Nothing is translated at run time (iOS has no JIT).
 # Usage: dmsh_build.py <capture dir> <shader cache root> [key...]   (no keys = all)
 #   capture dir: <key>.ctl (the 0x880-byte NVN control section) + <key>.data (the code the game passes to nvnProgramSetShaders), as written by
-#   the host's DM_SHDUMP or by an engine extractor (engines/unity/shader_extract.py); key = the first 16 hex digits of sha256(control section).
+#   the host's DM_SHDUMP or by an engine extractor (engines/unity/shader_extract.py); key = the first 16 hex digits of sha256(control section + code
+#   area), the code area being the length at control +0x704 (the host's shader_key in hle_nvn.c: many shaders share a control section).
 #   Output goes to <cache root>/b-<chain version>/ (dmsh_chain.py): <key>_b.metallib, <key>_b.json (reflection, including drv_reads: run-time reads
 #   of the driver banks c0 / c2), <key>_b.metal (MSL), and <key>_bf.metallib readable-tile variants of fragment shaders (dmsh_fetch.py).
 # Environment: DM_GAME = the game id (games/<id>/game.json gives nvn_c2, the c[2] handle table layout of its shaders; required);
@@ -219,8 +220,9 @@ stage_of, CAP_RECS = {}, {}
 for fn in sorted(os.listdir(cap_dir)):
     if not fn.endswith('.ctl'): continue
     key = fn[:-4]; ctl = open(os.path.join(cap_dir, fn), 'rb').read(); data = open(os.path.join(cap_dir, key + '.data'), 'rb').read()
-    if len(ctl) != 0x880 or ctl[:4] != bytes.fromhex('34127698') or hashlib.sha256(ctl).hexdigest()[:16] != key: sys.exit(f'[red] capture {key}: bad control section (length {len(ctl):#x})')
+    if len(ctl) != 0x880 or ctl[:4] != bytes.fromhex('34127698'): sys.exit(f'[red] capture {key}: bad control section (length {len(ctl):#x})')
     total = struct.unpack_from('<I', ctl, 0x704)[0]
+    if hashlib.sha256(ctl + data[:total]).hexdigest()[:16] != key: sys.exit(f'[red] capture {key}: the hash of control section + code area does not match the name')
     if data[:4] == bytes.fromhex('78563412'):
         w0 = struct.unpack_from('<I', data, 0x30)[0]; st = {(1, 1): 'vs', (2, 5): 'ps'}.get((w0 & 0x1f, (w0 >> 10) & 0xf))
         if not st: sys.exit(f'[red] capture {key}: first SPH word {w0:#x} is neither vertex nor pixel (tessellation / geometry shaders are not supported)')
@@ -426,6 +428,34 @@ def vi_variant(src):
     out.append(f'vertex {fn.group(1)} main0_vi(main0_in_vi in [[stage_in]]{fn.group(2)})\n{{\n{pro}{body_vi}\n}}\n')
     return src + '\n'.join(out), locs
 
+# Vertex / pixel pairs the game put in one program: <capture dir>/pairs.tsv, written by the host while capturing (DM_SHDUMP). Vertex key → pixel keys
+PAIRS = collections.defaultdict(set)
+if os.path.exists(os.path.join(cap_dir, 'pairs.tsv')):
+    for _ln in open(os.path.join(cap_dir, 'pairs.tsv')):
+        _f = _ln.split()
+        if len(_f) == 2 and not _ln.startswith('#'): PAIRS[_f[0]].add(_f[1])
+
+def vs_pad_locs(key):
+    """Locations the paired pixel shaders of a vertex shader read, from their built MSL (the vertex shader's own outputs are subtracted in vs_pad,
+    once its MSL exists). Part of the vertex shader's cache key"""
+    want = set()
+    for ps in sorted(PAIRS.get(key, ())):
+        fn = os.path.join(out, ps + '_b.metal')
+        if os.path.exists(fn): want |= {int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', open(fn).read())}
+    return sorted(want)
+
+def vs_pad(src, want):
+    """Give a vertex shader the outputs its paired pixel shaders read but it does not write, with the value (0, 0, 0, 1). Maxwell attributes are untyped
+    32-bit slots and a pixel shader reading a location the vertex shader did not write gets a default (Ryujinx fills (0, 0, 0, 1) when it links
+    stages); every shader here is translated on its own, and Metal refuses to link a pixel input no vertex output provides (19 of Tears of the
+    Kingdom's pipelines failed so; their draws were skipped). From nxnative's dmsh_build.py vs_pad (seedds, MIT). Returns (source, padded locations)"""
+    miss = sorted(set(want) - {int(x) for x in re.findall(r'\[\[user\(locn(\d+)\)', src)})
+    i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i); k = src.find('main0_out out = {};')
+    if not miss or i < 0 or j < 0 or k < 0: return src, []
+    src = src[:j] + ''.join(f'\n    float4 dm_pad{l} [[user(locn{l})]];' for l in miss) + src[j:]
+    k = src.find('main0_out out = {};') + len('main0_out out = {};')
+    return src[:k] + ''.join(f'\n    out.dm_pad{l} = float4(0.0, 0.0, 0.0, 1.0);' for l in miss) + src[k:], miss
+
 def finish(key, w, j, c1):
     res = json.load(open(os.path.join(w, key + '.res.json')))
     msl = os.path.join(w, key + '.metal'); air = msl[:-6] + '.air'; lib = os.path.join(out, key + '_b.metallib')
@@ -433,6 +463,10 @@ def finish(key, w, j, c1):
     if r.returncode: return 'MSL failed', r.stderr.strip()[:160], None
     src, iq = img_size_queries(open(msl).read())
     if iq: open(msl, 'w').write(src); res['notes'].append('image size queries moved to the image argument: ' + ' '.join(iq))
+    pad = []
+    if j['stage'] == 'vs' and j.get('pad_want'):   # outputs the paired pixel shaders read but this one does not write get (0, 0, 0, 1) (see vs_pad)
+        src, pad = vs_pad(src, j['pad_want'])
+        if pad: open(msl, 'w').write(src); res['notes'].append('outputs padded for the paired pixel shaders: locations ' + ' '.join(map(str, pad)))
     vi_locs = []
     if j['stage'] == 'vs':   # the variant goes into the compiled source only; everything below analyzes the original (src)
         vsrc, vi_locs = vi_variant(src)
@@ -458,7 +492,7 @@ def finish(key, w, j, c1):
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'c2': C2, 'depth_mode': DEPTH, 'notes': res['notes'], 'drv_reads': dr, 'drv_unfillable': unfillable(dr),
             'bindings': reflect(key, j['stage'], src, res),
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
-            'raster': raster_facts(j['stage'], src)}
+            'raster': raster_facts(j['stage'], src), 'vs_pad': pad}
     if vi_locs: refl['vi_entry'] = 'main0_vi'; refl['vi_int'] = vi_locs
     write_refl(key, refl)
     fetch_finish(key, src, refl)
@@ -470,35 +504,43 @@ os.makedirs(out, exist_ok=True)
 w = tempfile.mkdtemp(prefix='dmsh_', dir=os.environ.get('WORK'))
 jobs, c1s = {}, {}
 digests, rule_fps, cache_reasons, cache_hits = {}, {}, {}, set()
-for key in keys:
-    if key not in CAP_RECS: sys.exit(f'[red] {key} is not in the capture directory {cap_dir}')
-    rec = CAP_RECS[key]
-    digests[key] = shader_key(key, 'capture', rec)
-    rule_fps[key] = hashlib.sha256(shader_rule_source('capture')).hexdigest()
-    hit, cache_reasons[key] = cache_lookup(key, digests[key], rule_fps[key], CODE_FP)
-    if hit: cache_hits.add(key)
-    else: jobs[key], c1s[key] = job_for(key, rec, w)
-misses = [key for key in keys if key not in cache_hits]
-chunks = [misses[i::NJ] for i in range(NJ)]
-def xl(ch):
-    jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
-    return subprocess.run([XLATE, jp, w], capture_output=True, text=True)
-with cf.ThreadPoolExecutor(NJ) as ex: xr = list(ex.map(xl, [c for c in chunks if c]))
 xerr = {}
-for r in xr:
-    for ln in r.stderr.splitlines():
-        m = re.match(r'\[red\] (\w+): (.*)', ln)
-        if m: xerr[m.group(1)] = m.group(2)[:160]
-def fin(key):
-    if key in cache_hits:
-        refl = json.load(open(os.path.join(out, key + '_b.json')))
-        src = open(os.path.join(out, key + '_b.metal')).read() if refl['stage'] == 'ps' else ''
-        return key, 'ok', '', fetch_finish(key, src, refl)
-    if key in xerr or not os.path.exists(os.path.join(w, key + '.spv')): return key, 'translation failed', xerr.get(key, 'no spv'), None
-    result = (key,) + finish(key, w, jobs[key], c1s[key])
-    if result[1] == 'ok': publish_cache(key, digests[key], rule_fps[key], CODE_FP)
-    return result
-with cf.ThreadPoolExecutor(NJ) as ex: res = list(ex.map(fin, keys))
+def wave(wkeys):
+    """Look up, translate and finish one set of keys. Vertex shaders go in a second wave, after the pixel shaders they are padded for (vs_pad)
+    have their MSL; the padded locations are part of their cache key"""
+    for key in wkeys:
+        if key not in CAP_RECS: sys.exit(f'[red] {key} is not in the capture directory {cap_dir}')
+        rec = CAP_RECS[key]
+        pw = vs_pad_locs(key) if stage_of[key] == 'vs' else []
+        digests[key] = shader_key(key, 'capture', rec) if not pw else hashlib.sha256((shader_key(key, 'capture', rec) + '\0pad\0' + ' '.join(map(str, pw))).encode()).hexdigest()
+        rule_fps[key] = hashlib.sha256(shader_rule_source('capture')).hexdigest()
+        hit, cache_reasons[key] = cache_lookup(key, digests[key], rule_fps[key], CODE_FP)
+        if hit: cache_hits.add(key)
+        else:
+            jobs[key], c1s[key] = job_for(key, rec, w)
+            if pw: jobs[key]['pad_want'] = pw
+    misses = [key for key in wkeys if key not in cache_hits]
+    chunks = [misses[i::NJ] for i in range(NJ)]
+    def xl(ch):
+        jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([{k_: v for k_, v in jobs[k].items() if k_ != 'pad_want'} for k in ch], open(jp, 'w'))
+        return subprocess.run([XLATE, jp, w], capture_output=True, text=True)
+    with cf.ThreadPoolExecutor(NJ) as ex: xr = list(ex.map(xl, [c for c in chunks if c]))
+    for r in xr:
+        for ln in r.stderr.splitlines():
+            m = re.match(r'\[red\] (\w+): (.*)', ln)
+            if m: xerr[m.group(1)] = m.group(2)[:160]
+    def fin(key):
+        if key in cache_hits:
+            refl = json.load(open(os.path.join(out, key + '_b.json')))
+            src = open(os.path.join(out, key + '_b.metal')).read() if refl['stage'] == 'ps' else ''
+            return key, 'ok', '', fetch_finish(key, src, refl)
+        if key in xerr or not os.path.exists(os.path.join(w, key + '.spv')): return key, 'translation failed', xerr.get(key, 'no spv'), None
+        result = (key,) + finish(key, w, jobs[key], c1s[key])
+        if result[1] == 'ok': publish_cache(key, digests[key], rule_fps[key], CODE_FP)
+        return result
+    with cf.ThreadPoolExecutor(NJ) as ex: return list(ex.map(fin, wkeys))
+res = wave([k for k in keys if stage_of[k] != 'vs']) + wave([k for k in keys if stage_of[k] == 'vs'])
+print(f'vertex shaders padded for their pixel shaders: {sum(1 for r in res if r[1] == "ok" and r[3] and r[3].get("vs_pad"))} (pairs file: {sum(len(v) for v in PAIRS.values())} pairs)')
 shutil.rmtree(w, ignore_errors=True)
 st = collections.Counter(r[1] for r in res)
 print(f'shaders {len(res)}: ok {st["ok"]}' + ''.join(f', {k} {v}' for k, v in st.items() if k != 'ok'))

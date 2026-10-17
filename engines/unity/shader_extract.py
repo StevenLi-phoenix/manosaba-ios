@@ -34,7 +34,7 @@ def add(ctl, code, nvn_stage, where, kws=''):
     if {'vs': 0, 'ps': 1, 'cs': 5}.get(st) != nvn_stage:
         if nvn_stage in (0, 1, 5): sys.exit(f'[red] {where}: header stage {nvn_stage}, but the code area says {st}')
         skipped[f'stage {nvn_stage} ({st})'] += 1; return
-    key = hashlib.sha256(ctl).hexdigest()[:16]
+    key = hashlib.sha256(ctl + code).hexdigest()[:16]   # control section + code area, as the host's shader_key (hle_nvn.c)
     if key in recs and recs[key][2] != code: sys.exit(f'[red] {where}: key {key} already has a different code area')
     recs[key] = (st, ctl, code); src[key].append(f'{where}\t{nvn_stage}\t{kws}')
 

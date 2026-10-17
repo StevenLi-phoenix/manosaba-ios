@@ -191,7 +191,7 @@ int main(void) {
     EXPECT("event value: h1(7,+5), h2 copies then runs h1(7,+5) again = 12", 12, P(nvnEventGetValue)(&ev));
     EXPECT("buffer copy 64 B all equal", 0, memcmp(src, dst, 64));
     uint64_t ts[2]; memcpy(ts, cnt, 16);
-    EXPECT("counter timestamp written (non-zero)", 1, ts[0] != 0 && ts[0] == ts[1]);
+    EXPECT("TIMESTAMP report: counter half 0, timestamp half non-zero (NVN: the counter value is always zero)", 1, ts[0] == 0 && ts[1] != 0);
 
     // 5b. Sync must hold the CPU back: first queue 24 copies of 64 MiB to keep the GPU busy, with the last one copying src to dst;
     //     the CPU rewrites src only after the fence wait returns. If the wait is released early, that last copy reads the rewritten src.
@@ -384,6 +384,47 @@ int main(void) {
         P(nvnMemoryPoolFinalize)(&wp);
     }
 
+    // 6c2. Conditional rendering: SetRenderEnableConditional compares the 64-bit values at counters and counters + 16; a TIMESTAMP_TOP report writes 0 into
+    //      the counter half. Tears of the Kingdom clears its lighting buffers once per frame that way: conditional (not equal) clear, report into the same
+    //      counters, and the next conditional clear of the frame is skipped. Then a RENDER_IF_EQUAL clear on equal values, and SetRenderEnable(false)
+    {
+        static uint8_t cm[256 << 10] __attribute__((aligned(16384)));
+        NVNmemoryPoolBuilder cpb2; NVNmemoryPool cp2; P(nvnMemoryPoolBuilderSetDefaults)(&cpb2); P(nvnMemoryPoolBuilderSetStorage)(&cpb2, cm, sizeof cm);
+        P(nvnMemoryPoolInitialize)(&cp2, &cpb2);
+        uint64_t *X = (uint64_t *)(cm + 0x8000), *Y = (uint64_t *)(cm + 0x8100); X[0] = 1; X[1] = 0; X[2] = 0; X[3] = 0; Y[0] = 5; Y[1] = 0; Y[2] = 5; Y[3] = 0;
+        NVNtextureBuilder b; NVNtexture tc, td; P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b);
+        P(nvnTextureBuilderSetWidth)(&b, 8); P(nvnTextureBuilderSetHeight)(&b, 4); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8);
+        P(nvnTextureBuilderSetStorage)(&b, &cp2, 0); P(nvnTextureInitialize)(&tc, &b);
+        P(nvnTextureBuilderSetStorage)(&b, &cp2, 0x4000); P(nvnTextureInitialize)(&td, &b);
+        const float red[4] = {1, 0, 0, 1}, green[4] = {0, 1, 0, 1}, blue[4] = {0, 0, 1, 1}, white[4] = {1, 1, 1, 1};
+        const NVNtexture *rt1[1] = {&tc}, *rt2[1] = {&td};
+        P(nvnCommandBufferBeginRecording)(&cb);
+        P(nvnCommandBufferSetRenderTargets)(&cb, 1, rt1, NULL, NULL, NULL);
+        P(nvnCommandBufferSetRenderEnableConditional)(&cb, NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_NOT_EQUAL, (NVNbufferAddress)X);
+        P(nvnCommandBufferClearColor)(&cb, 0, red, NVN_CLEAR_COLOR_MASK_RGBA);                     // X[0] 1 ≠ X[2] 0: cleared
+        P(nvnCommandBufferReportCounter)(&cb, NVN_COUNTER_TYPE_TIMESTAMP_TOP, (NVNbufferAddress)X);
+        P(nvnCommandBufferSetRenderEnable)(&cb, 1);
+        P(nvnCommandBufferSetRenderEnableConditional)(&cb, NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_NOT_EQUAL, (NVNbufferAddress)X);
+        P(nvnCommandBufferClearColor)(&cb, 0, green, NVN_CLEAR_COLOR_MASK_RGBA);                   // X[0] 0 = X[2] 0: skipped
+        P(nvnCommandBufferReportCounter)(&cb, NVN_COUNTER_TYPE_TIMESTAMP_TOP, (NVNbufferAddress)X);
+        P(nvnCommandBufferSetRenderEnable)(&cb, 1);
+        P(nvnCommandBufferSetRenderTargets)(&cb, 1, rt2, NULL, NULL, NULL);
+        P(nvnCommandBufferSetRenderEnableConditional)(&cb, NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_EQUAL, (NVNbufferAddress)Y);
+        P(nvnCommandBufferClearColor)(&cb, 0, blue, NVN_CLEAR_COLOR_MASK_RGBA);                    // Y[0] 5 = Y[2] 5: cleared
+        P(nvnCommandBufferSetRenderEnable)(&cb, 0);
+        P(nvnCommandBufferClearColor)(&cb, 0, white, NVN_CLEAR_COLOR_MASK_RGBA);                   // rendering off: discarded
+        P(nvnCommandBufferSetRenderEnable)(&cb, 1);
+        NVNcommandHandle hc = P(nvnCommandBufferEndRecording)(&cb);
+        P(nvnQueueSubmitCommands)(&q, 1, &hc); P(nvnQueueFinish)(&q);
+        NVNcopyRegion all = {0, 0, 0, 8, 4, 1}; uint8_t g1[8 * 4 * 4], g2[8 * 4 * 4];
+        P(nvnTextureReadTexels)(&tc, NULL, &all, g1); P(nvnTextureReadTexels)(&td, NULL, &all, g2);
+        int bad1 = 0, bad2 = 0; for (int i = 0; i < 32; i++) { bad1 += g1[i * 4] != 255 || g1[i * 4 + 1] != 0 || g1[i * 4 + 2] != 0; bad2 += g2[i * 4] != 0 || g2[i * 4 + 1] != 0 || g2[i * 4 + 2] != 255; }
+        EXPECT("conditional clear once: the first (not equal) clear ran, the second was skipped (red)", 0, bad1);
+        EXPECT("RENDER_IF_EQUAL on equal values cleared, the clear with rendering off was discarded (blue)", 0, bad2);
+        EXPECT("TIMESTAMP_TOP report wrote 0 into the counter half", 0, (long long)X[0]);
+        P(nvnTextureFinalize)(&tc); P(nvnTextureFinalize)(&td); P(nvnMemoryPoolFinalize)(&cp2);
+    }
+
     // 6d. Lifecycle: in-flight GPU work is 0 when suspend returns; submits are blocked during suspend and let through after resume
     {
         size_t big = 64u << 20; uint8_t *heap; posix_memalign((void **)&heap, 16384, 2 * big); memset(heap, 0, 2 * big);
@@ -445,6 +486,29 @@ int main(void) {
         P(nvnWindowAcquireTexture)(&w3, NULL, &ix);
         EXPECT("acquire gets texture 0", 0, ix);
         mtl_present_test_stall(0); mtl_present_flush();
+    }
+
+    // 6b. Shader key = sha256(0x880-byte control section + code area of the length at control +0x704)[:8]: a shader with the same control
+    //     section and other code gets another key (Tears of the Kingdom's bloom upsampler shared its control section with another shader and ran
+    //     that one's code); bytes after the code area do not count
+    {
+        static uint8_t ctl[0x880], code_a[0x300], code_b[0x300], code_c[0x300];
+        ctl[0] = 0x34; ctl[1] = 0x12; ctl[2] = 0x76; ctl[3] = 0x98; uint32_t len = 0x200; memcpy(ctl + 0x704, &len, 4);
+        for (int i = 0; i < 0x300; i++) code_a[i] = (uint8_t)(i * 7);
+        uint32_t magic = 0x12345678, sph = 2 | 5u << 10; memcpy(code_a, &magic, 4); memcpy(code_a + 0x30, &sph, 4);   // graphics code area, pixel shader
+        memcpy(code_b, code_a, sizeof code_b); code_b[0x100] ^= 1;   // differs inside the code area
+        memcpy(code_c, code_a, sizeof code_c); code_c[0x250] ^= 1;   // differs only after it
+        NVNprogram pa, pb, pc;
+        NVNshaderData sa = {(NVNbufferAddress)(uintptr_t)code_a, ctl}, sb = {(NVNbufferAddress)(uintptr_t)code_b, ctl}, sc = {(NVNbufferAddress)(uintptr_t)code_c, ctl};
+        P(nvnProgramInitialize)(&pa, &dev); P(nvnProgramInitialize)(&pb, &dev); P(nvnProgramInitialize)(&pc, &dev);
+        EXPECT("SetShaders accepted", 3, P(nvnProgramSetShaders)(&pa, 1, &sa) + P(nvnProgramSetShaders)(&pb, 1, &sb) + P(nvnProgramSetShaders)(&pc, 1, &sc));
+        const prog_t *a = (const prog_t *)&pa, *b = (const prog_t *)&pb, *c = (const prog_t *)&pc;
+        uint8_t want[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX h; CC_SHA256_Init(&h); CC_SHA256_Update(&h, ctl, 0x880); CC_SHA256_Update(&h, code_a, 0x200); CC_SHA256_Final(want, &h);
+        EXPECT("shader key = sha256(control + code area)[:8]", 0, memcmp(a->key[0], want, 8));
+        EXPECT("same control section, other code: other key", 1, memcmp(a->key[0], b->key[0], 8) != 0);
+        EXPECT("bytes after the code area do not count", 0, memcmp(a->key[0], c->key[0], 8));
+        EXPECT("stage read from the code area: pixel", 1, a->kstage[0]);
+        P(nvnProgramFinalize)(&pa); P(nvnProgramFinalize)(&pb); P(nvnProgramFinalize)(&pc);
     }
 
     // 7. Unimplemented functions: return 0, report a failure, report only once
