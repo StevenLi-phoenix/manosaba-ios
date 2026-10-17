@@ -117,6 +117,28 @@ void crash_set_dump_hook(void (*fn)(void)) { g_dump_hook = fn; }
 void crash_set_wait_dump(void (*fn)(void)) { g_wait_dump = fn; }
 // Dump the current state on demand (without exiting): the iOS app has no no-progress watchdog, so when the smoke test fails it sends dump through DM_LOG_PORT to trigger this -- what each guest thread is waiting on + the graphics-side wait points, the same thing the watchdog prints
 void crash_dump_now(const char *why) { fprintf(stderr, "[dm] state dump (%s): tick %u / stage %s\n", why, atomic_load(&g_watch_tick), g_watch_stage[atomic_load(&g_watch_stage_idx)]); if (g_dump_hook) g_dump_hook(); if (g_wait_dump) g_wait_dump(); }
+// DM_CRASH_MEM=reg[+-off]:len[,...] (diagnostics): on a crash, also print guest memory at a register plus an offset, e.g. "x27-0x28:0x80,sp+0x130:0x40"
+// (reg = x0..x30 or sp; len in bytes, up to 0x400). Unreadable addresses are reported as such (read through vm_read, no second fault).
+static void crash_mem(ucontext_t *uc) {
+    const char *e = getenv("DM_CRASH_MEM"); if (!e) return;
+    char spec[512]; strlcpy(spec, e, sizeof spec);
+    for (char *save, *t = strtok_r(spec, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+        char *end; uint64_t base; int r;
+        if (t[0] == 's' && t[1] == 'p') { base = uc->uc_mcontext->__ss.__sp; end = t + 2; }
+        else if (t[0] == 'x' && (r = (int)strtol(t + 1, &end, 10)) >= 0 && r <= 30 && end != t + 1)
+            base = r == 29 ? uc->uc_mcontext->__ss.__fp : r == 30 ? uc->uc_mcontext->__ss.__lr : uc->uc_mcontext->__ss.__x[r];
+        else { fprintf(stderr, "[dm] DM_CRASH_MEM: cannot parse \"%s\"\n", t); continue; }
+        int64_t off = 0; if (*end == '+' || *end == '-') off = strtoll(end, &end, 0);
+        size_t len = *end == ':' ? strtoul(end + 1, 0, 0) : 0x40; if (len > 0x400) len = 0x400;
+        uint64_t a = base + (uint64_t)off; uint8_t b[0x400]; vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), a, len, (vm_address_t)b, &got) || got != len) { fprintf(stderr, "[dm] mem %s = %#llx: not readable\n", t, a); continue; }
+        for (size_t k = 0; k < len; k += 32) {
+            fprintf(stderr, "[dm] mem %s %#llx:", k ? "" : t, a + k);
+            for (size_t j = k; j < k + 32 && j < len; j += 8) { uint64_t v = 0; memcpy(&v, b + j, 8 <= len - j ? 8 : len - j); fprintf(stderr, " %016llx", v); }
+            fputc('\n', stderr);
+        }
+    }
+}
 static void on_crash(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = uc_;
     if (sig == SIGTRAP && g_trap_hook && g_trap_hook(uc)) return;
@@ -144,6 +166,7 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     fprintf(stderr, " sp=%#llx\n", uc->uc_mcontext->__ss.__sp);
     for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
+    crash_mem(uc);
     dm_backtrace(uc->uc_mcontext->__ss.__fp);
     mtl_crash_note();   // the graphics layer's last copy handed to the driver (plain values recorded beforehand; no Objective-C here)
     if (g_dump_hook) g_dump_hook();

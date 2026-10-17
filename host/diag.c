@@ -52,7 +52,122 @@ static void probe_dump_once(void) {
     fwrite(m->base + strtoull(o, 0, 16), 1, strtoull(n, 0, 16), fp); fclose(fp);
     LOG("probe dump %s+%s, %s bytes -> %s", mod, o, n, path);
 }
+// ---------- Write watchpoint DM_WATCHPOINT=[heap+]addr:len (Mac development only) ----------
+// One hardware watchpoint on stores to [addr, addr+len) on every thread of the process: guest threads arm themselves at start (wp_thread_start),
+// a 20 ms scan arms all other threads (host, GCD, Metal callbacks). len is 1..8 bytes within one 8-byte word, or a power of two from 16 up with
+// addr aligned to it. "heap+" makes addr relative to the guest heap (its offsets repeat from run to run, absolute addresses do not).
+// A hit steps over the store with a hardware breakpoint at pc+4 (a store always continues there) and then prints the store's pc, the thread, the
+// word before and after, and a backtrace; the watchpoint is armed again at that breakpoint. A failed exclusive store (status != 0) leaves the thread
+// unarmed until the next scan: taking the exception clears the exclusive monitor, so a watchpoint armed again at once would fail every retry.
+// Up to DM_WATCHPOINT_MAX hits (default 400) are printed, plus the first 3 of each new pc after that. Kernel writes (read() into guest memory) are not seen.
+// Bit layout of DBGWCR / DBGBCR and what a user process may set: XNU osfmk/arm64/status.c (ARM_DEBUG_STATE64) and osfmk/arm64/proc_reg.h.
+const char *thr_cur_name(char *nb, size_t n);
+void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n);
+#define WP_SLOTS 1024
+static struct { _Atomic mach_port_t port; _Atomic int state; int seen; uint64_t pc, far, before; } g_wpt[WP_SLOTS];   // state: 1 armed, 2 stepping, 3 rearm at the next scan
+static uint64_t g_wp_addr, g_wp_wcr, g_wp_lo, g_wp_hi; static int g_wp_on, g_wp_max = 400;
+static _Atomic unsigned g_wp_hits, g_wp_rearm;
+static struct { _Atomic uint64_t pc; _Atomic unsigned n; } g_wp_pcs[256];
+static int wp_set(thread_t th, uint64_t bp) {   // bp = 0: the watchpoint; else a breakpoint at bp instead
+    arm_debug_state64_t st; memset(&st, 0, sizeof st);
+    if (!bp) { st.__wvr[0] = g_wp_addr; st.__wcr[0] = g_wp_wcr; }
+    else { st.__bvr[0] = bp; st.__bcr[0] = (0xFu << 5) | (2u << 1) | 1; }   // BAS 0b1111 (one A64 instruction), EL0, enabled
+    return thread_set_state(th, ARM_DEBUG_STATE64, (thread_state_t)&st, ARM_DEBUG_STATE64_COUNT);
+}
+static int wp_off(thread_t th) { arm_debug_state64_t st; memset(&st, 0, sizeof st); return thread_set_state(th, ARM_DEBUG_STATE64, (thread_state_t)&st, ARM_DEBUG_STATE64_COUNT); }
+static int wp_slot(mach_port_t p, int claim) {
+    for (int i = 0; i < WP_SLOTS; i++) if (atomic_load(&g_wpt[i].port) == p) return i;
+    if (claim) for (int i = 0; i < WP_SLOTS; i++) { mach_port_t z = 0; if (atomic_compare_exchange_strong(&g_wpt[i].port, &z, p)) return i; }
+    return -1;
+}
+static int wp_is_stx(uint32_t w) { return (w & 0x3FC00000) == 0x08000000; }   // STXR / STLXR / STXP / STLXP (bits 29:24 = 001000, o2 = 0, L = 0); Ws = bits 20:16
+static uint64_t wp_word(uint64_t a) { uint64_t v = 0; vm_size_t got = 0; vm_read_overwrite(mach_task_self(), a & ~7ull, 8, (vm_address_t)&v, &got); return v; }
+static int wp_trap(ucontext_t *uc) {
+    if (!g_wp_on) return 0;
+    uint64_t pc = uc->uc_mcontext->__ss.__pc; unsigned ec = (unsigned)(uc->uc_mcontext->__es.__esr >> 26) & 0x3f;
+    mach_port_t me = pthread_mach_thread_np(pthread_self()); int s = wp_slot(me, 1); if (s < 0) return 0;
+    if (ec == 0x34) {   // watchpoint from EL0 (ESR_EC_WATCHPT_MATCH_EL0): pc is the store, not executed yet
+        uint64_t far = uc->uc_mcontext->__es.__far;
+        g_wpt[s].pc = pc; g_wpt[s].far = far; g_wpt[s].before = wp_word(far);
+        atomic_store(&g_wpt[s].state, 2); wp_set(me, pc + 4);
+        return 1;
+    }
+    if (ec == 0x30 && atomic_load(&g_wpt[s].state) == 2 && pc == g_wpt[s].pc + 4) {   // breakpoint from EL0 (ESR_EC_BKPT_REG_MATCH_EL0) after the store
+        uint32_t w = *(const uint32_t *)g_wpt[s].pc;
+        if (wp_is_stx(w) && (uint32_t)uc->uc_mcontext->__ss.__x[(w >> 16) & 31]) { wp_off(me); atomic_store(&g_wpt[s].state, 3); atomic_fetch_add(&g_wp_rearm, 1); return 1; }
+        atomic_store(&g_wpt[s].state, 1); wp_set(me, 0);
+        unsigned n = atomic_fetch_add(&g_wp_hits, 1) + 1; int show = (int)n <= g_wp_max;
+        if (!show) for (int i = 0; i < 256; i++) {
+            uint64_t z = 0, p = atomic_load(&g_wp_pcs[i].pc);
+            if (p == g_wpt[s].pc) { show = atomic_fetch_add(&g_wp_pcs[i].n, 1) < 3; break; }
+            if (!p && atomic_compare_exchange_strong(&g_wp_pcs[i].pc, &z, g_wpt[s].pc)) { atomic_store(&g_wp_pcs[i].n, 1); show = 1; break; }
+        }
+        if (show) {
+            char nb[64]; const char *tn = thr_cur_name(nb, sizeof nb);
+            uint64_t far = g_wpt[s].far; module_t *m = module_of((void *)g_wpt[s].pc); Dl_info di;
+            fprintf(stderr, "[dm] WATCH #%u [%.4fs] thread %s%s%s port %#x store ", n, (now_ns() - g_t0_ns) / 1e9, tn ? "\"" : "", tn ? tn : "host", tn ? "\"" : "", me);
+            if (m) fprintf(stderr, "%s+%#llx", m->name, g_wpt[s].pc - (uint64_t)m->base);
+            else if (dladdr((void *)g_wpt[s].pc, &di) && di.dli_sname) fprintf(stderr, "%s+%#lx", di.dli_sname, (unsigned long)(g_wpt[s].pc - (uint64_t)di.dli_saddr));
+            else fprintf(stderr, "%#llx", g_wpt[s].pc);
+            fprintf(stderr, " (%08x) at %#llx (+%#llx) word %016llx -> %016llx\n", w, far, far - g_wp_lo, g_wpt[s].before, wp_word(far));
+            dm_backtrace(uc->uc_mcontext->__ss.__fp);
+        }
+        return 1;
+    }
+    return 0;
+}
+static void *wp_scan(void *arg) {
+    (void)arg;
+    for (;;) {
+        thread_act_array_t th; mach_msg_type_number_t n = 0;
+        if (task_threads(mach_task_self(), &th, &n) == KERN_SUCCESS) {
+            for (int i = 0; i < WP_SLOTS; i++) g_wpt[i].seen = 0;
+            for (mach_msg_type_number_t k = 0; k < n; k++) {
+                int s = wp_slot(th[k], 0);
+                if (s < 0) { s = wp_slot(th[k], 1); if (s >= 0) { int z = 0; if (atomic_compare_exchange_strong(&g_wpt[s].state, &z, 1)) wp_set(th[k], 0); } }
+                else { int r = 3; if (atomic_compare_exchange_strong(&g_wpt[s].state, &r, 1)) wp_set(th[k], 0); }
+                if (s >= 0) g_wpt[s].seen = 1;
+                mach_port_deallocate(mach_task_self(), th[k]);
+            }
+            vm_deallocate(mach_task_self(), (vm_address_t)th, n * sizeof *th);
+            for (int i = 0; i < WP_SLOTS; i++)   // a thread that is gone: free its slot (its port name may come back for a new thread)
+                if (atomic_load(&g_wpt[i].port) && !g_wpt[i].seen && atomic_load(&g_wpt[i].state) != 2) { atomic_store(&g_wpt[i].state, 0); atomic_store(&g_wpt[i].port, 0); }
+        }
+        usleep(20000);
+    }
+    return NULL;
+}
+// Called by every guest thread when it starts (hle_thread.c): arm before its first guest instruction instead of at the next scan
+void wp_thread_start(void) {
+    if (!g_wp_on) return;
+    mach_port_t me = pthread_mach_thread_np(pthread_self()); int s = wp_slot(me, 1); int z = 0;
+    if (s >= 0 && atomic_compare_exchange_strong(&g_wpt[s].state, &z, 1)) wp_set(me, 0);
+}
+static const char *g_wp_spec;
+static int wp_parse(void) {   // 0 = the guest heap is not reserved yet
+    uint64_t base = 0; const char *q = g_wp_spec;
+    if (!strncmp(q, "heap+", 5)) { uint8_t *a, *st, *h; size_t an, sn, hn; svc_guest_layout(&a, &an, &st, &sn, &h, &hn); if (!h) return 0; base = (uint64_t)h; q += 5; }
+    char *end; uint64_t addr = base + strtoull(q, &end, 0), len = *end == ':' ? strtoull(end + 1, 0, 0) : 8;
+    if (len >= 1 && len <= 8 && (addr & 7) + len <= 8) g_wp_wcr = (((1ull << len) - 1) << (addr & 7)) << 5, g_wp_addr = addr & ~7ull;
+    else if (len >= 16 && !(len & (len - 1)) && !(addr & (len - 1)) && len <= 0x80000000ull) g_wp_wcr = ((uint64_t)__builtin_ctzll(len) << 24) | (0xFFull << 5), g_wp_addr = addr;
+    else die("DM_WATCHPOINT: len must be 1..8 bytes inside one 8-byte word, or a power of two >= 16 with the address aligned to it");
+    g_wp_wcr |= (2u << 3) | (2u << 1) | 1;   // stores, EL0, enabled
+    g_wp_lo = addr; g_wp_hi = addr + len;
+    LOG("watchpoint: stores to %#llx..%#llx (DBGWVR %#llx DBGWCR %#llx), all threads", g_wp_lo, g_wp_hi, g_wp_addr, g_wp_wcr);
+    return 1;
+}
+static void *wp_start(void *arg) {   // a heap-relative address waits for the guest heap (reserved at the first memory system call)
+    while (!wp_parse()) usleep(2000);
+    g_wp_on = 1;
+    return wp_scan(arg);
+}
+static void wp_install(void) {
+    if (!(g_wp_spec = getenv("DM_WATCHPOINT"))) return;
+    const char *mx = getenv("DM_WATCHPOINT_MAX"); if (mx) g_wp_max = atoi(mx);
+    pthread_t pt; pthread_create(&pt, NULL, wp_start, NULL); pthread_detach(pt);
+}
 static int probe_hit(ucontext_t *uc) {   // SIGTRAP hook of crash.c
+    if (wp_trap(uc)) return 1;
     uint64_t pc = uc->uc_mcontext->__ss.__pc;
     for (int i = 0; i < g_nprobe; i++) if (g_probe[i].at == pc) {
         probe_dump_once();
@@ -126,6 +241,7 @@ static void probe_add(module_t *m, uint64_t off, long dump, probe_fn fn) {
 void probe_install(void) {
 #if !TARGET_OS_IPHONE
     crash_set_trap_hook(probe_hit);
+    wp_install();
     const char *e = getenv("DM_PROBE");
     if (e) {
         char spec[512]; strlcpy(spec, e, sizeof spec);

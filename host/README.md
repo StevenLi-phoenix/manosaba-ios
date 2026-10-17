@@ -70,8 +70,8 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `app_mac.m` | Mac app form: prepares what the command line would set when packaged as an `.app` |
 | `gamepad.m` | Game controllers (GameController framework) → Switch controller input, shared by Mac and iOS |
 | `cloud.m`, `cloud.h`, `cloudsync.c` | iCloud save sync of the profile's `save_sync` files (Mac app and iOS; file-level core in `cloudsync.c`) |
-| `crash.c` | Crash handler: guest backtrace, thread dump, watchdog (`DM_WATCH`) |
-| `diag.c` | Diagnostics: probes (`DM_PROBE`, `DM_THROWLOG`), boot timeline (`DM_BOOTPROF`), guest sampling (`DM_SAMPLE`), perf record |
+| `crash.c` | Crash handler: guest backtrace, thread dump, watchdog (`DM_WATCH`), memory at registers on a crash (`DM_CRASH_MEM`) |
+| `diag.c` | Diagnostics: probes (`DM_PROBE`, `DM_THROWLOG`), store watchpoint on all threads (`DM_WATCHPOINT`), boot timeline (`DM_BOOTPROF`), guest sampling (`DM_SAMPLE`), perf record |
 | `memstat.m` | Memory accounting (`DM_MEMSTAT`), low-memory watch |
 | `dm.h` | Common header |
 

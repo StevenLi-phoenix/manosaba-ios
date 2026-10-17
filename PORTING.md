@@ -132,7 +132,9 @@ needs work for a new game:
   one cut to turn on touch input.
 - **Debugging**: `tools/fdis.py` / `symaddr.py` (disassembly with symbols), `DM_PROBE=module:offset` (Mac only: logs x0–x3, x8, x19–x23 and a
   backtrace when that instruction runs; probe function entries),
-  `DM_THROWLOG=1`, `DM_HLECOUNT=<file>`, the crash handler's guest backtrace. For IL2CPP games a metadata dump maps addresses to C# methods.
+  `DM_THROWLOG=1`, `DM_HLECOUNT=<file>`, the crash handler's guest backtrace, `DM_CRASH_MEM=x27-0x28:0x80,...` (memory at registers when it
+  crashes), `DM_WATCHPOINT=[heap+]addr:len` (Mac only: a hardware watchpoint on every thread that logs each store to the range with its pc and
+  backtrace; guest heap offsets repeat between runs). For IL2CPP games a metadata dump maps addresses to C# methods.
 
 Keep `make -C host/tests run`, `make -C gfx/tests run` and `verify/regress.sh` passing.
 

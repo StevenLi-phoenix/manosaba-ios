@@ -29,14 +29,20 @@
 #define R_OUT_OF_RES  0xCE01u   // 103
 #define R_BAD_ENUM    0xF001u   // 120 InvalidEnumValue
 #define R_BUSY        0xF401u   // 122 Busy
+#define R_BAD_CORE    0xE201u   // 113 InvalidCoreId
+#define R_BAD_COMBO   0xE801u   // 116 InvalidCombination
 #define WAITERS_BIT   0x40000000u
+// The process's ideal core and core mask: NPDM MainThreadCoreNumber and the ThreadInfo kernel capability (core 0, cores 0..2 in both manosaba 2.0.4b's
+// and TotK 1.4.3's main.npdm). The kernel gives the main thread an affinity of just its ideal core (KProcess::Run → InitializeUserThread)
+#define PROC_IDEAL_CORE 0
+#define PROC_CORE_MASK  7ull
 #define H_CUR_THREAD  0xFFFF8000u
 
 enum { O_FREE, O_THREAD, O_EVENT_R, O_EVENT_W };
 typedef struct event { int signaled; int refs; } event_t;
 typedef struct thr {
     uint32_t handle; uint64_t id;
-    uint64_t entry, arg, stack_top; int prio, core; uint64_t mask;
+    uint64_t entry, arg, stack_top; int prio, core, act; uint64_t mask;   // core = ideal core (-1 = don't care), act = the core it runs on, mask = affinity
     uint64_t born_ns, exit_ns;   // time of creation / exit (state dump: did a worker exit before the stall)
     int started, exited, cancel;
     pthread_t pt; pthread_cond_t cv;
@@ -270,6 +276,7 @@ static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads cha
     pthread_cond_destroy(&t->cv); free(t);
 }
 static const char *thr_name(thr_t *t, char *buf, size_t n);
+__attribute__((weak)) void wp_thread_start(void) {}   // diag.c (DM_WATCHPOINT, Mac) provides the real one; iOS and the unit tests link without it
 static void wake_sync_waiters(void);
 // Publish the exit: record the time, mark exited and wake synchronization waiters. Once G is released a waiter may close the handle and free t,
 // and the guest may unmap the guest stack, so the caller must neither touch t nor run on the guest stack afterwards
@@ -291,6 +298,7 @@ static void *thread_main(void *p) {
     t->mport = pthread_mach_thread_np(pthread_self());
     __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(t->tsd));
     crash_thread_init();
+    wp_thread_start();   // DM_WATCHPOINT (diag.c)
     guest_thread_init();
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); pthread_mutex_unlock(&G);
     // ExitThread lands here through siglongjmp, back on this host stack with the callee-saved registers restored; the abandoned guest frames need
@@ -321,7 +329,7 @@ uint32_t svc_thread_main_init(void) {
     pthread_key_create(&g_keythr, NULL);
     thr_t *t = calloc(1, sizeof *t);
     pthread_cond_init(&t->cv, NULL);
-    t->started = 1; t->prio = 44; t->core = 0; t->mask = 7; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt);
+    t->started = 1; t->prio = 44; t->core = t->act = PROC_IDEAL_CORE; t->mask = 1ull << PROC_IDEAL_CORE; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt);
     __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(t->tsd));
     pthread_mutex_lock(&G); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; t->all = g_all; g_all = t; pthread_mutex_unlock(&G);
     pthread_setspecific(g_keythr, t);
@@ -376,6 +384,8 @@ static const char *thr_name(thr_t *t, char *nb, size_t n) {   // SDK ThreadType+
         vm_read_overwrite(mach_task_self(), np, n - 1, (vm_address_t)nb, &got)) return "?";
     nb[got] = 0; return nb;
 }
+// Name of the calling guest thread (diagnostics, DM_WATCHPOINT); NULL on a host thread
+const char *thr_cur_name(char *nb, size_t n) { thr_t *t = pthread_getspecific(g_keythr); return t ? thr_name(t, nb, n) : NULL; }
 // All live guest threads (used by the sampler DM_SAMPLE=ms:*): fill the pthreads into out, return the count
 int thr_list(pthread_t *out, int max) {
     int n = 0;
@@ -469,7 +479,7 @@ void svc_thread_dump(void) {
         if (t->exited) snprintf(life, sizeof life, " exited %.1f s ago", (nowns - t->exit_ns) / 1e9);
         else if (!t->born_ns) snprintf(life, sizeof life, " since process start");
         else snprintf(life, sizeof life, " created %.1f s ago", (nowns - t->born_ns) / 1e9);
-        fprintf(stderr, "[dm] thread %#x \"%s\" priority %d core %d mask %#llx CPU %.2fs svc %llu %s%s%s waits:%s addr=%#llx%s last svc %#x lr=%s+%#llx\n", t->handle, nm, t->prio, t->core, (unsigned long long)t->mask,
+        fprintf(stderr, "[dm] thread %#x \"%s\" priority %d core %d (runs on %d) mask %#llx CPU %.2fs svc %llu %s%s%s waits:%s addr=%#llx%s last svc %#x lr=%s+%#llx\n", t->handle, nm, t->prio, t->core, t->act, (unsigned long long)t->mask,
                 cpu, t->nsvc, t->exited ? " exited" : "", t->started ? "" : " not started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
                 m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr);
         if (have_raw) { char hx[200]; int q = 0; for (int i = 0; i < 64; i += 4) q += snprintf(hx + q, sizeof hx - q, "%08x ", *(uint32_t *)(raw + i));
@@ -515,7 +525,9 @@ int svc_thread(int num, uint64_t *regs) {
         thr_t *t = calloc(1, sizeof *t);
         pthread_cond_init(&t->cv, NULL);
         t->entry = regs[1]; t->arg = regs[2]; t->stack_top = regs[3] & ~0xFull;
-        t->prio = (int)regs[4]; t->core = (int)regs[5]; t->mask = t->core >= 0 ? 1ull << t->core : 7;
+        int c = (int)regs[5] == -2 ? PROC_IDEAL_CORE : (int)regs[5];   // -2 = IdealCoreUseProcessValue
+        if (c < 0 || c >= 64 || !(PROC_CORE_MASK >> c & 1)) { pthread_cond_destroy(&t->cv); free(t); regs[0] = R_BAD_CORE; return 1; }
+        t->prio = (int)regs[4]; t->core = t->act = c; t->mask = 1ull << c;   // a new thread may run only on its ideal core (KThread::Initialize)
         t->born_ns = now_ns();
         pthread_mutex_lock(&G); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; t->all = g_all; g_all = t; pthread_mutex_unlock(&G);
         pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 1 << 20);
@@ -552,12 +564,24 @@ int svc_thread(int num, uint64_t *regs) {
     case 0x0D: { thr_t *t = h_get((uint32_t)regs[0], O_THREAD); if (t) t->prio = (int)regs[1]; regs[0] = t ? 0 : R_BAD_HANDLE; return 1; }
     case 0x0E: { thr_t *t = h_get((uint32_t)regs[2], O_THREAD);
                  regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? (uint64_t)(uint32_t)t->core : 0; regs[2] = t ? t->mask : 0; return 1; }
-    case 0x0F: {  // SetThreadCoreMask(w0, w1 ideal core, x2 mask): -1 = use the process default, -2/-3 = leave the ideal core unchanged; the host only keeps the bookkeeping
-        thr_t *t = h_get((uint32_t)regs[0], O_THREAD);
-        if (t) { int c = (int)regs[1]; if (c >= 0) t->core = c; else if (c == -1) t->core = 0; if (regs[2]) t->mask = regs[2]; }
-        regs[0] = t ? 0 : R_BAD_HANDLE; return 1;
+    case 0x0F: {  // SetThreadCoreMask(w0, w1 ideal core, x2 mask): -1 = don't care, -2 = the process's ideal core (mask = just it), -3 = keep the ideal core
+        // As the Horizon kernel (Atmosphere mesosphere svc SetThreadCoreMask + KThread::SetCoreMask): validate, then if the core the thread runs on
+        // leaves the mask it moves to the ideal core, or with no ideal core to the highest core of the mask. The host does not pin threads; it keeps
+        // this bookkeeping because GetCurrentProcessorNumber answers from it: TotK's job system picks a per-worker output block by the current core
+        // number (ModuleSystemWorker0..2, masks 1/2/4), and answering the ideal core 0 for all of them made three threads fill one block (main+0x7ad80)
+        thr_t *t = h_get((uint32_t)regs[0], O_THREAD); int c = (int)regs[1]; uint64_t m = regs[2]; uint32_t r = 0;
+        if (!t) r = R_BAD_HANDLE;
+        else if (c == -2) { c = PROC_IDEAL_CORE; m = 1ull << c; }
+        else if ((m | PROC_CORE_MASK) != PROC_CORE_MASK) r = R_BAD_CORE;
+        else if (!m) r = R_BAD_COMBO;
+        else if (c >= 0 && c < 4) { if (!(m >> c & 1)) r = R_BAD_COMBO; }   // a valid virtual core (0..3 on the Switch's four) must be in the mask
+        else if (c != -3 && c != -1) r = R_BAD_CORE;
+        if (!r && c == -3) { c = t->core; if (c < 0 || !(m >> c & 1)) r = R_BAD_COMBO; }
+        if (!r) { t->core = c; t->mask = m; if (!(m >> t->act & 1)) t->act = c >= 0 ? c : 63 - __builtin_clzll(m); }
+        if (g_flag.thr) LOG("SetThreadCoreMask h=%#x core %d mask %#llx -> %#x (ideal %d, runs on %d)", (unsigned)regs[0], (int)regs[1], (unsigned long long)regs[2], r, t ? t->core : 0, t ? t->act : 0);
+        regs[0] = r; return 1;
     }
-    case 0x10: regs[0] = (uint64_t)(uint32_t)cur()->core; return 1;
+    case 0x10: regs[0] = (uint64_t)(uint32_t)cur()->act; return 1;   // GetCurrentProcessorNumber: the core the thread runs on (in its mask), not the ideal core
     case 0x25: { thr_t *t = h_get((uint32_t)regs[1], O_THREAD); regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? t->id : 0; return 1; }
 
     case 0x1A: {  // ArbitrateLock(w0 owner handle, x1 address, w2 this thread's tag)
