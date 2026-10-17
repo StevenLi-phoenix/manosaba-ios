@@ -1,7 +1,8 @@
 // Original Switch shaders (Maxwell machine code) → SPIR-V (the Ryujinx.Graphics.Shader translator), for route B's offline metallib build.
 // Difference from Ryujinx.ShaderTools: the translator's "queries" are answered truthfully rather than always with defaults -
 //   texture type / image format / vertex attribute type / fragment output type / compute thread group size come from the job file (given by the PC reflection paired via the mapping table; same slot number = same resource);
-//   window origin upper-left, depth 0..1 (measured from the game: nvnDeviceSetWindowOriginMode / SetDepthMode).
+//   window origin upper-left (measured from the game: nvnDeviceSetWindowOriginMode); the depth convention comes with each job ("depth", game.json depth_mode):
+//   near_is_zero is Metal's own, near_is_minus_w (GL, Tears of the Kingdom) gets the translator's z' = z / 2 + w / 2 before every vertex return.
 // Usage: dmsh_xlate <job.json> <output dir>
 //   Job: [{ "key", "stage": "vs|ps|cs", "code": machine code file (graphics = 0x50-byte SPH + instructions, compute = instructions),
 //           "tex": { "slot": "2d|2darray|cube|cubearray|3d|buffer|1d|1darray|2dms|2dmsarray", ... }, "img": { "slot": { "type", "fmt" } },
@@ -19,16 +20,26 @@ using System.Text.Json.Nodes;
 
 static class SwshXlate
 {
-    const int TexBase = 0x168, SampBase = 0x568;   // byte base of NVN separate texture / sampler handles in c[2] (8 bytes per slot)
-    const int ImgBase = 0x120;   // byte base of NVN image handles in c[2] (8 slots × 8 bytes, right before the texture table; same as dmsh_build.py IMG_BASE)
+    // c[2] layout of the NVN driver the game's shaders were compiled for: byte base and slot count of the texture and image handle tables (8 bytes per
+    // slot). It differs between games (manosaba: textures 0x168, images 0x120; Tears of the Kingdom and the games nxnative ports: textures 0x20, images
+    // 0x120), so each job carries it ("c2": {"tex": [base, slots], "img": [base, slots]}, from game.json nvn_c2 through dmsh_build.py)
+    readonly record struct C2(int TexBase, int TexEnd, int ImgBase, int ImgEnd)
+    {
+        public static C2 Of(JsonObject job)
+        {
+            if (job["c2"] is not JsonObject c || c["tex"] is not JsonArray t || c["img"] is not JsonArray i || t.Count != 2 || i.Count != 2) throw new InvalidDataException("job has no c2 layout {\"tex\": [base, slots], \"img\": [base, slots]}");
+            return new C2((int)t[0], (int)t[0] + 8 * (int)t[1], (int)i[0], (int)i[0] + 8 * (int)i[1]);
+        }
+    }
 
     sealed class Accessor : IGpuAccessor
     {
         readonly byte[] _code; readonly JsonObject _job; int _binding = 1; public readonly List<string> Notes = new();
-        readonly byte[] _c1;
+        readonly byte[] _c1; readonly C2 _c2; readonly bool _nearMinusW;
         // Size queries on an image handle (TXQ immediate handle falling in c[2]'s image table): the instruction carries no dimension. Answered from the job's img table, then from the type of the image with the same handle in the previous translation pass (SUST / SULD carry the dimension)
         readonly Dictionary<int, SamplerType> _imgByWord; public bool ImgQueryDefaulted;
-        public Accessor(byte[] code, JsonObject job, Dictionary<int, SamplerType> imgByWord = null) { _code = code; _job = job; _imgByWord = imgByWord; _c1 = job["c1"] is JsonNode h ? Convert.FromHexString((string)h) : Array.Empty<byte>(); }
+        public Accessor(byte[] code, JsonObject job, Dictionary<int, SamplerType> imgByWord = null) { _code = code; _job = job; _imgByWord = imgByWord; _c1 = job["c1"] is JsonNode h ? Convert.FromHexString((string)h) : Array.Empty<byte>(); _c2 = C2.Of(job);
+            _nearMinusW = job["depth"] is JsonNode dm ? (string)dm switch { "near_is_minus_w" => true, "near_is_zero" => false, _ => throw new InvalidDataException($"job depth {(string)dm}: near_is_minus_w or near_is_zero") } : throw new InvalidDataException("job has no depth convention (near_is_minus_w / near_is_zero)"); }
         // c1 constant segment (the 0x100 bytes before the control segment in the shader package): the jump table of indirect jump BRX lives here (LDC c[1]); without it the translator cannot resolve jump targets and control flow goes wrong (particle shaders loop forever)
         public uint ConstantBuffer1Read(int offset) { if (offset >= 0 && offset + 4 <= _c1.Length) return BitConverter.ToUInt32(_c1, offset); Notes.Add($"c1 read out of range +{offset:X} (c1 length {_c1.Length})"); return 0; }
         // All resources go into set 0, each with a distinct binding number (spirv-cross emits them as one argument buffer); the translator's convention of giving the buffer of constant segment number index binding = index+1 is not relied on
@@ -46,13 +57,13 @@ static class SwshXlate
         {
             (int off0, _, _) = TextureHandle.UnpackOffsets(handle);
             int bytes = off0 * 4;
-            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= TexBase && bytes < SampBase && (bytes - TexBase) % 8 == 0 ? (bytes - TexBase) / 8 : -1;
+            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= _c2.TexBase && bytes < _c2.TexEnd && (bytes - _c2.TexBase) % 8 == 0 ? (bytes - _c2.TexBase) / 8 : -1;
         }
         int ImgSlot(int handle, int cbufSlot)
         {
             (int off0, _, _) = TextureHandle.UnpackOffsets(handle);
             int bytes = off0 * 4;
-            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= ImgBase && bytes < TexBase && (bytes - ImgBase) % 8 == 0 ? (bytes - ImgBase) / 8 : -1;
+            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= _c2.ImgBase && bytes < _c2.ImgEnd && (bytes - _c2.ImgBase) % 8 == 0 ? (bytes - _c2.ImgBase) / 8 : -1;
         }
         public SamplerType QuerySamplerType(int handle, int cbufSlot = -1)
         {
@@ -99,10 +110,12 @@ static class SwshXlate
             if (_job["attr"] is JsonObject a) foreach (var kv in a) attr[int.Parse(kv.Key)] = Attr((string)kv.Value);
             if (_job["fout"] is JsonObject f) foreach (var kv in f) fout[int.Parse(kv.Key)] = Attr((string)kv.Value);
             return new GpuGraphicsState(false, InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
-                false, false, false, false /* depth 0..1 */, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
+                false, false, false, _nearMinusW /* depth mode: GL convention */, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
                 false /* no Y flip */, true /* origin upper-left */, false);
         }
         public bool QueryHostSupportsTextureShadowLod() => true;
+        // Metal has no depth clip control: with the GL convention the translator remaps z itself (EmitterContext.PrepareForVertexReturn)
+        public bool QueryHostSupportsDepthClipControl() => !_nearMinusW;
         // Job reduced = true: relaxed precision - the translator marks NoContraction only on operations that must be exact (the default marks all: keeps the bit-exact results of Maxwell's separate rounding, at the cost of many optimization-disabled spvFMul etc. in the MSL)
         public bool QueryHostReducedPrecision() => _job["reduced"] is JsonNode n && (bool)n;
     }

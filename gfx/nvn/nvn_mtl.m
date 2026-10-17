@@ -584,7 +584,6 @@ static inline void enc_r_args(RENC e, MTLRenderStages s, uint64_t gpu, NSUIntege
 static inline void enc_r_vbuf(RENC e, NSUInteger i, uint64_t gpu) { (void)e; [g_vt setAddress:gpu atIndex:i]; }
 static inline void enc_r_args(RENC e, MTLRenderStages s, uint64_t gpu, NSUInteger i) { (void)e; [(s == MTLRenderStageVertex ? g_vt : g_ft) setAddress:gpu atIndex:i]; }
 #endif
-static inline void enc_r_draw(RENC e, MTLPrimitiveType p, NSUInteger v, NSUInteger n) { [e drawPrimitives:p vertexStart:v vertexCount:n]; }
 static inline void enc_r_draw_instanced(RENC e, MTLPrimitiveType p, NSUInteger v, NSUInteger n, NSUInteger i, NSUInteger b) { [e drawPrimitives:p vertexStart:v vertexCount:n instanceCount:i baseInstance:b]; }
 #if DM_NVN_M3
 static inline void enc_r_draw_indexed(RENC e, MTLPrimitiveType p, NSUInteger n, MTLIndexType t, uint64_t gpu, NSUInteger len, NSUInteger i, NSInteger bv, NSUInteger bi) { (void)len; if (!n) return; NSUInteger off; id<MTLBuffer> b = m3_buf(gpu, &off); if (!b) { { static int n_; if (!n_++) MLOG("[red] " "legacy API draw: index buffer address %#llx is not in any registered buffer", (unsigned long long)gpu); } return; } [e drawIndexedPrimitives:p indexCount:n indexType:t indexBuffer:b indexBufferOffset:off instanceCount:i baseVertex:bv baseInstance:bi]; }
@@ -1657,8 +1656,19 @@ static void rp_end(void) { if (g_enc) {
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
     sd_finish(); enc_r_end(g_enc); zskip_commit_clears(); g_enc = nil; g_rt_merged = 0; g_rt_range_active = g_rt_range_pending = 0; ts_after(); if (g_lp.count) lp_finish(); fz_end();
 } }
+// A compressed texture as a render target (Tears of the Kingdom, as nxnative found in Breath of the Wild: a BC4 texture written through an RGBA16UI
+// view, one texel = one 8-byte block, i.e. BC4 encoded on the GPU): Metal can neither attach a compressed format as a colour attachment nor make
+// compressed <-> uncompressed views (pipeline descriptor validation aborts the process). For now the attachment is left out with a red line (its
+// draws land nowhere); drawing it needs an uncompressed proxy with the same block size, copied into the compressed texture through a buffer after
+// the pass. (nxnative, seedds, MIT)
+static int mtl_fmt_block(MTLPixelFormat f) { return (f >= MTLPixelFormatBC1_RGBA && f <= MTLPixelFormatBC7_RGBAUnorm_sRGB) || (f >= MTLPixelFormatPVRTC_RGB_2BPP && f < MTLPixelFormatGBGR422); }
 // The format a colour attachment is actually attached with: the view's format if the view changes the format and it can be attached, otherwise the base texture's format (shared by attaching and pipeline prediction, so both agree). warn: log red when it cannot be attached
 static MTLPixelFormat rt_color_fmt(id<MTLTexture> base, const view_t *v, int has_v, int warn) {
+    if (base && mtl_fmt_block(base.pixelFormat)) {
+        if (warn) RED_ONCE(71, "render target is a compressed texture (Metal format %lu, %lux%lu, view format %#x): not attached, its draws land nowhere (first case)",
+                           (unsigned long)base.pixelFormat, (unsigned long)base.width, (unsigned long)base.height, has_v && v->set_format ? v->format : 0);
+        return MTLPixelFormatInvalid;
+    }
     if (!base || !has_v || !v->set_format) return base.pixelFormat;
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(v->format, &pf, swz) || !pf) return base.pixelFormat;
@@ -1672,6 +1682,7 @@ static MTLPixelFormat rt_color_fmt(id<MTLTexture> base, const view_t *v, int has
 // The view lives only until this submission completes (Metal 4 does not retain resources; the view shares storage with the base texture and is not made resident separately). Depth / stencil attachments do not change format
 static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const view_t *v, int has_v, int color) {
     id<MTLTexture> base = tex_mtl(t); a.texture = base;
+    if (color && base && mtl_fmt_block(base.pixelFormat)) { rt_color_fmt(base, v, has_v, 1); a.texture = nil; return; }   // see mtl_fmt_block
     if (has_v && v->set_levels) a.level = v->base_level;
     if (has_v && v->set_layers) { if (t->d.target == 2) a.depthPlane = v->min_layer; else a.slice = v->min_layer; }
     if (!color || !base) return;
@@ -1706,6 +1717,8 @@ static RENC rp_begin_ex(int clear_only) {
         any = 1;
         pd.colorAttachments[i].loadAction = R.clear_c[i] ? MTLLoadActionClear : MTLLoadActionLoad;
         pd.colorAttachments[i].clearColor = R.cc[i];
+        { static long long rtc = -2; if (rtc == -2) { const char *e = getenv("DM_NVN_RTCLEAR"); rtc = e ? atoll(e) : -1; }   // diagnostic: passes on this colour serial start cleared to magenta (does the attachment reach the texture?)
+          if (rtc >= 0 && R.rt.color[i]->serial == (uint64_t)rtc) { pd.colorAttachments[i].loadAction = MTLLoadActionClear; pd.colorAttachments[i].clearColor = MTLClearColorMake(1, 0, 1, 1); } }
         int cov = tbdr_on() && !R.clear_c[i] && (g_fd_dw || g_fd_di) && fz_load_covers(i, pd.colorAttachments[i].texture, pd.colorAttachments[i].level);
         if (!R.clear_c[i] && (g_fd_dw || g_fd_di) && !cov) PD("Q %llu c%d load not elidable why=%d", g_stat_pass + 1, i, g_fd_why);
         if (cov) {
@@ -2134,6 +2147,18 @@ static MTLTextureType ttype(int target, int fallback) {
 }
 // Out-of-pool texture ID = empty slot: the game itself uses GetSeparateTextureHandle(0xFFFFF) to get a handle and bind it to unused slots (measured call site main+0x1746820,
 // texture pool capacity 15256) and never registers that ID. Read 0 per D3D / empty-slot semantics (the same all-zero dummy textures as unbound), no failure; unregistered IDs inside the pool are still reported a failure
+// c[2] handle table layout of the game's shaders (game.json nvn_c2; hle_nvn.c sets it at nvnDeviceInitialize, the graphics unit tests keep manosaba's)
+static struct { int tex, ntex, samp, nsamp; } g_c2 = {0x168, 128, 0x568, 128};
+void mtl_set_c2_layout(int tex, int ntex, int samp, int nsamp) {
+    if (tex < 0 || samp < 0 || tex + 8 * ntex > 0xA00 || samp + 8 * nsamp > 0xA00) MDIE("c[2] layout tex %#x x %d / samp %#x x %d does not fit the 0xA00-byte bank", tex, ntex, samp, nsamp);
+    g_c2.tex = tex; g_c2.ntex = ntex; g_c2.samp = samp; g_c2.nsamp = nsamp;
+}
+int mtl_c2_tex_base(void) { return g_c2.tex; }
+// Depth convention the vertex shaders must have been built for (game.json depth_mode; 1 = near_is_zero, manosaba's, until hle_nvn.c sets it)
+static int g_depth_mode = 1;
+void mtl_set_depth_mode(int m) { g_depth_mode = m; }
+const char *mtl_depth_mode_name(void) { return g_depth_mode ? "near_is_zero" : "near_is_minus_w"; }
+int mtl_c2_samp_base(void) { return g_c2.samp; }
 static int g_tpool_n; static uint64_t g_stat_tex_oob;
 void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
 static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
@@ -2159,11 +2184,24 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
     id<MTLTexture> base = tex_mtl(&rp->t);
     if (!base) return nil;
     v = base;
-    int tswz = r.t.d.swz_set;   // Texture swizzle: build a view with swizzle (NVN and Metal swizzle enums have the same numeric values)
-    if ((r.has_v && (r.v.set_format || r.v.set_levels || r.v.set_layers || r.v.set_target)) || tswz) {
+    // Swizzle: the view's when it set one (it replaces the texture's, even as the identity), else the texture's; built as a view with swizzle (NVN and
+    // Metal swizzle enums have the same numeric values)
+    uint8_t esw[4] = {r.t.d.swz[0], r.t.d.swz[1], r.t.d.swz[2], r.t.d.swz[3]}; int tswz = r.t.d.swz_set;
+    if (r.has_v && r.v.set_swz) { esw[0] = r.v.swz_r; esw[1] = r.v.swz_g; esw[2] = r.v.swz_b; esw[3] = r.v.swz_a; tswz = !(esw[0] == 2 && esw[1] == 3 && esw[2] == 4 && esw[3] == 5); }
+    if ((r.has_v && (r.v.set_format || r.v.set_levels || r.v.set_layers || r.v.set_target || r.v.set_swz)) || tswz) {
         uint32_t pf = (uint32_t)base.pixelFormat; uint8_t swz[4];
         if (r.v.set_format && !(nvn_fmt_to_mtl(r.v.format, &pf, swz) && pf)) pf = (uint32_t)base.pixelFormat;
         { uint32_t upf; int ubpp; if (r.v.set_format && bc_unpack(r.v.format, &upf, &ubpp)) pf = upf; }   // No BC: a BC view is switched to the decompressed format just like the base texture
+        // Metal makes format views only within one size class, never across compressed ↔ uncompressed or depth / stencil ↔ colour except sRGB pairs;
+        // anything else aborts the process in texture view validation. Such a pool entry is sampled in the base format, reported once with its formats
+        if (pf != (uint32_t)base.pixelFormat && tex_need_pfv(base.pixelFormat, (MTLPixelFormat)pf)) {
+            int bw, bh, vbw, vbh, bb = nvn_fmt_bpb(r.t.d.format, &bw, &bh), vb = nvn_fmt_bpb(r.v.format, &vbw, &vbh);
+            if (mtl_fmt_block(base.pixelFormat) || mtl_fmt_block((MTLPixelFormat)pf) || pf_is_depth_stencil(base.pixelFormat) || pf_is_depth_stencil((MTLPixelFormat)pf) || !bb || bb != vb || bw != 1 || bh != 1 || vbw != 1 || vbh != 1) {
+                RED_ONCE(72, "texture ID %d: view format %#x (Metal %u) is not a valid Metal view of texture format %#x (Metal %lu, %ux%u, serial %llu): sampled in the texture's format (first case)",
+                         tid, r.v.format, pf, r.t.d.format, (unsigned long)base.pixelFormat, r.t.d.width, r.t.d.height, (unsigned long long)r.t.serial);
+                pf = (uint32_t)base.pixelFormat;
+            }
+        }
         if (r.v.set_format && tex_need_pfv(base.pixelFormat, (MTLPixelFormat)pf) && !(base.usage & MTLTextureUsagePixelFormatView)) {
             base = tex_upgrade_pfv(&rp->t, base, (MTLPixelFormat)pf);
             sg = g_ser_gen;
@@ -2173,8 +2211,16 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
         NSUInteger ns = base.textureType == MTLTextureType3D ? 1 : (r.v.set_layers && r.v.nlayers ? r.v.nlayers : base.arrayLength * (base.textureType == MTLTextureTypeCube || base.textureType == MTLTextureTypeCubeArray ? 6 : 1) - s0);
         MTLTextureType tt = r.v.set_target ? ttype(r.v.target, base.textureType) : base.textureType;
         if (tt == MTLTextureType2D && ns > 1) ns = 1;
+        // A view whose level / layer range does not fit the texture (the game registered the ID with a texture and a view that do not belong together;
+        // the console samples garbage, Metal's view validation aborts the process): sampled as the whole texture, reported once
+        NSUInteger nsl = base.textureType == MTLTextureType3D ? 1 : base.arrayLength * (base.textureType == MTLTextureTypeCube || base.textureType == MTLTextureTypeCubeArray ? 6 : 1);
+        if (!nl || l0 + nl > base.mipmapLevelCount || !ns || s0 + ns > nsl) {
+            RED_ONCE(73, "texture ID %d: view levels %lu+%lu / layers %lu+%lu do not fit the texture (format %#x, %ux%u, %lu levels, %lu slices, view format %#x): sampled as the whole texture (first case)",
+                     tid, (unsigned long)l0, (unsigned long)nl, (unsigned long)s0, (unsigned long)ns, r.t.d.format, r.t.d.width, r.t.d.height, (unsigned long)base.mipmapLevelCount, (unsigned long)nsl, r.v.set_format ? r.v.format : 0);
+            l0 = 0; nl = base.mipmapLevelCount; s0 = 0; ns = tt == MTLTextureType2D ? 1 : nsl; tt = base.textureType; pf = (uint32_t)base.pixelFormat;
+        }
         if (tswz) v = [base newTextureViewWithPixelFormat:(MTLPixelFormat)pf textureType:tt levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns)
-                                                 swizzle:MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)r.t.d.swz[0], (MTLTextureSwizzle)r.t.d.swz[1], (MTLTextureSwizzle)r.t.d.swz[2], (MTLTextureSwizzle)r.t.d.swz[3])];
+                                                 swizzle:MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)esw[0], (MTLTextureSwizzle)esw[1], (MTLTextureSwizzle)esw[2], (MTLTextureSwizzle)esw[3])];
         else v = [base newTextureViewWithPixelFormat:(MTLPixelFormat)pf textureType:tt levels:NSMakeRange(l0, nl) slices:NSMakeRange(s0, ns)];
         if (!v) { RED_ONCE(11, "cannot create texture view id %d", tid); v = base; }
     }
@@ -2339,7 +2385,8 @@ static MTLVertexFormat vfmt(int f) {
         case 0x25: return MTLVertexFormatUChar4Normalized; case 0x26: return MTLVertexFormatChar4Normalized; case 0x27: return MTLVertexFormatUChar4; case 0x28: return MTLVertexFormatChar4;
         case 0x29: return MTLVertexFormatHalf4; case 0x2A: return MTLVertexFormatUShort4Normalized; case 0x2B: return MTLVertexFormatShort4Normalized; case 0x2C: return MTLVertexFormatUShort4;
         case 0x2D: return MTLVertexFormatShort4; case 0x2E: return MTLVertexFormatFloat4; case 0x2F: return MTLVertexFormatUInt4; case 0x30: return MTLVertexFormatInt4;
-        case 0x3D: return MTLVertexFormatUInt1010102Normalized; case 0x3F: return MTLVertexFormatFloatRG11B10; case 0x9A: return MTLVertexFormatUChar4Normalized_BGRA;
+        case 0x3D: return MTLVertexFormatUInt1010102Normalized; case 0x69: return MTLVertexFormatInt1010102Normalized;   // RGB10A2SN (TotK full-screen quads; nxnative)
+        case 0x3F: return MTLVertexFormatFloatRG11B10; case 0x9A: return MTLVertexFormatUChar4Normalized_BGRA;
     }
     return MTLVertexFormatInvalid;
 }
@@ -2836,7 +2883,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             USE(support_buf(), MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_DRV0 || b->kind == NVN_RB_DRV2) {
             // NVN driver constant segments: those proven unread by static analysis at packaging time are supplied as 0; those read are filled on the spot from the current bindings - c0 = storage buffer table (base + 0x10 r: address 64 bits, size 32 bits),
-            // c2 = texture handle table (0x168 + 8 r) and sampler handle table (0x568 + 8 r), the values being the NVN handles the game gave at bind time; positions read outside the tables are registered at packaging time and reported a failure at load time
+            // c2 = texture handle table and sampler handle table (bases from the game's nvn_c2, 8 bytes per slot), the values being the NVN handles the game gave at bind time; positions read outside the tables are registered at packaging time and reported a failure at load time
             int bank = b->kind == NVN_RB_DRV2 ? 2 : 0;
             if (!sh->rf.drv_read[bank]) { slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); }
             else {
@@ -2846,7 +2893,8 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                     if (base < 0) RED_ONCE(45, "stage %d shader reads driver segment c0, storage buffer table base address not measured", nvn_stage);
                     else for (int r = 0; r < 16; r++) { uint64_t a = S.ssbo[nvn_stage][r].addr; uint32_t n = (uint32_t)S.ssbo[nvn_stage][r].size; memcpy(d + base + 16 * r, &a, 8); memcpy(d + base + 16 * r + 8, &n, 4); }
                 } else {
-                    for (int r = 0; r < 128; r++) { uint32_t th = (uint32_t)S.tex[nvn_stage][r], sh_ = (uint32_t)S.samp[nvn_stage][r]; memcpy(d + 0x168 + 8 * r, &th, 4); memcpy(d + 0x568 + 8 * r, &sh_, 4); }
+                    for (int r = 0; r < g_c2.ntex && r < 128; r++) { uint32_t th = (uint32_t)S.tex[nvn_stage][r]; memcpy(d + g_c2.tex + 8 * r, &th, 4); }
+                    for (int r = 0; r < g_c2.nsamp && r < 128; r++) { uint32_t sh_ = (uint32_t)S.samp[nvn_stage][r]; memcpy(d + g_c2.samp + 8 * r, &sh_, 4); }
                 }
                 slots[aid] = g_cur_arena->gpu + doff;
                 USE(db, MTLResourceUsageRead);
@@ -4179,7 +4227,8 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     }
     enc_r_scissor(en, sc);
     if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) return;
-    enc_r_cull(en, S.poly.cull == NVN_FACE_FRONT ? MTLCullModeFront : S.poly.cull == NVN_FACE_BACK ? MTLCullModeBack : MTLCullModeNone);
+    { static int nocull = -1; if (nocull < 0) { nocull = getenv("DM_NVN_NOCULL") != NULL; if (nocull) MLOG("DM_NVN_NOCULL: face culling off (diagnostic, rendering is wrong)"); }   // diagnostic: does a missing draw come back without culling?
+      enc_r_cull(en, nocull ? MTLCullModeNone : S.poly.cull == NVN_FACE_FRONT ? MTLCullModeFront : S.poly.cull == NVN_FACE_BACK ? MTLCullModeBack : MTLCullModeNone); }
     enc_r_winding(en, S.poly.front == NVN_FRONT_FACE_CCW ? MTLWindingCounterClockwise : MTLWindingClockwise);
     enc_r_fill(en, S.poly.mode == NVN_POLYGON_MODE_LINE ? MTLTriangleFillModeLines : MTLTriangleFillModeFill);
     if (S.poly.offset_en & 4) enc_r_depth_bias(en, S.po.units, S.po.factor, S.po.clamp); else enc_r_depth_bias(en, 0, 0, 0);
@@ -4222,7 +4271,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (passdump()) {   // Characteristics of a render pass's first draw (to judge whether the load can be omitted: full screen, no blending, writes all channels, does not depend on depth); with DM_NVN_PASSDUMP_ALL every draw is recorded
         static uint64_t last_pass = ~0ull; static int all = -1; if (all < 0) all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;
         if (all) PD("d %llu bv=%d bi=%d first=%d vs=%s fs=%s vc=%d inst=%d blend=%#x b0=%#llx dt=%d dw=%d df=%d cull=%d st=%d sf=%d,%d sop=%d,%d,%d/%d,%d,%d smask=%#x,%#x/%#x,%#x sref=%#x,%#x ib=%#llx it=%d cmask=%#x", g_stat_pass, di ? di->base_vertex : 0, di ? di->base_instance : 0, dw ? dw->first : 0, pr->sh[0] ? pr->sh[0]->key : "-", pr->sh[1] ? pr->sh[1]->key : "-",
-                    dw ? dw->count : di->count, dw ? 1 : di->instances, S.color.blend_en, (unsigned long long)*(uint64_t *)&S.blend[0], (int)S.ds.dt, (int)S.ds.dw, (int)S.ds.df, (int)S.poly.cull,
+                    dw ? dw->count : di->count, dw ? (dw->instances ? dw->instances : 1) : di->instances, S.color.blend_en, (unsigned long long)*(uint64_t *)&S.blend[0], (int)S.ds.dt, (int)S.ds.dw, (int)S.ds.df, (int)S.poly.cull,
                     (int)S.ds.st, (int)S.ds.sf_f, (int)S.ds.sf_b, (int)S.ds.fail_f, (int)S.ds.zfail_f, (int)S.ds.zpass_f,
                     (int)S.ds.fail_b, (int)S.ds.zfail_b, (int)S.ds.zpass_b, S.st_vmask[0], S.st_vmask[1], S.st_wmask[0], S.st_wmask[1], S.st_ref[0], S.st_ref[1],
                     di ? (unsigned long long)di->ibuf : 0ull, di ? di->itype : 0, S.chmask.mask);
@@ -4241,13 +4290,18 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
             for (int i = 0; i < S.nattr && i < 6; i++) { int st = S.attr[i].stream;
                 o += snprintf(vb + o, sizeof vb - o, " a%d{fmt=%#x off=%d s=%d stride=%u div=%u vb=%#llx/%llu}", i, S.attr[i].fmt, S.attr[i].offset, st,
                               st < 16 ? S.stream[st].stride : 0, st < 16 ? S.stream[st].divisor : 0, st < 16 ? (unsigned long long)S.vbuf[st].address : 0ull, st < 16 ? (unsigned long long)S.vbuf[st].size : 0ull); }
-            PD("v %llu %s", g_stat_pass, vb); }
+            PD("v %llu %s", g_stat_pass, vb);
+            if (S.nattr > 0 && S.attr[0].stream < 16 && S.vbuf[S.attr[0].stream].address && S.attr[0].fmt == 0x29) {   // a0 as RGBA16F: the first 4 vertices
+                const uint16_t *hv = (const uint16_t *)(uintptr_t)(S.vbuf[S.attr[0].stream].address + S.attr[0].offset); uint32_t st = S.stream[S.attr[0].stream].stride; char hx[300]; size_t ho = 0;
+                for (int k = 0; k < 4 && (uint64_t)k * st + 8 <= S.vbuf[S.attr[0].stream].size; k++) { const uint16_t *e = (const uint16_t *)((const uint8_t *)hv + (size_t)k * st);
+                    ho += snprintf(hx + ho, sizeof hx - ho, " (%g %g %g %g)", (double)*(const __fp16 *)&e[0], (double)*(const __fp16 *)&e[1], (double)*(const __fp16 *)&e[2], (double)*(const __fp16 *)&e[3]); }
+                PD("v %llu a0 data%s", g_stat_pass, hx); } }
         if (last_pass != g_stat_pass) {
             last_pass = g_stat_pass;
-            PD("D %llu prim=%d vc=%d inst=%d blend=%#x wm=%#x dt=%d dw=%d df=%d st=%d sc=%lu,%lu,%lu,%lu tgt=%lux%lu vp=%.0f,%.0f,%.0f,%.0f", g_stat_pass, prim,
-               dw ? dw->count : di->count, dw ? 1 : di->instances, S.color.blend_en, S.chmask.mask, (int)S.ds.dt, (int)S.ds.dw, (int)S.ds.df, (int)S.ds.st,
+            PD("D %llu prim=%d vc=%d inst=%d blend=%#x wm=%#x dt=%d dw=%d df=%d st=%d sc=%lu,%lu,%lu,%lu tgt=%lux%lu vp=%.0f,%.0f,%.0f,%.0f cull=%d front=%d dr=%.3g,%.3g it=%d", g_stat_pass, prim,
+               dw ? dw->count : di->count, dw ? (dw->instances ? dw->instances : 1) : di->instances, S.color.blend_en, S.chmask.mask, (int)S.ds.dt, (int)S.ds.dw, (int)S.ds.df, (int)S.ds.st,
                (unsigned long)sc.x, (unsigned long)sc.y, (unsigned long)sc.width, (unsigned long)sc.height, (unsigned long)tw, (unsigned long)th,
-               S.has_vp ? S.vp[0][0] : 0, S.has_vp ? S.vp[0][1] : 0, S.has_vp ? S.vp[0][2] : (float)tw, S.has_vp ? S.vp[0][3] : (float)th);
+               S.has_vp ? S.vp[0][0] : 0, S.has_vp ? S.vp[0][1] : 0, S.has_vp ? S.vp[0][2] : (float)tw, S.has_vp ? S.vp[0][3] : (float)th, (int)S.poly.cull, (int)S.poly.front, S.dr[0], S.dr[1], di ? di->itype : -1);
         }
     }
     if (rt_range_on() && !rt_range_pr_ro(pr)) g_pass.range_external=1;
@@ -4260,18 +4314,27 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
             for (uint32_t q = 0; q < n; q++) { uint32_t b = q * 4; uint32_t v[6] = {b, b + 1, b + 2, b, b + 2, b + 3}; memcpy(ix + q * 6, v, 24); }
             g_quad_ib = [g_dev newBufferWithBytes:ix length:n * 24 options:MTLResourceStorageModeShared]; g_quad_gpu = g_quad_ib.gpuAddress; res_add(g_quad_ib); free(ix);
         }
-        if (dw->count >= 4) enc_r_draw_indexed(en, mp, (dw->count / 4) * 6, MTLIndexTypeUInt32, g_quad_gpu, g_quad_ib.length, 1, dw->first, 0);
+        if (dw->count >= 4) enc_r_draw_indexed(en, mp, (dw->count / 4) * 6, MTLIndexTypeUInt32, g_quad_gpu, g_quad_ib.length, dw->instances ? dw->instances : 1, dw->first, dw->base_instance);
     } else if (dw) {
-        if (dw->count) enc_r_draw(en, mp, dw->first, dw->count);
+        if (dw->count) enc_r_draw_instanced(en, mp, dw->first, dw->count, dw->instances ? dw->instances : 1, dw->base_instance);
     } else {
         if (prim == 7) { RED_ONCE(20, "indexed quads not implemented"); return; }
-        if (di->itype == 0) { RED_ONCE(21, "8-bit indices not implemented"); return; }
-        void *mb; uint64_t mo;
-        uint64_t gpu;
-        if (!mtl_gpu_addr(di->ibuf, 1, &mb, &mo, &gpu)) { RED_ONCE(22, "index buffer is not in a memory pool"); return; }
-        use_rec("buf", di->ibuf, (uint64_t)di->count * (di->itype == 1 ? 2 : 4), 0, NULL);
-        if (di->count) enc_r_draw_indexed(en, mp, di->count, di->itype == 1 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, gpu, ((__bridge id<MTLBuffer>)mb).length - mo,
-                di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
+        if (di->itype == 0) {   // 8-bit indices (Tears of the Kingdom draws most quads with them): Metal has only 16 / 32-bit index buffers, so they are widened into this submission's arena
+            if (!di->count) return;
+            const uint8_t *src8 = (const uint8_t *)(uintptr_t)di->ibuf; void *mb; uint64_t mo;
+            if (!mtl_addr(di->ibuf, (uint64_t)di->count, &mb, &mo)) { RED_ONCE(21, "8-bit index buffer is not in a memory pool"); return; }
+            use_rec("buf", di->ibuf, (uint64_t)di->count, 0, NULL);
+            id<MTLBuffer> ab; size_t ao = arena_alloc((size_t)di->count * 2, &ab); uint16_t *d16 = (uint16_t *)((uint8_t *)ab.contents + ao);
+            for (int k = 0; k < di->count; k++) d16[k] = src8[k];
+            enc_r_draw_indexed(en, mp, di->count, MTLIndexTypeUInt16, g_cur_arena->gpu + ao, (NSUInteger)di->count * 2, di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
+        } else {
+            void *mb; uint64_t mo;
+            uint64_t gpu;
+            if (!mtl_gpu_addr(di->ibuf, 1, &mb, &mo, &gpu)) { RED_ONCE(22, "index buffer is not in a memory pool"); return; }
+            use_rec("buf", di->ibuf, (uint64_t)di->count * (di->itype == 1 ? 2 : 4), 0, NULL);
+            if (di->count) enc_r_draw_indexed(en, mp, di->count, di->itype == 1 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, gpu, ((__bridge id<MTLBuffer>)mb).length - mo,
+                    di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
+        }
     }
     if (g_rt_range_pending) { PD("j rt_level_range pass=%llu vc=%u", g_stat_pass, (unsigned)(dw ? dw->count : di->count)); g_rt_range_pending=0; }
 }
@@ -4649,7 +4712,9 @@ void mtl_exec(const uint8_t *p) {
             case OP_COPY_B2B: { uint64_t s_, d, n; memcpy(&s_, a, 8); memcpy(&d, (const uint8_t *)a + 8, 8); memcpy(&n, (const uint8_t *)a + 16, 8);
                 PD("Y copy_b2b cmd=%p src=%#llx dst=%#llx bytes=%llu", p, (unsigned long long)s_, (unsigned long long)d, (unsigned long long)n); mtl_sub_copy(s_, d, n); break; }
             case OP_UPDATE_UB: { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, (const uint8_t *)a + 8, 8);
-                PD("Y update_ub cmd=%p src=%#llx dst=%#llx bytes=%llu", p, (unsigned long long)((const uint8_t *)a + 16), (unsigned long long)d, (unsigned long long)n); mtl_sub_copy((uint64_t)((const uint8_t *)a + 16), d, n); break; }
+                if (passdump()) { char fv[400] = ""; size_t fo = 0; for (uint64_t q = 0; q + 4 <= n && q < 64; q += 4) { float f; memcpy(&f, (const uint8_t *)a + 16 + q, 4); fo += snprintf(fv + fo, sizeof fv - fo, " %g", f); }
+                    PD("Y update_ub cmd=%p src=%#llx dst=%#llx bytes=%llu data%s", p, (unsigned long long)((const uint8_t *)a + 16), (unsigned long long)d, (unsigned long long)n, fv); }
+                mtl_sub_copy((uint64_t)((const uint8_t *)a + 16), d, n); break; }
             case OP_SET_RT: {
                 const p_set_rt *r = a;
                 if (defer_begin_q(p)) break;

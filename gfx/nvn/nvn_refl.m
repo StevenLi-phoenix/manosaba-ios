@@ -27,6 +27,15 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
     memset(o, 0, sizeof *o);
     #define FAIL(...) do { snprintf(err, errlen, __VA_ARGS__); return 1; } while (0)
     if (![j[@"route"] isEqual:@"B"]) FAIL("not a B reflection (route ≠ B; route A / PC-chain reflections are retired)");
+    {   // Built for this game's c[2] layout (dmsh_build.py takes it from game.json nvn_c2): slot numbers decoded with another layout would bind wrong textures
+        int mtl_c2_tex_base(void), mtl_c2_samp_base(void);
+        NSDictionary *c2 = j[@"c2"]; NSArray *t = [c2 isKindOfClass:[NSDictionary class]] ? c2[@"tex"] : nil, *s = [c2 isKindOfClass:[NSDictionary class]] ? c2[@"samp"] : nil;
+        if (![t isKindOfClass:[NSArray class]] || ![s isKindOfClass:[NSArray class]] || t.count != 2 || s.count != 2) FAIL("no c2 layout");
+        if ([t[0] intValue] != mtl_c2_tex_base() || [s[0] intValue] != mtl_c2_samp_base())
+            FAIL("built for c[2] textures %#x / samplers %#x, this game's are %#x / %#x", [t[0] intValue], [s[0] intValue], mtl_c2_tex_base(), mtl_c2_samp_base());
+        const char *mtl_depth_mode_name(void); NSString *dm = j[@"depth_mode"];   // vertex shaders: built for the game's depth convention
+        if ([j[@"stage"] isEqual:@"vs"] && ![dm isEqual:@(mtl_depth_mode_name())]) FAIL("vertex shader built for depth mode %s, this game's is %s", dm ? dm.UTF8String : "(none)", mtl_depth_mode_name());
+    }
     {   // Translated original Switch shaders: kind and NVN slot number are already parsed from the MSL member names by dmsh_build.py
         NSArray *bs = j[@"bindings"];
         if (![bs isKindOfClass:[NSArray class]]) FAIL("missing bindings");

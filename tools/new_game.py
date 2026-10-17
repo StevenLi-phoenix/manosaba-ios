@@ -55,6 +55,7 @@ def main():
         'id': gid, 'title': opt.get('title', gid), 'version': opt.get('version', gid), 'engine': 'unity' if unity else 'unknown',
         'program_id': program_id(os.path.join(exefs, 'main.npdm')), 'modules': mods, 'main_build_id': nso[0x40:0x50].hex(),
         'language': opt.get('language', 'en-US'), 'screen': [1920, 1080], 'guest_heap_mb': 256,
+        'depth_mode': 'near_is_zero', 'nvn_c2': {'tex': ['0x20', 32], 'samp': ['0x568', 128], 'img': ['0x120', 8]},
         'romfs': {'files': {k: os.path.getsize(os.path.join(romfs, k)) for k in keys}, 'tree': tree, 'tree_files': n, 'tree_bytes': size},
         'save_sync': [],
         'workspace': {

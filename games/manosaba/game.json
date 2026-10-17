@@ -10,6 +10,8 @@
   "screen": [1920, 1080],
   "guest_heap_mb": 256,
   "device_api": "53.311",
+  "depth_mode": "near_is_zero",
+  "nvn_c2": {"tex": ["0x168", 128], "samp": ["0x568", 128], "img": ["0x120", 8]},
   "romfs": {
     "files": {
       "Data/globalgamemanagers": 261988,

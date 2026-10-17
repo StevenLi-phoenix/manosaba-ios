@@ -121,6 +121,9 @@ NVN(nvnDeviceBuilderSetFlags, void, NVNdeviceBuilder *b, int f) { ((dev_builder_
 NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
     dev_t_ *o = (dev_t_ *)d; memset(o, 0, sizeof *o);
     o->magic = MAGIC('D', 'E', 'V', 0); o->flags = ((const dev_builder_t *)b)->flags;
+    if (!dm_game.nvn_c2.ntex) die("game profile %s has no nvn_c2 (c[2] handle table layout of its shaders)", dm_game.id);
+    void mtl_set_c2_layout(int tex, int ntex, int samp, int nsamp); mtl_set_c2_layout(dm_game.nvn_c2.tex, dm_game.nvn_c2.ntex, dm_game.nvn_c2.samp, dm_game.nvn_c2.nsamp);
+    void mtl_set_depth_mode(int m); mtl_set_depth_mode(dm_game.nvn_depth_mode);
     OLOG("DeviceInitialize %p flags=%#x", (void *)d, o->flags);
     return 1;
 }
@@ -165,11 +168,17 @@ NVN(nvnDeviceGetInteger, void, const NVNdevice *d, NVNdeviceInfo what, int *out)
     OLOG("DeviceGetInteger %#x -> %d", w, *out);
 }
 NVN(nvnDeviceGetImageHandle, NVNimageHandle, const NVNdevice *d, int id) { (void)d; return (NVNimageHandle)id; }
-NVN(nvnDeviceRegisterFastClearColor, NVNboolean, NVNdevice *d, const float *c, NVNformat f) { (void)d; (void)c; (void)f; return 1; }
+NVN(nvnDeviceRegisterFastClearColor, NVNboolean, NVNdevice *d, const float *c, NVNformat f) { (void)d; (void)c; (void)f; return 1; }   // a fast-clear hint for the console's compression: accepted, nothing to do (nxnative)
 NVN(nvnDeviceRegisterFastClearDepth, NVNboolean, NVNdevice *d, float z) { (void)d; (void)z; return 1; }   // same, for depth (TotK main 0xcc8e38)
 // Combined texture handle = texture ID | sampler ID << 20, the encoding of the separate handles; the replay layer takes the sampler from the high bits
 // of a texture slot where the shader needs one (nvn_mtl.m NVN_RB_SAMPT). From nxnative (seedds, MIT); TotK main 0x2d34cc
-NVN(nvnDeviceGetTextureHandle, NVNtextureHandle, const NVNdevice *d, int tex, int samp) { (void)d; return (NVNtextureHandle)((uint64_t)(uint32_t)tex | (uint64_t)(uint32_t)samp << 20); }   // a fast-clear hint for the console's compression: accepted, nothing to do (nxnative)
+NVN(nvnDeviceGetTextureHandle, NVNtextureHandle, const NVNdevice *d, int tex, int samp) { (void)d; return (NVNtextureHandle)((uint64_t)(uint32_t)tex | (uint64_t)(uint32_t)samp << 20); }
+// Counter timestamps are written by the replay layer as 19.2 MHz ticks of CLOCK_MONOTONIC (nvn_mtl.m gpu_ticks: ns × 12 / 625); these convert back to
+// and read the same clock, so a counter timestamp and the current time can be subtracted (nxnative found returning the raw ticks gave garbage)
+NVN(nvnDeviceGetTimestampInNanoseconds, uint64_t, const NVNdevice *d, const NVNcounterData *c) { (void)d; return c->timestamp * 625 / 12; }
+NVN(nvnDeviceGetCurrentTimestampInNanoseconds, uint64_t, const NVNdevice *d) {
+    (void)d; struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return ((uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec) * 12 / 625 * 625 / 12;
+}
 // Separate texture / sampler handles: value = descriptor index (the sampler index goes in bit 20 and above, consistent with the bit layout of combined handles)
 NVN(nvnDeviceGetSeparateTextureHandle, NVNseparateTextureHandle, const NVNdevice *d, int id) { (void)d; return (NVNseparateTextureHandle){(uint64_t)id}; }
 NVN(nvnDeviceGetSeparateSamplerHandle, NVNseparateSamplerHandle, const NVNdevice *d, int id) { (void)d; return (NVNseparateSamplerHandle){(uint64_t)id << 20}; }
@@ -177,7 +186,11 @@ NVN(nvnDeviceInstallDebugCallback, void, NVNdevice *d, const PFNNVNDEBUGCALLBACK
     dev_t_ *o = (dev_t_ *)d; o->dbg_cb = B(enable) ? (void *)cb : NULL; o->dbg_data = data;
 }
 NVN(nvnDeviceSetWindowOriginMode, void, NVNdevice *d, NVNwindowOriginMode m) { ((dev_t_ *)d)->origin = m; LOG("[nvn] window origin %s", m ? "upper left (same as D3D / Metal)" : "lower left (GL)"); }
-NVN(nvnDeviceSetDepthMode, void, NVNdevice *d, NVNdepthMode m) { ((dev_t_ *)d)->depth_mode = m; LOG("[nvn] depth mode %s", m ? "near=0 (same as D3D / Metal)" : "near=-w (GL)"); }
+// The shaders were built for the profile's convention (game.json depth_mode; near=-w gets z remapped in every vertex shader): another one draws at wrong depths
+NVN(nvnDeviceSetDepthMode, void, NVNdevice *d, NVNdepthMode m) {
+    ((dev_t_ *)d)->depth_mode = m; LOG("[nvn] depth mode %s", m ? "near=0 (same as D3D / Metal)" : "near=-w (GL)");
+    if ((int)m != dm_game.nvn_depth_mode) LOG("[red] the game sets depth mode %d, its shaders were built for %d (game.json depth_mode): geometry lands at wrong depths or is clipped", (int)m, dm_game.nvn_depth_mode);
+}
 NVN(nvnDeviceFinalizeCommandHandle, void, NVNdevice *d, NVNcommandHandle h) { (void)d; (void)h; }
 
 // ---------- Memory pools ----------
@@ -414,12 +427,12 @@ NVN(nvnTextureViewSetLevels, void, NVNtextureView *v, int base, int n) { VW(v)->
 NVN(nvnTextureViewSetLayers, void, NVNtextureView *v, int min, int n) { VW(v)->set_layers = 1; VW(v)->min_layer = min; VW(v)->nlayers = n; }
 NVN(nvnTextureViewSetFormat, void, NVNtextureView *v, NVNformat f) { VW(v)->set_format = 1; VW(v)->format = f; }
 NVN(nvnTextureViewSetTarget, void, NVNtextureView *v, NVNtextureTarget t) { VW(v)->set_target = 1; VW(v)->target = t; }
-// View swizzle / depth-stencil mode (TotK main 0x531d20): not applied yet; reported once when they are not the identity / depth
+// View swizzle (TotK main 0x531d20): a view property set explicitly replaces the texture's, and only the ones left unset come from the texture
+// (NVN reference, nvn::TextureView), so even an identity swizzle set here overrides a swizzled texture. Applied where the texture pool entry's
+// view is built (nvn_mtl.m tex_by_id). Stencil mode is not modelled (TotK sets depth only)
 NVN(nvnTextureViewSetSwizzle, void, NVNtextureView *v, NVNtextureSwizzle r, NVNtextureSwizzle g, NVNtextureSwizzle bl, NVNtextureSwizzle a) {
-    (void)v;
-    if (r != NVN_TEXTURE_SWIZZLE_R || g != NVN_TEXTURE_SWIZZLE_G || bl != NVN_TEXTURE_SWIZZLE_B || a != NVN_TEXTURE_SWIZZLE_A) {
-        static int once; if (!once++) LOG("[red] TextureViewSetSwizzle %d %d %d %d: view swizzles are not applied yet", (int)r, (int)g, (int)bl, (int)a);
-    }
+    if ((unsigned)r > 5 || (unsigned)g > 5 || (unsigned)bl > 5 || (unsigned)a > 5) { LOG("[red] TextureViewSetSwizzle %d %d %d %d: not a swizzle value, ignored", (int)r, (int)g, (int)bl, (int)a); return; }
+    VW(v)->set_swz = 1; VW(v)->swz_r = r; VW(v)->swz_g = g; VW(v)->swz_b = bl; VW(v)->swz_a = a;
 }
 NVN(nvnTextureViewSetDepthStencilMode, void, NVNtextureView *v, NVNtextureDepthStencilMode m) {
     (void)v; if (m) { static int once; if (!once++) LOG("[red] TextureViewSetDepthStencilMode %d: views read depth", (int)m); }
@@ -443,21 +456,27 @@ static void read_texels(const tex_t *o, const view_t *v, const NVNcopyRegion *r,
     unsigned level = v && v->set_levels ? (unsigned)v->base_level : 0, layer0 = v && v->set_layers ? (unsigned)v->min_layer : 0;
     mtl_read_texels(o, level, layer0, r, dst, (size_t)row, (size_t)img);
 }
-// Concurrency check: the Metal layer's submission state (current command buffer, blit encoder, render state) and the texel paths are not locked
-// against each other; they rely on the game calling SubmitCommands / PresentTexture / Read|WriteTexels from one thread at a time. The first overlap
-// is logged once in red, naming both threads (a crash inside a copy encoder at a scene load was seen on the Mac)
+// One thread at a time in the Metal layer: its submission state (current command buffer, blit encoder, render state) and the texel paths are not
+// locked against each other. Manosaba calls SubmitCommands / PresentTexture / Read|WriteTexels from one thread, TotK writes texels from its
+// ModuleSystemWorker threads while the Presentation Thread submits (a crash inside a copy encoder at a scene load had been seen on the Mac with the
+// earlier check-only version), so these entries take one recursive lock. The first wait is logged once, naming both threads.
 __attribute__((weak)) int thr_name_of(pthread_t pt, char *out, size_t n) { (void)pt; (void)out; (void)n; return 0; }   // host hle_thread.c (guest thread names); the graphics unit tests have none
-static _Atomic int g_gfx_in; static _Atomic uint64_t g_gfx_tid; static const char *_Atomic g_gfx_what; static char g_gfx_name[96];
+static pthread_mutex_t g_gfx_mu; static pthread_once_t g_gfx_mu_once = PTHREAD_ONCE_INIT;
+static uint64_t g_gfx_tid; static const char *g_gfx_what; static char g_gfx_name[96];   // the holder (written under the lock)
+static void gfx_mu_init(void) { pthread_mutexattr_t a; pthread_mutexattr_init(&a); pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE); pthread_mutex_init(&g_gfx_mu, &a); pthread_mutexattr_destroy(&a); }
 static void gfx_mt_enter(const char *what) {
-    uint64_t me; pthread_threadid_np(NULL, &me);
-    if (atomic_fetch_add(&g_gfx_in, 1)) {
-        static _Atomic int said; if (atomic_exchange(&said, 1)) return;
-        char nm[96] = "-"; thr_name_of(pthread_self(), nm, sizeof nm);
-        LOG("[red] [nvn] %s on thread %llu (%s) while %s runs on thread %llu (%s): two threads inside the Metal layer at once", what, (unsigned long long)me, nm,
-            atomic_load(&g_gfx_what), (unsigned long long)atomic_load(&g_gfx_tid), g_gfx_name);
-    } else { atomic_store(&g_gfx_tid, me); atomic_store(&g_gfx_what, what); if (!thr_name_of(pthread_self(), g_gfx_name, sizeof g_gfx_name)) strcpy(g_gfx_name, "-"); }
+    pthread_once(&g_gfx_mu_once, gfx_mu_init);
+    if (pthread_mutex_trylock(&g_gfx_mu)) {
+        static _Atomic int said;
+        if (!atomic_exchange(&said, 1)) {   // the holder's fields may be mid-update: diagnostics only
+            uint64_t me; pthread_threadid_np(NULL, &me); char nm[96] = "-"; thr_name_of(pthread_self(), nm, sizeof nm);
+            LOG("[nvn] %s on thread %llu (%s) waits for %s on thread %llu (%s): Metal layer entries are serialized", what, (unsigned long long)me, nm, g_gfx_what ? g_gfx_what : "?", (unsigned long long)g_gfx_tid, g_gfx_name);
+        }
+        pthread_mutex_lock(&g_gfx_mu);
+    }
+    pthread_threadid_np(NULL, &g_gfx_tid); g_gfx_what = what; if (!thr_name_of(pthread_self(), g_gfx_name, sizeof g_gfx_name)) strcpy(g_gfx_name, "-");
 }
-static void gfx_mt_leave(void) { atomic_fetch_sub(&g_gfx_in, 1); }
+static void gfx_mt_leave(void) { pthread_mutex_unlock(&g_gfx_mu); }
 NVN(nvnTextureReadTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, void *dst) {
     gfx_mt_enter("ReadTexels"); read_texels(CTX(t), (const view_t *)v, r, dst, 0, 0); gfx_mt_leave();
 }
@@ -822,6 +841,19 @@ NVN(nvnCommandBufferSetDepthClamp, void, NVNcommandBuffer *c, uint32_t en) { REC
 NVN(nvnCommandBufferSetConservativeRasterEnable, void, NVNcommandBuffer *c, uint32_t en) {
     (void)c; static int red; if (B(en) && !red++) LOG("[red] CommandBufferSetConservativeRasterEnable 1: Metal has no conservative rasterization, drawing with normal rasterization");
 }
+// Not modelled yet, reported red once when they would change what is drawn: render enable (plain and conditional on a query result) draws always,
+// rasterizer discard is ignored. The tiled cache calls are hints for the console's binning rasterizer with no Metal counterpart. (nxnative)
+NVN(nvnCommandBufferSetRenderEnable, void, NVNcommandBuffer *c, uint32_t en) {
+    (void)c; static int red; if (!B(en) && !red++) LOG("[red] CommandBufferSetRenderEnable 0: not modelled, drawing continues");
+}
+NVN(nvnCommandBufferSetRenderEnableConditional, void, NVNcommandBuffer *c, NVNconditionalRenderMode m, NVNbufferAddress a) {
+    (void)c; static int red; if (!red++) LOG("[red] CommandBufferSetRenderEnableConditional (mode %d, address %#llx): not modelled, drawing continues", (int)m, (unsigned long long)a);
+}
+NVN(nvnCommandBufferSetRasterizerDiscard, void, NVNcommandBuffer *c, uint32_t en) {
+    (void)c; static int red; if (B(en) && !red++) LOG("[red] CommandBufferSetRasterizerDiscard 1: not modelled, fragments are still drawn");
+}
+NVN(nvnCommandBufferSetTiledCacheAction, void, NVNcommandBuffer *c, NVNtiledCacheAction a) { (void)c; (void)a; }
+NVN(nvnCommandBufferSetTiledCacheTileSize, void, NVNcommandBuffer *c, int w, int h) { (void)c; (void)w; (void)h; }
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
@@ -896,7 +928,9 @@ NVN(nvnCommandBufferSetStencilRef, void, NVNcommandBuffer *c, NVNface f, int v) 
 NVN(nvnCommandBufferSetPolygonOffsetClamp, void, NVNcommandBuffer *c, float fa, float un, float cl) {
     *REC(c, OP_POLY_OFFSET, p_poly_offset) = (p_poly_offset){fa, un, cl};
 }
-NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n) { *REC(c, OP_DRAW, p_draw) = (p_draw){pr, first, n}; }
+NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n) { *REC(c, OP_DRAW, p_draw) = (p_draw){pr, first, n, 1, 0}; }
+// Parameter order (mode, first, count, baseInstance, instanceCount): NVN reference nvn::CommandBuffer::DrawArraysInstanced
+NVN(nvnCommandBufferDrawArraysInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n, int bi, int inst) { *REC(c, OP_DRAW, p_draw) = (p_draw){pr, first, n, inst, bi}; }
 NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib,
     int bv, int bi, int inst) {
     *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, bv, bi, inst, ib};

@@ -1,7 +1,7 @@
 // NVN null device unit tests: look up addresses from nvnBootstrapLoader the way the game does and go all the way to present; all expected values are hand-calculated, without calling the implementation under test.
 // For build and run see gfx/tests/Makefile (make -C gfx/tests).
 #include "../nvn/hle_nvn.c"
-const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15 };   // hle_nvn.c reports the NVN API version from the profile
+const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15, .nvn_c2 = {0x168, 128, 0x568, 128, 0x120, 8}, .nvn_depth_mode = 1 };   // hle_nvn.c reports the NVN API version and sets the c[2] layout from the profile
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
 #include "../tex/nvn_deswizzle.h"
@@ -91,6 +91,26 @@ int main(void) {
         EXPECT("buffer's pool", (long long)(uintptr_t)&pool, (uintptr_t)P(nvnBufferGetMemoryPool)(&buf));
         P(nvnBufferBuilderSetStorage)(&bb, &pool, sizeof poolmem - 0x100, 0x200);
         EXPECT("buffer past the end of the pool fails to initialize", 0, P(nvnBufferInitialize)(&buf, &bb));
+    }
+
+    // 3b'. Texture view swizzle: kept in the 10-byte view (Tears of the Kingdom keeps game fields right after its views; a 12-byte view_t overwrote them),
+    // marked as set even for the identity (a set view property replaces the texture's), other fields untouched; a value outside 0..5 is not stored
+    {
+        uint8_t raw[16]; memset(raw, 0xa5, sizeof raw); NVNtextureView *v = (NVNtextureView *)raw;
+        P(nvnTextureViewSetDefaults)(v);
+        EXPECT("SetDefaults clears exactly 10 bytes", 0xa5, raw[10]);
+        P(nvnTextureViewSetLevels)(v, 3, 9); P(nvnTextureViewSetFormat)(v, NVN_FORMAT_RGBA8_SRGB);
+        P(nvnTextureViewSetSwizzle)(v, NVN_TEXTURE_SWIZZLE_B, NVN_TEXTURE_SWIZZLE_G, NVN_TEXTURE_SWIZZLE_R, NVN_TEXTURE_SWIZZLE_ONE);
+        const view_t *w = (const view_t *)raw;
+        EXPECT("view swizzle set", 1, w->set_swz);
+        EXPECT("view swizzle r = B", NVN_TEXTURE_SWIZZLE_B, w->swz_r); EXPECT("view swizzle g = G", NVN_TEXTURE_SWIZZLE_G, w->swz_g);
+        EXPECT("view swizzle b = R", NVN_TEXTURE_SWIZZLE_R, w->swz_b); EXPECT("view swizzle a = ONE", NVN_TEXTURE_SWIZZLE_ONE, w->swz_a);
+        EXPECT("levels kept beside the swizzle", 3 * 16 + 9, w->base_level * 16 + w->nlevels); EXPECT("format kept", NVN_FORMAT_RGBA8_SRGB, w->format);
+        EXPECT("swizzle leaves the bytes after the view alone", 0xa5, raw[10]);
+        P(nvnTextureViewSetDefaults)(v); P(nvnTextureViewSetSwizzle)(v, NVN_TEXTURE_SWIZZLE_R, NVN_TEXTURE_SWIZZLE_G, NVN_TEXTURE_SWIZZLE_B, NVN_TEXTURE_SWIZZLE_A);
+        EXPECT("identity view swizzle still counts as set", 1, w->set_swz);
+        P(nvnTextureViewSetDefaults)(v); P(nvnTextureViewSetSwizzle)(v, (NVNtextureSwizzle)6, NVN_TEXTURE_SWIZZLE_G, NVN_TEXTURE_SWIZZLE_B, NVN_TEXTURE_SWIZZLE_A);
+        EXPECT("out-of-range swizzle not stored", 0, w->set_swz);
     }
 
     // 3c. Texture description: SetSize2D / Swizzle / depth-stencil mode read back; an identity swizzle does not set swz_set (the replay layer builds no swizzle view)

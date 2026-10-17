@@ -63,10 +63,12 @@ capture  (<key>.ctl + <key>.data per shader)
 Binding conventions used by the translation:
 
 - uniform buffer slot r is constant section `c[3 + r]`;
-- the handle of separate texture r is at `c[2][0x168 + 8r]`, of separate sampler r at `c[2][0x568 + 8r]`;
+- the handle of texture r is at `c[2][tex + 8r]`, of separate sampler r at `c[2][samp + 8r]`, of image r at `c[2][img + 8r]`, with the bases of
+  the game's `nvn_c2` (manosaba: 0x168 / 0x568 / 0x120; Tears of the Kingdom: 0x20 / 0x568 / 0x120);
+- the depth convention is the game's `depth_mode`: with `near_is_minus_w` every vertex shader remaps z to Metal's 0..w;
 - the address of storage buffer r is at `c[0][base + 16r]`, base: vertex 0x110, compute 0x310, fragment 0x510;
 - compute thread group size: control section +0x748 / +0x74c / +0x750;
-- window origin top left, depth range 0–1 (same as Metal): nothing is flipped.
+- window origin top left (same as Metal): nothing is flipped.
 
 ## Files
 
@@ -124,6 +126,8 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_PROF=1` | Time every implemented NVN function |
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |
 | `DM_NVN_TBDR=0` | Turn off all pass optimizations (attach, load and store everything), for equivalence comparisons |
+| `DM_NVN_NOCULL=1` | Draw with face culling off (does a missing draw come back?) |
+| `DM_NVN_RTCLEAR=<serial>` | Passes on that colour texture start cleared to magenta (does the attachment reach the texture?) |
 | `DM_NVN_UNWRITTEN_DC=0` | Store attachments even when the pass did not write them |
 | `DM_NVN_FUSE_CHECK=1` | Same-frame check of pass merging |
 | `DM_TEST_NO_BC=1` | Take the "GPU without BC textures" decompression path on any machine |

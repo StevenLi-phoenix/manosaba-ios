@@ -51,8 +51,16 @@ _Static_assert(sizeof(tex_t) <= 0x80, "tex_t exceeds this SDK's actual NVNtextur
 // NVNtextureView is at most 0x10 bytes in this SDK: Unity keeps two views 0x10 apart on its stack (main+0x9c35ec / +0x9c361c), and a view right before a
 // staging NVNbuffer (main+0x9c7f40: view at sp+0x20, buffer at sp+0x30). The earlier 0x1c-byte view_t overran the next local on every SetDefaults
 // (that NVNbuffer lost its memory pool pointer's low half; Unity then crashed releasing the upload memory of the first video frame).
-// Packed to 10 bytes: levels < 16, layers and formats fit 16 bits, targets 8 bits.
-typedef struct { uint8_t set_levels : 1, set_layers : 1, set_format : 1, set_target : 1; uint8_t base_level, nlevels, target; uint16_t min_layer, nlayers, format; } view_t;
+// Packed to 10 bytes (the size proven safe in both games): levels and targets fit 4 bits (at most 15 levels, targets 0..10), layers and formats 16 bits,
+// the swizzle 4 × 3 bits (NVNtextureSwizzle 0..5) in what is left.
+typedef struct {
+    uint8_t set_levels : 1, set_layers : 1, set_format : 1, set_target : 1, set_swz : 1, swz_a : 3;
+    uint8_t base_level : 4, nlevels : 4;
+    uint8_t target : 4, swz_r : 3;
+    uint8_t swz_g : 3, swz_b : 3;
+    uint16_t min_layer, nlayers, format;
+} view_t;
+_Static_assert(sizeof(view_t) == 10, "view_t must stay 10 bytes (see above)");
 FITS(view_t, NVNtextureView);
 
 // Sampler parameters (one copy shared by builder and object)
@@ -128,7 +136,7 @@ typedef struct { int32_t stage, index; uint64_t addr, size; } p_bind_buf;  // UB
 typedef struct { int32_t stage, first, n, defer; uint64_t src; uint64_t h[32]; } p_bind_handles; // Separate texture / sampler handles
 typedef struct { int32_t face, value_mask, mask, ref, which; } p_stencil;  // which: 0 value mask 1 write mask 2 reference value
 typedef struct { float factor, units, clamp; } p_poly_offset;
-typedef struct { int32_t prim, first, count; } p_draw;
+typedef struct { int32_t prim, first, count, instances, base_instance; } p_draw;   // instances 0 is read as 1
 typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instances; uint64_t ibuf; } p_draw_idx;
 typedef struct { int32_t x, y, z; uint64_t caller; } p_dispatch;   // caller: return address of the game call site (to locate the dispatcher)
 typedef struct { const dpool_t *pool; } p_set_pool;

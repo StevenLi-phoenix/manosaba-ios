@@ -13,6 +13,8 @@ typedef struct {
     int screen_w, screen_h;                   // console output size the game renders at (touch space until the game sets a crop)
     unsigned guest_heap_mb;                   // heap region on iOS; the rest of the address space reservation goes to the alias region
     int nvn_api_major, nvn_api_minor;         // NVN API version nvnDeviceGetInteger reports (game.json device_api "major.minor")
+    struct { int tex, ntex, samp, nsamp, img, nimg; } nvn_c2;   // c[2] handle tables of the game's shaders: byte base and slot count (game.json nvn_c2)
+    int nvn_depth_mode;                       // NVNdepthMode its shaders were built for (game.json depth_mode: 0 near_is_minus_w, 1 near_is_zero)
     const dm_game_file *romfs_files; int romfs_nfiles;          // key RomFS files with their exact sizes (also tells the version)
     const char *romfs_tree; int romfs_tree_files; long long romfs_tree_bytes;   // RomFS directory whose file count and byte total must match
     const char *const *save_sync; int save_sync_n;              // save paths (glob, relative to the save root) kept in iCloud sync

@@ -13,6 +13,11 @@ def load(path):
     if not isinstance(g['screen'], list) or len(g['screen']) != 2: sys.exit(f'{path}: screen must be [width, height]')
     int(g['program_id'], 16); bytes.fromhex(g['main_build_id'])
     if not re.fullmatch(r'\d+\.\d+', g.get('device_api', '55.15')): sys.exit(f'{path}: device_api must be "major.minor"')
+    c2 = g.get('nvn_c2')
+    if not isinstance(c2, dict) or sorted(c2) != ['img', 'samp', 'tex'] or not all(isinstance(v, list) and len(v) == 2 and re.fullmatch(r'0x[0-9a-fA-F]+', str(v[0])) and isinstance(v[1], int) for v in c2.values()):
+        sys.exit(f'{path}: nvn_c2 must be {{"tex": ["0x..", slots], "samp": ["0x..", slots], "img": ["0x..", slots]}}')
+    if max(int(v[0], 16) + 8 * v[1] for v in c2.values()) > 0xA00: sys.exit(f'{path}: nvn_c2 tables must end within 0xA00 (the replay layer fills a 0xA00-byte bank)')
+    if g.get('depth_mode') not in ('near_is_minus_w', 'near_is_zero'): sys.exit(f'{path}: depth_mode must be "near_is_minus_w" or "near_is_zero"')
     return g
 
 def cstr(s): return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
@@ -33,6 +38,8 @@ def write_c(g, out):
           f'    .modules = {cstr(" ".join(g["modules"]))}, .main_build_id = {cstr(g["main_build_id"])}, .language = {cstr(g["language"])},',
           f'    .screen_w = {g["screen"][0]}, .screen_h = {g["screen"][1]}, .guest_heap_mb = {g.get("guest_heap_mb", 256)},',
           '    .nvn_api_major = %s, .nvn_api_minor = %s,' % tuple(g.get('device_api', '55.15').split('.')),
+          '    .nvn_c2 = {%s},' % ', '.join(f'{v[0]}, {v[1]}' for v in (g['nvn_c2']['tex'], g['nvn_c2']['samp'], g['nvn_c2']['img'])),
+          '    .nvn_depth_mode = %d,' % (1 if g['depth_mode'] == 'near_is_zero' else 0),
           f'    .romfs_files = romfs_files, .romfs_nfiles = {len(files)},',
           f'    .romfs_tree = {cstr(r["tree"]) if r.get("tree") else "0"}, .romfs_tree_files = {r.get("tree_files", 0)}, .romfs_tree_bytes = {r.get("tree_bytes", 0)}LL,',
           f'    .save_sync = save_sync, .save_sync_n = {len(sync)},',

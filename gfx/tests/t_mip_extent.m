@@ -1,7 +1,7 @@
 // Real NVN recording entry → production Metal replay; each mip of 8x6 is hand-calculated independently; with no viewport set, an explicit viewport is not used to dodge it.
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/hle_nvn.c"
-const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15 };   // hle_nvn.c reports the NVN API version from the profile
+const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15, .nvn_c2 = {0x168, 128, 0x568, 128, 0x120, 8}, .nvn_depth_mode = 1 };   // hle_nvn.c reports the NVN API version and sets the c[2] layout from the profile
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
 void *front_metal_layer(void) { return NULL; }

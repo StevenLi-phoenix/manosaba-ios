@@ -6,7 +6,8 @@
 #   the host's DM_SHDUMP or by an engine extractor (engines/unity/shader_extract.py); key = the first 16 hex digits of sha256(control section).
 #   Output goes to <cache root>/b-<chain version>/ (dmsh_chain.py): <key>_b.metallib, <key>_b.json (reflection, including drv_reads: run-time reads
 #   of the driver banks c0 / c2), <key>_b.metal (MSL), and <key>_bf.metallib readable-tile variants of fragment shaders (dmsh_fetch.py).
-# Environment: IOSOUT=<dir> also builds iphoneos metallibs (ios_metal.py) into <dir>/b-<chain version>/; XLATE = the translator; J = jobs;
+# Environment: DM_GAME = the game id (games/<id>/game.json gives nvn_c2, the c[2] handle table layout of its shaders; required);
+#   IOSOUT=<dir> also builds iphoneos metallibs (ios_metal.py) into <dir>/b-<chain version>/; XLATE = the translator; J = jobs;
 #   DMSH_CAS = content-addressed cache (default <cache root>/cas); DMSH_BF_WANT = file listing keys that also get an output-mapping-only variant.
 # Ends with a summary: successes / failures by reason, and the driver bank reads the replay layer cannot fill.
 import ast, inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tempfile, collections, threading, concurrent.futures as cf
@@ -30,7 +31,18 @@ CAS = os.environ.get('DMSH_CAS', os.path.join(cache_root, 'cas'))
 CAS_LOCKS, CAS_LOCKS_GUARD = {}, threading.Lock()
 PRE_STATS = collections.Counter()
 MAC_RECORD = 'xcrun -sdk macosx metal -c; xcrun -sdk macosx metallib'
-TEX_BASE, SAMP_BASE, IMG_BASE = 0x168, 0x568, 0x120   # c[2]: image handle table 0x120 + 8 r (8 slots, immediately before the texture table; inferred from cs_lut_combine_c writing u4 = 0x140, checked with u5 = 0x148)
+# c[2] handle tables of the game's NVN driver (game.json nvn_c2: {"tex": [base, slots], "samp": [...], "img": [...]}, bases as hex strings, 8 bytes
+# per slot). manosaba: textures 0x168, samplers 0x568, images 0x120 (inferred from cs_lut_combine_c writing u4 = 0x140, checked with u5 = 0x148);
+# Tears of the Kingdom: textures 0x20 (as nxnative for the games on the same SDK). Each translator job carries tex / img, each reflection all three.
+GAME_ID = os.environ.get('DM_GAME') or sys.exit('[red] DM_GAME is not set: the c[2] layout of the shaders comes from games/<DM_GAME>/game.json nvn_c2')
+_gj = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'games', GAME_ID, 'game.json'), encoding='utf-8'))
+if 'nvn_c2' not in _gj: sys.exit(f'[red] games/{GAME_ID}/game.json has no nvn_c2')
+C2 = {k: [int(v[0], 16), int(v[1])] for k, v in _gj['nvn_c2'].items()}
+# Depth convention the game sets with nvnDeviceSetDepthMode (game.json depth_mode): near_is_minus_w makes the translator remap z in every vertex shader
+DEPTH = _gj.get('depth_mode') or sys.exit(f'[red] games/{GAME_ID}/game.json has no depth_mode')
+TEX_BASE, TEX_END = C2['tex'][0], C2['tex'][0] + 8 * C2['tex'][1]
+SAMP_BASE, SAMP_END = C2['samp'][0], C2['samp'][0] + 8 * C2['samp'][1]
+IMG_BASE, IMG_END = C2['img'][0], C2['img'][0] + 8 * C2['img'][1]
 
 def clone(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -66,7 +78,7 @@ def tool_fingerprint():
             '\0xc\0' + repr(XC) + '\0mac\0' + MAC_RECORD + '\0ios\0' + (ios_metal.RECORD if IOSOUT else ''))
 
 def shader_key(key, name, rec):
-    payload = (b'record\0' + rec + b'\0tools\0' + TOOL_FP + b'\0code\0' + CODE_FP.encode() + b'\0rule\0' + shader_rule_source(name))
+    payload = (b'record\0' + rec + b'\0tools\0' + TOOL_FP + b'\0code\0' + CODE_FP.encode() + b'\0rule\0' + shader_rule_source(name) + b'\0c2\0' + json.dumps(C2, sort_keys=True).encode() + b'\0depth\0' + DEPTH.encode())
     return hashlib.sha256(payload).hexdigest()
 
 def cache_meta_path(key): return os.path.join(CAS, 'index', key + '.json')
@@ -223,7 +235,7 @@ def job_for(key, rec, w):
     if stage != 'cs': code = code[0x30:]
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     # Translation options (dmsh_xlate/Program.cs); relaxed precision is on by default (last-bit GPU float differences do not reach game state)
-    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(),
+    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'c2': {'tex': C2['tex'], 'img': C2['img']}, 'depth': DEPTH,
          'debug': os.environ.get('XLATE_DEBUG', '1') != '0', 'reduced': os.environ.get('XLATE_REDUCED', '1') == '1'}
     # Compute thread group size: control section +0x748 / +0x74c / +0x750 (u32 x / y / z; matches Unity's threadGroupSize metadata for every kernel checked)
     local = list(struct.unpack_from('<3I', rec, ci + 0x748)) if stage == 'cs' else None
@@ -282,14 +294,14 @@ def decode_tex(name):
     def slot(word, base, cb): return (word * 4 - base) // 8 if cb == 2 and word * 4 >= base and (word * 4 - base) % 8 == 0 else None
     words = [o0] + ([o1] if ty else [])
     if re.match(r'[a-z]+_i', name):   # image
-        return next((slot(x, IMG_BASE, tb) for x in words if IMG_BASE <= x * 4 < TEX_BASE and slot(x, IMG_BASE, tb) is not None), None), None, ty
-    t = next((slot(x, TEX_BASE, tb) for x in words if slot(x, TEX_BASE, tb) is not None and x * 4 < SAMP_BASE), None)
-    s = next((slot(x, SAMP_BASE, sb) for x in words if x * 4 >= SAMP_BASE and slot(x, SAMP_BASE, sb) is not None), None)
+        return next((slot(x, IMG_BASE, tb) for x in words if IMG_BASE <= x * 4 < IMG_END and slot(x, IMG_BASE, tb) is not None), None), None, ty
+    t = next((slot(x, TEX_BASE, tb) for x in words if slot(x, TEX_BASE, tb) is not None and x * 4 < TEX_END), None)
+    s = next((slot(x, SAMP_BASE, sb) for x in words if SAMP_BASE <= x * 4 < SAMP_END and slot(x, SAMP_BASE, sb) is not None), None)
     return t, s, ty
 
 def img_size_queries(src):
     """
-    Size queries on an image handle: a TXQ immediate handle falling in c[2]'s image table (IMG_BASE..TEX_BASE) gets its own texture argument <seg>_t_tcb_<handle> (plus a ...Smplr sampler) from Ryujinx,
+    Size queries on an image handle: a TXQ immediate handle falling in c[2]'s image table (IMG_BASE..IMG_END) gets its own texture argument <seg>_t_tcb_<handle> (plus a ...Smplr sampler) from Ryujinx,
     and the host has no "image as texture" binding. They query the same descriptor, so when this shader also accesses the image through the same handle (<seg>_i_cb2_<handle>_...), point the queries at that image argument and drop the extra texture / sampler members.
     Only texture arguments used solely for get_width / get_height / get_depth / get_num_mip_levels are changed; returns (new MSL, list of changed member names)"""
     body = re.search(r'struct spvDescriptorSetBuffer0\s*\{(.*?)\};', src, re.S)
@@ -298,7 +310,7 @@ def img_size_queries(src):
     done = []
     for nm in members:
         m = re.fullmatch(r'([a-z]+)_t_tcb_([0-9A-F]+)', nm)
-        if not m or not (IMG_BASE <= int(m.group(2), 16) * 4 < TEX_BASE): continue
+        if not m or not (IMG_BASE <= int(m.group(2), 16) * 4 < IMG_END): continue
         img = [x for x in members if re.fullmatch(r'%s_i_cb2_%s_\w*' % (m.group(1), m.group(2)), x)]
         uses = re.findall(r'spvDescriptorSet0\.%s\b(\.\w+\()?' % nm, src)
         if len(img) != 1 or not uses or any(u not in ('.get_width(', '.get_height(', '.get_depth(', '.get_num_mip_levels(') for u in uses): continue
@@ -343,12 +355,12 @@ def reflect(key, stage, msl, res):
     return binds
 
 DRV_FILL = {0: [(0x110, 0x210), (0x310, 0x410), (0x510, 0x610)],   # c0: storage buffer address tables (vertex / compute / pixel, 16 slots × 0x10 each)
-            2: [(0x168, 0x568), (0x568, 0x968)]}                     # c2: texture handle table, sampler handle table (128 slots × 8 each)
+            2: [(TEX_BASE, TEX_END), (SAMP_BASE, SAMP_END)]}         # c2: texture handle table, sampler handle table (nvn_c2)
 
 def drv_reads(src):
     """Reads of driver segments c0 / c2 in the MSL: constant index → byte range; non-constant indices are recorded as dynamic.
     words = offsets of the 4-byte words actually read: an index followed by components (.x / .yz ...) records only those components, without components the whole vec4
-    (c2's handle tables use 8 bytes per slot, not vec4-aligned: _m0[22].z = 0x168 is texture slot 0, counting by vec4 would falsely report 0x160)"""
+    (c2's handle tables use 8 bytes per slot, not vec4-aligned: with manosaba's layout _m0[22].z = 0x168 is texture slot 0, counting by vec4 would falsely report 0x160)"""
     out = {}
     for bank in (0, 2):
         offs, words, dyn = set(), set(), False
@@ -443,7 +455,7 @@ def finish(key, w, j, c1):
     dr = drv_reads(src)
     refl = {'key': key + '_b', 'route': 'B', 'chain': CHAIN, 'dm_ctl': key, 'source': 'capture', 'stage': j['stage'],
             'entry': entry.group(2) if entry else 'main0', 'msl_entry_kind': entry.group(1) if entry else None,
-            'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'notes': res['notes'], 'drv_reads': dr, 'drv_unfillable': unfillable(dr),
+            'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'c2': C2, 'depth_mode': DEPTH, 'notes': res['notes'], 'drv_reads': dr, 'drv_unfillable': unfillable(dr),
             'bindings': reflect(key, j['stage'], src, res),
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
             'raster': raster_facts(j['stage'], src)}
