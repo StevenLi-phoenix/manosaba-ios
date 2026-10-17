@@ -16,7 +16,7 @@ This working copy uses `DM_ROOT=<repo>/work` (git ignores `work/`).
 | Not in git | Where it lived | How to get it back |
 |---|---|---|
 | Console keys | `keys/` | From your own console; keep your own backup |
-| Game dump (NSP, ExeFS, RomFS) | `dump/`, `extracted/2.0.4b/` | [PORTING.md § 1](PORTING.md#1-dump-the-game-from-your-console). `work/data/switch/manosaba-2.0.4b/RomFS` was a link to `extracted/2.0.4b/RomFS` |
+| Game dump (NSP, ExeFS, RomFS) | `dump/`, `extracted/2.0.4b/` | [PORTING.md § 1](PORTING.md#1-dump-the-game-from-your-console): `tools/game_extract.sh keys/prod.keys <out dir> dump/*.nsp` rebuilds ExeFS and RomFS from the two NSPs. `work/data/switch/manosaba-2.0.4b/RomFS` was a link to `extracted/2.0.4b/RomFS` |
 | System fonts | `work/data/switch/sysfont` | PORTING.md § 1 (nxdumptool, system data titles 0100000000000810–814) |
 | Console and SD card backups | `sd_backup_*/` | Only your own backup |
 | Product (rewritten modules) | `work/build/cache/dm/out/…` | `tools/build_product.sh && verify/regress.sh` |
@@ -77,6 +77,53 @@ What works is in the README's status. Open, roughly by value:
 Devices on 2026-10-16: iPhone 17 Pro (iOS 26.4) runs a build from before 1f54dad (the copy encoder fix), iPad mini 7 (iOS 18.6.2) a build of
 68c048b, iPad Pro M4 (iOS 18.5) the unsigned IPA above (build 1792140837) with the iPad mini's save of 2026-10-16 17:10.
 
+## Next game: Tears of the Kingdom (started 2026-10-17)
+
+`games/totk` (1.4.3, program 0100F2C0115B6000, main build 277178b7dba1b6d4949a84778d4abc58), data from your NSPs with
+`tools/game_extract.sh` into `work/data/switch/totk-1.4.3`. SDK 20.5.22; its `sdk` and `subsdk0` have the same build IDs as nxnative's Breath of
+the Wild 1.9.0, so the system layer is the same binary and most host work could be taken from nxnative.
+
+**Rewrite: done, `verify/regress.sh --fuzz` OK for all three modules** (main: 129 windows, 5 sections in pieces, 6 explicit jump tables with 49
+targets, 17 equally spaced tables, 8 `blr x18`; manosaba's equivalence numbers are unchanged). What `tools/patch_nso.py` learned:
+
+- `blr x18` whose x18 was loaded in an earlier block: the K18 slot holds it wherever it was loaded (nxnative's blr rewrite has no such check).
+- Jump tables with explicit targets (`adr xA, anchor; ldrsw / ldrh / ldrb xT, [xB, xI, lsl #s]; add xD, xA, xT[, lsl #k]; br xD`): the targets
+  are derived over the function's control flow (table base and anchor from every reaching definition, the index bound from a compare + branch
+  on every path, other tables' targets as edges, iterated to a fixpoint and re-derived strictly), then a compare chain with landing pads as
+  nxnative's `site_br_tab`, comparing with `sub` + `cbz` so NZCV stays as `br` leaves it. An index outside the table stops at `brk #0x18`.
+  New `sites.tsv` row `JT`.
+- Exclusive sections by control flow (`exclusive_regions`): every instruction on a path from an exclusive load to a store (not through another
+  exclusive load, a call or `clrex`), plus the status branch. Contiguous sections entered at their load are windows as before (manosaba's 17
+  come out identical); TotK's compiler moves compare-and-swap retries into cold blocks that jump back to the main path's `stxr`, giving sections
+  in pieces, copied by `site_region` (row `R`: entry, then `lo-hi@copy` per piece). Any other entry stops the rewrite.
+- `mrs xN, ctr_el0` (SIGILL on Apple systems, read by `nn::os::FlushDataCache`) → `movz xN, #4, lsl #16` in place, as nxnative (row `ctr`; 64-byte
+  lines, at most the real 128). This also changes two words of manosaba's `sdk`, a latent SIGILL there.
+- Verifiers: `structck` ⑪ checks windows, sections and explicit tables word by word against the original and enforces the single entry
+  independently, ⑫ the `ctr` constants; `equiv` runs sections in pieces from each piece (the cold retry block is reached only through the status
+  branch that `deexcl` removes), draws explicit table targets, and does not compare a trial whose original instruction reads below sp (the rewrite
+  blocks' red zone; one such draw in TotK main); `fnfuzz` gives both images the `ctr` constant. Seven deliberately broken products were all
+  caught by `structck`, five also by `equiv`.
+
+**First runs on the Mac (headless, empty shader map):** the game runs its main loop at 30 fps, renders and captures shaders (6202 so far), its
+audio renders with sound, saves and cache storage work. Host additions on the way, most from nxnative (credited in the code):
+oe (`GetPreviousProgramIndex` = -1 per switchbrew, launch parameter, startup logo, `PopNotificationMessage`, volume balance, ARUID), the NVN API
+version as a profile field `device_api` (TotK needs 55.15; manosaba keeps 53.311), hid mouse / vibration batch, the in-process audio renderer
+(`host/hle_audren.c`, with host guest threads `host/hle_guestthread.c` and `dm_pcmout_*`), the hardware Opus C API on the SDK's software decoder,
+fs read priority / access log, indexed cache storage (`$DM_CACHE`, from the SDK reference), another application's save not existing (TotK looks
+for BotW's), the user exception context area (svc GetInfo 20), play reports, amiibo (`host/hle_nfp.c`), clock snapshots and the steady / network
+clocks (layout and service semantics from Ryujinx), NVN functions (`MapVirtual`, `ProgramSetShadersExt`, `BindTexture`, deferred texture binds,
+`GetCommandMemoryUsed`, ...; 13 names added to `gfx/nvn/names.txt`, as nxnative's table), and command memory: a disabled callback or one that
+cannot supply enough continues in host segments that grow on demand and are reclaimed when the game gives the recording's memory out again.
+
+Where it stops now: a crash at main+0x84f5c (an object whose first field is null, right after NVN calls the host does not implement yet:
+`SetRenderEnable(Conditional)`, `SetTiledCacheAction / TileSize`, `SetRasterizerDiscard`). Known gaps: texture view swizzle and depth-stencil mode
+are logged, not applied; the other deferred bind kinds have no implementation; two threads enter the Metal layer at once (`WriteTexels` /
+`ReadTexels` from game worker threads during `SubmitCommands`); iOS needs `DM_CACHE` set by the front end and the large heap; hid six-axis is still
+a stub. Run: `DM_GAME=totk DM_ROOT=$PWD/work DM_NVN_SHMAP=<empty file> DM_SHDUMP=$PWD/work/build/totk/shader_capture DM_SAVE=… DM_TEMP=…
+DM_CACHE=… DM_WATCH=120 host/dmhost` after `make -C host GAME=totk`.
+
+Upstream PR #55 (x18 scan prefilter, n3crosis) is in `tools/patch_nso.py` (76 s → 16 s for manosaba's main).
+
 ## Upstream and other ports to draw from
 
 Reviewed 2026-10-17. Fetch them into a scratch repository, read only, never run their code; port by hand with a test per item, check our
@@ -98,8 +145,9 @@ Reviewed through 21cf97b91823111ead237858ea79929afacf71a5 (2026-10-17).
 
 All MIT and keep jhaizhou's LICENSE; they use the old `dm/` layout.
 
-- [seedds/nxnative](https://github.com/seedds/nxnative) (main, reviewed through 20cba12c4299d77f05b6bbfd3dfa42d6c6035da4): NSP → IPA; by
-  its README Mario Wonder playable on iPhone, Super Mario 3D World + Bowser's Fury and Breath of the Wild 1.9.0 in bring-up on the Mac.
+- [seedds/nxnative](https://github.com/seedds/nxnative) (main, reviewed through 20cba12c4299d77f05b6bbfd3dfa42d6c6035da4): NSP → IPA; its
+  README at that commit lists Super Mario Bros. Wonder, Fire Emblem Engage, Metroid Dread, 13 Sentinels, Super Mario 3D World + Bowser's
+  Fury and Breath of the Wild 1.9.0 as tested on an iPhone and playable (iOS 26); the BotW profile's own header still says "in bring-up".
 - [Johnoooob/nx-port](https://github.com/Johnoooob/nx-port) (main, single commit 3e6366b86a510361d451618ffd7c45dea5549492, unchanged).
 - [Kamisorara/d2r-mobile](https://github.com/Kamisorara/d2r-mobile) (main: only upstream merges since 95d6caa; branch
   face-buttons-by-printed-glyph).
@@ -130,6 +178,14 @@ multisample textures), 1D textures as one-row 2D, a zero write mask and no blend
 broken version that fails it (`t_pool_find`, `t_tex_fit` on the GPU, `t_hid_script`). On the Mac a trial scene loaded with the old and the new
 host gave no red lines and equal screenshots after the load; no texture type mismatch happens there, so `tex_fit` has only run in its test.
 
+On 2026-10-17, after nxnative's nx_extract (aa8cc5c…, LibHac 0.19.0): `tools/game_extract` (`prod.keys` + `.nsp` / `.xci` → ExeFS and
+the merged RomFS), our own code with XCI input, Horizon split-file folders, only the keys LibHac classes as common, and a check for
+personalized tickets added. LibHac's GitHub repository is gone (404); the NuGet package is unlisted but still served, MIT, pinned by content
+hash. Checked with manosaba's base and update NSPs: ExeFS and all 667 RomFS files equal to the console's extraction by SHA-256, and
+negative controls (base game only differs; a damaged NSP fails the hash check and leaves no output; a ticket marked personalized, a split
+folder with a missing part, a key file without the header key and its sources are refused; a split folder of the base NSP gives the same
+RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) and a real personalized ticket.
+
 ### Port when a game needs it
 
 - **AudioRenderer** (first-party games): nxnative `dm/host/hle_audren.c` (50a9c65b5f402b796cc7e7f0b011e11b2015f30f, the SDK renderer
@@ -156,7 +212,7 @@ host gave no red lines and equal screenshots after the load; no texture type mis
   (libvpx).
 - **Shaders** from Nintendo's containers: nxnative `dm/gfx/tools/shader_split.py` (Yaz0 SARCs, BNSH, BAHS in 42a50ef…); older Unity bundles:
   `dm/gfx/tools/unityfs.py` (e3cd2ff8ff0eb84a62280ef70e90c60753e546e6).
-- **Tools**: nx_extract (LibHac) and nso_syms.py (aa8cc5c0cd8bd5d09bcacb019f7832df3a164452); nso_fnmap.py, which carries cuts to a new build
+- **Tools**: nso_syms.py (aa8cc5c0cd8bd5d09bcacb019f7832df3a164452); nso_fnmap.py, which carries cuts to a new build
   of `main` (b5507f2aac7e1d1f5512de750f5810a550162b04, also for a manosaba update); build_ipa_from_nsp.py
   (0d763ec864344610cc41548a2ad01cd55def3182); DLC packing (e452f52b607bdf6f960eb843f20aeb29b803dec8); the app icon from the game's icon
   (1cd9bfb84b31fad5b413ab20baa977c16600f50a).
