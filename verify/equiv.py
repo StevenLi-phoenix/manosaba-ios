@@ -2,6 +2,8 @@
 # Several random states per site; compares x0-x30 (x18 compared against the slot value), sp, nzcv, v0-v31, all memory writes, final PC, memory access faults.
 # Usage: equiv.py <rewrite build output dir> <module> <NSO> [--seed 1] [--jobs N] [--min-eff 2] [--max-extra 16] [--mutate 300] [--tsv file]
 # Coverage: a trial where both sides take a memory access fault only compares the fault address and does not count as "effective"; each site needs at least min-eff effective trials, extra draws are made if short (≤max-extra), and sites still short are listed by name.
+# A trial whose original instruction reads the 128 bytes below sp is not compared and not effective (redzone_reads): the rewrite blocks keep their scratch
+# registers there (Apple's red zone), and real code never reads below sp (TotK main 0x5cc0ac ldr x18, [x17] drew x17 = sp - 14 and read the saved x0 / x1).
 # Mutation self-check: draw mutate ordinary rewrite blocks; in half the replaced instruction is changed to nop, in half the target of the trampoline exit b gets +4; all must be judged divergent (a negative control showing the criterion can discriminate).
 # Host gate (svc / cntpct / cntvct) semantics are defined by the host and are not run here, structck.py does the structural check; registered cuts (cuts.tsv) are intentional semantic changes and likewise only have their bytes checked by structck.
 import sys, os, struct, random, argparse, multiprocessing as mp
@@ -57,13 +59,17 @@ orig, _ = deexcl(orig); pat, _ = deexcl(pat)
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
-sites = []; winend = {}; brinfo = {}; fnptr = {}; ngate = 0
+sites = []; winend = {}; brinfo = {}; brtab = {}; fnptr = {}; ngate = 0
+secs = {}   # exclusive section in pieces (R row): entry → [(lo, hi, copy address)]
 for l in open(f'{DIR}/{MOD}.sites.tsv'):
     f = l.split(); a = int(f[0], 16)
     if f[1] == 'W': winend[a] = int(f[2], 16); sites.append(a)
+    elif f[1] == 'R': secs[a] = [tuple(int(v, 16) for v in p.replace('@', '-').split('-')) for p in f[2:]]; sites.append(a)
     elif f[1] == 'J': brinfo[a] = (int(f[2], 16), int(f[3]))
+    elif f[1] == 'JT': brtab[a] = [int(t, 16) for t in f[2:]]       # jump table with explicit targets (the site itself has its own x18 row)
     elif f[1] == 'T': fnptr[a] = int(f[2])                   # br / blr x18 through a function pointer (the site itself has its own x18 row)
     elif f[1] in ('svc', 'cntpct', 'cntvct'): ngate += 1      # Host gate: semantics are defined by the host, only a structural check is done
+    elif f[1] == 'ctr': ngate += 1                            # cache type read replaced by a constant in place: an intended value change, checked word for word by structck ⑫
     else: sites.append(a)
 
 def btarget(b, o):
@@ -84,6 +90,8 @@ def plain_block(a):
     if ins[5].mnemonic != 'ldr' or ins[5].operands[1].mem.base != T: return None              # ldr xS,[xT]: read the slot
     if ins[7].mnemonic != 'str' or ins[7].operands[1].mem.base != T: return None              # str xS,[xT]: write back to the slot - only ordinary blocks have it, conditional blocks do not (same convention as the old version)
     return ins[6].address
+GP = [getattr(sys.modules['unicorn.arm64_const'], f'UC_ARM64_REG_X{i}') for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_X30]
+VR = [getattr(sys.modules['unicorn.arm64_const'], f'UC_ARM64_REG_Q{i}') for i in range(32)]
 # Conditional branches inside an exclusive window (the status cbz/cbnz has already been turned into nop by deexcl and is not included): a random state almost never draws the "compare equal" direction (2^-32),
 # so each branch is forced through both directions once -- in both images the same branch is changed to nop (not taken) / an unconditional b (taken) at the same time, and the rest is compared as usual.
 # Background: up to r40 the rewriter placed the "sequential fall-out" exit of the window copy after the external exits, so a compare-and-swap window fell into the "compare not equal" exit after a successful write; the random trials were all green (6 windows in the game: main 0x1848eb8 / 0x1848f28 / 0x1848f84, sdk 0x2ea0fc / 0x2ea4cc / 0x2ea644).
@@ -91,22 +99,36 @@ def cond_target(w, pc):
     if w & 0xFF000010 == 0x54000000 or w & 0x7E000000 == 0x34000000: imm = (w >> 5) & 0x7FFFF; imm -= (imm & 0x40000) << 1; return pc + 4 * imm
     if w & 0x7E000000 == 0x36000000: imm = (w >> 5) & 0x3FFF; imm -= (imm & 0x2000) << 1; return pc + 4 * imm
     return None
-win_br = {}
-for a0, hi0 in winend.items():
+# Exclusive sections: a window [lo, hi) is copied right after its prologue; a section in pieces lists each piece's copy (structck ⑪ checks the copies
+# word by word). The original run of a section ends when pc leaves its instructions (inside); a piece of a section in pieces that is not entered from
+# outside (TotK main 0x18598, the cold retry block, reached only from the status cbnz that deexcl turns into nop) is run on its own as well: the
+# rewritten side starts at its copy with the state the prologue leaves (S = x18, T = slot address, S / T saved at [sp, #-16]).
+win_br = {}; inside = {}; piece_start = {}
+for a0, hi0 in list(winend.items()) + [(e, None) for e in secs]:
     gate = btarget(pat, a0); pre = list(md.disasm(bytes(pat[gate:gate + 24]), gate))
     assert [x.mnemonic for x in pre] == ['stp', 'mrs', 'adrp', 'ldr', 'add', 'ldr'], f'window block prologue does not have the expected shape {a0:#x}'
-    copy0 = gate + 24; lst = []
-    for c in range(a0, hi0, 4):
-        wo = struct.unpack_from('<I', orig, c)[0]; to = cond_target(wo, c)
-        if to is None: continue
-        cp = copy0 + (c - a0); wp = struct.unpack_from('<I', pat, cp)[0]; tp_ = cond_target(wp, cp)
-        assert tp_ is not None, f'no matching conditional branch in the window copy {c:#x}'
-        lst.append((c, wo, to, cp, wp, tp_))
-    if lst: win_br[a0] = lst
+    pieces = [(a0, hi0, gate + 24)] if hi0 is not None else secs[a0]
+    inside[a0] = {IB + c for lo, hi, cp in pieces for c in range(lo, hi, 4)}
+    S, T = (GP[int(pre[0].reg_name(pre[0].operands[k].reg)[1:])] for k in (0, 1))   # stp xS, xT, [sp, #-16]
+    for lo, hi, cp in pieces:
+        if lo != a0: piece_start[lo] = (a0, cp, S, T); inside[lo] = inside[a0]
+    lst = []
+    for lo, hi, copy0 in pieces:
+        for c in range(lo, hi, 4):
+            wo = struct.unpack_from('<I', orig, c)[0]; to = cond_target(wo, c)
+            if to is None: continue
+            cp = copy0 + (c - lo); wp = struct.unpack_from('<I', pat, cp)[0]; tp_ = cond_target(wp, cp)
+            assert tp_ is not None, f'no matching conditional branch in the window copy {c:#x}'
+            lst.append((c, wo, to, cp, wp, tp_))
+    if lst:
+        win_br[a0] = lst
+        for lo, hi, cp in pieces:
+            if lo != a0: win_br[lo] = lst
+sites += sorted(piece_start)
 def enc_b(pc, tgt): return 0x14000000 | (((tgt - pc) >> 2) & 0x3FFFFFF)
 mut_sites = []
 if A.mutate:
-    cand = [a for a in sites if a not in winend and a not in brinfo and plain_block(a)]
+    cand = [a for a in sites if a not in inside and a not in brinfo and a not in brtab and plain_block(a)]
     mut_sites = sorted(random.Random(A.seed).sample(cand, min(A.mutate, len(cand))))
     pat_mut = bytearray(pat)
     def exit_b(a):   # The b by which a rewrite block returns to text (the first unconditional b in the block whose target lands back in text)
@@ -123,8 +145,6 @@ if A.mutate:
         else: struct.pack_into('<I', pat_mut, plain_block(a), 0xD503201F); mut_kind[a] = 'nop'
     pat_mut = bytes(pat_mut)
 
-GP = [getattr(sys.modules['unicorn.arm64_const'], f'UC_ARM64_REG_X{i}') for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_X30]
-VR = [getattr(sys.modules['unicorn.arm64_const'], f'UC_ARM64_REG_Q{i}') for i in range(32)]
 
 def mk(image, arena0):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
@@ -133,17 +153,20 @@ def mk(image, arena0):
     u.mem_map(ARENA, ARENA_SZ); u.mem_write(ARENA, arena0)
     u.mem_map(TSD, 0x10000)
     u.reg_write(UC_ARM64_REG_TPIDRRO_EL0, TSD)
-    st = {'w': [], 'fault': None, 'arena': arena0}
+    st = {'w': [], 'fault': None, 'arena': arena0, 'rz': False}
     def wr(uc, acc, addr, size, val, d): st['w'].append((addr, size, val & ((1 << (8 * size)) - 1)))
     def bad(uc, acc, addr, size, val, d): st['fault'] = (acc, addr); return False
+    def rd(uc, acc, addr, size, val, d):
+        if addr < SP0 and addr + size > SP0 - 128: st['rz'] = True
     u.hook_add(UC_HOOK_MEM_WRITE, wr)
+    u.hook_add(UC_HOOK_MEM_READ, rd)
     u.hook_add(UC_HOOK_MEM_INVALID, bad)
     return u, st
 
 def restore(u, st):
     for a, s, v in st['w']:
         if ARENA <= a < ARENA + ARENA_SZ: u.mem_write(a, st['arena'][a:a + s])
-    st['w'].clear(); st['fault'] = None
+    st['w'].clear(); st['fault'] = None; st['rz'] = False
 
 def state(u, st, patched):
     g = [u.reg_read(r) for r in GP]
@@ -167,21 +190,27 @@ def run(u, st, start, patched, init):
         u.mem_write(TSD + 8 * SLOTTLS, struct.pack('<Q', init['tls']))
         u.mem_write(TSD + 8 * SLOTTLR, struct.pack('<Q', init['tlr']))
         u.reg_write(GP[18], 0xDEADBEEFDEADBEEF)
+        if start - IB in piece_start:                                  # what the section's prologue leaves: S / T saved below sp, S = x18, T = slot address
+            _, cp, S, T = piece_start[start - IB]
+            u.mem_write(SP0 - 16, struct.pack('<QQ', u.reg_read(S), u.reg_read(T))); st['w'].append((SP0 - 16, 16, 0))   # the record lets restore() put the arena back
+            u.reg_write(S, init['g'][18]); u.reg_write(T, TSD + 8 * SLOT18)
+            start = IB + cp
     end = {'pc': None}
     if patched:
         seen = {'patch': False}
         def hk(uc, addr, size, d):
             if addr >= IB + PATCH_OFF: seen['patch'] = True
             elif seen['patch']: end['pc'] = addr; uc.emu_stop()
+        if start >= IB + PATCH_OFF: seen['patch'] = True
         h = u.hook_add(UC_HOOK_CODE, hk)
         try: u.emu_start(start, IB + 0x7FFFFFFF, count=400)
         except UcError: pass
         u.hook_del(h)
         if end['pc'] is None and st['fault'] is None: end['pc'] = 'NOEXIT'
-    elif start - IB in winend:
-        lo, hi = start, IB + winend[start - IB]
+    elif start - IB in inside:
+        ins_ = inside[start - IB]
         def hk2(uc, addr, size, d):
-            if not (lo <= addr < hi): end['pc'] = addr; uc.emu_stop()
+            if addr not in ins_: end['pc'] = addr; uc.emu_stop()
         h = u.hook_add(UC_HOOK_CODE, hk2)
         try: u.emu_start(start, IB + 0x7FFFFFFF, count=400)
         except UcError: pass
@@ -195,7 +224,7 @@ def run(u, st, start, patched, init):
     return s + (end['pc'],)
 
 TEXT_END = hdr['TEXT_END']
-def init_state(rng, kind, site_br=None, fn_target=False):
+def init_state(rng, kind, site_br=None, fn_target=False, tab=None):
     g = []
     for i in range(31):
         if kind == 0: g.append(rng.randrange(0, 0x10000) & ~7)
@@ -203,10 +232,12 @@ def init_state(rng, kind, site_br=None, fn_target=False):
         else: g.append(rng.getrandbits(64))
     if site_br: g[18] = IB + site_br[0] + 4 * rng.randrange(site_br[1])
     if fn_target: g[18] = IB + 4 * rng.randrange(TEXT_END // 4)    # function pointer: any text address, so both sides land on mapped code
+    if tab: g[18] = IB + rng.choice(tab)                             # explicit jump table: one of its targets (any other value stops at the block's brk)
     return {'g': g, 'v': [rng.getrandbits(128) for _ in range(32)], 'nzcv': rng.randrange(16) << 28, 'tls': rng.randrange(0, 0x100000) & ~15, 'tlr': rng.randrange(0x100000, 0x200000) & ~15}
 
 def trial(UO, SO, UP, SP, a, init):
     so = run(UO, SO, IB + a, False, init)
+    if SO['rz']: return True, False, [], True       # the original read below sp: not a state real code can be in
     sp_ = run(UP, SP, IB + a, True, init)
     if a in fnptr:   # the function pointer block leaves the target in x17 (IP1, not preserved across a call / tail call by AAPCS64)
         g = list(sp_[0]); g[17] = so[0][17]; sp_ = (g,) + sp_[1:]
@@ -214,7 +245,7 @@ def trial(UO, SO, UP, SP, a, init):
     sp_ = sp_[:4] + ([x for x in sp_[4] if not ((SP0 - 128 <= x[0] < SP0 or TSD <= x[0] < TSD + 0x10000) and x[0] not in ow)],) + sp_[5:]
     both = bool(so[5] and sp_[5])
     same = (so[5] == sp_[5]) if (so[5] or sp_[5]) else (so == sp_)
-    return same, both, [k for k, (x, y) in enumerate(zip(so, sp_)) if x != y]
+    return same, both, [k for k, (x, y) in enumerate(zip(so, sp_)) if x != y], False
 
 def work(job):
     idx, chunk, mutated = job
@@ -223,14 +254,14 @@ def work(job):
     UO, SO = mk(orig, arena0); UP, SP = mk(pat_mut if mutated else pat, arena0)
     out = []
     for a in chunk:
-        n = eff = 0; diffs = []
+        n = eff = nrz = 0; diffs = []
         kinds = [0, 1] + ([] if a in brinfo else [2])
         extra = 0
         while kinds or (eff < A.min_eff and extra < A.max_extra):
             if kinds: kind = kinds.pop(0)
             else: kind = (1, 0)[extra % 2]; extra += 1
-            same, both, fl = trial(UO, SO, UP, SP, a, init_state(rng, kind, brinfo.get(a), a in fnptr))
-            n += 1; eff += not both
+            same, both, fl, rz = trial(UO, SO, UP, SP, a, init_state(rng, kind, brinfo.get(a), a in fnptr, brtab.get(a)))
+            n += 1; eff += not (both or rz); nrz += rz
             if not same: diffs.append((kind, fl))
             if mutated and diffs: break
         if not mutated:
@@ -240,12 +271,12 @@ def work(job):
                     UP.mem_write(IB + cp, struct.pack('<I', 0xD503201F if mode == 'not-taken' else enc_b(cp, tp_)))
                     UO.ctl_remove_cache(IB + c, IB + c + 4); UP.ctl_remove_cache(IB + cp, IB + cp + 4)
                     for kind in (0, 1, 0, 1):
-                        same, both, fl = trial(UO, SO, UP, SP, a, init_state(rng, kind))
-                        n += 1; eff += not both
+                        same, both, fl, rz = trial(UO, SO, UP, SP, a, init_state(rng, kind))
+                        n += 1; eff += not (both or rz); nrz += rz
                         if not same: diffs.append((f'window-branch {c:#x} forced-{mode}', fl))
                     UO.mem_write(IB + c, struct.pack('<I', wo)); UP.mem_write(IB + cp, struct.pack('<I', wp))
                     UO.ctl_remove_cache(IB + c, IB + c + 4); UP.ctl_remove_cache(IB + cp, IB + cp + 4)
-        out.append((a, n, eff, diffs))
+        out.append((a, n, eff, diffs, nrz))
     return out
 
 def runall(lst, mutated):
@@ -257,30 +288,30 @@ def runall(lst, mutated):
 def ins_of(a): return next(md.disasm(orig[a:a + 4], a))
 if __name__ == '__main__':
     res = sorted(runall(sites, 0))
-    T = sum(r[1] for r in res); E = sum(r[2] for r in res)
+    T = sum(r[1] for r in res); E = sum(r[2] for r in res); RZ = sum(r[4] for r in res)
     zero = [r for r in res if r[2] == 0]; low = [r for r in res if r[2] < A.min_eff]
     bad = [r for r in res if r[3]]
-    for a, n, eff, diffs in bad:
+    for a, n, eff, diffs, _ in bad:
         i = ins_of(a)
         for kind, fl in diffs: print(f'DIFF {a:#x} {i.mnemonic} {i.op_str} kind={kind} fields={fl}', flush=True)
-    for a, n, eff, _ in zero:
+    for a, n, eff, _, _ in zero:
         i = ins_of(a); print(f'NOEFF {a:#x} {i.mnemonic} {i.op_str} trials={n}')
     caught = miss = 0; mut_by = '-'
     if mut_sites:
         mres = runall(mut_sites, 1)
         caught = sum(1 for r in mres if r[3])
-        for a, n, eff, d in mres:
+        for a, n, eff, d, _ in mres:
             if not d: i = ins_of(a); print(f'MUTMISS {a:#x} {mut_kind[a]} {i.mnemonic} {i.op_str} trials={n} eff={eff}')
         miss = len(mres) - caught
         mk_ = {}
-        for a, n, eff, d in mres: c = mk_.setdefault(mut_kind[a], [0, 0]); c[0] += 1; c[1] += bool(d)
+        for a, n, eff, d, _ in mres: c = mk_.setdefault(mut_kind[a], [0, 0]); c[0] += 1; c[1] += bool(d)
         mut_by = ' '.join(f'{k}:{v[1]}/{v[0]}' for k, v in sorted(mk_.items()))
     if A.tsv:
         with open(A.tsv, 'w') as f:
             f.write('site\ttrials\teff\tdiffs\n')
-            for a, n, eff, d in res: f.write(f'{a:#x}\t{n}\t{eff}\t{len(d)}\n')
+            for a, n, eff, d, _ in res: f.write(f'{a:#x}\t{n}\t{eff}\t{len(d)}\n')
     ok = not bad and not zero and not miss   # A missed mutation = the criterion cannot tell a bad rewrite apart, so fail (earlier a miss was only printed, not judged)
-    print(f'EQUIV {MOD} {"OK" if ok else "FAIL"} sites={len(res)} trials={T} eff_trials={E} both_fault={T - E} '
+    print(f'EQUIV {MOD} {"OK" if ok else "FAIL"} sites={len(res)} trials={T} eff_trials={E} both_fault={T - E - RZ} redzone_reads={RZ} '
           f'sites_eff_ge1={len(res) - len(zero)} sites_eff_ge{A.min_eff}={len(res) - len(low)} zero_eff={len(zero)} diff_sites={len(bad)} '
-          f'windows={len(winend)} cond_windows={len(win_br)}(forced_branches={sum(len(v) for v in win_br.values())}x2) gates(structck)={ngate} cuts(structck)={ncut} obs_gates(structck)={nobs} mutations={len(mut_sites)}({mut_by}) caught={caught} missed={miss} seed={A.seed}', flush=True)
+          f'windows={len(winend)} pieces_sections={len(secs)}(piece_starts={len(piece_start)}) explicit_jump_tables={len(brtab)} cond_windows={len(set(win_br) - set(piece_start))}(forced_branches={sum(len(v) for a, v in win_br.items() if a not in piece_start)}x2) gates(structck)={ngate} cuts(structck)={ncut} obs_gates(structck)={nobs} mutations={len(mut_sites)}({mut_by}) caught={caught} missed={miss} seed={A.seed}', flush=True)
     sys.exit(0 if ok else 1)

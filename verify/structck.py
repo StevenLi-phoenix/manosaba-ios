@@ -21,7 +21,14 @@
 #     touched in between, no branch target in the range, key registered, a unique original value per key, no constant mask downstream
 #  ⑨ Temporary registers: every non-original destination register in a patch block has a matching red-zone save/restore pair at the same offset
 #  ⑩ Trampoline exits: for every b jumping into the patch area, the patch block's exits back to text may only be original site+4 / end of the absorbed
-#     span / end of the window / a branch target of an original instruction within the span (cuts are let through and listed)
+#     span / end of the window / a branch target of an original instruction within the span (cuts are let through and listed); an exclusive section in
+#     pieces (R row) may leave only to an address outside it that follows one of its instructions; a jump table with explicit targets (JT row) only to them
+#  ⑫ Cache type reads (ctr rows): the word is movz xN, #4, lsl #16 with the original destination register, in place (no trampoline)
+#  ⑪ Exclusive sections and explicit jump tables, word by word: windows (W) and sections in pieces (R) are entered only at their head (no direct branch,
+#     fall-through or JT target from outside lands on another of their instructions); the copy after the prologue is the original word for word, x18
+#     replaced by the prologue's scratch register, branches retargeted to the copy of their target inside the section or to an exit that writes the
+#     slot back, restores the scratch registers and jumps to the original target; JT blocks match the compare-chain template for exactly the listed
+#     targets, the original instruction is br x18 and every target lies inside its function
 import sys, os, re, struct, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 import nsoimg
@@ -62,9 +69,9 @@ def llvm_dis(blob, base):
             subprocess.run([f'{LLVM}/llvm-objcopy', '-I', 'binary', '-O', 'elf64-littleaarch64',
                             '--rename-section', '.data=.text,code', b, e], check=True)
         else: elf_wrap(blob, e)
-        # Keep only potentially relevant lines (x18/w18, tpidr, svc, cnt?ct); filtering millions of lines is left to grep
+        # Keep only potentially relevant lines (x18/w18, tpidr, svc, cnt?ct, ctr_el0); filtering millions of lines is left to grep (DIS_FILTER is part of the cache key)
         od = subprocess.Popen([f'{LLVM}/llvm-objdump', '-d', '--no-show-raw-insn', e], stdout=subprocess.PIPE)
-        r = subprocess.run(['/usr/bin/grep', '-iE', r'[xw]18|tpidr|svc|cnt[pv]ct'], stdin=od.stdout, capture_output=True, text=True)
+        r = subprocess.run(['/usr/bin/grep', '-iE', DIS_FILTER], stdin=od.stdout, capture_output=True, text=True)
         od.stdout.close(); assert od.wait() == 0
     out = {}
     for line in r.stdout.splitlines():
@@ -73,6 +80,7 @@ def llvm_dis(blob, base):
     return out
 
 RX18 = re.compile(r'\b[xw]18\b')
+DIS_FILTER = r'[xw]18|tpidr|svc|cnt[pv]ct|ctr_el0'
 def sysk(t):
     if re.match(r'svc\s', t): return 'svc'
     if re.match(r'mrs\s', t) and 'tpidr_el0' in t: return 'tpidr_r'
@@ -80,17 +88,21 @@ def sysk(t):
     if re.match(r'mrs\s', t) and 'tpidrro_el0' in t: return 'tpidrro_r'
     if re.match(r'mrs\s', t) and 'cntpct_el0' in t: return 'cntpct'
     if re.match(r'mrs\s', t) and 'cntvct_el0' in t: return 'cntvct'
+    if re.match(r'mrs\s', t) and 'ctr_el0' in t: return 'ctr'
     return None
 
 # ---- sites.tsv ----
-sites = {}; wins = []; jumps = 0; fnptr = 0
+sites = {}; wins = []; psecs = {}; tabs = {}; jumps = 0; fnptr = 0
 for l in open(f'{out_dir}/{mod}.sites.tsv'):
     f = l.split(); a = int(f[0], 16)
     if f[1] == 'J': jumps += 1; continue
+    if f[1] == 'JT': tabs[a] = [int(t, 16) for t in f[2:]]; continue   # jump table with explicit targets: annotation of the br x18 site's own row
     if f[1] == 'T': fnptr += 1; continue   # br / blr x18 through a function pointer: annotation of an x18 site, which has its own row
     if f[1] == 'W': wins.append((a, int(f[2], 16))); sites[a] = 'W'
+    elif f[1] == 'R':                       # exclusive section in pieces: entry, then lo-hi@copy per piece
+        psecs[a] = [tuple(int(v, 16) for v in re.fullmatch(r'(0x[0-9a-f]+)-(0x[0-9a-f]+)@(0x[0-9a-f]+)', p).groups()) for p in f[2:]]; sites[a] = 'R'
     else: sites[a] = f[1]
-inwin = set(o for lo, hi in wins for o in range(lo, hi, 4))
+inwin = set(o for lo, hi in wins for o in range(lo, hi, 4)) | {o for ps in psecs.values() for lo, hi, c in ps for o in range(lo, hi, 4)}
 
 # ⓪ Registered cuts
 cuts = []; bid = None
@@ -176,7 +188,11 @@ def btarget(o):
     imm = w & 0x3FFFFFF
     if imm & 0x2000000: imm -= 0x4000000
     return o + 4 * imm
-nb = [a for a in heads | obs_heads if not (btarget(a) is not None and PO <= btarget(a) < len(pat))]
+nb = [a for a in heads | obs_heads if sites.get(a) != 'ctr' and not (btarget(a) is not None and PO <= btarget(a) < len(pat))]
+# ⑫ ctr sites: replaced in place by a constant
+_ctr = [a for a, k in sites.items() if k == 'ctr']
+for a in _ctr:
+    if W(orig, a) & 0xFFFFFFE0 != 0xD53B0020 or W(pat, a) != 0xD2A00080 | (W(orig, a) & 31): bad(f'ctr site {a:#x}: not mrs xN, ctr_el0 → movz xN, #4, lsl #16')
 if nb: bad(f'rewrite site heads that are not a B into the patch area: {len(nb)}, e.g. {[hex(x) for x in nb[:5]]}')
 
 # ③ Independent denominator
@@ -185,7 +201,7 @@ def cached_dis(blob):
     import hashlib, json
     cd = os.environ.get('DM_VCACHE', os.path.join(DM_ROOT, 'build/cache/dm/verify'))
     ver = hashlib.sha256(subprocess.run([f'{LLVM}/llvm-objdump', '--version'], capture_output=True).stdout).hexdigest()[:8]
-    p = os.path.join(cd, f'{mod}.{hashlib.sha256(blob).hexdigest()[:16]}.{ver}.json')
+    p = os.path.join(cd, f'{mod}.{hashlib.sha256(blob).hexdigest()[:16]}.{ver}.{hashlib.sha256(DIS_FILTER.encode()).hexdigest()[:6]}.json')
     if os.path.exists(p): return {int(k): v for k, v in json.load(open(p)).items()}
     d = llvm_dis(blob, 0)
     os.makedirs(cd, exist_ok=True); tmp = f'{p}.new.{os.getpid()}'; json.dump(d, open(tmp, 'w')); os.replace(tmp, p)
@@ -198,9 +214,9 @@ for o, t in D.items():
     if k: ind[o] = k
 miss = sorted(o for o in ind if o not in sites and o not in inwin)
 if miss: bad(f'in the independent disassembly but not covered by rewrite sites: {len(miss)}, e.g. {[(hex(x), D[x]) for x in miss[:5]]}')
-extra = sorted(a for a, k in sites.items() if k != 'W' and a not in ind and a not in _hostcall)   # The svc introduced by a cut is not in the original image
+extra = sorted(a for a, k in sites.items() if k not in ('W', 'R') and a not in ind and a not in _hostcall)   # The svc introduced by a cut is not in the original image
 if extra: bad(f'rewrite sites not in the independent set: {len(extra)}, e.g. {[(hex(x), D.get(x)) for x in extra[:5]]}')
-kmis = sorted(a for a, k in sites.items() if k != 'W' and a in ind and ind[a] != k)
+kmis = sorted(a for a, k in sites.items() if k not in ('W', 'R') and a in ind and ind[a] != k)
 if kmis: bad(f'rewrite site kind differs from the independent reading: {len(kmis)}, e.g. {[(hex(x), sites[x], D[x]) for x in kmis[:5]]}')
 nwin_ref = sum(1 for o in ind if o in inwin)
 
@@ -302,7 +318,7 @@ for o in range(PO, len(pat) - 4, 4):
     nk[k] = nk.get(k, 0) + 1
 expected = {}
 for kind in sites.values():
-    key = {'x18': 'K18', 'W': 'K18', 'tpidr_r': 'KTLS', 'tpidr_w': 'KTLS', 'tpidrro_r': 'KTLR'}.get(kind)
+    key = {'x18': 'K18', 'W': 'K18', 'R': 'K18', 'tpidr_r': 'KTLS', 'tpidr_w': 'KTLS', 'tpidrro_r': 'KTLR'}.get(kind)
     if key: expected[key] = expected.get(key, 0) + 1
 expected['KGATE'] = len(gsites) + len(obs)
 for _, _, _, key in params: expected[key] = expected.get(key, 0) + 1
@@ -399,9 +415,9 @@ def _mem_sp(ins, load):
             if op.mem.disp < 0: return op.mem.disp
             if load and ins.mnemonic == 'ldp' and op.mem.disp == 0: return -16
     return None
-def _block(start):
+def _block(start, size=256):
     out = []
-    for ins in _md.disasm(pat[start:start + 256], start):
+    for ins in _md.disasm(pat[start:start + size], start):
         out.append(ins)
         if ins.mnemonic == 'b':
             t = ins.operands[0].imm
@@ -426,10 +442,11 @@ for a, allowed in static_entries:
         static_seen += 1; n_movsp += 1
         if not _movsp_ok(a, s): bad(f'mov sp, x18 block {a:#x} is not the template')
         continue
-    block = _block(s); static_seen += 1
+    block = _block(s, 4 * (12 + 4 * len(set(tabs[a])))) if a in tabs else _block(s); static_seen += 1   # a JT block reaches its first landing pad after the compare chain
     if not allowed:
         end = next((hi for lo, hi in wins if lo == a), a + 4)
-        for ins in _md.disasm(orig[a:end], a): allowed |= _writes(ins)
+        for lo, hi in ([(lo, hi) for lo, hi, c in psecs[a]] if a in psecs else [(a, end)]):
+            for ins in _md.disasm(orig[lo:hi], lo): allowed |= _writes(ins)
         if next(_md.disasm(orig[a:a + 4], a), None).mnemonic in ('stp', 'ldp'):
             allowed.update(('x0', 'x1'))
     saved = {}
@@ -478,7 +495,7 @@ def _exits(start):
                 if t < PO: ex.add(t); break
                 o = t; continue
             if w & 0xFC000000 == 0x94000000: o += 4; continue
-            if w == 0xD65F03C0 or w & 0xFFFFFC1F == 0xD61F0000: break
+            if w == 0xD65F03C0 or w & 0xFFFFFC1F == 0xD61F0000 or w & 0xFFE0001F == 0xD4200000: break   # ret / br / brk
             t = _bt(w, o)
             if t is not None:
                 if t < PO: ex.add(t)
@@ -487,18 +504,108 @@ def _exits(start):
     return ex
 nexit = 0; _cutoff = {c[0] for c in cuts}; _cutex = []
 for a in sorted(_heads):
+    if a in psecs:
+        inr = {o for lo, hi, c in psecs[a] for o in range(lo, hi, 4)}
+        legal = ({hi for lo, hi, c in psecs[a]} | {t for o in inr for t in [_bt(W(orig, o), o)] if t is not None}) - inr
+        for t in _exits(btarget(a)):
+            nexit += 1
+            if t not in legal: bad(f'trampoline exit {a:#x} → {t:#x}: not an address outside the exclusive section that follows one of its instructions')
+        continue
     if a in _wend:
         seg = range(a, _wend[a], 4); legal = {_wend[a]}
     else:
         e = a + 4
         while e < TE and W(pat, e) != W(orig, e) and e not in _heads: e += 4
         seg = range(a, e, 4); legal = {a + 4 * k for k in range(1, len(seg) + 1)}
-    legal |= {t for o in seg for t in [_bt(W(orig, o), o)] if t is not None}
+    legal |= {t for o in seg for t in [_bt(W(orig, o), o)] if t is not None} | set(tabs.get(a, ()))
     for t in _exits(btarget(a)):
         nexit += 1
         if t not in legal and a in _cutoff: _cutex.append(f'{a:#x}→{t:#x}'); continue   # Registered cuts (with a reason, deliberately changing control flow): let through and listed
         if t not in legal: bad(f'trampoline exit {a:#x} → {t:#x}: neither {a + 4:#x} / end of the absorbed span / end of the window, nor a branch target of an original instruction in the span (skips unmodified original instructions or another trampoline head)')
 print(f'EXITS {mod} tramp_heads={len(_heads)} exits={nexit} cut_exits={_cutex}')
+
+# ⑪ Exclusive sections (W / R rows) and jump tables with explicit targets (JT rows), word by word
+def STRX_(t, n): return 0xF9000000 | (n << 5) | t                                  # str xt, [xn]
+def LDP_(t, t2): return 0xA97F0000 | (t2 << 10) | (31 << 5) | t                     # ldp xt, xt2, [sp, #-16]
+_sec = {lo: [(lo, hi, None)] for lo, hi in wins} | psecs                          # entry → pieces (a window is one piece; its copy follows the prologue)
+_into = {}                                                                        # instruction of a section → its entry
+for e, ps in _sec.items():
+    for lo, hi, c in ps:
+        for o in range(lo, hi, 4):
+            if o in _into: bad(f'exclusive sections {_into[o]:#x} and {e:#x} share {o:#x}')
+            _into[o] = e
+for o in range(0, TE & ~3, 4):                                                    # entries from outside: direct branches and fall-through (independent of the rewriter's CFG)
+    w = W(orig, o); t = _bt(w, o)
+    if t is None and w & 0xFC000000 == 0x94000000: t = o + 4 * (((w & 0x3FFFFFF) ^ 0x2000000) - 0x2000000)   # bl
+    if t in _into and t != _into[t] and _into.get(o) != _into[t]: bad(f'{o:#x} branches into exclusive section {_into[t]:#x} at {t:#x}')
+for a, tg in tabs.items():
+    for t in tg:
+        if t in _into and t != _into[t]: bad(f'jump table {a:#x} target {t:#x} lies inside exclusive section {_into[t]:#x}')
+_nofall = lambda w: w & 0xFC000000 == 0x14000000 or w == 0xD65F03C0 or w & 0xFFFFFC1F == 0xD61F0000   # b / ret / br
+for o, e in _into.items():
+    if o != e and _into.get(o - 4) != e and not _nofall(W(orig, o - 4)): bad(f'{o - 4:#x} falls through into exclusive section {e:#x} at {o:#x}')
+_xst = [o for o, t in D.items() if RX18.search(t) and re.match(r'st[l]?x[rp][bh]?\s', t) and o not in _into]
+if _xst: bad(f'exclusive stores with x18 outside every exclusive section: {[(hex(o), D[o]) for o in _xst[:5]]}')
+def _q(b, o): return next(_md.disasm(b[o:o + 4], o), None)
+def _txt(b, o):
+    q = _q(b, o)
+    return f'{q.mnemonic} {q.op_str}' if q else None
+_FIELDS = sum(31 << p for p in (0, 5, 10, 16))
+def _subst_ok(ow, pw, S):
+    """pw is ow with every register field that holds 18 (and only those) set to S."""
+    return not (ow ^ pw) & ~_FIELDS and all(((ow >> p) & 31 == (pw >> p) & 31) or ((ow >> p) & 31 == 18 and (pw >> p) & 31 == S) for p in (0, 5, 10, 16))
+_BMASK = lambda w: 0xFC000000 if w & 0x7C000000 == 0x14000000 else 0xFFF80000 if w & 0x7E000000 == 0x36000000 else 0xFF000000   # branch bits outside the target and Rt / cond (b: imm26 only)
+nsec = 0
+for e, ps in sorted(_sec.items()):
+    s = btarget(e)
+    if s is None: continue                                                        # ② already reported the head
+    q0 = _q(pat, s); ks = keyseq(s + 4)
+    m = re.fullmatch(r'x(\d+), x(\d+), \[sp, #-0x10\]', q0.op_str) if q0 and q0.mnemonic == 'stp' else None
+    if not m or not ks or ks[1] != KEY['K18'] or _txt(pat, s + 4) != f'mrs x{m.group(2)}, tpidrro_el0' or _txt(pat, s + 20) != f'ldr x{m.group(1)}, [x{m.group(2)}]':
+        bad(f'exclusive section {e:#x}: prologue is not stp xS, xT, [sp, #-16]; slot address of K18 in xT; ldr xS, [xT]'); continue
+    S, T = int(m.group(1)), int(m.group(2)); nsec += 1
+    inr = {o for lo, hi, c in ps for o in range(lo, hi, 4)}
+    if ps[0][2] is None: ps = [(ps[0][0], ps[0][1], s + 24)]
+    elif e != ps[0][0]:
+        if btarget(s + 24) != next(c + e - lo for lo, hi, c in ps if lo <= e < hi): bad(f'exclusive section {e:#x}: no b to the entry\'s copy after the prologue')
+    elif ps[0][2] != s + 24: bad(f'exclusive section {e:#x}: the first piece is not copied right after the prologue')
+    cpos = {o: c + o - lo for lo, hi, c in ps for o in range(lo, hi, 4)}
+    exit_ok = lambda x, t: x is not None and W(pat, x) == STRX_(S, T) and W(pat, x + 4) == LDP_(S, T) and btarget(x + 8) == t
+    for lo, hi, c in ps:
+        for o in range(lo, hi, 4):
+            ow, cp = W(orig, o), cpos[o]; pw = W(pat, cp); t = _bt(ow, o)
+            x18 = bool(RX18.search(D.get(o, '')))
+            if t is not None:
+                pt = _bt(pw, cp)
+                if pt is None or (ow ^ pw) & _BMASK(ow) or (ow & 0x7C000000 != 0x14000000 and (ow & 31) != (pw & 31) and not (x18 and ow & 31 == 18 and pw & 31 == S)):
+                    bad(f'exclusive section {e:#x}: copy of branch {o:#x} is not the same branch'); continue
+                if t in inr:
+                    if pt != cpos[t]: bad(f'exclusive section {e:#x}: branch {o:#x} → {t:#x} inside the section does not go to its copy')
+                elif not exit_ok(pt, t): bad(f'exclusive section {e:#x}: branch {o:#x} → {t:#x} does not go to an exit to {t:#x}')
+            elif x18:
+                if _txt(pat, cp) != re.sub(r'\b([xw])18\b', lambda mm: f'{mm.group(1)}{S}', _txt(orig, o)) or not _subst_ok(ow, pw, S):
+                    bad(f'exclusive section {e:#x}: copy of {o:#x} is not the original with x18 → x{S}')
+            elif pw != ow: bad(f'exclusive section {e:#x}: copy of {o:#x} differs from the original')
+        if W(orig, hi - 4) & 0xFC000000 != 0x14000000:                            # the piece falls through: to an exit back to hi (a window's first exit follows the copy)
+            x = c + hi - lo
+            if not (exit_ok(x, hi) or exit_ok(btarget(x), hi)): bad(f'exclusive section {e:#x}: piece {lo:#x}-{hi:#x} does not fall through to an exit to {hi:#x}')
+_fs11 = nsoimg.func_starts(orig, TE)
+for a, tg in sorted(tabs.items()):
+    if sites.get(a) != 'x18' or _txt(orig, a) != 'br x18': bad(f'jump table {a:#x}: not an x18 site at br x18'); continue
+    i = _bs.bisect_right(_fs11, a) - 1; f0, f1 = _fs11[i], (_fs11[i + 1] if i + 1 < len(_fs11) else TE)
+    if any(not (f0 <= t < f1) or t % 4 for t in tg): bad(f'jump table {a:#x}: a target outside its function {f0:#x}-{f1:#x}')
+    s = btarget(a); u = sorted(set(tg)); ks = keyseq(s + 8) if s is not None else None
+    ok = bool(ks) and ks[1] == KEY['K18'] and _txt(pat, s) == 'stur x16, [sp, #-0x10]' and _txt(pat, s + 4) == 'stur x17, [sp, #-0x18]' \
+        and _txt(pat, s + 8) == 'mrs x16, tpidrro_el0' and _txt(pat, s + 24) == 'ldr x16, [x16]'
+    pads = (s or 0) + 28 + 16 * len(u) + 4
+    for k, t in enumerate(u if ok else []):
+        o = s + 28 + 16 * k; qa, qb = _q(pat, o), _q(pat, o + 4)
+        ok = ok and qa.mnemonic == 'adrp' and qa.op_str.startswith('x17,') and qa.operands[1].imm == t & ~0xFFF \
+            and qb.mnemonic == 'add' and qb.op_str.startswith('x17, x17, #') and qb.operands[2].imm == t & 0xFFF and _txt(pat, o + 8) == 'sub x17, x17, x16' \
+            and _txt(pat, o + 12) == f'cbz x17, #{pads + 12 * k:#x}' and _txt(pat, pads + 12 * k) == 'ldur x16, [sp, #-0x10]' \
+            and _txt(pat, pads + 12 * k + 4) == 'ldur x17, [sp, #-0x18]' and btarget(pads + 12 * k + 8) == t
+    if not (ok and _txt(pat, pads - 4) == 'brk #0x18'): bad(f'jump table {a:#x}: block is not the compare chain for exactly its {len(u)} targets')
+print(f'SECTIONS {mod} windows={len(wins)} pieces_sections={len(psecs)} checked={nsec} explicit_jump_tables={len(tabs)} targets={sum(len(set(t)) for t in tabs.values())}')
 
 cnt = {}
 if _hostcall: print(f'cuts introduce {len(_hostcall)} host-call gates: ' + ', '.join(f"{a:#x}=svc#{n:#x}" for a, n in _hostcall.items()))

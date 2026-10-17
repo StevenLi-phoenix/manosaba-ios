@@ -52,6 +52,9 @@ for l in open(f'{A.dir}/{A.mod}.sites.tsv'):
     f = l.split()
     if f[1] != 'J': sites[int(f[0], 16)] = f[1]
 gsites = {a for a, k in sites.items() if k in ('svc', 'cntpct', 'cntvct')}
+# Cache type reads are replaced by a constant in place (an intended value change, structck ⑫): the original image gets the same word, so both sides read it
+for a, k in sites.items():
+    if k == 'ctr': struct.pack_into('<I', orig, a, struct.unpack_from('<I', pat, a)[0])
 starts = nsoimg.func_starts(bytes(orig), TE)
 def func_of(a): return starts[bisect.bisect_right(starts, a) - 1]
 funcs = sorted({func_of(a) for a in sites})

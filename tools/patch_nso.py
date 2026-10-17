@@ -5,6 +5,7 @@
 #   mrs tpidr_el0       → read thread slot KTLS; msr tpidr_el0 → write KTLS
 #   mrs tpidrro_el0     → read thread slot KTLR (Horizon ThreadLocalRegion pointer)
 #   svc #n, mrs cntpct_el0 → host gate (gate address taken from thread slot KGATE; once in C, gates.tsv is looked up by return point)
+#   mrs xN, ctr_el0     → movz xN, #4, lsl #16 in place (cache type; Apple does not let user mode read it: SIGILL)
 #   The game's rules (rules.py, by NSO build ID) — cuts (CUTS): before rewriting, the original bytes are asserted one by one and any mismatch aborts; results are listed in <name>.cuts.tsv
 #   observation gates (OBS): one instruction at the entry is replaced with "enter the host observation callback → execute the original instruction → jump back", so diagnostics modify zero code at runtime; listed in <name>.obs.tsv
 #   parameter slots (PARAMS): a constant built by two instructions is read from a host thread slot instead
@@ -92,6 +93,11 @@ def ADDR(dd, n, m): return 0x8B000000 | (m << 16) | (n << 5) | dd
 def SUBI(dd, n, imm12, sh=0): return 0xD1000000 | (sh << 22) | (imm12 << 10) | (n << 5) | dd
 def BR(n): return 0xD61F0000 | (n << 5)
 def BLR(n): return 0xD63F0000 | (n << 5)
+def SUBR(dd, n, m): return 0xCB000000 | (m << 16) | (n << 5) | dd   # sub xd, xn, xm (flags untouched)
+def CBZ(t, frm, to):
+    off = to - frm; assert -(1 << 20) <= off < (1 << 20) and off % 4 == 0
+    return 0xB4000000 | (((off >> 2) & 0x7FFFF) << 5) | t
+def BRK(imm): return 0xD4200000 | ((imm & 0xFFFF) << 5)
 NOP = 0xD503201F
 
 def dis(w, addr):
@@ -198,6 +204,23 @@ def site_br(ins, base, count):
         emit(B(here(), base + 4 * i))
     return start
 
+def site_br_tab(ins, targets):
+    """Jump table br x18 whose targets are not equally spaced (anchor + signed word, see jump_tab): the table is constant, so all targets are read at
+    rewrite time. x16 = guest x18, compared with each target in turn (adrp + add put the target in x17, sub + cbz compare without touching NZCV,
+    which br x18 leaves alone); on a match x16 / x17 are restored and the block jumps to that target, which is exactly where br x18 would go;
+    no match → brk #0x18 (an index the analysis did not foresee stops loudly). After nxnative's site_br_tab (seedds, MIT), which compares with cmp."""
+    start = here()
+    emit(STUR(16, 31, -16)); emit(STUR(17, 31, -24))   # as in site_br: save x16 / x17 to the red zone before borrowing
+    emit(MRS_TPIDRRO(16)); emit_slot_addr(16, 17, 'K18'); emit(LDRX(16, 16))
+    uniq = sorted(set(targets))
+    pads = here() + 4 * (4 * len(uniq) + 1)
+    for k, t in enumerate(uniq):
+        emit(ADRP(17, here(), t)); emit(ADDI(17, 17, t & 0xFFF)); emit(SUBR(17, 17, 16)); emit(CBZ(17, here(), pads + 12 * k))
+    emit(BRK(0x18))
+    for t in uniq:
+        emit(LDUR(16, 31, -16)); emit(LDUR(17, 31, -24)); emit(B(here(), t))
+    return start
+
 def site_xbranch(ins, link):
     """br / blr x18 through a function pointer (not a jump table): IL2CPP invokers use x18 as the only free scratch register.
     The target goes to x17 (IP1: a linker veneer may clobber it on any call, so the callee cannot rely on it at entry); x16 is borrowed through the red zone.
@@ -295,23 +318,74 @@ def site_obs(off, oid, word):
     return start
 
 # ---- Exclusive windows ----
+# Between an exclusive load and its store, x18 cannot go through the slot (the slot access is a memory access inside the exclusive section, and the
+# section may then never succeed), so the whole section is copied with x18 replaced by a scratch register S loaded from the slot before it.
+# A section is found by control flow (exclusive_regions): every instruction on a path from an exclusive load to an exclusive store, plus the cbz /
+# cbnz on the store's status. A contiguous section entered only at its load is a window (site_window); TotK's compiler also moves the retry of a
+# compare-and-swap into a cold block (main 0x18598: ldxr; cmp; b.eq → the stxr at 0x181fc of the main path), giving a section in several pieces
+# (site_region).
 EXCL_LD = ('ldxr', 'ldaxr', 'ldxp', 'ldaxp', 'ldxrb', 'ldaxrb', 'ldxrh', 'ldaxrh')
 EXCL_ST = ('stxr', 'stlxr', 'stxp', 'stlxp', 'stxrb', 'stlxrb', 'stxrh', 'stlxrh')
-def find_windows(insl):
+EXCL_STOP = ('bl', 'blr', 'br', 'ret', 'svc', 'brk', 'hlt', 'udf', 'clrex')   # a path through these is not one exclusive section
+def exclusive_regions(insl):
+    """Exclusive sections of one function → sorted lists of instruction indices. From each exclusive load L, walk forward without passing another
+    exclusive load or EXCL_STOP and without going past an exclusive store (its status cbz / cbnz is kept); the section of L is what can reach one of
+    those stores walking back inside that set, again without passing an exclusive load (a failed compare that loops back to L is not part of it).
+    Sections that share an instruction are one section."""
+    idx = {x.address: i for i, x in enumerate(insl)}
+    def succ(i):
+        x = insl[i]
+        if x.mnemonic in EXCL_STOP: return []
+        out = [i + 1] if x.mnemonic != 'b' and i + 1 < len(insl) else []
+        t = dtarget(x)
+        if t is not None and t in idx: out.append(idx[t])
+        return out
+    def status(k):
+        s = insl[k].op_str.split(',')[0]
+        return k + 1 if k + 1 < len(insl) and insl[k + 1].mnemonic in ('cbz', 'cbnz') and insl[k + 1].op_str.split(',')[0] == s else None
     out = []
-    for i, ins in enumerate(insl):
-        if ins.mnemonic not in EXCL_LD: continue
-        j = i
-        while j < len(insl) and insl[j].mnemonic not in EXCL_ST: j += 1
-        if j >= len(insl) or j - i >= 16: continue
-        if j + 1 < len(insl) and insl[j + 1].mnemonic in ('cbz', 'cbnz'): j += 1
-        seg = insl[i:j + 1]
-        if any(has18(x) for x in seg): out.append(seg)
-    return out
+    for L, x in enumerate(insl):
+        if x.mnemonic not in EXCL_LD: continue
+        F, st, stores = {L}, [L], set()
+        while st:
+            i = st.pop()
+            if insl[i].mnemonic in EXCL_ST: stores.add(i); continue
+            for j in succ(i):
+                if j not in F and insl[j].mnemonic not in EXCL_LD: F.add(j); st.append(j)
+        if not stores: continue
+        back = {}
+        for i in F:
+            if insl[i].mnemonic not in EXCL_ST:
+                for j in succ(i):
+                    if j in F: back.setdefault(j, []).append(i)
+        R, st = set(stores), list(stores)
+        while st:
+            i = st.pop()
+            if insl[i].mnemonic in EXCL_LD: continue
+            for p in back.get(i, []):
+                if p not in R: R.add(p); st.append(p)
+        R |= {status(k) for k in stores} - {None}
+        for M in [M for M in out if M & R]: out.remove(M); R |= M
+        out.append(R)
+    return sorted((sorted(R) for R in out), key=lambda r: r[0])
+
+def region_entries(insl, R, fa, extra=()):
+    """Instructions of section R that can be entered from outside it: a branch (b, bl, conditional) or fall-through from outside, a jump table
+    target (extra: (from, to) edges), the function entry, or no visible predecessor at all."""
+    inR = {insl[i].address for i in R}
+    preds = {a: [] for a in inR}
+    for i, x in enumerate(insl):
+        if x.mnemonic not in ('b', 'br', 'ret') and i + 1 < len(insl) and insl[i + 1].address in preds: preds[insl[i + 1].address].append(x.address)
+        t = dtarget(x) if x.mnemonic != 'bl' else x.operands[0].imm
+        if t in preds: preds[t].append(x.address)
+    for frm, t in extra:
+        if t in preds: preds[t].append(frm)
+    return sorted(a for a in inR if a == fa or not preds[a] or any(p not in inR for p in preds[a]))
 
 def site_window(seg):
     used = set()
     for x in seg: used |= regs_in(x)
+    assert all(sp_delta(x) == 0 for x in seg), f'window {seg[0].address:#x} moves sp'   # the exits reload S / T from [sp, #-16]
     S, T = pick(used)
     lo, hi = seg[0].address, seg[-1].address + 4
     start = here()
@@ -342,6 +416,53 @@ def site_window(seg):
     for t in [hi] + ex_targets:
         emit(STRX(S, T)); emit(LDP(S, T, 31, -16)); emit(B(here(), t)); emit(NOP)
     return start, lo, hi
+
+def site_region(seg, entry):
+    """Exclusive section in several pieces, entered only at the exclusive load `entry`: the same prologue and exits as site_window, the pieces copied
+    one after another in address order. A branch to an instruction of the section goes to its copy (also an unconditional b, e.g. a cold retry
+    block's way back); a piece whose last instruction falls through ends with a b to the exit that returns to the instruction after it.
+    Layout: prologue; [b to the entry's copy unless it comes first]; piece copies (+ b to its fall-through exit); exits. Returns the start and the
+    pieces as (original lo, original hi, copy address)."""
+    used = set()
+    for x in seg: used |= regs_in(x)
+    assert all(sp_delta(x) == 0 for x in seg), f'exclusive section {entry:#x} moves sp'
+    S, T = pick(used)
+    inR = {x.address for x in seg}
+    runs = []
+    for k, x in enumerate(seg):
+        if k and x.address == seg[k - 1].address + 4: runs[-1][1] = k + 1
+        else: runs.append([k, k + 1])
+    start = here()
+    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+    pos, pieces, p = {}, [], here() + (4 if entry != seg[0].address else 0)
+    for a, b in runs:
+        pieces.append((seg[a].address, seg[b - 1].address + 4, p))
+        for k in range(a, b): pos[seg[k].address] = p; p += 4
+        if seg[b - 1].mnemonic != 'b': p += 4
+    exits0, exits = p, []
+    def exit_to(t): exits.append(t); return exits0 + 16 * (len(exits) - 1)
+    if entry != seg[0].address: emit(B(here(), pos[entry]))
+    for (a, b), (lo, hi, c0) in zip(runs, pieces):
+        assert here() == c0
+        for k in range(a, b):
+            x = seg[k]; pc = here(); m = x.mnemonic
+            w = subst(x, S) if has18(x) else struct.unpack('<I', x.bytes)[0]
+            if m in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or m.startswith('b.'):
+                tgt = x.operands[-1].imm
+                newt = pos[tgt] if tgt in inR else exit_to(tgt)
+                off = (newt - pc) >> 2
+                if m == 'b': w = B(pc, newt)
+                elif m in ('tbz', 'tbnz'): w = (w & 0xFFF8001F) | ((off & 0x3FFF) << 5)
+                else: w = (w & 0xFF00001F) | ((off & 0x7FFFF) << 5)
+                dd = dis(w, pc); assert dd.operands[-1].imm == newt and dd.mnemonic == m
+            else:
+                assert m not in ('adr', 'adrp', 'bl', 'br', 'blr', 'ret') and not (m == 'ldr' and '[' not in x.op_str), hex(x.address)
+            emit(w)
+        if seg[b - 1].mnemonic != 'b': emit(B(here(), exit_to(hi)))
+    assert here() == exits0
+    for t in exits:
+        emit(STRX(S, T)); emit(LDP(S, T, 31, -16)); emit(B(here(), t)); emit(NOP)
+    return start, pieces
 
 # ---- Function boundaries (eh_frame_hdr) ----
 m0 = struct.unpack_from('<I', IMG, 4)[0]
@@ -375,6 +496,12 @@ for o in range(0, TEXT_END, 4):
     if w & 0xFFFFFFE0 == 0xD53BD060: kinds[o] = ('tpidrro_r', None); continue
     if w & 0xFFFFFFE0 == 0xD53BE020: kinds[o] = ('cntpct', w & 31); continue
     if w & 0xFFFFFFE0 == 0xD53BE040: kinds[o] = ('cntvct', w & 31); continue
+    # mrs xN, ctr_el0 (cache type): SIGILL in user mode on Apple systems; SDK 20's nn::os::FlushDataCache reads it for the data cache line size (TotK sdk
+    # 0x13bbb4, from AddI3dl2Reverb). After nxnative (seedds, MIT)
+    if w & 0xFFFFFFE0 == 0xD53B0020: kinds[o] = ('ctr', w & 31); continue
+    # x18 / w18 can only sit in a register field (Rd/Rt, Rn, Ra/Rt2, Rm/Rs); a word with 18 in none of them needs no disassembly
+    # (upstream PR #55, n3crosis)
+    if not any((w >> p) & 31 == 18 for p in (0, 5, 10, 16)): continue
     for ins in md.disasm(IMG[o:o + 4], o):
         if has18(ins): kinds[o] = ('x18', None)
 
@@ -383,7 +510,149 @@ import bisect
 def func_of(a):
     i = bisect.bisect_right(starts, a) - 1
     return (starts[i], starts[i + 1] if i + 1 < len(starts) else TEXT_END) if i >= 0 else (a, a + 4)
-done = set(); windows = []; jumps = {}; xbranch = {}
+
+# ---- Control flow inside one function (jump tables whose targets are not equally spaced) ----
+# Edges: fall-through (not after b / br / ret; bl and blr fall through), direct branch targets inside the function, and the targets of the jump
+# tables found so far. A backward walk that reaches an instruction with no known predecessor (the function entry, or a target of a jump table
+# not recognised) cannot see every definition.
+def dtarget(ins):
+    m = ins.mnemonic
+    return ins.operands[-1].imm if m in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or m.startswith('b.') else None
+def preds_of(insl, extra=()):
+    """Predecessor edges per instruction index: (predecessor index, 'fall' | 'taken' | 'jt')."""
+    idx = {x.address: i for i, x in enumerate(insl)}
+    P = [[] for _ in insl]
+    for i, x in enumerate(insl):
+        if x.mnemonic not in ('b', 'br', 'ret') and i + 1 < len(insl): P[i + 1].append((i, 'fall'))
+        t = dtarget(x)
+        if t is not None and t in idx: P[idx[t]].append((i, 'taken'))
+    for frm, t in extra:
+        if t in idx: P[idx[t]].append((idx[frm], 'jt'))
+    return P
+CALL_CLOBBER = {f'x{i}' for i in range(19)} | {'x30'}
+def wnames(ins):
+    """Registers an instruction writes, as x names; a call writes every register the callee may clobber."""
+    _, w = ins.regs_access()
+    s = {re.sub(r'^w', 'x', ins.reg_name(r)) for r in w}
+    if ins.mnemonic in ('bl', 'blr'): s |= CALL_CLOBBER
+    return s
+class OpenPath(Exception): pass
+def reaching(insl, P, i, reg, strict):
+    """Instructions that may define reg (x name) for the use at insl[i], over every backward path. strict: a path that reaches an instruction with
+    no known predecessor raises OpenPath; otherwise that path contributes nothing (the optimistic rounds of jump_tables)."""
+    defs, seen, st = set(), set(), [p for p, _ in P[i]]
+    if not P[i] and strict: raise OpenPath(f'{insl[i].address:x}')
+    while st:
+        k = st.pop()
+        if k in seen: continue
+        seen.add(k)
+        if len(seen) > 6000: raise OpenPath('walk limit')
+        if reg in wnames(insl[k]): defs.add(k); continue
+        if not P[k]:
+            if strict: raise OpenPath(f'{insl[k].address:x}')
+            continue
+        st.extend(p for p, _ in P[k])
+    return defs
+def const_of(insl, P, i, reg, strict):
+    """The address in reg at insl[i] when every reaching definition gives the same one (adrp + add, or adr); otherwise None."""
+    vals = set()
+    for k in reaching(insl, P, i, reg, strict):
+        x = insl[k]
+        if x.mnemonic == 'adr' and x.op_str.startswith(reg + ','): vals.add(x.operands[1].imm); continue
+        m = re.fullmatch(rf'{reg}, {reg}, #(0x[0-9a-f]+|\d+)', x.op_str) if x.mnemonic == 'add' else None
+        if not m: return None
+        pg = reaching(insl, P, k, reg, strict)
+        if len(pg) != 1: return None
+        y = insl[next(iter(pg))]
+        if y.mnemonic != 'adrp' or not y.op_str.startswith(reg + ','): return None
+        vals.add(y.operands[1].imm + int(m.group(1), 0))
+    return vals.pop() if len(vals) == 1 else None
+INV_COND = {'hi': 'ls', 'ls': 'hi', 'hs': 'lo', 'lo': 'hs'}
+def bound(insl, P, i, reg, strict):
+    """Number of table entries for the index reg at insl[i]: every backward path (following register copies into the index) must meet
+    `cmp wA, #N` + a conditional branch whose edge on that path means wA <= N (b.ls taken / b.hi not taken) or wA < N (b.lo taken / b.hs not
+    taken); the largest bound over the paths. None when a path redefines the index otherwise."""
+    best, seen = 0, set()
+    st = [(p, e, frozenset({reg})) for p, e in P[i]]
+    if not st and strict: raise OpenPath(f'{insl[i].address:x}')
+    while st:
+        k, e, al = st.pop()
+        if (k, e, al) in seen: continue
+        seen.add((k, e, al))
+        if len(seen) > 6000: raise OpenPath('walk limit')
+        x = insl[k]
+        c = x.mnemonic[2:] if x.mnemonic.startswith('b.') else None
+        if c in INV_COND and k > 0:
+            cmp = insl[k - 1]
+            m = re.fullmatch(r'w(\d+), #(0x[0-9a-f]+|\d+)', cmp.op_str) if cmp.mnemonic == 'cmp' else None
+            if m and f'x{m.group(1)}' in al:
+                eff = c if e == 'taken' else INV_COND[c] if e == 'fall' else None
+                n = int(m.group(2), 0)
+                if eff == 'ls': best = max(best, n + 1); continue
+                if eff == 'lo': best = max(best, n); continue
+        hit = wnames(x) & al
+        if hit:
+            mm = re.fullmatch(r'[wx]\d+, [wx](\d+)', x.op_str) if x.mnemonic == 'mov' else None
+            if not mm or len(hit) != 1: return None
+            al = (al - hit) | {f'x{mm.group(1)}'}
+        if not P[k]:
+            if strict: raise OpenPath(f'{x.address:x}')
+            continue
+        st.extend((p, e2, al) for p, e2 in P[k])
+    return best or None
+TAB_ELEM = {'ldrsw': (4, '<i'), 'ldrh': (2, '<H'), 'ldrb': (1, '<B'), 'ldrsh': (2, '<h'), 'ldrsb': (1, '<b')}
+def jump_tab(insl, P, j, fa, fb, strict):
+    """br xD at insl[j] after `adr xA, #anchor; ldr{sw,h,b,sh,sb} xT, [xB, xI{, lsl #s}]; add xD, xA, xT{, lsl #k}` (TotK main 0x393bb0:
+    adr x18; ldrsw x1, [x17, x0, lsl #2]; add x18, x18, x1; br x18), with the table base xB from adrp + add and the index bounded by a compare
+    (0x680528: sub w12, w18, #1; cmp w12, #0x2d; b.ls → table block) → (all targets, description) or (None, reason).
+    Targets = anchor + (entry << k), read from the constant table; all must lie inside the function."""
+    rD = insl[j].op_str
+    ds = reaching(insl, P, j, rD, strict)
+    if len(ds) != 1: return None, 'register defined by several instructions'
+    ka = next(iter(ds)); a = insl[ka]
+    m = re.fullmatch(rf'{rD}, (x\d+), x(\d+)(?:, lsl #(\d))?', a.op_str) if a.mnemonic == 'add' else None
+    if not m: return None, f'defined by {a.address:x} {a.mnemonic} {a.op_str}'
+    rT, sh = f'x{m.group(2)}', int(m.group(3) or 0)
+    anc = const_of(insl, P, ka, m.group(1), strict)
+    if anc is None: return None, 'anchor not a constant'
+    ld = reaching(insl, P, ka, rT, strict)
+    if len(ld) != 1: return None, 'offset defined by several instructions'
+    kl = next(iter(ld)); L = insl[kl]
+    mm = re.fullmatch(rf'[xw]{rT[1:]}, \[x(\d+), x(\d+)(?:, lsl #(\d))?\]', L.op_str)
+    if not mm or L.mnemonic not in TAB_ELEM: return None, f'offset from {L.address:x} {L.mnemonic} {L.op_str}'
+    size, fmt = TAB_ELEM[L.mnemonic]
+    if (1 << int(mm.group(3) or 0)) != size: return None, 'index scale differs from the element size'
+    tb = const_of(insl, P, kl, f'x{mm.group(1)}', strict)
+    if tb is None: return None, 'table base not a constant'
+    if not RO_OFF <= tb < DATA_OFF: return None, f'table {tb:#x} outside the read-only segment'
+    n = bound(insl, P, kl, f'x{mm.group(2)}', strict)
+    if n is None: return None, 'index not bounded'
+    tg = [anc + (struct.unpack_from(fmt, IMG, tb + size * i)[0] << sh) for i in range(n)]
+    if any(not (fa <= t < fb) or t % 4 for t in tg): return None, 'a target outside the function'
+    return tg, f'anchor {anc:#x} table {tb:#x} {n} x {L.mnemonic} << {sh}'
+def jump_tables(insl, fa, fb):
+    """All jump tables of one function → ({br index: targets}, {br index: description or reason}). A table's targets are edges that other tables'
+    walks need (a table's own targets can loop back to it), so rounds that ignore paths with an unknown predecessor run to a fixpoint; then every
+    table is derived again strictly with all edges found, and only tables that pass the strict round count."""
+    brs = [j for j, x in enumerate(insl) if x.mnemonic == 'br']
+    edges = lambda tabs: [(insl[j].address, t) for j, tg in tabs.items() for t in tg]
+    known = {}
+    for _ in range(10):
+        P = preds_of(insl, edges(known)); new = {}
+        for j in brs:
+            try: tg, _w = jump_tab(insl, P, j, fa, fb, False)
+            except OpenPath: tg = None
+            if tg: new[j] = tg
+        if new == known: break
+        known = new
+    P = preds_of(insl, edges(known)); out, why = {}, {}
+    for j in brs:
+        try: tg, why[j] = jump_tab(insl, P, j, fa, fb, True)
+        except OpenPath as e: tg, why[j] = None, f'a path reaches {e} with no known predecessor'
+        if tg: out[j] = tg
+    return out, why
+
+done = set(); windows = []; jumps = {}; tabjumps = {}; xbranch = {}
 def x18_fnptr(insl, j):
     """The instruction that last wrote x18 before insl[j], within the same straight-line block: must be `ldr x18, [...]` (a function pointer)."""
     for p in reversed(insl[:j]):
@@ -392,14 +661,14 @@ def x18_fnptr(insl, j):
         if wr & {'x18', 'w18'}: return p.mnemonic == 'ldr' and p.op_str.startswith('x18, [')
     return False
 funcs = sorted({func_of(a) for a, (k, _) in kinds.items() if k == 'x18'})
+regions = []
 for fa, fb in funcs:
     insl = list(md.disasm(bytes(IMG[fa:fb]), fa))
-    ws = find_windows(insl)
-    for wseg in ws:
-        windows.append(wseg); done |= {x.address for x in wseg}
+    tabs = None
     for j, ins in enumerate(insl):
         if ins.mnemonic == 'blr' and ins.op_str == 'x18':
-            assert x18_fnptr(insl, j), f'blr x18 without a function pointer load {ins.address:x}'
+            # The block reads the K18 slot, which holds the guest's x18 wherever it was loaded: TotK main 0xc25f0 loads it in an earlier block
+            # (nxnative's blr rewrite has no such check either)
             xbranch[ins.address] = 1
         if ins.mnemonic == 'br' and ins.op_str == 'x18':
             if not any(p.mnemonic == 'adr' and p.op_str.startswith('x18,') for p in insl[max(0, j - 8):j]) and x18_fnptr(insl, j):
@@ -416,19 +685,31 @@ for fa, fb in funcs:
                         if q.mnemonic in ('ldrh', 'ldrsh') and num(q.reg_name(q.operands[0].reg)) == idx: width = 65536
                         if width: break
                     break
-            assert base and width, f'jump table {ins.address:x}'
-            jumps[ins.address] = (base, width)
-    # No jump may land in the middle of a window
-    inwin = {x.address for wseg in ws for x in wseg}; heads = {wseg[0].address for wseg in ws}
-    for x in insl:
-        if x.mnemonic in ('b', 'bl', 'cbz', 'cbnz', 'tbz', 'tbnz') or x.mnemonic.startswith('b.'):
-            t = x.operands[-1].imm
-            assert not (t in inwin and t not in heads), f'branch into window {x.address:x}'
+            if base and width: jumps[ins.address] = (base, width); continue
+            if tabs is None: tabs = jump_tables(insl, fa, fb)
+            assert j in tabs[0], f'jump table {ins.address:x}: {tabs[1][j]}'
+            tabjumps[ins.address] = tabs[0][j]
+    # Exclusive sections that use x18 may be entered only at their exclusive load: an entry further in would run part of the section natively with
+    # the real x18, or start the copy after its load (the jump-table targets of site_br_tab count as entries; site_br's equally spaced tables are
+    # not resolved to targets, as before)
+    tedges = [(a_, t) for a_, tg in tabjumps.items() if fa <= a_ < fb for t in tg]
+    for R in exclusive_regions(insl):
+        seg = [insl[i] for i in R]
+        if not any(has18(x) for x in seg): continue
+        ents = region_entries(insl, R, fa, tedges)
+        assert len(ents) == 1 and next(x for x in seg if x.address == ents[0]).mnemonic in EXCL_LD, \
+            f'exclusive section {seg[0].address:x}: entered at {[hex(e) for e in ents]} (supported: one entry, at its exclusive load)'
+        if ents[0] == seg[0].address and seg[-1].address - seg[0].address == 4 * (len(seg) - 1): windows.append(seg)
+        else: regions.append((seg, ents[0]))
+        done |= {x.address for x in seg}
 
 IMG0 = bytes(IMG)   # text before any site is replaced by a branch (alloca_shape looks back across earlier sites)
 def put_branch(at, to): struct.pack_into('<I', IMG, at, B(at, to))
 for wseg in windows:
     st, lo, hi = site_window(wseg); stat('window'); put_branch(lo, st)
+region_rows = []
+for seg, e in regions:
+    st, pieces = site_region(seg, e); stat('region'); put_branch(e, st); region_rows.append((e, pieces))
 for a in sorted(kinds):
     if a in done: continue
     k, arg = kinds[a]
@@ -436,6 +717,7 @@ for a in sorted(kinds):
     if k == 'x18':
         m = ins.mnemonic
         if a in xbranch: st = site_xbranch(ins, xbranch[a]); stat('blr_fnptr' if xbranch[a] else 'br_fnptr')
+        elif m == 'br' and a in tabjumps: st = site_br_tab(ins, tabjumps[a]); stat('br_tab')
         elif m == 'br': st = site_br(ins, *jumps[a]); stat('br')
         elif m in ('cbz', 'cbnz', 'tbz', 'tbnz'): st = site_cond(ins); stat('cond')
         elif m in ('adr', 'adrp'): st = site_pcrel(ins); stat('pcrel')
@@ -449,6 +731,10 @@ for a in sorted(kinds):
     elif k == 'tpidr_w': st = site_tpidr_write(ins); stat(k)
     elif k == 'svc': st = site_gate(ins, 'svc', arg); stat(k)
     elif k in ('cntpct', 'cntvct'): st = site_gate(ins, k, arg); stat(k)
+    elif k == 'ctr':   # in place: DminLine = 4 (64-byte lines). The value only has to be at most the real line size (128 bytes on Apple cores): a smaller
+        # step cleans every line, some twice. IminLine = 0 (4 bytes) is the smallest, so instruction cache loops cover every line too
+        assert arg != 18, f'{a:x} mrs x18, ctr_el0'
+        struct.pack_into('<I', IMG, a, 0xD2A00080 | arg); stat(k); continue
     put_branch(a, st)
 
 obs = list(OBS.get(BUILD_ID, []))
@@ -457,7 +743,7 @@ for off, oid, ow, why in obs:
     assert f'{w:08x}' == ow, f'observation gate {off:#x}: original instruction differs ({w:08x})'
     # Function entries only: dm_gate writes back only x0–x8 / x30, and host C code may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8)
     assert off in set(starts), f'observation gate {off:#x} is not a function entry'
-    assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate {off:#x} overlaps a rewrite site'
+    assert off < TEXT_END and off not in kinds and off not in done, f'observation gate {off:#x} overlaps a rewrite site'   # done: every instruction of a window / section
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 
 # ---- Parameter slots (host only): {NSO build ID: [(offset A, original word A, offset B, original word B, register, key, reason)]}.
@@ -469,7 +755,7 @@ for oa, wa, ob_, wb, r, key, why in params:
     for o, w0 in ((oa, wa), (ob_, wb)):
         w = struct.unpack_from('<I', IMG, o)[0]
         assert f'{w:08x}' == w0, f'parameter slot {o:#x}: original instruction differs ({w:08x})'
-        assert o not in kinds and not any(lo <= o < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'parameter slot {o:#x} overlaps a rewrite site'
+        assert o not in kinds and o not in done, f'parameter slot {o:#x} overlaps a rewrite site'
     for o in range(oa + 4, ob_, 4):
         ins = dis(struct.unpack_from('<I', IMG, o)[0], o)
         assert r not in regs_in(ins), f'parameter slot: x{r} is used between A and B at {o:#x} ({ins.mnemonic} {ins.op_str})'
@@ -493,7 +779,9 @@ with open(P('sites.tsv'), 'w') as f:
     for a in sorted(kinds):
         if a not in done: f.write(f'{a:#x}\t{kinds[a][0]}\n')
     for wseg in windows: f.write(f'{wseg[0].address:#x}\tW\t{wseg[-1].address + 4:#x}\n')
+    for e, pieces in region_rows: f.write(f'{e:#x}\tR\t' + ' '.join(f'{lo:#x}-{hi:#x}@{c:#x}' for lo, hi, c in pieces) + '\n')   # exclusive section in pieces: entry, then each piece [lo, hi) and the address of its copy
     for a, (b, c) in jumps.items(): f.write(f'{a:#x}\tJ\t{b:#x}\t{c}\n')
+    for a, tg in sorted(tabjumps.items()): f.write(f'{a:#x}\tJT\t' + ' '.join(f'{t:#x}' for t in tg) + '\n')   # jump table with explicit targets, one per entry (site_br_tab)
     for a, link in sorted(xbranch.items()): f.write(f'{a:#x}\tT\t{link}\n')   # br / blr x18 through a function pointer: 1 = blr
 with open(P('cuts.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
