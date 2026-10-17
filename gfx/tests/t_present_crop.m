@@ -1,6 +1,7 @@
 // Present crop regression: colored 8×8 texture, closed-form RGBA expectations; real Metal rendering, no dependence on the game or on cross-run determinism.
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/hle_nvn.c"
+const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15 };   // hle_nvn.c reports the NVN API version from the profile
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
 void *front_metal_layer(void) { return NULL; }

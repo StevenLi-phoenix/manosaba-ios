@@ -81,6 +81,8 @@ typedef struct {
     uint8_t *begin;                      // BEGIN record of this recording
     PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb; void *cb_data;
     NVNdevice *dev;
+    uint64_t used;                       // Record bytes written since BeginRecording, over all segments (GetCommandMemoryUsed)
+    uint8_t cb_off;                      // The game turned the out-of-command-memory callback off (SetCommandMemoryCallbackEnabled)
 } cmd_t;                                                                                     FITS(cmd_t, NVNcommandBuffer);
 
 // ---------- State objects (defaults follow the NVN / GL defaults) ----------
@@ -122,7 +124,8 @@ typedef struct { int32_t first, n; uint32_t st[16]; } p_bind_vattr;
 typedef struct { int32_t first, n; vs_st st[16]; } p_bind_vstream;
 typedef struct { int32_t first, n; NVNbufferRange r[16]; } p_bind_vbuf;
 typedef struct { int32_t stage, index; uint64_t addr, size; } p_bind_buf;  // UBO / SSBO
-typedef struct { int32_t stage, first, n; uint64_t h[32]; } p_bind_handles; // Separate texture / sampler handles
+// defer / src: a deferred binding (BindTexturesDeferred) records where the handles are; replay reads them from there (nvn_mtl.m bh_fresh)
+typedef struct { int32_t stage, first, n, defer; uint64_t src; uint64_t h[32]; } p_bind_handles; // Separate texture / sampler handles
 typedef struct { int32_t face, value_mask, mask, ref, which; } p_stencil;  // which: 0 value mask 1 write mask 2 reference value
 typedef struct { float factor, units, clamp; } p_poly_offset;
 typedef struct { int32_t prim, first, count; } p_draw;

@@ -101,3 +101,63 @@ HLE_FORCE_OPT("_ZN2nn4time43GetAdjustableUserSystemClockCurrentTimespecEP8timesp
 HLE_FORCE_OPT("_ZN2nn4time37GetStandardSteadyClockCurrentTimespecEP8timespec", "libc CLOCK_MONOTONIC source: guest clock", int, h_time_SteadyTs, int64_t *ts) {
     uint64_t ns = guest_ns(); ts[0] = (int64_t)(ns / 1000000000ull); ts[1] = (int64_t)(ns % 1000000000ull); return 0;
 }
+
+// ---------- Clock snapshots and the steady / network clocks (TotK). The SDK reads them from the time service or its shared memory, neither of which the
+// host has (CreateWithStandardSystemClock aborts at sdk 0x4418b4; StandardSteadyClock::now and the network clock read shared memory that is never set up).
+// ClockSnapshot is 0xd0 bytes, laid out as Ryujinx's ClockSnapshot.cs (the SDK's constructor sdk 0x4417e0 clears +0xab and +0xcd, inside that layout).
+// Filled like the time service's GetClockSnapshot (Ryujinx IStaticServiceForPsc): both contexts are an offset in seconds over the steady clock, user time =
+// steady time point + offset, calendars from ToCalendarTime above, the device's location name, automatic correction on, type = the byte the client passes.
+// Steady clock = the guest clock in seconds (as CLOCK_MONOTONIC above), one clock source (ID 0). The network clock is the user clock (offline, as if synced).
+#include <CoreFoundation/CoreFoundation.h>
+typedef struct { int64_t timepoint; uint8_t source[16]; } SteadyClockTimePoint;
+typedef struct { int64_t offset; SteadyClockTimePoint steady; } SystemClockContext;
+typedef struct {
+    SystemClockContext user_ctx, net_ctx;           // +0x00, +0x20
+    int64_t user_time, net_time;                    // +0x40, +0x48
+    CalendarTime user_cal, net_cal;                 // +0x50, +0x58
+    CalendarAdditionalInfo user_ai, net_ai;         // +0x60, +0x78
+    SteadyClockTimePoint steady;                    // +0x90
+    char location[0x24];                            // +0xa8
+    uint8_t auto_correct, type; uint16_t unknown;   // +0xcc
+} ClockSnapshot;
+_Static_assert(sizeof(CalendarTime) == 8 && sizeof(CalendarAdditionalInfo) == 0x18 && sizeof(ClockSnapshot) == 0xd0, "time layouts");
+static int64_t steady_s(void) { return (int64_t)(guest_ns() / 1000000000ull); }
+static int64_t user_now(void) { int64_t ft = fixed_time(); return ft >= 0 ? ft : time(NULL); }
+static void location_name(char *out, size_t n) {
+    memset(out, 0, n);
+    if (fixed_time() >= 0) { strlcpy(out, "UTC", n); return; }   // main.c pins TZ to UTC then
+    CFTimeZoneRef tz = CFTimeZoneCopyDefault();
+    if (!tz || !CFStringGetCString(CFTimeZoneGetName(tz), out, (CFIndex)n, kCFStringEncodingASCII)) strlcpy(out, "UTC", n);
+    if (tz) CFRelease(tz);
+}
+static void fill_snapshot(ClockSnapshot *s, uint8_t type) {
+    memset(s, 0, sizeof *s);
+    int64_t st = steady_s(), now = user_now();
+    s->steady.timepoint = st;
+    s->user_ctx = (SystemClockContext){now - st, {st, {0}}}; s->net_ctx = s->user_ctx;
+    s->user_time = s->net_time = now;
+    h_time_ToCalendarTime(&s->user_cal, &s->user_ai, &now); s->net_cal = s->user_cal; s->net_ai = s->user_ai;
+    location_name(s->location, sizeof s->location);
+    s->auto_correct = 1; s->type = type;
+}
+HLE_FORCE_OPT("_ZN2nn4time13ClockSnapshot29CreateWithStandardSystemClockEPS1_", "clock snapshot from the host clocks (time service GetClockSnapshot)", Result, h_time_SnapStd, ClockSnapshot *s) {
+    fill_snapshot(s, 1); return RES_OK;   // type 1: what the SDK passes the service (sdk 0x441890)
+}
+HLE_FORCE_OPT("_ZN2nn4time19StandardSteadyClock3nowEv", "steady clock time point (seconds): the guest clock", int64_t, h_time_SteadyNow, void) { return steady_s(); }
+HLE_FORCE_OPT("_ZN2nn4time26StandardNetworkSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "network clock → the user clock (offline, as if synced)", Result, h_time_NetNow, int64_t *out) {
+    *out = user_now(); return RES_OK;
+}
+// TimeSpan in nanoseconds. Span between: from the steady time points when they come from the same clock source, else from the network times when both are set
+// (Ryujinx CalculateSpanBetween); the host has one source. Difference by user: the user contexts' offsets, 0 when the sources differ or both have automatic
+// correction on (Ryujinx CalculateStandardUserSystemClockDifferenceByUser)
+#define RES_TIME_NOT_FOUND (116u | 200u << 9)   // time module 116, description 200 (Ryujinx Time ResultCode.TimeNotFound)
+HLE_FORCE_OPT("_ZN2nn4time20CalculateSpanBetweenEPNS_8TimeSpanERKNS0_13ClockSnapshotES5_", "span between two snapshots", Result, h_time_SpanBetween, int64_t *out, const ClockSnapshot *a, const ClockSnapshot *b) {
+    if (!memcmp(a->steady.source, b->steady.source, 16)) { *out = (b->steady.timepoint - a->steady.timepoint) * 1000000000ll; return RES_OK; }
+    if (a->net_time && b->net_time) { *out = (b->net_time - a->net_time) * 1000000000ll; return RES_OK; }
+    return RES_TIME_NOT_FOUND;
+}
+HLE_FORCE_OPT("_ZN2nn4time48CalculateStandardUserSystemClockDifferenceByUserERKNS0_13ClockSnapshotES3_", "user clock difference between two snapshots", int64_t, h_time_UserDiff, const ClockSnapshot *a, const ClockSnapshot *b) {
+    if (memcmp(a->user_ctx.steady.source, b->user_ctx.steady.source, 16) || (a->auto_correct && b->auto_correct)) return 0;
+    return (b->user_ctx.offset - a->user_ctx.offset) * 1000000000ll;
+}
+HLE_FORCE_OPT("_ZN2nn4time8FinalizeEv", "the time service is taken over: nothing to close", Result, h_time_Finalize, void) { return RES_OK; }

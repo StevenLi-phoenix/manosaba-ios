@@ -39,6 +39,7 @@ void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t 
 uint64_t dm_input_samples(void) { return (uint64_t)atomic_load(&g_sampling); }   // how many times the game has read a controller
 
 static uint32_t connected_id(void) { return dm_opmode() == 0 ? NPAD_HANDHELD : 0; }   // follows the operation mode (hle_oe.c)
+uint32_t hle_hid_connected_npad(void) { return connected_id(); }   // nfp's NFC device sits on this controller (hle_nfp.c)
 static uint32_t style_of(uint32_t id) {
     if (id != connected_id()) return 0;
     return id == NPAD_HANDHELD ? STYLE_HANDHELD : STYLE_FULLKEY;
@@ -240,6 +241,15 @@ HID_STUB("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", h_hid_stub6, "nn:
 // The host attaches no USB keyboard: only the sampling number advances, the rest is 0 (not connected, no key down). It used to be a stub that wrote nothing, so the game read uninitialized stack contents every frame.
 HLE_FORCE_OPT("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", "keyboard state: not connected (sampling number counts up, the rest 0)", void, h_hid_GetKeyboard, uint8_t *out) {
     static _Atomic int64_t n; memset(out, 0, 0x30); int64_t v = atomic_fetch_add(&n, 1) + 1; memcpy(out, &v, 8);
+}
+// Mouse without a handle (TotK main): not connected. Without these the sdk opens the hid service proxy (sm::Initialize aborts, from InitializeMouse
+// in TotK's startup). From nxnative's hle_hid.c (seedds, MIT)
+HLE_FORCE_OPT("_ZN2nn3hid15InitializeMouseEv", "mouse: the host provides none", void, h_hid_InitMouse0, void) {}
+HLE_FORCE_OPT("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEi", "mouse states: none written", int, h_hid_MouseStates0, void *out, int n) { (void)out; (void)n; return 0; }
+// Values queued by the vibration graph reach the sdk's FlushEnqueuedVibrationValues and from there the hid service proxy: success, nothing sent
+// (nxnative, Metroid Dread)
+HLE_FORCE_OPT("_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi", "vibration (batch): the host has none", Result, h_hid_SendVibs, const void *h, const void *v, int n) {
+    (void)h; (void)v; (void)n; return 0;
 }
 HID_STUB("_ZN2nn3hid17InitializeGestureEii", h_hid_stub8, "nn::hid::InitializeGesture(int, int)")
 HID_STUB("_ZN2nn3hid17InitializeGestureEv", h_hid_stub9, "nn::hid::InitializeGesture()")

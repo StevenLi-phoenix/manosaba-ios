@@ -17,6 +17,14 @@ HLE_FORCE("_ZN2nn3aoc16ListAddOnContentEPiii", "add-on content list: the profile
 HLE_FORCE("_ZN2nn3aoc31GetAddOnContentListChangedEventEPNS_2os11SystemEventE", "add-on content change event: bound to a kernel event, never signalled (games poll it with TryWait and abort when it is not initialized)", void, h_aoc_GetEv, void *ev) { hle_bind_system_event(ev, 0); }
 HLE_FORCE("_ZN2nn2ec24ShowShopAddOnContentListEv", "shop applet (out of scope): no-op", void, h_ec_ShowShop, void) { LOG("ec::ShowShopAddOnContentList (cut)"); }
 
+// ---------- prepo play reports (telemetry): saving / sending report success, nothing is kept or sent. The Add / Set calls only fill the game's own
+// buffer and stay in the SDK; Save goes to the prepo service through sm (TotK aborted there). From nxnative's hle_offline.c (seedds, MIT) ----------
+HLE_FORCE_OPT("_ZN2nn5prepo10PlayReport4SaveERKNS_7account3UidE", "play report save (user): not sent, success", Result, h_prepo_SaveU, void *self, const void *uid) { (void)self; (void)uid; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn5prepo10PlayReport4SaveEv", "play report save: not sent, success", Result, h_prepo_Save, void *self) { (void)self; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn5prepo27AddInternetConnectionStatusEPNS0_10PlayReportEPKcS4_S4_", "play report connection status: asks the service on the console; nothing added, success",
+              Result, h_prepo_AddNet, void *rep, const char *a, const char *b, const char *c) { (void)rep; (void)a; (void)b; (void)c; return RES_OK; }
+HLE_FORCE_OPT("_ZN2nn5prepo28RequestImmediateTransmissionEv", "play report upload now: not sent, success", Result, h_prepo_Tx, void) { return RES_OK; }
+
 // ---------- err error applet: printed by the host ----------
 HLE_FORCE("_ZN2nn3err9ShowErrorENS_6ResultE", "error applet; the host logs module / description", void, h_err_ShowError, Result r) {
     LOG("err::ShowError Result=%#x (module %u, description %u)", r, r & 0x1ff, (r >> 9) & 0x1fff);

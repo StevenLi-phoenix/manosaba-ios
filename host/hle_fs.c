@@ -2,6 +2,7 @@
 //   rom   → $DM_ROMFS (read-only; DM_ROMFS_OVERLAY layers take priority, see host_path)
 //   save  → $DM_SAVE (must be set; transactional: the game works in <save>.work, Commit swaps it in atomically)
 //   temp  → $DM_TEMP (default $DM_ROOT/run/platform/temp)
+//   cache storage <index> → $DM_CACHE/<index> (default $DM_ROOT/run/platform/cache; not transactional, see MountCacheStorage)
 // Paths look like "rom:/data/x". FileHandle / DirectoryHandle are 8 bytes passed by value, here they store the host fd / DIR*.
 // Struct layout follows the public Horizon ABI: DirectoryEntry = {char name[0x301], pad[3], s8 type, pad[3], s64 size} (0x310 bytes).
 #include "hle.h"
@@ -20,6 +21,7 @@
 
 #define RES_PATH_NOT_FOUND 0x202u      // fs module 2, description 1
 #define RES_PATH_EXISTS    0x402u      // fs module 2, description 2
+#define RES_TARGET_NOT_FOUND 0x7d402u  // fs module 2, description 1002 (SDK API reference: ResultTargetNotFound)
 enum { MODE_READ = 1, MODE_WRITE = 2, MODE_APPEND = 4 };
 enum { ENT_DIR = 0, ENT_FILE = 1 };
 enum { DIRMODE_DIR = 1, DIRMODE_FILE = 2 };
@@ -624,10 +626,65 @@ HLE_FORCE_OPT("_ZN2nn2fs17MountAddOnContentEPKciPvm", "add-on content: nothing t
 }
 // bool results: Switch callers read only w0's low byte
 HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "does the save exist: the save directory is created at mount, always yes", unsigned, h_fs_SaveExists, const void *uid) { (void)uid; return 1; }
-HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", "does the save exist (given application): as above", unsigned, h_fs_SaveExistsApp, uint64_t app, const void *uid) { (void)app; (void)uid; return 1; }
+// Another application's save (TotK looks for The Legend of Zelda: Breath of the Wild's, 0x01007ef00011e000): the host has only this game's save
+HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", "does the save exist (given application): only this game's", unsigned, h_fs_SaveExistsApp, uint64_t app, const void *uid) {
+    (void)uid; return app == dm_game.program_id;
+}
+// Access log switch and read priority (TotK calls SetPriorityOnCurrentThread on its threads): on the console both ask fsp-srv; the host has no access log,
+// and priority does not change its reads. From nxnative's hle_fs.c (seedds, MIT)
+HLE_FORCE_OPT("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", "file read priority: ignored", void, h_fs_SetPrio, int prio) { (void)prio; }
+HLE_FORCE_OPT("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "access log: off (bool)", unsigned, h_fs_AccessLogMask, unsigned mask) { (void)mask; return 0; }
+HLE_FORCE_OPT("_ZN2nn2fs6detail18IsEnabledAccessLogEv", "access log: off (bool)", unsigned, h_fs_AccessLog, void) { return 0; }
+
+// Indexed cache storage (TotK): one host directory per index under $DM_CACHE. Semantics from the SDK API reference (fs_CacheStorageWithIndex.h,
+// fs_CacheStorage.h): MountCacheStorage(name, index) gives ResultTargetNotFound when that index does not exist; ReadCacheStorageList lists the existing
+// indices. Not transactional: what the game writes there is data it can make again, and Commit on a non-transactional mount is a no-op.
+// CacheStorageListHandle is a pointer the game only hands back (the sdk keeps a 0x28-byte object: cursor + vector<int>); the host keeps its own list.
+// CacheStorageInfo is 0x20 bytes, zeroed, the index at +0 (sdk 0xeda5c ReadCacheStorageList).
+static const char *cache_dir(int index, char *out, size_t n) {
+    char b[1024]; snprintf(out, n, "%s/%d", envdir("DM_CACHE", "run/platform/cache", b, sizeof b), index); return out;
+}
+HLE_FORCE_OPT("_ZN2nn2fs17MountCacheStorageEPKci", "cache storage <index> → host directory; ResultTargetNotFound when it was not created", Result, h_fs_MountCache, const char *name, int index) {
+    char d[1100]; struct stat st;
+    if (stat(cache_dir(index, d, sizeof d), &st) || !S_ISDIR(st.st_mode)) return RES_TARGET_NOT_FOUND;
+    return mount(name, d, 0);
+}
+HLE_FORCE_OPT("_ZN2nn2fs18CreateCacheStorageEill", "create cache storage <index>: a host directory (sizes not reserved)", Result, h_fs_CreateCache, int index, int64_t size, int64_t journal) {
+    char b[1024], d[1100]; mkdir(envdir("DM_CACHE", "run/platform/cache", b, sizeof b), 0755);
+    if (mkdir(cache_dir(index, d, sizeof d), 0755) && errno != EEXIST) { LOG("[red] CreateCacheStorage %d: %s errno=%d", index, d, errno); return RES_FAIL; }
+    LOG("fs cache storage %d created → %s (data %lld, journal %lld bytes)", index, d, (long long)size, (long long)journal);
+    return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn2fs18DeleteCacheStorageEi", "delete cache storage <index>: its host directory", Result, h_fs_DeleteCache, int index) {
+    char d[1100]; cache_dir(index, d, sizeof d);
+    if (access(d, F_OK)) return RES_TARGET_NOT_FOUND;
+    int r; { PATH_LOCK(); r = rm_tree(d); }
+    LOG("fs cache storage %d deleted", index);
+    return r ? RES_FAIL : RES_OK;
+}
+typedef struct { int n, cur, idx[64]; } cache_list;
+HLE_FORCE_OPT("_ZN2nn2fs20OpenCacheStorageListEPNS0_22CacheStorageListHandleE", "cache storage list: the numeric directories under $DM_CACHE", Result, h_fs_OpenCacheList, cache_list **out) {
+    cache_list *l = calloc(1, sizeof *l); char b[1024];
+    DIR *dir = opendir(envdir("DM_CACHE", "run/platform/cache", b, sizeof b)); struct dirent *e;
+    while (dir && (e = readdir(dir)) && l->n < 64) {
+        char *end; long v = strtol(e->d_name, &end, 10);
+        if (e->d_name[0] >= '0' && e->d_name[0] <= '9' && !*end && v >= 0 && v <= 0x7fffffff) l->idx[l->n++] = (int)v;
+    }
+    if (dir) closedir(dir);
+    for (int i = 1; i < l->n; i++) for (int j = i; j > 0 && l->idx[j - 1] > l->idx[j]; j--) { int t = l->idx[j]; l->idx[j] = l->idx[j - 1]; l->idx[j - 1] = t; }
+    *out = l; return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn2fs20ReadCacheStorageListEPiPNS0_16CacheStorageInfoENS0_22CacheStorageListHandleEi", "cache storage list: next entries",
+              Result, h_fs_ReadCacheList, int *n, uint8_t *info, cache_list *l, int count) {
+    int k = 0;
+    while (k < count && l && l->cur < l->n) { memset(info + 0x20 * k, 0, 0x20); memcpy(info + 0x20 * k, &l->idx[l->cur++], 4); k++; }
+    *n = k; return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn2fs21CloseCacheStorageListENS0_22CacheStorageListHandleE", "cache storage list: closed", void, h_fs_CloseCacheList, cache_list *l) { free(l); }
 HLE_FORCE_OPT("_ZN2nn2fs21MountSaveDataReadOnlyEPKcNS_13ApplicationIdERKNS_7account3UidE", "read-only mount of this application's save → the same host save directory (committed copy, read-only)", Result, h_fs_MountSaveRo, const char *name, uint64_t app, const void *uid) {
     (void)uid; const char *d = getenv("DM_SAVE"); if (!d) die("DM_SAVE is not set: point it at a writable save directory");
-    LOG("fs MountSaveDataReadOnly %s, application %#llx", name, (unsigned long long)app);
+    LOG("fs MountSaveDataReadOnly %s, application %#llx%s", name, (unsigned long long)app, app == dm_game.program_id ? "" : ": not this game, no such save");
+    if (app != dm_game.program_id) return RES_TARGET_NOT_FOUND;   // the save does not exist (the SDK reference makes its existence a precondition)
     return mount(name, d, 1);
 }
 HLE_FORCE_OPT("_ZN2nn2fs6CommitEPKPKci", "commit several mounts: one Commit each (each atomic)", Result, h_fs_CommitN, const char *const *names, int n) {

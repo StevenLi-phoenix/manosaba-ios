@@ -25,6 +25,7 @@ Select the game with `GAME=<id>` for `make -C host` and with `DM_GAME=<id>` for 
 | `language` | Default `nn::oe::GetDesiredLanguage` answer (e.g. `en-US`, `ja`, `zh-Hans`); `DM_LANG` overrides it |
 | `screen` | `[width, height]` the game renders at; the touch space until the game sets a window crop |
 | `guest_heap_mb` | Heap region size on iOS (default 256); the rest of the address space reservation goes to the alias region |
+| `device_api` | NVN API version `"major.minor"` that `nvnDeviceGetInteger` reports (default `"55.15"`, as nxnative). Some games check it and create no device on a mismatch (TotK: major 55, minor ≥ 15); `DM_NVN_API` overrides it |
 | `romfs.files` | Key RomFS files and their exact sizes; checked before the game starts, which also catches the wrong game version |
 | `romfs.tree`, `tree_files`, `tree_bytes` | A RomFS directory (`.` = all of it) whose file count and byte total must match: catches half-copied data |
 | `save_sync` | Save files kept in iCloud sync (globs relative to the save root); empty = no sync |

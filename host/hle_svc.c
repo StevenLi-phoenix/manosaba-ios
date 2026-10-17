@@ -526,7 +526,9 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         case I_RandomEntropy: { uint64_t dm_entropy64(void); v = dm_entropy64(); break; }   // a deterministic stream when DM_DETCLOCK is on (hle_os.c)
         case I_ProgramId: v = dm_game.program_id; break;
         case I_IsApplication: v = 1; break;
-        case I_UserExcAddr: v = 0; break;
+        // User exception context area (switchbrew SVC GetInfo 20, a process value): SDK 20's SetDyingMessageRegion writes the region at +0x1c0 (TotK
+        // sdk 0x1438dc; 0 wrote through a null pointer). One page of host memory, as nxnative (seedds, MIT)
+        case I_UserExcAddr: { static _Alignas(0x1000) uint8_t ctx[0x1000]; v = (uint64_t)ctx; break; }
         // Threads the process may still create (Unity checks this before starting each worker and silently skips the thread at 0, then waits
         // forever for it). The host has no real limit besides its handle table; 128 is a generous cap of the host's own choosing
         case I_FreeThreadCount: { void thr_counts(int *, int *, int *); int nh, nl, no; thr_counts(&nh, &nl, &no); v = nl < 128 ? (uint64_t)(128 - nl) : 0; break; }

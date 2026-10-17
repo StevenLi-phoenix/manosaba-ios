@@ -4,6 +4,7 @@
 // order there); the ordering rests on the documented signalEvent / waitForEvent of MTL4CommandQueue and on MetalFX's measured fence use (fx_apply)
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/hle_nvn.c"
+const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15 };   // hle_nvn.c reports the NVN API version from the profile
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
 void *front_metal_layer(void) { return NULL; }

@@ -20,6 +20,7 @@ int dm_opmode(void) {
 enum { MSG_FOCUS = 15, MSG_OPMODE = 30, MSG_PERFMODE = 31 };
 #define MQ 32
 static pthread_mutex_t g_mq_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_mq_cond = PTHREAD_COND_INITIALIZER;   // PopNotificationMessage waits on it
 static uint32_t g_mq[MQ]; static int g_mqh, g_mqn;
 static _Atomic int g_ntf_opmode, g_ntf_perfmode;   // pushed only once the game enables them with Set*NotificationEnabled
 void oe_msg_event_signal(void);
@@ -32,6 +33,7 @@ static void mq_push(uint32_t m) {
             if (g_mq[(g_mqh + i) % MQ] == m) { pthread_mutex_unlock(&g_mq_lock); return; }
     if (g_mqn == MQ) die("oe notification queue overflow (the game is not fetching?)");
     g_mq[(g_mqh + g_mqn++) % MQ] = m;
+    pthread_cond_broadcast(&g_mq_cond);
     pthread_mutex_unlock(&g_mq_lock);
     oe_msg_event_signal();
 }
@@ -100,6 +102,16 @@ HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "notification queue fed by 
     void oe_msg_event_clear_if_empty(void); oe_msg_event_clear_if_empty();
     return ok;
 }
+// Blocking form (TotK main imports it): waits for the host queue. After nxnative's h_oe_PopMsg (seedds, MIT)
+HLE_FORCE_OPT("_ZN2nn2oe22PopNotificationMessageEv", "notification queue, waiting until a message is pushed", uint32_t, h_oe_PopMsg, void) {
+    uint32_t m = 0;
+    for (;;) {
+        pthread_mutex_lock(&g_mq_lock);
+        while (!g_mqn) pthread_cond_wait(&g_mq_cond, &g_mq_lock);
+        pthread_mutex_unlock(&g_mq_lock);
+        if (h_oe_TryPopMsg(&m)) return m;   // another thread may have taken it in between: wait again
+    }
+}
 
 // ---------- Notification message event (games that wait for messages instead of polling, e.g. Unity) ----------
 // On the console the event stays signaled while messages are pending. Here: manual clear, signaled on every push, cleared by TryPop once the queue is empty.
@@ -137,6 +149,21 @@ HLE_FORCE_OPT("_ZN2nn2oe27GetDefaultDisplayResolutionEPiS1_", "default display r
 HLE_FORCE_OPT("_ZN2nn2oe38GetDefaultDisplayResolutionChangeEventEPNS_2os11SystemEventE", "display resolution change event (never signaled)", void, h_oe_DefResEv, void *ev) {
     hle_bind_system_event(ev, 0);
 }
+// Multi-program applications (am IApplicationFunctions 123, an s32): -1 = no program of this application launched this one (switchbrew
+// "Applet Manager services"). The SDK reads it through the am application proxy, which the host does not have (TotK main calls it in nnMain)
+HLE_FORCE_OPT("_ZN2nn2oe23GetPreviousProgramIndexEv", "no previous program: -1", int, h_oe_PrevProgram, void) { return -1; }
+// Launch parameter (present only when another program launched this one with one; returns bool): the host never passes one. From nxnative
+HLE_FORCE_OPT("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "no launch parameter", unsigned, h_oe_PopLaunchParam, size_t *out, void *buf, size_t n) {
+    (void)buf; (void)n; if (out) *out = 0; return 0;
+}
+HLE_FORCE_OPT("_ZN2nn2oe17FinishStartupLogoEv", "the host shows no startup logo", void, h_oe_FinishLogo, void) {}
+HLE_FORCE_OPT("_ZN2nn2oe38SetUserInactivityDetectionTimeExtendedEb", "the host does not dim the screen", void, h_oe_Inactivity, unsigned on) { (void)on; }
+HLE_FORCE_OPT("_ZN2nn2oe44SetUserInactivityDetectionTimeExtendedUnsafeEb", "the host does not dim the screen", void, h_oe_InactivityU, unsigned on) { (void)on; }
+HLE_FORCE_OPT("_ZN2nn2oe24GetExpectedVolumeBalanceEPfS1_", "system / application volume balance: always 1:1", void, h_oe_GetVolBal, float *sys, float *app) { *sys = 1.0f; *app = 1.0f; }
+HLE_FORCE_OPT("_ZN2nn2oe24SetExpectedVolumeBalanceEff", "volume balance: ignored", void, h_oe_SetVolBal, float sys, float app) { (void)sys; (void)app; }
+// Applet resource user ID (the number am gives this process): the SDK's own getter returns 0 without am, and SDK 20's OpenAudioRenderer aborts on 0
+// (nxnative, The Legend of Zelda: Breath of the Wild 1.9.0, same sdk module as TotK). A fixed non-zero ID, used only as an identifier
+HLE_FORCE_OPT("_ZN2nn6applet23GetAppletResourceUserIdEv", "no am: a fixed non-zero ID", uint64_t, h_applet_Aruid, void) { return 0x80; }
 HLE_FORCE_OPT("_ZN2nn2oe25GetProgramTotalActiveTimeEv", "total active time (nn::TimeSpan, ns) from the guest clock", int64_t, h_oe_ActiveTime, void) { return (int64_t)guest_ns(); }
 // bool arguments: Switch callers do not extend them, only the low 8 bits count
 HLE_FORCE("_ZN2nn2oe28SetResumeNotificationEnabledEb", "resume is expressed by the focus notification", void, h_oe_SetResumeNtf, unsigned on) { (void)on; }

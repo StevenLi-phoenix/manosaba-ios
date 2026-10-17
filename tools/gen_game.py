@@ -2,7 +2,7 @@
 # games/<id>/game.json → C profile for the host (host/game.h: dm_game). Also prints single fields for shell scripts.
 # Usage: gen_game.py <game.json> <out.c>        write the profile source
 #        gen_game.py <game.json> --get <key>    print a field (lists joined by spaces), e.g. --get modules
-import json, sys
+import json, re, sys
 
 REQUIRED = ('id', 'title', 'version', 'engine', 'program_id', 'modules', 'main_build_id', 'language', 'screen', 'romfs')
 
@@ -12,6 +12,7 @@ def load(path):
     if miss: sys.exit(f'{path}: missing {", ".join(miss)}')
     if not isinstance(g['screen'], list) or len(g['screen']) != 2: sys.exit(f'{path}: screen must be [width, height]')
     int(g['program_id'], 16); bytes.fromhex(g['main_build_id'])
+    if not re.fullmatch(r'\d+\.\d+', g.get('device_api', '55.15')): sys.exit(f'{path}: device_api must be "major.minor"')
     return g
 
 def cstr(s): return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
@@ -31,6 +32,7 @@ def write_c(g, out):
           f'    .program_id = 0x{int(g["program_id"], 16):016x}ull,',
           f'    .modules = {cstr(" ".join(g["modules"]))}, .main_build_id = {cstr(g["main_build_id"])}, .language = {cstr(g["language"])},',
           f'    .screen_w = {g["screen"][0]}, .screen_h = {g["screen"][1]}, .guest_heap_mb = {g.get("guest_heap_mb", 256)},',
+          '    .nvn_api_major = %s, .nvn_api_minor = %s,' % tuple(g.get('device_api', '55.15').split('.')),
           f'    .romfs_files = romfs_files, .romfs_nfiles = {len(files)},',
           f'    .romfs_tree = {cstr(r["tree"]) if r.get("tree") else "0"}, .romfs_tree_files = {r.get("tree_files", 0)}, .romfs_tree_bytes = {r.get("tree_bytes", 0)}LL,',
           f'    .save_sync = save_sync, .save_sync_n = {len(sync)},',

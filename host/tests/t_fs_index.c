@@ -5,7 +5,8 @@
 //   (3) a case collision in RomFS (b.txt next to .dm-case-1 named "B.txt") resolves both names to their own files, the physical alias itself is
 //       not a guest name, and only .dm-case-1's xattr is read;
 //   (4) ReadDirectory lists guest names (no alias), the types and the sizes;
-//   (5) MountSaveDataReadOnly is read-only but not indexed: a file the save gains afterwards (a Commit through the writable mount) is found.
+//   (5) MountSaveDataReadOnly is read-only but not indexed: a file the save gains afterwards (a Commit through the writable mount) is found;
+//       another application's save does not exist (TotK looks for Breath of the Wild's).
 #include <dirent.h>
 #include <sys/xattr.h>
 #include <stdio.h>
@@ -88,7 +89,9 @@ int main(void) {
     char save[1100]; snprintf(save, sizeof save, "%s/save", root); mkdir(save, 0755);
     snprintf(p, sizeof p, "%s/old.dat", save); put(p, "old");
     setenv("DM_SAVE", save, 1);
-    CHECK(h_fs_MountSaveRo("ros", 0, NULL) == RES_OK, "mount the save read-only");
+    CHECK(h_fs_MountSaveRo("ros", dm_game.program_id, NULL) == RES_OK, "mount the save read-only");
+    CHECK(h_fs_MountSaveRo("oth", dm_game.program_id ^ 1, NULL) == RES_TARGET_NOT_FOUND, "another application's save is not found");
+    CHECK(h_fs_SaveExistsApp(dm_game.program_id, NULL) && !h_fs_SaveExistsApp(dm_game.program_id ^ 1, NULL), "only this game's save exists");
     CHECK(content("ros:/old.dat", "old"), "an existing save file reads");
     r = h_fs_OpenFile(&h, "ros:/new.dat", MODE_READ); if (!r) h_fs_CloseFile(h);
     CHECK(r == RES_PATH_NOT_FOUND, "new.dat is not there yet");

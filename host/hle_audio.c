@@ -258,6 +258,17 @@ HLE_FORCE("_ZN2nn5audio25GetReleasedAudioOutBufferEPNS0_8AudioOutE", "next playe
     return b;
 }
 
+// Host-internal PCM output for the in-process audio renderer (hle_audren.c): the same AudioOut machinery (real output / silent sink / lifecycle
+// take-over), keyed by a host-allocated object instead of a guest AudioOut, without a release event. From nxnative's hle_audio.c (seedds, MIT)
+void *dm_pcmout_open(int ch) {
+    void *key = calloc(1, 64); uint8_t param[8] = {0}; *(uint16_t *)(param + 4) = (uint16_t)ch;
+    if (!key || h_au_Open(key, NULL, "AudioRenderer", param)) die("host PCM output cannot be opened");
+    return key;
+}
+void dm_pcmout_start(void *k) { h_au_Start(k); }
+int dm_pcmout_append(void *k, void *b) { return (int)h_au_Append(k, b); }
+void *dm_pcmout_released(void *k) { return h_au_Released(k); }
+
 // Front-end lifecycle / audio session interruption: suspend real audio output, with the silent sink taking over real-time consumption meanwhile (pacing unbroken); switch back to the AudioUnit on resume.
 // The front end calls with 1 on going to background / interruption began, and with 0 on returning to foreground / interruption ended (shouldResume).
 void dm_audio_suspend(int on) {

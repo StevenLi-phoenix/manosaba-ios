@@ -1,6 +1,7 @@
 // NVN null device unit tests: look up addresses from nvnBootstrapLoader the way the game does and go all the way to present; all expected values are hand-calculated, without calling the implementation under test.
 // For build and run see gfx/tests/Makefile (make -C gfx/tests).
 #include "../nvn/hle_nvn.c"
+const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15 };   // hle_nvn.c reports the NVN API version from the profile
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
 #include "../tex/nvn_deswizzle.h"
@@ -55,7 +56,7 @@ int main(void) {
     gpa = (PFNNVNDEVICEGETPROCADDRESSPROC)boot("nvnDeviceGetProcAddress");
     EXPECT("bootstrap gets GetProcAddress, non-null", 1, gpa != NULL);
     int nonnull = 0; for (unsigned i = 0; i < NVN_NFUNC; i++) nonnull += gpa(NULL, nvn_names[i]) != NULL;
-    EXPECT("all 523 names get an address", 523, nonnull);
+    EXPECT("every name in the table gets an address", NVN_NFUNC, nonnull);
     EXPECT("address lookup of an unknown name returns null", 0, gpa(NULL, "nvnNoSuchFunction") != NULL);
 
     // 2. Device
