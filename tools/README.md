@@ -7,6 +7,7 @@ Usage is in each file's header. Python tools need the packages in `requirements.
 
 | File | What it does |
 |---|---|
+| `game_extract.sh` | Your `prod.keys` + game packages (`.nsp` / `.xci`, base game and updates) → ExeFS and the merged RomFS; builds and runs `game_extract/` (C#, LibHac 0.19.0, pinned by content hash in `packages.lock.json`). Reads only the keys common to all consoles; key values are never printed |
 | `new_game.py` | Drafts `games/<id>/game.json` and an empty `rules.py` from the dumped ExeFS and RomFS (program ID, build ID, modules, RomFS checks) |
 | `build_product.sh` | Rewrites the profile's modules into the product directory (`workspace.product`) with `patch_nso.py` and the game's `rules.py` |
 | `patch_nso.py` | The rewriter: changes only the instructions that cannot run unchanged under Apple's kernel (x18, `tpidr_el0`, `tpidrro_el0`, `svc`, timer reads) and applies the game's rules; everything else stays byte-for-byte |

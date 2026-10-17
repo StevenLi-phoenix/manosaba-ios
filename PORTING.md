@@ -35,12 +35,26 @@ $DM_ROOT/run/…                                logs, screenshots, saves of test
 
 ## 1. Dump the game from your console
 
-Only your own copy, from your own console. You need the game with its latest update applied:
+Only your own copy, from your own console. You need the game with its latest update applied, as ExeFS (`main`, `sdk`, `subsdk*`,
+`main.npdm`) and RomFS. Two ways:
 
-- **ExeFS** (`main`, `sdk`, `subsdk*`, `main.npdm`). From an NSP of the base game + update, `hactool` with your console's keys extracts it.
-- **RomFS**. If hactool fails on compressed NCAs, dump the RomFS on the console with nxdumptool.
-- **System fonts**: the `*.bfttf` files from the RomFS of system data titles `0100000000000810`–`0100000000000814` (nxdumptool). The host
-  serves them as `nn::pl` shared fonts; many games render all their text with them.
+- **Packages + keys** (the usual way). On the console, run Lockpick_RCM (`prod.keys`), then in nxdumptool's `user titles menu` → the game
+  → `nsp dump options`, dump the base game and the update as NSPs; keep `tik: remove console specific data` on (eShop titles have
+  personalized tickets, which cannot be used off the console) and `nca/tik: remove titlekey crypto` off. On the Mac:
+
+  ```sh
+  tools/game_extract.sh <prod.keys> $DM_ROOT/data/switch/<id>-<ver> <base.nsp> <update.nsp>
+  ```
+
+  It takes `.nsp` and `.xci` in any mix, and the folder nxdumptool writes for a file over 4 GiB on the SD card. It reads only the keys
+  common to all consoles from `prod.keys`, layers the newest update over the base game, checks every read against the NCA hash trees and
+  prints the module build IDs (C#, LibHac; needs the .NET SDK). On manosaba it gave the same 667 files, byte for byte, as the console.
+- **On the console**, no keys on the Mac: nxdumptool → `nca / nca fs dump options` → `dump update` → the Program NCA; dump the `ExeFS`
+  section, then the `Patch RomFS` section with `use base/patch title` set to the base game. Output under
+  `sdmc:/nxdt_rw_poc/NCA FS/User/Extracted/<title>/Program #0/<section>`.
+
+**System fonts**: the `*.bfttf` files from the RomFS of system data titles `0100000000000810`–`0100000000000814` (nxdumptool). The host
+serves them as `nn::pl` shared fonts; many games render all their text with them.
 
 Keys, dumps and console backups stay out of the repository (`.gitignore` covers `keys/`, `dump/`, `work/` …).
 

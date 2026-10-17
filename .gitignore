@@ -17,5 +17,7 @@ __pycache__/
 /host/*.dSYM/
 /gfx/tools/dmsh_xlate/obj/
 /gfx/tools/dmsh_xlate/bin/
+/tools/game_extract/obj/
+/tools/game_extract/bin/
 /third_party/ryujinx/**/obj/
 /third_party/ryujinx/**/bin/
