@@ -115,12 +115,36 @@ clocks (layout and service semantics from Ryujinx), NVN functions (`MapVirtual`,
 `GetCommandMemoryUsed`, ...; 13 names added to `gfx/nvn/names.txt`, as nxnative's table), and command memory: a disabled callback or one that
 cannot supply enough continues in host segments that grow on demand and are reclaimed when the game gives the recording's memory out again.
 
-Where it stops now: a crash at main+0x84f5c (an object whose first field is null, right after NVN calls the host does not implement yet:
-`SetRenderEnable(Conditional)`, `SetTiledCacheAction / TileSize`, `SetRasterizerDiscard`). Known gaps: texture view swizzle and depth-stencil mode
-are logged, not applied; the other deferred bind kinds have no implementation; two threads enter the Metal layer at once (`WriteTexels` /
-`ReadTexels` from game worker threads during `SubmitCommands`); iOS needs `DM_CACHE` set by the front end and the large heap; hid six-axis is still
-a stub. Run: `DM_GAME=totk DM_ROOT=$PWD/work DM_NVN_SHMAP=<empty file> DM_SHDUMP=$PWD/work/build/totk/shader_capture DM_SAVE=… DM_TEMP=…
-DM_CACHE=… DM_WATCH=120 host/dmhost` after `make -C host GAME=totk`.
+**With its shaders (2026-10-18):** the title screen draws (the logo over a 3D mural scene in the G-buffer); the lit picture behind the logo is
+still a solid red. What it took, in the order found:
+
+- Core numbers (`host/hle_thread.c`): the job system picks a per-worker output block by `nn::os::GetTlsValue` = current core + 1, and the host
+  answered core 0 for every thread, so ModuleSystemWorker0..2 and the main thread filled one block at once (the crash at main+0x84f5c, an
+  object pointer overwritten by a neighbour). `SetThreadCoreMask` / `GetThreadCoreMask` / `GetCurrentProcessorNumber` / `CreateThread` now follow
+  the Horizon kernel (Atmosphère mesosphere: -1 don't care, -2 the process's ideal core, -3 keep it and it must be in the mask; the running core
+  moves into the mask), with the process's ideal core and core mask from main.npdm (core 0, cores 0..2 in both games). Found with a new
+  hardware store watchpoint (`DM_WATCHPOINT`, `host/diag.c`) and crash-time memory dumps (`DM_CRASH_MEM`, `host/crash.c`).
+- NVN: `DrawArraysInstanced`, timestamps in ns, render enable / rasterizer discard / tiled cache logged or no-ops (nxnative); Metal layer entries
+  (`Read|WriteTexels`, `QueueFinish`, `SubmitCommands`, `PresentTexture`) take one recursive lock (TotK writes texels from worker threads).
+- Shader build per game: `game.json` `nvn_c2` (where the shaders read texture / sampler / image handles in c[2]: textures at 0x20 for TotK as for
+  nxnative's games, 0x168 for manosaba; it reached 2090 shaders with unbound textures) and `depth_mode` (TotK sets `near_is_minus_w`: the
+  translator's own z' = z / 2 + w / 2 before every vertex return; without it every full-screen pass at z = -w was clipped). Both travel in the
+  translator job, the cache key and the reflection, and the host refuses a reflection built for another layout. manosaba's 2740 shaders come out
+  byte-identical (MSL and reflection) under the new chain. `dmsh_build.py` needs `DM_GAME`, and the translator needs `DOTNET_ROOT` when .NET
+  comes from Homebrew (`/opt/homebrew/opt/dotnet/libexec`).
+- Replay: 8-bit index buffers widened to 16-bit (most of TotK's quads; they had been skipped), vertex format RGB10A2SN, texture view swizzle
+  (a set view property replaces the texture's; `view_t` stays 10 bytes, because a 12-byte one overwrote the game's fields after its views),
+  views whose format or level / layer range cannot be a Metal view of the texture are sampled as the texture (they had aborted the process),
+  compressed render targets are left unattached (BC4 written through an RGBA16UI view, as nxnative found in BotW).
+
+Known gaps: the lit picture is red (the deferred lighting chain behind the logo, next to look at); 45 pipelines fail to link because a pixel
+shader reads an output its vertex shader does not write (nxnative pads such outputs from shader pairs, `vs_pad`; the host can write the pairs
+it sees in each program while capturing); 17 vertex shaders read a storage buffer address from a uniform buffer; 4 vertex shaders use 64-bit
+floats Metal lacks; GPU-encoded BC textures need an uncompressed proxy target; alpha test, render enable, depth-stencil (stencil) views are not
+modelled; iOS needs `DM_CACHE` and the large heap; hid six-axis is a stub. Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
+the pass dump prints cull / depth range / index type, the inline uniform data and the first vertices. Run after `make -C host GAME=totk`:
+`DM_GAME=totk DM_ROOT=$PWD/work DM_SHDUMP=$PWD/work/build/totk/shader_capture DM_SAVE=… DM_TEMP=… DM_CACHE=… DM_WATCH=120 host/dmhost` (the
+stage map and library directory come from the profile; rebuild them with `shmap_from_capture.py` and `DM_GAME=totk dmsh_build.py`).
 
 Upstream PR #55 (x18 scan prefilter, n3crosis) is in `tools/patch_nso.py` (76 s → 16 s for manosaba's main).
 
