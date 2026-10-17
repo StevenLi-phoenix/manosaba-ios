@@ -99,7 +99,11 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   and frame-timed scripted input, credited in their commits; `tools/game_extract` follows nxnative's `nx_extract`. For Tears of the Kingdom,
   whose system modules are the ones nxnative brought up for Breath of the Wild 1.9.0: the explicit jump-table rewrite (`site_br_tab`), the
   in-process audio renderer, host guest threads, amiibo, play report, oe / hid / fs additions, NVN 55 functions, deferred texture binds,
-  growable command-memory segments and the NVN API version setting, credited in the code.
+  growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool
+  buffer, the inline-uniform ring and per-stage vertex shader padding, credited in the code.
+- **tomodachi-native** (kuosuko, MIT), a fork of nxnative: the variant of the duplicated colour slot handling that keeps the slot the pass writes.
+- **LASRecomp** (hjqcan, MIT): its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled
+  textures of Tears of the Kingdom.
 - **LibHac** (Alex Barney, MIT): reads NSP, XCI and NCA containers in `tools/game_extract`.
 - **Ryujinx** (MIT): the shader translator in `third_party/ryujinx`.
 - **deko3d** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c`.

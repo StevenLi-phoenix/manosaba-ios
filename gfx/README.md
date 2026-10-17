@@ -35,7 +35,10 @@ them anyway): they are translated offline, once, into Metal libraries.
 ## Shaders
 
 A game's shaders are Maxwell (Tegra X1) machine code. Each one is identified by a **key**: the first 16 hex digits of the sha256 of its 0x880-byte
-control section. At run time the game passes the control section to `nvnProgramSetShaders`, and the replay layer computes the same key.
+control section followed by its code area (the length at control +0x704). At run time the game passes both to `nvnProgramSetShaders`, and the
+replay layer computes the same key (`shader_key` in `nvn/hle_nvn.c`; the same definition as nxnative's). The control section alone is not
+enough: it holds sizes and resource counts but no hash of the code, and in Tears of the Kingdom 807 of 3667 shaders share their control section
+with another shader (313 sections), so a key without the code ran one shader's code for all of them.
 
 ```
 capture  (<key>.ctl + <key>.data per shader)
@@ -122,6 +125,11 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_SHOT=<frame>[,<frame>…]:<path>` | Save the presented picture at those frames (`%d` = frame number) |
 | `DM_NVN_SHOT_OUT=<W>x<H>` | Screenshots capture the picture after scaling to that size |
 | `DM_NVN_TEXDUMP=<frame>:<path>` | Save every color render target of that frame |
+| `DM_NVN_TEXSNAP=<index>,<a>-<b>,@<W>x<H>` | With `DM_NVN_TEXDUMP`: also save the color attachments of those render passes of that frame right after each pass (in-frame index, index range, or every pass with an attachment of that size; at most 96). The copy runs on the replay's own blit encoder, so it sees what the pass left; the pass dump prints `S <pass> snapshot index <i>`. With `DM_NVN_TBDR=0` no attachment store is elided |
+| `DM_NVN_TEXNZ=1` | Pass dump: for each texture binding, the share of non-zero words in its guest storage, and for BC textures in the Metal texture's level 0 (does the content reach Metal?) |
+| `DM_NVN_TEXCLASS=1` | Log each GPU-only texture at creation: texture flags, pool flags, how much of its storage the CPU filled |
+| `DM_NVN_UBLOG=1` | Log the raw arguments of every `UpdateUniformBuffer` and `BindUniformBuffer` call |
+| `DM_NVN_REUPLOG=<n>` | Log the first n re-uploads of memory-backed textures (which textures does the CPU keep rewriting?) |
 | `DM_NVN_PASSDUMP=<frame>` or `<a>-<b>` | Log each render pass (attachments, loads / stores, samples) for those frames to stderr; `DM_NVN_PASSDUMP_ALL=1` adds every draw |
 | `DM_NVN_PROF=1` | Time every implemented NVN function |
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |

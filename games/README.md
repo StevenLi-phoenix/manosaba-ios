@@ -48,7 +48,7 @@ Select the game with `GAME=<id>` for `make -C host` and with `DM_GAME=<id>` for 
 | `msl_mac`, `msl_ios` | Shader library roots; libraries are under `b-<chain version>/` | Mac host default `DM_MSL_DIR`; `mac_app.sh`; `ios/run.sh` |
 | `icon` | 1024×1024 opaque PNG app icon (game art: never committed) | `ios/run.sh build` |
 
-Shader libraries are keyed by a hash of each shader's control section, so several games can share one `msl_mac` / `msl_ios` root.
+Shader libraries are keyed by a hash of each shader's control section and code area, so several games can share one `msl_mac` / `msl_ios` root.
 
 ## rules.py — rewriter rules
 

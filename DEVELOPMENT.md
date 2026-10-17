@@ -115,8 +115,8 @@ clocks (layout and service semantics from Ryujinx), NVN functions (`MapVirtual`,
 `GetCommandMemoryUsed`, ...; 13 names added to `gfx/nvn/names.txt`, as nxnative's table), and command memory: a disabled callback or one that
 cannot supply enough continues in host segments that grow on demand and are reclaimed when the game gives the recording's memory out again.
 
-**With its shaders (2026-10-18):** the title screen draws (the logo over a 3D mural scene in the G-buffer); the lit picture behind the logo is
-still a solid red. What it took, in the order found:
+**With its shaders (2026-10-18):** the title screen draws as on the console (the lit stone mural, the green wisps, the logo and the menu text;
+compared with a console screenshot), and the save selection after "Continue" shows its text. What it took, in the order found:
 
 - Core numbers (`host/hle_thread.c`): the job system picks a per-worker output block by `nn::os::GetTlsValue` = current core + 1, and the host
   answered core 0 for every thread, so ModuleSystemWorker0..2 and the main thread filled one block at once (the crash at main+0x84f5c, an
@@ -137,12 +137,42 @@ still a solid red. What it took, in the order found:
   views whose format or level / layer range cannot be a Metal view of the texture are sampled as the texture (they had aborted the process),
   compressed render targets are left unattached (BC4 written through an RGBA16UI view, as nxnative found in BotW).
 
-Known gaps: the lit picture is red (the deferred lighting chain behind the logo, next to look at); 45 pipelines fail to link because a pixel
-shader reads an output its vertex shader does not write (nxnative pads such outputs from shader pairs, `vs_pad`; the host can write the pairs
-it sees in each program while capturing); 17 vertex shaders read a storage buffer address from a uniform buffer; 4 vertex shaders use 64-bit
-floats Metal lacks; GPU-encoded BC textures need an uncompressed proxy target; alpha test, render enable, depth-stencil (stencil) views are not
+The title picture was wrong for three separate reasons, each found by following the data from the screen back to its source (pass dumps,
+snapshots after each pass, then the texture and memory behind the bad value):
+
+- **Red background: the wrong shader code.** Shader keys hashed the 0x880-byte control section only, which holds sizes and resource counts but
+  no hash of the code. 807 of the game's 3667 captured shaders share their control section with another one (313 sections); the capture kept
+  the first code seen per key and every other shader under that key ran it. The bloom upsampler (`sample × c[3][0x60]`) ran a shader that adds
+  `c[3][0x20]`, which held a matrix row (2, 0, 0, 0) of an earlier pass: red. The key is now sha256(control section + code area) in the host,
+  the capture and the tools (`shader_key` in `hle_nvn.c`; nxnative had made the same change for Mario, whose control sections collide too).
+  Both games were rebuilt: manosaba's 2740 shaders map one to one (MSL byte-identical, only key names change); TotK's captures were renamed and
+  recaptured (3706 shaders). The uniform-buffer experiments on the way (per-binding copies instead of memory semantics) only hid this: they
+  broke manosaba and were reverted; NVN's documentation and Ryujinx both give memory semantics in command order, which the host keeps.
+- **Black mural: assets never uploaded.** The game gives no packaged layout to its asset textures (26 `SetPackagedTextureLayout` against 757
+  registered textures); it writes their block-linear data into CPU-cached pools and flushes the ranges. Only packaged textures were uploaded
+  from the pool, so the mural's albedo was black in Metal while its storage was 90-99 % filled. As in LASRecomp (a texture is uploaded from
+  guest memory until it is rendered into), a texture in a CPU-visible, non-compressible pool that the GPU has not written is uploaded once the
+  CPU has filled it (non-zero storage at first use, or dirty pages later), created render-target capable; the first GPU write (render target,
+  copy / clear destination, image store) makes that MTLTexture the GPU's (`tex_gpu_write`). Linear textures in CPU-visible pools are made on
+  the pool buffer (`tex_linear`, from nxnative): that is the glyph cache (IMAGE | LINEAR), and the menu text appeared with it.
+- **Black lighting: every conditional clear ran.** The lighting buffers are cleared once per frame with `SetRenderEnableConditional(not
+  equal, X)`, the clear, then `ReportCounter(TIMESTAMP_TOP, X)`. NVN documents that TIMESTAMP and TIMESTAMP_TOP reports write 0 as the
+  counter value, so the next conditional clear of the frame compares X+0 = 0 with X+16 = 0 and is skipped, and the second lighting pass adds
+  to the first. The host wrote the timestamp into the counter half and did not evaluate conditions at all, so the second pass cleared the
+  first pass's light. Counter reports other than samples passed now write their counter half (0) in command order at replay; conditions are
+  evaluated at replay from guest memory (rendering stays on while either value is a samples-passed result still on the GPU); the store,
+  clear-hoisting, fusion and deferral look-aheads treat a render enable change conservatively.
+
+Also ported on the way: one attachment per texture level / layer attached at several color slots (`rt_dup_slot`, nxnative / tomodachi-native),
+inline uniform data copied into a host ring at replay (nxnative), `BindProgram` keeping the program's shaders as recorded, `SetRenderEnable`,
+vertex shaders padded for the pixel shaders the game pairs them with (`vs_pad`, pairs written by the host while capturing; link failures
+45 → 2). Known gaps: GPU-encoded BC4 render targets need an uncompressed proxy; 21 vertex shaders read a storage buffer address from a uniform
+buffer; 4 vertex shaders use 64-bit floats Metal lacks; two 4x4 textures are re-uploaded every frame (the CPU rewrites their pages); the blurred
+background of the save selection shows only the logo glow, not the mural (wrong: the user confirmed it differs from the console; next to look at); alpha test and depth-stencil (stencil) views are not
 modelled; iOS needs `DM_CACHE` and the large heap; hid six-axis is a stub. Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
-the pass dump prints cull / depth range / index type, the inline uniform data and the first vertices. Run after `make -C host GAME=totk`:
+`DM_NVN_TEXSNAP` (ordered on the replay's encoder, `@WxH` and ranges), `DM_NVN_TEXNZ`, `DM_NVN_TEXCLASS`, `DM_NVN_REUPLOG`; the pass dump prints
+cull / depth range / index type, the inline uniform data, the first vertices and the counters seen by conditional rendering. Run after
+`make -C host GAME=totk`:
 `DM_GAME=totk DM_ROOT=$PWD/work DM_SHDUMP=$PWD/work/build/totk/shader_capture DM_SAVE=… DM_TEMP=… DM_CACHE=… DM_WATCH=120 host/dmhost` (the
 stage map and library directory come from the profile; rebuild them with `shmap_from_capture.py` and `DM_GAME=totk dmsh_build.py`).
 
