@@ -116,7 +116,12 @@ clocks (layout and service semantics from Ryujinx), NVN functions (`MapVirtual`,
 cannot supply enough continues in host segments that grow on demand and are reclaimed when the game gives the recording's memory out again.
 
 **With its shaders (2026-10-18):** the title screen draws as on the console (the lit stone mural, the green wisps, the logo and the menu text;
-compared with a console screenshot), and the save selection after "Continue" shows its text. What it took, in the order found:
+compared with a console screenshot), and the save selection after "Continue" shows its text over the blurred title, as on the console. Its
+background is not drawn live: `TitleMenuBG_00` (layout archive `Title.Product.140`) has a capture pane (`C_Capture_00`, R10G10B10A2,
+multi-filter `SystemWindow_00`) that copies the framebuffer once when the screen opens, and `LoadList.module` hides the `Main` layer. The
+title's camera loop fades to black for about a second (frames 900–970 in our runs), so pressing A then captures only the logo and the menu
+(what `DM_KEYS="A@48"` did; `A@26.5` captures the lit mural). The black thumbnail of the old save was written while the mural still drew
+black. What it took, in the order found:
 
 - Core numbers (`host/hle_thread.c`): the job system picks a per-worker output block by `nn::os::GetTlsValue` = current core + 1, and the host
   answered core 0 for every thread, so ModuleSystemWorker0..2 and the main thread filled one block at once (the crash at main+0x84f5c, an
@@ -166,10 +171,95 @@ snapshots after each pass, then the texture and memory behind the bad value):
 Also ported on the way: one attachment per texture level / layer attached at several color slots (`rt_dup_slot`, nxnative / tomodachi-native),
 inline uniform data copied into a host ring at replay (nxnative), `BindProgram` keeping the program's shaders as recorded, `SetRenderEnable`,
 vertex shaders padded for the pixel shaders the game pairs them with (`vs_pad`, pairs written by the host while capturing; link failures
-45 → 2). Known gaps: GPU-encoded BC4 render targets need an uncompressed proxy; 21 vertex shaders read a storage buffer address from a uniform
-buffer; 4 vertex shaders use 64-bit floats Metal lacks; two 4x4 textures are re-uploaded every frame (the CPU rewrites their pages); the blurred
-background of the save selection shows only the logo glow, not the mural (wrong: the user confirmed it differs from the console; next to look at); alpha test and depth-stencil (stencil) views are not
-modelled; iOS needs `DM_CACHE` and the large heap; hid six-axis is a stub. Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
+45 → 2).
+
+**The prologue (2026-10-18):** an empty save starts it without input (corridor with Zelda's torch, her dialogue, then the controllable cave
+with the HUD; the first autosave at about 88 s carries a correct thumbnail). Zelda was mostly missing (her torch and a flat-shaded head only)
+because the run-time capture only had the title's shaders: 87 more were captured in the prologue (3706 → 3793; some appear only in some runs,
+so it took two capture runs), and every "not in the shader map" line went away. 7 of them are vertex shaders doing DMUL / DFMA on uniform data,
+and Metal has no `double`: `dmsh_xlate` now answers `QueryHostSupportsShaderFloat64` false, so Ryujinx's own `DoubleToFloat` pass runs them
+in float with IEEE double ↔ float helpers for the register pairs (chain `ae97fd60e78b`; all 3793 TotK shaders build, manosaba's 2740 and the
+other TotK shaders come out byte-identical in MSL and reflection).
+
+**30 fps, the shaders from the RomFS, MacNativeGames' fixes (2026-10-18):**
+
+- **20 fps was the game's own choice.** TotK's frame-rate controller (main 0x2db174, called from 0x2daa20) sets present interval
+  clamp(int(max(CPU, GPU) × 60 + bias) + 1, 2, 3). Its GPU time is `nn::os::ConvertToTick(nvnDeviceGetTimestampInNanoseconds(last report))`
+  minus the frame's start tick from `nn::os::GetSystemTick` (main 0x2b3cff8, stored at sys+0x128, the larger of the two at sys+0x118). Our
+  counter timestamps were `CLOCK_MONOTONIC`, which counts the Mac's sleep; the guest's system tick is `mach_absolute_time`, which does not. After
+  25 hours of sleep the "GPU time" was 25 hours and the game stayed at interval 3 with the process idle 99 % of the time (a `sample` of the
+  cave). Counter timestamps and `nvnDeviceGetCurrentTimestampInNanoseconds` now run on the guest clock (`guest_ns`, the system tick's source);
+  the game keeps interval 2 (frame time p50 33.3 ms) and its GPU time reads 5-14 ms. Found with a backtrace on every present interval change
+  (kept in `nvnWindowSetPresentInterval`) and a hardware watchpoint on sys+0x118 (`DM_WATCHPOINT`).
+- **Shaders from the RomFS:** `engines/bnsh/shader_extract.py` reads the BNSH files the game ships, as MacNativeGames' prepare_shader_seed.py
+  does (`Pack/Bootup`, `Lib/**`, `Shader/**`: 8290 shaders, its count for 1.4.3), plus the effect sets `Effect/**.esetb.byml.zs`, whose VFXB
+  carries two BNSH files (GRSN graphics, GRSC compute; not in MacNativeGames' set), and 0x88c-byte control sections taken as their first 0x880
+  bytes (`Shader/cave_quadmesh`, which MacNativeGames skips: 30 vertex shader records, 21 distinct, all captured at run time under those bytes): 24371
+  shaders and 19669 vertex / pixel pairs. 3451 of the 3793 run-time captures are among them, all byte-identical, and all 2272 run-time pairs of
+  those are BNSH program pairs. The other 342 come from agl / gsys / Terrain shader archives (`Lib/**.sharcb`) and from main, whose code areas
+  are not next to their control sections (not parsed: they stay run-time captures). The extractor writes into the capture directory
+  (`work/build/totk/shader_capture`, 24713 shaders) and adds only what is missing.
+- **From MacNativeGames** ([ly05010419/MacNativeGames](https://github.com/ly05010419/MacNativeGames), MIT, reviewed at
+  41e1e0caf43d58c4af3c478ca2d1bafd9dba7093; ported by hand, credited in the code):
+  - a texture registration without a view clears the slot's old view, and only a registered view changes format / levels / layers / target
+    (`tex_by_id` read the old view whenever the texture had a swizzle);
+  - clears inside a pass, with a partial channel mask, under a partial scissor or with a partial stencil mask are drawn as one full-target
+    triangle (`clear_quad` / `clear_ds_quad`); they had been dropped, and a scissored depth clear or a partial stencil mask had cleared the whole
+    plane. The store look-ahead and the clear-pass hoist now count a clear only under a full scissor;
+  - BC render targets written through a view of one texel per block (BC4 through RGBA16UI) render into an auxiliary texture loaded with the old
+    blocks and copied back through a buffer when the pass ends (`blk_aux`); they had been left out;
+  - storage buffers whose address the shader reads from a uniform buffer (21 vertex shaders): `dmsh_build.py` kind `sbuf_ubo` (uniform slot
+    = cb slot − 3, byte offset), reflection kind `NVN_RB_SBUFU`, read at bind time with the inline uniform updates recorded so far in the
+    submission applied (`pend_read`); argument blocks of those shaders are not reused;
+  - the storage buffer write flag is Ryujinx's `BufferUsageFlags.Write` = bit 0 (we tested bit 1, so none was writable).
+- **Also found in the prologue:** the BC4 encoder's pixel shader writes an RGBA16UI target, but shaders were built with float outputs (pipeline
+  creation failed). When a pipeline fails, the host writes the integer colour attachments the pixel shader writes to `<DM_SHDUMP>/fout.tsv`
+  ("key target uint|sint"); `dmsh_build.py` passes them to the translator's fragment output types (Ryujinx answers them from the render target
+  formats the same way) and keys the build on them. A draw with no colour and no depth target (1x1 scissor) had been dropped ("none of the
+  render targets can create an MTLTexture"): it now gets a Metal pass without attachments, sized by the scissor.
+  Chain `530a8546d06c`. Tests: `t_nvn` (timestamps on the guest clock, scissored / masked clears, BC4 render target), `t_refl` (new),
+  `t_ub` (`pend_read`), `t_mip_extent` (the scissored clear now writes its two texels; a pass without attachments); each fails with the old
+  code.
+
+**Playing it in a window (2026-10-18):** the window front end presented one frame per display tick (60 fps) whatever the game's
+interval, and the game's step is per frame, so it ran twice as fast; with game.json `present_interval` "game" the display-link wait takes as many
+ticks as the game's interval (30 fps). game.json `window_unfocused` "in_focus" keeps the game in focus while its window is visible but not key
+(OutOfFocus is the console's HOME menu: the game stopped whenever the player clicked another window). Frames alternated between two states
+(Zelda's cloak and hood, the cave walls, torn models): found with consecutive-frame captures, present already in the morning's build.
+- Counter reports wrote their timestamp at replay, before the GPU ran them; the timestamp now appears only at completion (the counter half
+  stays in command order for conditional rendering). The large alternations (walls, whole objects) went away (16-frame captures, 14/14 → 0/14
+  alternating triples at frames 1500-1515). `t_nvn` checks that the timestamp is not there while the GPU is busy.
+- Occlusion counting that starts inside a pass without a visibility buffer splits the pass (it counted nothing; `t_reorder_chain`).
+- Virtual cores (game.json `virtual_cores`, host `hle_thread.c`, from MacNativeGames' runtime/threads.c): a guest thread holds one of three
+  cores while it runs guest code and gives it up in waits, sleep, yield, exit and blocking NVN calls; TotK keys per-core data by
+  GetCurrentProcessorNumber without locks and its main thread shares core 0 with ModuleSystemWorker0. Host-work threads
+  (`dm_guest_thread_spawn`, the audio renderer) hold none: the audio renderer kept core 0 and the boot hung.
+- What was left, the cloak and the face (every other frame Zelda lost her cloak or her face, or the cloak changed shape): cached command
+  handles lost their tails. Tears of the Kingdom records the binds of each draw once per frame parity, with the memory callback off, into a
+  512-byte window at slot + GetCommandMemoryUsed of the previous recording, and calls those handles every frame until it records them again.
+  Three faults in our command memory combined:
+  - its NVN 55 inline wrappers (775 sites in main, gated by the SDK's `nvnPrivate0`, a .bss word that stays 0 here) store a dirty byte at
+    command buffer +0x10 before every call, and +0x10 was our `end`: windows ended up to 255 bytes early (…8b0 → …801), so recordings that
+    fit went on in host segments (1336 by frame 1300; 4 now);
+  - a host segment was reclaimed when the game gave out memory overlapping its recording, but the 512-byte windows reach into the next slots'
+    live recordings: a later recording took the segment and its binds became the tail of a cached handle. In even frames Zelda's G-buffer
+    draws bound another model's skeleton buffer while the shadow pass bound hers;
+  - used did not count the JUMP into a host segment: with only END there, the game's next slot began 8 bytes before the JUMP's end.
+
+  Now `cmd_t` leaves +0x10 to the game (`guest_flags`), a host segment lives as long as the JUMP that links it (in game memory inside a live
+  pool, or in a live host segment) and is reused once that JUMP is gone, and the JUMP counts as used. Over a run: 1.28 million CallCommands,
+  none to a handle a later recording had written over; 16-frame captures at frames 1290, 1790 and 2090 have no pixels alternating (per pixel
+  |N − (N+1)| against |N − (N+2)|; 2.4–6.2 % of the pixels before), and every skinned mesh binds the same skeleton in both passes. Found with
+  the pass dump's op trace (`DM_NVN_PASSDUMP_ALL`, `o` lines): the even frames' bind handles jumped into host segments holding another draw's
+  binds. The earlier note here that the two frames' draw lists differed was wrong: same draws, different bindings. MacNativeGames avoids the
+  same with another design (records in host memory, copies owned by control memory, usage reported as the console encodings would take).
+  `t_nvn` 5a checks the dirty byte, the JUMP in used, a host segment surviving an overlapping window and its reuse once its JUMP is
+  overwritten; each fails with the old code.
+
+Known gaps: two 4x4 textures are re-uploaded every frame (the CPU rewrites their pages; MacNativeGames hashes small textures instead); alpha
+test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn (red line); GPUs without BC
+(iOS) do not get the BC render target path; 60 fps needs MacNativeGames' real-time step and controller patches; iOS needs `DM_CACHE` and the
+large heap; hid six-axis is a stub. Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
 `DM_NVN_TEXSNAP` (ordered on the replay's encoder, `@WxH` and ranges), `DM_NVN_TEXNZ`, `DM_NVN_TEXCLASS`, `DM_NVN_REUPLOG`; the pass dump prints
 cull / depth range / index type, the inline uniform data, the first vertices and the counters seen by conditional rendering. Run after
 `make -C host GAME=totk`:
@@ -210,6 +300,13 @@ All MIT and keep jhaizhou's LICENSE; they use the old `dm/` layout.
   test on an iPhone 14 Pro Max with iOS 17.0. For running on iOS 17 devices.
 - TommyLau/botw-mobile: gone from GitHub (404 on 2026-10-17). Its commits listed below can no longer be fetched from there; nxnative now
   carries Breath of the Wild.
+- [ly05010419/MacNativeGames](https://github.com/ly05010419/MacNativeGames) (main, reviewed at 41e1e0caf43d58c4af3c478ca2d1bafd9dba7093,
+  2026-10-18): Tears of the Kingdom 1.0.0 / 1.1.2 / 1.4.3 on the Mac, its NVN layer from d2r-mobile's (`games/totk/third_party/d2r_gfx`).
+  Ported (see the TotK section): offline BNSH shaders, stale texture views, quad clears, BC render targets, storage buffers addressed from uniform
+  buffers, the storage buffer write flag. Not yet: the real-time frame step and the 60 fps controller patch (`game_patches_v143.c`), the 2K canvas
+  and MetalFX, uniform rename (inline updates without ending the pass), submission split every 60 / 75 draws, the acquire sync not fenced to the
+  newest submission, GPU keep-alive, small-texture hashing, the state filter. With those its 1.4.3 notes give 83.9-110.2 fps averaged over 15
+  fixed-camera points on an M4 (docs/v1.4.3-port.md), and about 27-30 fps with the game's own controller.
 
 ### Independent: [c22dev/mush8](https://github.com/c22dev/mush8)
 
