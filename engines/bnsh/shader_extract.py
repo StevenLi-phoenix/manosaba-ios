@@ -8,8 +8,12 @@
 # effect sets 3451 are found, byte-identical). A .zs file is a zstd frame; a frame with a dictionary ID takes that dictionary from Pack/ZsDic.pack.zs
 # (a SARC of dictionaries, itself without one). SARCs are walked recursively; a BFSHA (FSHA) holds complete BNSH files, each addressed from its own
 # start, found by their 8-byte magic "BNSH\0\0\0\0"; an effect set is a BYML whose VFXB carries two (GRSN graphics, GRSC compute).
-# Not covered (the other 342 run-time shaders): agl / gsys / Terrain shader archives (Lib/**.sharcb, magic BAHS: their control sections are there,
-# the code areas not right after them) and shaders built into main (32 control sections, code elsewhere). Those come from run-time captures.
+# The agl / gsys / Terrain / application shader archives (*.sharcb inside those SARCs, magic BAHS, version 9) keep their control sections in front and
+# every code area in one pool: u32 @0x1c is the pool's offset, and the 0x60 bytes before each control section begin with its code area's u64 offset
+# from the pool, the control section's u32 size and u32 0x60 (the distance to the control section). Control sections are found by their magic below
+# the pool and taken only where that record matches (the layout was read off agl_common.sharcb; 141 shaders that had come only from run-time
+# captures are found here, all byte-identical); which program pairs which shaders is not read, so these add no pairs. Not covered: shaders built into main (32 control sections,
+# code elsewhere), which come from run-time captures.
 # BNSH (little-endian, offsets from the BNSH's start): "BNSH" @0, byte order mark ff fe @12, size u32 @28, "grsc" @96, variation count u32 @124,
 #   variation table u64 @128 (64-byte records; program record u64 at +16). Program record (56 bytes): stage records u64 at +8 vertex, +40 pixel,
 #   +48 compute (0 = none; the other slots are not read). Stage record: control section u64 @+8, code area u64 @+16, code size u32 @+24, control size
@@ -57,6 +61,28 @@ def stage_of(code):
     w0 = struct.unpack_from('<I', code, 0x30)[0]
     return {(1, 1): 'vs', (2, 5): 'ps'}.get((w0 & 0x1f, (w0 >> 10) & 0xf), f'sph{w0:#x}')
 
+def add(st, ctl, code, where):
+    key = hashlib.sha256(ctl + code).hexdigest()[:16]   # control section + code area, as the host's shader_key (hle_nvn.c)
+    if key in recs and recs[key][1:] != (ctl, code): sys.exit(f'[red] {where}: key {key} already has a different control section or code area')
+    if key not in recs: recs[key] = (st, ctl, code)
+    if where not in src[key]: src[key].append(where)
+    return key
+
+def sharcb(d, where):
+    ver, pool = struct.unpack_from('<II', rng(d, 4, 4, where) + rng(d, 0x1c, 4, where))
+    if ver != 9 or not 0x20 <= pool <= len(d): skipped[f'sharcb version {ver} (pool {pool:#x}) in {where}'] += 1; return
+    p = 0
+    while (p := d.find(CTL_MAGIC, p, pool)) >= 0:
+        off, cn, dist = struct.unpack_from('<QII', d, p - 0x60) if p >= 0x60 else (0, 0, 0)
+        if dist != 0x60 or cn not in (0x880, 0x88c): skipped[f'control magic without a record in {where}'] += 1; p += 4; continue
+        ctl = rng(d, p, 0x880, where)   # a 0x88c record is the 0x880 bytes plus a 12-byte tail, as in BNSH
+        c1, ln = struct.unpack_from('<II', ctl, 0x700); nvn = struct.unpack_from('<I', ctl, 0x714)[0]; st = {0: 'vs', 1: 'ps', 5: 'cs'}.get(nvn)
+        if not st or not 0 <= c1 <= ln or not 0 < ln < 1 << 24: sys.exit(f'[red] {where}@{p:#x}: bad control section (stage {nvn}, {c1:#x} / {ln:#x})')
+        code = rng(d, pool + off, ln, f'{where}@{p:#x}')
+        if stage_of(code) != st: sys.exit(f'[red] {where}@{p:#x}: control section says {st}, the code area {stage_of(code)}')
+        add(st, ctl, code, where)
+        p += 4
+
 def bnsh(d, where):
     if d[:4] != b'BNSH' or rng(d, 12, 2, where) != b'\xff\xfe' or rng(d, 96, 4, where) != b'grsc': sys.exit(f'[red] {where}: unsupported BNSH header')
     d = rng(d, 0, struct.unpack_from('<I', d, 28)[0], where)
@@ -76,16 +102,13 @@ def bnsh(d, where):
                 sys.exit(f'[red] {where}: variation {i} {st}: bad control section (magic {ctl[:4].hex()}, stage {struct.unpack_from("<I", ctl, 0x714)[0]}, {c1:#x} / {ln:#x} / {dn:#x})')
             code = code[:ln]
             if stage_of(code) != st: sys.exit(f'[red] {where}: variation {i}: program slot {st}, but the code area says {stage_of(code)}')
-            key = hashlib.sha256(ctl + code).hexdigest()[:16]   # control section + code area, as the host's shader_key (hle_nvn.c)
-            if key in recs and recs[key][1:] != (ctl, code): sys.exit(f'[red] {where}: key {key} already has a different control section or code area')
-            if key not in recs: recs[key] = (st, ctl, code)
-            if where not in src[key]: src[key].append(where)
-            keys[st] = key
+            keys[st] = add(st, ctl, code, where)
         if 'vs' in keys and 'ps' in keys: pairs.add((keys['vs'], keys['ps']))
 
 def visit(d, where):
     if d[:4] == b'SARC':
         for nm, m in sarc(d, where).items(): visit(m, where + '/' + nm)
+    elif d[:4] == b'BAHS': sharcb(d, where)
     elif d[:4] in (b'FSHA', b'BNSH') or d[:2] == b'YB' and where.endswith('.esetb.byml.zs'):
         p = 0
         while (p := d.find(b'BNSH\0\0\0\0', p)) >= 0:
