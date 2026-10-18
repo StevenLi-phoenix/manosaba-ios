@@ -541,9 +541,10 @@ void svc_thread_dump(void) {
         if (t->exited) snprintf(life, sizeof life, " exited %.1f s ago", (nowns - t->exit_ns) / 1e9);
         else if (!t->born_ns) snprintf(life, sizeof life, " since process start");
         else snprintf(life, sizeof life, " created %.1f s ago", (nowns - t->born_ns) / 1e9);
-        fprintf(stderr, "[dm] thread %#x \"%s\" priority %d core %d (runs on %d) mask %#llx CPU %.2fs svc %llu %s%s%s waits:%s addr=%#llx%s last svc %#x lr=%s+%#llx\n", t->handle, nm, t->prio, t->core, t->act, (unsigned long long)t->mask,
+        fprintf(stderr, "[dm] thread %#x \"%s\" priority %d core %d (runs on %d) mask %#llx CPU %.2fs svc %llu %s%s%s waits:%s addr=%#llx%s last svc %#x lr=%s+%#llx%s\n", t->handle, nm, t->prio, t->core, t->act, (unsigned long long)t->mask,
                 cpu, t->nsvc, t->exited ? " exited" : "", t->started ? "" : " not started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
-                m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr);
+                m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr,
+                g_keythr && t == pthread_getspecific(g_keythr) ? " ← the thread writing this dump (after a CRASH line: the one that crashed)" : "");
         if (have_raw) { char hx[200]; int q = 0; for (int i = 0; i < 64; i += 4) q += snprintf(hx + q, sizeof hx - q, "%08x ", *(uint32_t *)(raw + i));
                         fprintf(stderr, "[dm]   %#x 64 bytes at the awaited object %#llx: %s\n", t->handle, t->waddr & ~0xfull, hx); }
         thr_bt(t);
