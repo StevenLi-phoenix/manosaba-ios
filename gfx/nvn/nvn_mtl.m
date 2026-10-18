@@ -464,9 +464,123 @@ static vis_list *vis_snapshot(void) {
 #define PEND_MAX 256
 static uint64_t g_pend_lo[PEND_MAX], g_pend_hi[PEND_MAX]; static const uint8_t *g_pend_data[PEND_MAX]; static int g_npend, g_pend_over;   // g_pend_data: an inline update's bytes (command memory, alive until the submission ends); NULL for a GPU copy
 static int pend_hits(uint64_t a, uint64_t n) { if (g_pend_over) return 1; for (int i = 0; i < g_npend; i++) if (a < g_pend_hi[i] && a + n > g_pend_lo[i]) return 1; return 0; }
+// ---------- Uniform snapshots (method from MacNativeGames' usnap, ly05010419/MacNativeGames nvn_mtl.m, MIT; written anew here) ----------
+// A submission is replayed inside nvnQueueSubmitCommands for 10-17 ms and its GPU work starts after that; on the console the call returns at once
+// and the GPU reads the constants soon after. Tears of the Kingdom, having handed the frame over, rebuilds per-object constant pools on other threads
+// (MacNativeGames found main+0x87a604, called from main+0x874f50): in the dive from the Great Sky Island up to 1041 bound uniform ranges of one
+// submission changed while it was on the GPU (DM_NVN_GPUWATCH, byte compare; vertex stage slot 4, 256 bytes: the objects' transforms), and those
+// frames showed rock walls in front of the camera, a flat ground or no terrain. So when a submission starts, every uniform range it binds is copied
+// into its argument arena (ranges up to 256 bytes apart in one memory pool merged, at most 1 MiB each, each copy at the same offset modulo 256), and
+// bindings and replay-time reads use the copy. A GPU write within the submission that reaches a copied range (inline update, buffer copy, texture to
+// buffer copy, a writable storage buffer) drops that copy from then on: later readers see memory, where the GPU applies the writes in order. A range
+// that a GPU write of an earlier, still running submission reaches is not copied (its result is not in memory yet). DM_NVN_UBO_SNAPSHOT=0 reads live
+// memory.
+typedef struct { uint64_t lo, hi; uint8_t *cpu; uint64_t gpu; void *buf; int dropped; } us_ent;   // buf: the arena block holding the copy
+static us_ent *g_us; static int g_us_n, g_us_cap;      // this submission's copies, sorted and disjoint
+typedef struct { uint64_t lo, hi; } us_rng;
+static us_rng *g_us_rng; static int g_us_rn, g_us_rcap;
+typedef struct { uint64_t lo, hi, fence; } us_gw;      // GPU writes, with the fence of their submission
+static us_gw *g_us_gw; static int g_us_gwn, g_us_gwcap;
+static uint64_t g_us_subs, g_us_ranges, g_us_copies, g_us_bytes, g_us_drops, g_us_skip_gpu, g_us_ns;
+static inline void args_dirty_all(void);
+static size_t arena_alloc(size_t n, id<MTLBuffer> *buf);
+uint64_t mtl_done_fence(void);
+static int g_us_on = -1;   // -1: not read yet (tests set it directly)
+static int us_on(void) {
+    if (g_us_on < 0) { const char *e = getenv("DM_NVN_UBO_SNAPSHOT"); g_us_on = !(e && !strcmp(e, "0")); MLOG("uniform snapshots at submission start: %s (DM_NVN_UBO_SNAPSHOT)", g_us_on ? "on" : "off, live memory"); }
+    return g_us_on;
+}
+static void us_collect(const uint8_t *p, int depth) {
+    if (depth > 32) return;
+    for (uint32_t guard = 0; guard < 4000000 && p; guard++) {
+        op_hdr h; memcpy(&h, p, sizeof h);
+        if (h.size < 8 || (h.size & 7) || h.op == OP_END) return;
+        if (h.op == OP_JUMP) { const uint8_t *t; memcpy(&t, p + 8, 8); p = t; continue; }
+        if (h.op == OP_CALL) { uint64_t t; memcpy(&t, p + 8, 8); us_collect((const uint8_t *)(uintptr_t)t, depth + 1); }
+        else if (h.op == OP_BIND_UBO) { const p_bind_buf *b = (const p_bind_buf *)(p + 8);
+            if (b->addr && b->size && b->size <= (1u << 20)) {
+                if (g_us_rn == g_us_rcap) { g_us_rcap = g_us_rcap ? g_us_rcap * 2 : 8192; g_us_rng = realloc(g_us_rng, (size_t)g_us_rcap * sizeof *g_us_rng); }
+                g_us_rng[g_us_rn++] = (us_rng){b->addr, b->addr + b->size}; } }
+        p += h.size;
+    }
+}
+static int us_rng_cmp(const void *x, const void *y) { const us_rng *a = x, *b = y; return (a->lo > b->lo) - (a->lo < b->lo); }
+static int us_gw_cmp(const void *x, const void *y) { const us_gw *a = x, *b = y; return (a->lo > b->lo) - (a->lo < b->lo); }
+void mtl_sub_snapshot(const uint64_t *h, int n) {   // hle_nvn.c nvnQueueSubmitCommands, after mtl_sub_begin and before the replay
+    g_us_n = 0;
+    if (!us_on() || !n) return;
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    g_us_subs++;
+    uint64_t done = mtl_done_fence(), gw_max = 0; int ng = 0;   // GPU writes of submissions not completed yet, sorted by start
+    for (int i = 0; i < g_us_gwn; i++) if (g_us_gw[i].fence > done) { g_us_gw[ng++] = g_us_gw[i]; if (g_us_gw[i].hi - g_us_gw[i].lo > gw_max) gw_max = g_us_gw[i].hi - g_us_gw[i].lo; }
+    g_us_gwn = ng;
+    if (ng > 1) qsort(g_us_gw, (size_t)ng, sizeof *g_us_gw, us_gw_cmp);
+    g_us_rn = 0;
+    for (int i = 0; i < n; i++) us_collect((const uint8_t *)(uintptr_t)h[i], 0);
+    if (!g_us_rn) return;
+    g_us_ranges += (uint64_t)g_us_rn;
+    qsort(g_us_rng, (size_t)g_us_rn, sizeof *g_us_rng, us_rng_cmp);
+    us_rng *u = g_us_rng; int k = 0;   // merge in place; the copies stay disjoint: a range overlapping a finished copy keeps only its part beyond it
+    for (int i = 1; i < g_us_rn; i++) {
+        void *mb; uint64_t mo, hi = u[i].hi > u[k].hi ? u[i].hi : u[k].hi;
+        if (hi <= u[k].hi) continue;
+        if (u[i].lo <= u[k].hi + 256 && hi - u[k].lo <= (1u << 20) && mtl_addr(u[k].lo, hi - u[k].lo, &mb, &mo)) u[k].hi = hi;
+        else { us_rng r = u[i]; if (r.lo < u[k].hi) r.lo = u[k].hi; u[++k] = r; }
+    }
+    int nr = k + 1;
+    if (g_us_cap < nr) { g_us_cap = nr + 256; g_us = realloc(g_us, (size_t)g_us_cap * sizeof *g_us); }
+    for (int i = 0; i < nr; i++) {
+        void *mb; uint64_t mo, sz = u[i].hi - u[i].lo;
+        if (!mtl_addr(u[i].lo, sz, &mb, &mo)) continue;   // not in one pool: read live memory
+        if (ng) {   // a GPU write still running reaches it: read on the GPU timeline
+            uint64_t from = u[i].lo > gw_max ? u[i].lo - gw_max : 0; int a = 0, b = ng;
+            while (a < b) { int m = (a + b) / 2; if (g_us_gw[m].lo < from) a = m + 1; else b = m; }
+            int hit = 0; for (int j = a; j < ng && g_us_gw[j].lo < u[i].hi; j++) if (g_us_gw[j].hi > u[i].lo) { hit = 1; break; }
+            if (hit) { g_us_skip_gpu++; continue; }
+        }
+        id<MTLBuffer> ab; uint64_t pad = u[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original
+        us_ent *c = &g_us[g_us_n++];
+        c->lo = u[i].lo; c->hi = u[i].hi; c->cpu = (uint8_t *)ab.contents + off; c->gpu = ab.gpuAddress + off; c->buf = (__bridge void *)ab; c->dropped = 0;
+        memcpy(c->cpu, (const void *)(uintptr_t)c->lo, (size_t)sz);
+        g_us_bytes += sz;
+    }
+    g_us_copies += (uint64_t)g_us_n;
+    g_us_ns += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+}
+static const us_ent *us_find(uint64_t a, uint64_t n) {   // the live copy holding all of [a, a + n), or NULL
+    if (!g_us_n || !a) return NULL;
+    if (!n) n = 1;
+    int lo = 0, hi = g_us_n;
+    while (lo < hi) { int m = (lo + hi) / 2; if (g_us[m].hi <= a) lo = m + 1; else hi = m; }
+    if (lo < g_us_n && g_us[lo].lo <= a && a + n <= g_us[lo].hi && !g_us[lo].dropped) return &g_us[lo];
+    return NULL;
+}
+static void us_drop(uint64_t a, uint64_t n) {   // a GPU write of this submission reaches [a, a + n)
+    if (!n || !us_on()) return;
+    int dup = 0;   // the same range written again and again (a storage buffer bound for many draws): noted once
+    for (int j = g_us_gwn - 1; j >= 0 && j >= g_us_gwn - 8; j--) if (g_us_gw[j].lo == a && g_us_gw[j].hi == a + n && g_us_gw[j].fence == g_fence + 1) { dup = 1; break; }
+    if (!dup) { if (g_us_gwn == g_us_gwcap) { g_us_gwcap = g_us_gwcap ? g_us_gwcap * 2 : 4096; g_us_gw = realloc(g_us_gw, (size_t)g_us_gwcap * sizeof *g_us_gw); }
+                g_us_gw[g_us_gwn++] = (us_gw){a, a + n, g_fence + 1}; }
+    if (!g_us_n) return;
+    int lo = 0, hi = g_us_n;
+    while (lo < hi) { int m = (lo + hi) / 2; if (g_us[m].hi <= a) lo = m + 1; else hi = m; }
+    int any = 0;
+    for (int i = lo; i < g_us_n && g_us[i].lo < a + n; i++) if (!g_us[i].dropped) { g_us[i].dropped = 1; g_us_drops++; any = 1; }
+    if (any) args_dirty_all();   // bindings encoded from here on read memory
+}
+static void us_report(uint64_t f) {   // every 300 frames
+    static uint64_t p[7]; uint64_t c[7] = {g_us_subs, g_us_ranges, g_us_copies, g_us_bytes, g_us_drops, g_us_skip_gpu, g_us_ns};
+    if (f % 300 || c[0] == p[0]) return;
+    double ns = (double)(c[0] - p[0]);
+    MLOG("uniform snapshots up to frame %llu: %llu submissions, per submission %.0f bindings in %.0f copies, %.1f KB, %.3f ms; %llu copies dropped by a GPU write of their submission, %llu ranges not copied (a GPU write of an earlier submission still running)",
+         (unsigned long long)f, (unsigned long long)(c[0] - p[0]), (c[1] - p[1]) / ns, (c[2] - p[2]) / ns, (c[3] - p[3]) / ns / 1024, (c[6] - p[6]) / ns / 1e6,
+         (unsigned long long)(c[4] - p[4]), (unsigned long long)(c[5] - p[5]));
+    memcpy(p, c, sizeof p);
+}
 // Bytes [a, a + n) as the GPU will see them at this point of the submission: guest memory with the inline uniform updates recorded so far applied in
 // order (MacNativeGames' pend_read, ly05010419/MacNativeGames, MIT). 0 when a GPU copy recorded so far writes into the range: its bytes are not known yet
 static int pend_read(uint64_t a, void *out, uint64_t n) {
+    { const us_ent *u = us_find(a, n); if (u) { memcpy(out, u->cpu + (a - u->lo), n); return 1; } }   // not dropped: no GPU write of this submission reached it
     memcpy(out, (const void *)(uintptr_t)a, n);
     if (g_pend_over) return 0;
     for (int i = 0; i < g_npend; i++) {
@@ -645,6 +759,7 @@ static BENC blit(void) { blit_note(); rp_end();
 
 void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
     if (g_npend < PEND_MAX) { g_pend_lo[g_npend] = dst; g_pend_hi[g_npend] = dst + n; g_pend_data[g_npend++] = NULL; } else g_pend_over = 1;
+    us_drop(dst, n);   // later readers see the copied bytes in memory
     void *sb, *db; uint64_t so, dof;
     if (!mtl_addr(src, n, &sb, &so) || !mtl_addr(dst, n, &db, &dof))
         MDIE("buffer copy address not in any memory pool src=%#llx dst=%#llx n=%#llx", (unsigned long long)src, (unsigned long long)dst, (unsigned long long)n);
@@ -676,6 +791,7 @@ static void ring_put(const void *data, uint64_t n, __unsafe_unretained id<MTLBuf
 void mtl_sub_update(const void *data, uint64_t dst, uint64_t n) {
     if (!n) return;
     if (g_npend < PEND_MAX) { g_pend_lo[g_npend] = dst; g_pend_hi[g_npend] = dst + n; g_pend_data[g_npend++] = data; } else g_pend_over = 1;
+    us_drop(dst, n);   // the update reaches memory on the GPU timeline; later readers read it there
     void *db; uint64_t dof;
     if (!mtl_addr(dst, n, &db, &dof)) MDIE("uniform update destination not in any memory pool dst=%#llx n=%#llx", (unsigned long long)dst, (unsigned long long)n);
     update_to(data, n, (__bridge id<MTLBuffer>)db, dof);
@@ -757,7 +873,8 @@ static int ub_skip(const char *key) {   // Whether this phase should drop draws 
     for (int i = 0; i < g_ub_nk[uc]; i++) { const char *k = g_ub_keys[uc][i]; if (k[0] == '@') continue; if (k[0] == '*' || !strncmp(key, k, strlen(k))) return 1; }
     return 0;
 }
-void mtl_set_frame(uint64_t f) { atomic_store(&g_cur_frame, f); if (g_ub_n) ub_frame(f); }
+static void us_report(uint64_t f);
+void mtl_set_frame(uint64_t f) { atomic_store(&g_cur_frame, f); if (g_ub_n) ub_frame(f); us_report(f); }
 // GPU timing registration: gpu_tag_begin(frame) before commit, gpu_tag_done(frame, GPU start, GPU end) on completion (seconds on the CACurrentMediaTime base).
 // Old-queue command buffers go through gpu_tag_f; the Metal 4 main submission backfills in the feedback of mtl_sub_commit (when switching to Metal 4 all the call sites were lost and the GPU column of the "timing" line became empty)
 static void gpu_tag_begin(uint64_t f) {
@@ -790,6 +907,49 @@ int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
     *t0 = atomic_load(&g_gpu[k].t0); *t1 = atomic_load(&g_gpu[k].t1);
     return *t1 >= *t0 && *t1;
 }
+// DM_NVN_GPUWATCH=<first>-<last> (diagnostics): the uniform ranges a submission of those frames binds are copied at its commit and compared byte by
+// byte when it completes: data the CPU changed while the GPU still had to read it (how Tears of the Kingdom's dive flicker was found; with uniform
+// snapshots on, a changed range the GPU read from its copy is counted apart). Ranges written by the submission's own inline updates are left out,
+// and a range also bound as a storage buffer is counted apart (a shader may have written it)
+typedef struct { uint64_t addr, size; int stage, index, ssbo, copied; } gw_rng;   // copied: a uniform snapshot of this submission held it when it was bound
+static gw_rng *g_gw; static int g_gw_n, g_gw_cap; static uint64_t g_gw_hits, g_gw_checked;
+static int gw_on(void) { static long a = -2, b; if (a == -2) { const char *e = getenv("DM_NVN_GPUWATCH"); a = e ? atol(e) : -1; b = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : a; }
+    long f = (long)atomic_load(&g_cur_frame); return a >= 0 && f >= a && f <= b; }
+static void gw_note(const p_bind_buf *b, int ssbo) {
+    if (!b->addr || !b->size || !gw_on()) return;
+    for (int i = g_gw_n - 1; i >= 0 && i >= g_gw_n - 64; i--) if (g_gw[i].addr == b->addr && g_gw[i].size == b->size) return;
+    if (g_gw_n == g_gw_cap) { g_gw_cap = g_gw_cap ? g_gw_cap * 2 : 1024; g_gw = realloc(g_gw, (size_t)g_gw_cap * sizeof *g_gw); }
+    g_gw[g_gw_n++] = (gw_rng){b->addr, b->size, b->stage, b->index, ssbo, !ssbo && us_find(b->addr, b->size)};
+}
+static void gw_commit(void) {   // before the commit blocks are copied: copy now, compare on completion
+    if (!g_gw_n) return;
+    int n = g_gw_n; gw_rng *l = malloc((size_t)n * sizeof *l); memcpy(l, g_gw, (size_t)n * sizeof *l); g_gw_n = 0;
+    uint64_t frame = atomic_load(&g_cur_frame);
+    {
+        uint8_t **snap = calloc((size_t)n, sizeof *snap); int nsnap = 0;
+        for (int i = 0; i < n; i++) {
+            if (l[i].ssbo || l[i].size > (1u << 20)) continue;
+            int upd = g_pend_over; for (int k = 0; k < g_npend && !upd; k++) upd = l[i].addr < g_pend_hi[k] && l[i].addr + l[i].size > g_pend_lo[k];
+            if (upd) continue;
+            snap[i] = malloc(l[i].size); memcpy(snap[i], (const void *)(uintptr_t)l[i].addr, l[i].size); nsnap++;
+        }
+        [g_commit_blocks addObject:^{
+            int hit = 0, gpu_hit = 0, copied_hit = 0;
+            for (int i = 0; i < n; i++) { if (!snap[i]) continue; g_gw_checked++;
+                if (memcmp(snap[i], (const void *)(uintptr_t)l[i].addr, l[i].size)) {
+                    int gpu = 0; for (int j = 0; j < n && !gpu; j++) gpu = l[j].ssbo && l[i].addr < l[j].addr + l[j].size && l[i].addr + l[i].size > l[j].addr;
+                    if (gpu) { gpu_hit++; continue; }   // also bound as a storage buffer in this submission: a shader may have written it
+                    if (l[i].copied) { copied_hit++; continue; }   // the GPU read the snapshot taken at the submit call
+                    hit++;
+                    size_t off = 0; while (off < l[i].size && snap[i][off] == ((const uint8_t *)(uintptr_t)l[i].addr)[off]) off++;
+                    if (g_gw_hits++ < 40) MLOG("[gpuwatch] frame %llu: UBO st%d r%d [%#llx, +%llu) changed while this submission was on the GPU (first byte +%zu)", (unsigned long long)frame,
+                                              l[i].stage, l[i].index, (unsigned long long)l[i].addr, (unsigned long long)l[i].size, off); }
+                free(snap[i]); }
+            MLOG("[gpuwatch] frame %llu: %d of %d bound UBO ranges compared byte by byte, %d changed during the GPU work and were read from memory (+%d read from the submit-time copy, +%d also bound as storage buffers)", (unsigned long long)frame, nsnap, n, hit, copied_hit, gpu_hit);
+            free(snap); free(l);
+        }];
+    }
+}
 static void rp_flush(void);
 static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before mtl_exec)
 uint64_t mtl_sub_commit(void) {
@@ -802,6 +962,7 @@ uint64_t mtl_sub_commit(void) {
     // CPU-visible effects after completion: copy the op table into the callback
     int n = g_npost; post_op *ops = n ? malloc(n * sizeof *ops) : NULL;
     if (n) memcpy(ops, g_post, n * sizeof *ops);
+    gw_commit();
     NSArray<dispatch_block_t> *commit_blocks = [g_commit_blocks copy];
 #if !DM_NVN_M3
     MTL4CommitOptions *o = [MTL4CommitOptions new];
@@ -837,6 +998,7 @@ uint64_t mtl_sub_commit(void) {
     [g_q4 signalEvent:g_ev value:fence];
 #endif
     cb_committed();
+    g_us_n = 0;   // the uniform copies belong to this submission
     g_alloc_fence[g_alloc_cur] = fence;
     g_cb = nil;
     g_commit_blocks = nil;
@@ -844,6 +1006,7 @@ uint64_t mtl_sub_commit(void) {
     return fence;
 }
 
+uint64_t mtl_done_fence(void) { pthread_mutex_lock(&g_mu); uint64_t d = g_done; pthread_mutex_unlock(&g_mu); return d; }   // highest completed submission fence
 uint64_t mtl_last_fence(void) { return g_fence; }
 int mtl_last_commit_error(void) { return atomic_load(&g_last_commit_error); }
 
@@ -3162,11 +3325,32 @@ static int g_render_off;   // SetRenderEnable(false) is in effect (NVN reference
 // Tears of the Kingdom clears each of its lighting buffers once per frame this way: conditional (not equal) clear, then a TIMESTAMP_TOP report into
 // the same counters, whose counter half is 0 (the NVN reference: timestamp reports write 0 there), so the next conditional clear of the frame is
 // skipped and the second lighting pass adds to the first. Clearing every time had wiped the first pass's light: the title mural stayed black.
-static struct { uint64_t addr, fence; } g_occ_pend[256]; static unsigned g_occ_pend_n;   // samples-passed report destinations and the fence of their submission
+// Samples-passed report destinations: address → fence of the latest submission that writes it (open addressing, one entry per distinct address,
+// grown at half load; replay thread only). This was a ring of the last 256 reports: with more reports in flight a destination still pending had
+// left the ring and its previous result was read (t_nvn 6c2b). Tears of the Kingdom makes about one report a frame (3 destinations), so it never
+// hit that.
+typedef struct { uint64_t addr, fence; } occ_ent;
+static occ_ent *g_occ; static unsigned g_occ_cap, g_occ_n;
+static occ_ent *occ_slot(uint64_t addr) {   // the entry of addr, or the empty slot where it goes
+    unsigned m = g_occ_cap - 1, h = (unsigned)((addr >> 3) * 0x9E3779B97F4A7C15ull >> 40) & m;
+    while (g_occ[h].addr && g_occ[h].addr != addr) h = (h + 1) & m;
+    return &g_occ[h];
+}
+static void occ_note(uint64_t addr, uint64_t fence) {
+    if (!addr) return;
+    if (2 * (g_occ_n + 1) > g_occ_cap) {
+        occ_ent *old = g_occ; unsigned oc = g_occ_cap; g_occ_cap = oc ? oc * 2 : 1024; g_occ = calloc(g_occ_cap, sizeof *g_occ); if (!g_occ) MDIE("occlusion table");
+        for (unsigned i = 0; i < oc; i++) if (old[i].addr) *occ_slot(old[i].addr) = old[i];
+        free(old);
+    }
+    occ_ent *e = occ_slot(addr); if (!e->addr) { e->addr = addr; g_occ_n++; }
+    e->fence = fence;
+}
 static int occ_pending(uint64_t addr) {
+    if (!g_occ_cap) return 0;
     pthread_mutex_lock(&g_mu); uint64_t done = g_done; pthread_mutex_unlock(&g_mu);
-    for (unsigned i = 0; i < 256 && i < g_occ_pend_n; i++) if (g_occ_pend[i].addr == addr && g_occ_pend[i].fence > done) return 1;
-    return 0;
+    const occ_ent *e = occ_slot(addr);
+    return e->addr && e->fence > done;
 }
 static uint64_t g_args_reg_seen, g_args_dirty_seen;
 static inline void args_dirty_all(void) { memset(g_args_dirty, 1, sizeof g_args_dirty); }
@@ -3249,6 +3433,8 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                 }
             }
+            const us_ent *sc = us_find(u->addr, u->size);   // contents as of the submit call
+            if (sc) { gpu = sc->gpu + (u->addr - sc->lo); mb = sc->buf; }
             slots[aid] = gpu;
             USE((__bridge id<MTLBuffer>)mb, MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_SAMP || b->kind == NVN_RB_SAMPT) {   // SAMPT: the sampler part of a combined handle (texture ID | sampler ID << 20)
@@ -3306,7 +3492,10 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
         } else if (b->kind == NVN_RB_SBUFP || b->kind == NVN_RB_UBOP) {   // B: storage buffers / compute-stage uniforms are device pointers; the address is taken by NVN slot
             const p_bind_buf *u = reg < 16 ? (b->kind == NVN_RB_UBOP ? &S.ubo[nvn_stage][reg] : &S.ssbo[nvn_stage][reg]) : NULL;
             void *mb; uint64_t mo, gpu;
-            if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { use_rec("buf", u->addr, u->size, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
+            if (b->kind == NVN_RB_SBUFP && b->rw && u && u->addr) us_drop(u->addr, u->size ? u->size : 1);   // the shader may write it
+            const us_ent *sc = b->kind == NVN_RB_UBOP && u ? us_find(u->addr, u->size) : NULL;   // compute uniforms as of the submit call
+            if (sc) { slots[aid] = sc->gpu + (u->addr - sc->lo); USE((__bridge id<MTLBuffer>)sc->buf, MTLResourceUsageRead); }
+            else if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { use_rec("buf", u->addr, u->size, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SBUFU) {   // B: a storage buffer the shader addresses from uniform slot r: {address u64, size u32} at byte off (the translator's cb slot r + 3)
@@ -3314,6 +3503,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             int ok = u && u->addr && b->off + 12 <= u->size && pend_read(u->addr + b->off, rec, 12);
             if (u && u->addr && !ok) RED_ONCE(77, "storage buffer address in uniform slot %d +%#x: a GPU copy earlier in the submission writes there, or it lies outside the binding (first case): dummy buffer", reg, b->off);
             if (ok) { memcpy(&sa, rec, 8); memcpy(&sn, rec + 8, 4); }
+            if (sa && b->rw) us_drop(sa, sn ? sn : 65536);   // the shader may write it (no size given: 64 KiB)
             void *mb; uint64_t mo, gpu;
             if (sa && mtl_gpu_addr(sa, sn ? sn : 1, &mb, &mo, &gpu)) { use_rec("buf", sa, sn, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
             else { if (sa) RED_ONCE(78, "storage buffer address %#llx read from uniform slot %d +%#x is not in any memory pool (first case): dummy buffer", (unsigned long long)sa, reg, b->off);
@@ -3336,7 +3526,8 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                 if (bank == 0) {
                     int base = nvn_stage == 0 ? 0x110 : nvn_stage == 5 ? 0x310 : nvn_stage == 1 ? 0x510 : -1;
                     if (base < 0) RED_ONCE(45, "stage %d shader reads driver segment c0, storage buffer table base address not measured", nvn_stage);
-                    else for (int r = 0; r < 16; r++) { uint64_t a = S.ssbo[nvn_stage][r].addr; uint32_t n = (uint32_t)S.ssbo[nvn_stage][r].size; memcpy(d + base + 16 * r, &a, 8); memcpy(d + base + 16 * r + 8, &n, 4); }
+                    else for (int r = 0; r < 16; r++) { uint64_t a = S.ssbo[nvn_stage][r].addr; uint32_t n = (uint32_t)S.ssbo[nvn_stage][r].size; memcpy(d + base + 16 * r, &a, 8); memcpy(d + base + 16 * r + 8, &n, 4);
+                        if (a && n) us_drop(a, n); }   // reached through the table: whether the shader writes it is not known
                 } else {
                     for (int r = 0; r < g_c2.ntex && r < 128; r++) { uint32_t th = (uint32_t)S.tex[nvn_stage][r]; memcpy(d + g_c2.tex + 8 * r, &th, 4); }
                     for (int r = 0; r < g_c2.nsamp && r < 128; r++) { uint32_t sh_ = (uint32_t)S.samp[nvn_stage][r]; memcpy(d + g_c2.samp + 8 * r, &sh_, 4); }
@@ -3576,8 +3767,8 @@ static int state_op(uint32_t op, const void *a) {
         case OP_BIND_VATTR: { const p_bind_vattr *b = a; if (S.nattr != b->n || memcmp(S.attr, b->st, 4 * b->n)) { memcpy(S.attr, b->st, 4 * b->n); S.nattr = b->n; g_pso_dirty = 1; } break; }
         case OP_BIND_VSTREAM: { const p_bind_vstream *b = a; if (S.nstream != b->n || memcmp(S.stream, b->st, 8 * b->n)) { memcpy(S.stream, b->st, 8 * b->n); S.nstream = b->n; g_pso_dirty = 1; } break; }
         case OP_BIND_VBUF: { const p_bind_vbuf *b = a; memcpy(&S.vbuf[b->first], b->r, sizeof *b->r * b->n); break; }
-        case OP_BIND_UBO: { const p_bind_buf *b = a; PD("b bind_ub st%d r%d addr=%#llx size=%llu", b->stage, b->index, (unsigned long long)b->addr, (unsigned long long)b->size); if (b->stage < 6 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
-        case OP_BIND_SSBO: { const p_bind_buf *b = a; if (b->stage < 6 && b->index < 16 && memcmp(&S.ssbo[b->stage][b->index], b, sizeof *b)) { S.ssbo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
+        case OP_BIND_UBO: { const p_bind_buf *b = a; gw_note(b, 0); PD("b bind_ub st%d r%d addr=%#llx size=%llu", b->stage, b->index, (unsigned long long)b->addr, (unsigned long long)b->size); if (b->stage < 6 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
+        case OP_BIND_SSBO: { const p_bind_buf *b = a; gw_note(b, 1); if (b->stage < 6 && b->index < 16 && memcmp(&S.ssbo[b->stage][b->index], b, sizeof *b)) { S.ssbo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
         case OP_BIND_TEX: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.tex[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.tex[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } break; }
         case OP_BIND_SAMP: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.samp[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.samp[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } break; }
         case OP_BIND_IMG: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first >= 0 && b->first + b->n <= 32) { if (memcmp(&S.img[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.img[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } } else RED_ONCE(31, "image slot out of range stage %d first %d count %d", b->stage, b->first, b->n); break; }
@@ -4483,7 +4674,9 @@ static int ubo_float(int slot, uint16_t ref, float *out) {   // Component cmp of
     int sl = ref >> 8, vec = ref >> 2 & 63, cmp = ref & 3;
     if (slot < 0 || slot >= 6 || sl < 0 || sl >= 16) return 0;
     const p_bind_buf *u = &S.ubo[slot][sl]; uint64_t off = (uint64_t)vec * 16 + (uint64_t)cmp * 4;
-    if (!u->addr || off + 4 > u->size || pend_hits(u->addr + off, 4)) return 0;
+    if (!u->addr || off + 4 > u->size) return 0;
+    { const us_ent *sc = us_find(u->addr + off, 4); if (sc) { memcpy(out, sc->cpu + (u->addr + off - sc->lo), 4); return 1; } }   // what the GPU reads
+    if (pend_hits(u->addr + off, 4)) return 0;
     void *mb; uint64_t mo; const uint8_t *base;
     if (!mtl_addr(u->addr + off, 4, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 0;
     memcpy(out, base + mo, 4); return 1;
@@ -4853,6 +5046,7 @@ static void copy_t2b(const p_copy_b2t *c) {
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
     void *mb; uint64_t mo;
     if (!mtl_addr(c->src, extent, &mb, &mo)) { RED_ONCE(31, "texture→buffer copy destination is not in a memory pool"); return; }
+    us_drop(c->src, extent);
     BENC b = blit();
     if (is3d)
         enc_b_copy_texture_buffer(b, t, 0, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, c->r.zoffset), MTLSizeMake(c->r.width, c->r.height, nz), (__bridge id<MTLBuffer>)mb, mo, row, img);
@@ -5158,7 +5352,7 @@ void mtl_exec(const uint8_t *p) {
             case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, (const uint8_t *)a + 8, 8); g_cnt_report[t & 31]++;
                 PD("Q report type=%llu cmd=%p dst=%#llx", (unsigned long long)t, p, (unsigned long long)ad);
                 if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot()}); g_vis_cur = -1;
-                    g_occ_pend[g_occ_pend_n++ % 256] = (typeof(g_occ_pend[0])){ad, g_fence + 1}; }   // this submission commits with fence g_fence + 1
+                    occ_note(ad, g_fence + 1); }   // this submission commits with fence g_fence + 1
                 else {   // counter half now, in command order (0: TIMESTAMP / TIMESTAMP_TOP report only a timestamp, the other counters are not emulated: conditional
                          // rendering at replay compares it); the timestamp half only when the GPU has run the submission. Written at replay as well, it told the game
                          // the GPU had passed that point while the work was still queued: Tears of the Kingdom's frames alternated between two poses / object sets
@@ -5758,6 +5952,65 @@ static int present_encode_m4(CBUF cb, id<MTLTexture> src0, id<MTLTexture> dst, c
     return 1;
 }
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
+// DM_NVN_LIVESHOT=<first present>,<count>:<path with %d> (window mode, diagnostics): the game picture each present really reads, copied in the present's
+// own command buffer after it (no GPU wait: the frames keep the pacing of play, unlike DM_NVN_SHOT, which waits for the GPU before each shot) and
+// written as PNG once that command buffer completes; at most 64 consecutive presents. For what only shows on screen
+static int g_live_first = -2, g_live_n; static char g_live_path[1024];
+static void png_write_buf(id<MTLBuffer> buf, size_t w, size_t h, int bgra, const char *path) {
+    size_t row = w * 4; CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGBitmapInfo bi = bgra ? (kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little) : (CGBitmapInfo)kCGImageAlphaNoneSkipLast;
+    CGContextRef ctx = CGBitmapContextCreate(buf.contents, w, h, 8, row, cs, bi); CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, strlen(path), false);
+    CGImageDestinationRef dst = url ? CGImageDestinationCreateWithURL(url, (__bridge CFStringRef)UTTypePNG.identifier, 1, NULL) : NULL;
+    int ok = 0; if (img && dst) { CGImageDestinationAddImage(dst, img, NULL); ok = CGImageDestinationFinalize(dst); }
+    if (dst) CFRelease(dst); if (url) CFRelease(url); CGImageRelease(img); CGContextRelease(ctx); CGColorSpaceRelease(cs);
+    MLOG("live shot %zux%zu → %s %s", w, h, path, ok ? "success" : "failed");
+}
+static id<MTLBuffer> live_copy(id cb, id<MTLTexture> src, uint64_t n, char *path, size_t pn) {   // M4 present command buffer; nil when this present is not captured
+    if (g_live_first == -2) { g_live_first = -1; const char *e = getenv("DM_NVN_LIVESHOT"), *c = e ? strchr(e, ':') : NULL;
+        if (c && sscanf(e, "%d,%d", &g_live_first, &g_live_n) == 2 && g_live_n > 0 && g_live_n <= 64) strlcpy(g_live_path, c + 1, sizeof g_live_path); else g_live_first = -1; }
+    if (g_live_first < 0 || n < (uint64_t)g_live_first || n >= (uint64_t)(g_live_first + g_live_n)) return nil;
+    MTLPixelFormat f = src.pixelFormat;
+    if (f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB && f != MTLPixelFormatBGRA8Unorm && f != MTLPixelFormatBGRA8Unorm_sRGB) { RED_ONCE(90, "live shot: format %lu not supported", (unsigned long)f); return nil; }
+    size_t w = src.width, h = src.height; id<MTLBuffer> buf = [g_dev newBufferWithLength:w * h * 4 options:MTLResourceStorageModeShared]; if (!buf) return nil;
+    res_add(buf); res_commit();   // resident before this command buffer is committed
+    id e = enc_b_begin(cb);
+#if !DM_NVN_M3
+    [(id<MTL4ComputeCommandEncoder>)e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+#endif
+    enc_b_copy_texture_buffer(e, src, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), buf, 0, w * 4, w * h * 4);
+    m4_end(e);
+    snprintf(path, pn, g_live_path, (int)n);
+    return buf;
+}
+// DM_NVN_LIVEROWS=<file> (window mode, diagnostics): at every present, 16 evenly spaced rows of the picture the present reads are copied in the present's
+// command buffer (no GPU wait) and written as one line: present number, row means (luma), then each row subsampled every 8 pixels (hex). A frame that
+// differs from both neighbours over the whole screen shows in these rows; DM_NVN_LIVESHOT then takes those presents in full
+enum { LR_ROWS = 16, LR_RING = 8 };
+static FILE *g_lr_f; static int g_lr_on = -1; static __strong id<MTLBuffer> g_lr_buf[LR_RING]; static pthread_mutex_t g_lr_mu = PTHREAD_MUTEX_INITIALIZER;
+static id<MTLBuffer> live_rows(id cb, id<MTLTexture> src, uint64_t n) {
+    if (g_lr_on < 0) { const char *e = getenv("DM_NVN_LIVEROWS"); g_lr_on = e && (g_lr_f = fopen(e, "w")) != NULL; if (e && !g_lr_on) MLOG("[red] DM_NVN_LIVEROWS: cannot open %s", e); }
+    if (!g_lr_on) return nil;
+    MTLPixelFormat f = src.pixelFormat;
+    if (f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB && f != MTLPixelFormatBGRA8Unorm && f != MTLPixelFormatBGRA8Unorm_sRGB) return nil;
+    size_t w = src.width, h = src.height, row = w * 4; int k = (int)(n % LR_RING);
+    if (!g_lr_buf[k] || g_lr_buf[k].length < row * LR_ROWS) { g_lr_buf[k] = [g_dev newBufferWithLength:row * LR_ROWS options:MTLResourceStorageModeShared]; res_add(g_lr_buf[k]); res_commit(); }
+    id e = enc_b_begin(cb);
+#if !DM_NVN_M3
+    [(id<MTL4ComputeCommandEncoder>)e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+#endif
+    for (int r = 0; r < LR_ROWS; r++) enc_b_copy_texture_buffer(e, src, 0, 0, MTLOriginMake(0, (h * (2 * r + 1)) / (2 * LR_ROWS), 0), MTLSizeMake(w, 1, 1), g_lr_buf[k], row * r, row, row);
+    m4_end(e);
+    return g_lr_buf[k];
+}
+static void live_rows_write(id<MTLBuffer> b, size_t w, uint64_t n) {   // completion handler: the presents of a ring slot never overlap (at most 3 in flight)
+    const uint8_t *p = b.contents; char line[LR_ROWS * (1920 / 8 + 1) * 2 + LR_ROWS * 8 + 64]; size_t o = 0;
+    o += (size_t)snprintf(line + o, sizeof line - o, "%llu", (unsigned long long)n);
+    for (int r = 0; r < LR_ROWS; r++) { uint64_t s = 0; for (size_t x = 0; x < w; x++) { const uint8_t *q = p + (size_t)r * w * 4 + x * 4; s += q[0] + q[1] + q[2]; } o += (size_t)snprintf(line + o, sizeof line - o, "\t%.2f", s / (3.0 * w)); }
+    for (int r = 0; r < LR_ROWS && o + 2 * (w / 8) + 4 < sizeof line; r++) { line[o++] = '\t';
+        for (size_t x = 0; x < w; x += 8) { const uint8_t *q = p + (size_t)r * w * 4 + x * 4; o += (size_t)snprintf(line + o, sizeof line - o, "%02x", (q[0] + q[1] + q[2]) / 3); } }
+    line[o] = 0; pthread_mutex_lock(&g_lr_mu); fprintf(g_lr_f, "%s\n", line); fflush(g_lr_f); pthread_mutex_unlock(&g_lr_mu);
+}
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     g_present_n++;
@@ -5837,6 +6090,10 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
     int fx_crop[4]; id<MTLFence> fx_wait; id<MTLTexture> fx = fx_apply(cb, src, crop, dr.texture, fx_crop, &fx_wait);
     if (!present_encode_m4(cb, fx ?: src, dr.texture, fx ? fx_crop : crop, alloc_i, fx_wait)) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
+    char live_path[1024]; id<MTLBuffer> live = live_copy(cb, src, g_present_n, live_path, sizeof live_path);
+    size_t live_w = src.width, live_h = src.height; int live_bgra = src.pixelFormat == MTLPixelFormatBGRA8Unorm || src.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB;
+    NSString *live_file = live ? @(live_path) : nil;
+    id<MTLBuffer> rows = live_rows(cb, src, g_present_n); uint64_t rows_n = g_present_n;
     [cb endCommandBuffer];
 #endif
 #if !DM_NVN_M3
@@ -5845,6 +6102,10 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [FB_ON(o, cb) FB_SEL:^(FB_ARG f) {
         if (f.error) MLOG("[red] present command buffer error: %s", f.error.description.UTF8String);
         pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
+#if !DM_NVN_M3
+        if (live) dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ png_write_buf(live, live_w, live_h, live_bgra, live_file.UTF8String); });
+        if (rows) live_rows_write(rows, live_w, rows_n);
+#endif
     }];
 #if !DM_NVN_M3
     CBUF buffers[] = {cb};

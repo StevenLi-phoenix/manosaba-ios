@@ -509,6 +509,46 @@ int main(void) {
         P(nvnTextureFinalize)(&tc); P(nvnTextureFinalize)(&td); P(nvnMemoryPoolFinalize)(&cp2);
     }
 
+    // 6c2b. A conditional on a samples-passed result still on the GPU renders, however many reports are in flight: 300 reports after the one the
+    //       conditional reads (the 256-entry ring had dropped it, its stale "equal" values were read and the clear was skipped). The submission with
+    //       the reports is kept busy by big copies
+    {
+        size_t big = 64u << 20, pgsz = 16384;
+        uint8_t *heap; posix_memalign((void **)&heap, pgsz, 2 * big + (1 << 20));
+        memset(heap, 0, 2 * big + (1 << 20));
+        uint8_t *busy_a = heap, *busy_b = heap + big, *small = heap + 2 * big;
+        NVNmemoryPoolBuilder ob; NVNmemoryPool op; P(nvnMemoryPoolBuilderSetDefaults)(&ob); P(nvnMemoryPoolBuilderSetStorage)(&ob, heap, 2 * big + (1 << 20));
+        P(nvnMemoryPoolInitialize)(&op, &ob);
+        uint64_t *X = (uint64_t *)(small + 0x80000); X[0] = 7; X[1] = 0; X[2] = 7; X[3] = 0;   // a previous frame's result: equal
+        NVNtextureBuilder b; NVNtexture tc; P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b);
+        P(nvnTextureBuilderSetWidth)(&b, 8); P(nvnTextureBuilderSetHeight)(&b, 4); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8);
+        P(nvnTextureBuilderSetStorage)(&b, &op, 2 * big); P(nvnTextureInitialize)(&tc, &b);
+        const float red[4] = {1, 0, 0, 1}; const NVNtexture *rt[1] = {&tc};
+        P(nvnCommandBufferBeginRecording)(&cb);
+        for (int i = 0; i < 24; i++) P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)busy_a, (NVNbufferAddress)busy_b, big, 0);
+        P(nvnCommandBufferResetCounter)(&cb, NVN_COUNTER_TYPE_SAMPLES_PASSED);
+        P(nvnCommandBufferReportCounter)(&cb, NVN_COUNTER_TYPE_SAMPLES_PASSED, (NVNbufferAddress)X);
+        for (int i = 0; i < 300; i++) P(nvnCommandBufferReportCounter)(&cb, NVN_COUNTER_TYPE_SAMPLES_PASSED, (NVNbufferAddress)(small + 0x1000 + 32 * i));
+        NVNcommandHandle h1 = P(nvnCommandBufferEndRecording)(&cb);
+        P(nvnCommandBufferBeginRecording)(&cb);
+        P(nvnCommandBufferSetRenderTargets)(&cb, 1, rt, NULL, NULL, NULL);
+        P(nvnCommandBufferSetRenderEnableConditional)(&cb, NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_NOT_EQUAL, (NVNbufferAddress)X);
+        P(nvnCommandBufferClearColor)(&cb, 0, red, NVN_CLEAR_COLOR_MASK_RGBA);   // the result at X is still pending: rendering stays enabled
+        P(nvnCommandBufferSetRenderEnable)(&cb, 1);
+        NVNcommandHandle h2 = P(nvnCommandBufferEndRecording)(&cb);
+        NVNsync s1; P(nvnSyncInitialize)(&s1, &dev);
+        P(nvnQueueSubmitCommands)(&q, 1, &h1); P(nvnQueueFenceSync)(&q, &s1, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
+        P(nvnQueueSubmitCommands)(&q, 1, &h2); P(nvnQueueFlush)(&q);
+        int busy = P(nvnSyncWait)(&s1, 0) == 2;
+        P(nvnQueueFinish)(&q);
+        NVNcopyRegion all = {0, 0, 0, 8, 4, 1}; uint8_t g[8 * 4 * 4]; P(nvnTextureReadTexels)(&tc, NULL, &all, g);
+        int bad = 0; for (int i = 0; i < 32; i++) bad += g[i * 4] != 255 || g[i * 4 + 1] != 0 || g[i * 4 + 2] != 0;
+        EXPECT("the reports' submission was still on the GPU when the conditional was submitted", 1, busy);
+        EXPECT("conditional on a pending samples-passed result with 300 reports after it: rendered (red)", 0, bad);
+        EXPECT("the samples-passed result reached X once the GPU finished (nothing drawn: 0)", 0, (long long)X[0]);
+        P(nvnTextureFinalize)(&tc); P(nvnMemoryPoolFinalize)(&op); free(heap);
+    }
+
     // 6c3. Clears a load action cannot do: a scissored colour clear, a channel-masked clear, a scissored depth clear and one with a partial stencil
     //      mask (drawn as a triangle, nvn_mtl.m clear_quad / clear_ds_quad); they had been dropped, and the depth one had cleared the whole plane
     {

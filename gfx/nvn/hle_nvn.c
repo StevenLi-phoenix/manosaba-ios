@@ -1142,6 +1142,7 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
     ((queue_t *)q)->submits++;
     mtl_sub_begin();
     mtl_sub_index((const uint64_t *)h, n);
+    mtl_sub_snapshot((const uint64_t *)h, n);
     for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
     mtl_exec_rest(NULL, 0);
     mtl_sub_commit();
