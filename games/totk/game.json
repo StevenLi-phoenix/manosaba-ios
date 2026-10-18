@@ -11,6 +11,9 @@
   "guest_heap_mb": 256,
   "device_api": "55.15",
   "depth_mode": "near_is_minus_w",
+  "present_interval": "game",
+  "window_unfocused": "in_focus",
+  "virtual_cores": true,
   "nvn_c2": {"tex": ["0x20", 32], "samp": ["0x568", 128], "img": ["0x120", 8]},
   "romfs": {
     "files": {

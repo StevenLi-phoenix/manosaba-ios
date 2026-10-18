@@ -18,6 +18,9 @@ def load(path):
         sys.exit(f'{path}: nvn_c2 must be {{"tex": ["0x..", slots], "samp": ["0x..", slots], "img": ["0x..", slots]}}')
     if max(int(v[0], 16) + 8 * v[1] for v in c2.values()) > 0xA00: sys.exit(f'{path}: nvn_c2 tables must end within 0xA00 (the replay layer fills a 0xA00-byte bank)')
     if g.get('depth_mode') not in ('near_is_minus_w', 'near_is_zero'): sys.exit(f'{path}: depth_mode must be "near_is_minus_w" or "near_is_zero"')
+    if g.get('present_interval', 'display') not in ('display', 'game'): sys.exit(f'{path}: present_interval must be "display" or "game"')
+    if g.get('window_unfocused', 'out_of_focus') not in ('out_of_focus', 'in_focus'): sys.exit(f'{path}: window_unfocused must be "out_of_focus" or "in_focus"')
+    if not isinstance(g.get('virtual_cores', False), bool): sys.exit(f'{path}: virtual_cores must be true or false')
     return g
 
 def cstr(s): return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
@@ -40,6 +43,9 @@ def write_c(g, out):
           '    .nvn_api_major = %s, .nvn_api_minor = %s,' % tuple(g.get('device_api', '55.15').split('.')),
           '    .nvn_c2 = {%s},' % ', '.join(f'{v[0]}, {v[1]}' for v in (g['nvn_c2']['tex'], g['nvn_c2']['samp'], g['nvn_c2']['img'])),
           '    .nvn_depth_mode = %d,' % (1 if g['depth_mode'] == 'near_is_zero' else 0),
+          '    .present_game_interval = %d,' % (g.get('present_interval', 'display') == 'game'),
+          '    .unfocused_in_focus = %d,' % (g.get('window_unfocused', 'out_of_focus') == 'in_focus'),
+          '    .virtual_cores = %d,' % bool(g.get('virtual_cores', False)),
           f'    .romfs_files = romfs_files, .romfs_nfiles = {len(files)},',
           f'    .romfs_tree = {cstr(r["tree"]) if r.get("tree") else "0"}, .romfs_tree_files = {r.get("tree_files", 0)}, .romfs_tree_bytes = {r.get("tree_bytes", 0)}LL,',
           f'    .save_sync = save_sync, .save_sync_n = {len(sync)},',

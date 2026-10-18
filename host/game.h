@@ -15,6 +15,11 @@ typedef struct {
     int nvn_api_major, nvn_api_minor;         // NVN API version nvnDeviceGetInteger reports (game.json device_api "major.minor")
     struct { int tex, ntex, samp, nsamp, img, nimg; } nvn_c2;   // c[2] handle tables of the game's shaders: byte base and slot count (game.json nvn_c2)
     int nvn_depth_mode;                       // NVNdepthMode its shaders were built for (game.json depth_mode: 0 near_is_minus_w, 1 near_is_zero)
+    int present_game_interval;                // 1: with a window too, present at the game's present interval (game.json present_interval "game"; default "display": one frame per display tick)
+    int unfocused_in_focus;                   // 1: a Mac window that is visible but not key keeps the game in focus (game.json window_unfocused "in_focus"; default "out_of_focus",
+                                              //    which on the console is the HOME menu: Tears of the Kingdom stops there); minimized is Background either way
+    int virtual_cores;                        // 1: guest threads hold one of three virtual cores while running guest code (game.json virtual_cores; hle_thread.c): the game
+                                              //    keeps per-core data without locks (Tears of the Kingdom)
     const dm_game_file *romfs_files; int romfs_nfiles;          // key RomFS files with their exact sizes (also tells the version)
     const char *romfs_tree; int romfs_tree_files; long long romfs_tree_bytes;   // RomFS directory whose file count and byte total must match
     const char *const *save_sync; int save_sync_n;              // save paths (glob, relative to the save root) kept in iCloud sync

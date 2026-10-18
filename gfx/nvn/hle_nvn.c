@@ -462,6 +462,11 @@ static void read_texels(const tex_t *o, const view_t *v, const NVNcopyRegion *r,
 // ModuleSystemWorker threads while the Presentation Thread submits (a crash inside a copy encoder at a scene load had been seen on the Mac with the
 // earlier check-only version), so these entries take one recursive lock. The first wait is logged once, naming both threads.
 __attribute__((weak)) int thr_name_of(pthread_t pt, char *out, size_t n) { (void)pt; (void)out; (void)n; return 0; }   // host hle_thread.c (guest thread names); the graphics unit tests have none
+// A guest thread waiting here (GPU, display, replay, shader loading) gives its virtual core back meanwhile (host hle_thread.c, game.json virtual_cores; as
+// MacNativeGames' NVN_BLOCKING). Weak defaults for the graphics unit tests, which have no guest threads
+__attribute__((weak)) int dm_core_away(void) { return 0; }
+__attribute__((weak)) void dm_core_back(int *away) { (void)away; }
+#define NVN_BLOCKING() __attribute__((cleanup(dm_core_back))) int nvn_core_away_ = dm_core_away()
 static pthread_mutex_t g_gfx_mu; static pthread_once_t g_gfx_mu_once = PTHREAD_ONCE_INIT;
 static uint64_t g_gfx_tid; static const char *g_gfx_what; static char g_gfx_name[96];   // the holder (written under the lock)
 static void gfx_mu_init(void) { pthread_mutexattr_t a; pthread_mutexattr_init(&a); pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE); pthread_mutex_init(&g_gfx_mu, &a); pthread_mutexattr_destroy(&a); }
@@ -579,6 +584,7 @@ static uint8_t shader_stage(const NVNshaderData *sd) {
     return 0xff;
 }
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *sd) {
+    NVN_BLOCKING();   // loads / builds shader libraries
     prog_t *o = (prog_t *)p;
     if (n < 0 || n > 6) { LOG("[red] ProgramSetShaders: stage count %d", n); return 0; }
     for (int i = 0; i < n; i++) shdump(&sd[i]);
@@ -620,6 +626,7 @@ NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = mtl_last_fence(); }
 // A sync object that was never fenced waits until timeout, as on a real device; a fenced one is released only after the GPU has actually completed up to that fence value
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
+    NVN_BLOCKING();
     const sync_t *o = (const sync_t *)s;
     if (!o->fenced) return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
     if (mtl_wait(o->fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
@@ -666,7 +673,8 @@ NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *in
 NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
 // The queue waits on a sync object on the GPU: the host has a single Metal queue executing in submit order and the fence comes from an earlier submission, so the wait holds by construction
 NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) { (void)q; (void)s; return 1; }
-NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; gfx_mt_enter("QueueFinish"); mtl_finish(); gfx_mt_leave(); }
+NVN(nvnQueueFinish, void, NVNqueue *q) {
+    NVN_BLOCKING(); (void)q; gfx_mt_enter("QueueFinish"); mtl_finish(); gfx_mt_leave(); }
 
 // ---------- Command buffer: record into the game's command memory, perform CPU-visible side effects at submit ----------
 #define CB(c) ((cmd_t *)(c))
@@ -1110,6 +1118,7 @@ void dm_gfx_suspend(int on) {
     if (on) { mtl_drain(); LOG("[nvn] graphics suspended: in-flight GPU work drained"); } else LOG("[nvn] graphics resumed");
 }
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
+    NVN_BLOCKING();
     gfx_enter(); gfx_mt_enter("SubmitCommands");
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
@@ -1221,6 +1230,7 @@ static uint64_t g_acq_wait_ns, g_pq_wait_ns;   // Accumulated display-link wait 
 uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
+    NVN_BLOCKING();
     win_t *o = (win_t *)w;
     int nuse = o->nactive ? o->nactive : o->ntex;
     *idx = nuse ? o->next++ % nuse : 0;
@@ -1435,6 +1445,7 @@ static uint64_t present_period(const win_t *o) {
 }
 int (*g_nvn_loadscreen_up)(void);   // optional game hook: is a loading screen up right now (waits for the pipeline warm-up there; marks long frames hidden behind it)
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
+    NVN_BLOCKING();
     (void)q; win_t *o = (win_t *)w; o->presents++;
     static uint64_t prev_in, prev_out, prev_pass, prev_draw;
     // Loading screen on first entering a run: if the background pipeline warm-up has not finished, wait for it here (the loading screen stays a bit longer), so that after entering the run no pipelines are compiled on the fly on the submit thread. When warm-up finished long ago this passes with a single check

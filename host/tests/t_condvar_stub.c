@@ -1,6 +1,8 @@
 // Stubs for t_condvar: host facilities of hle_thread.c that the unit test does not use
 #include "../dm.h"
+#include "../game.h"
 struct dm_flags g_flag;
+const dm_game_profile dm_game = { .id = "test" };   // virtual cores off (hle_thread.c reads dm_game.virtual_cores)
 pthread_key_t g_key18, g_keytls;   // used by thread pausing to read the x18 / tpidr slots (the unit test does not pause threads)
 uint64_t g_t0_ns;
 void crash_thread_init(void) {}

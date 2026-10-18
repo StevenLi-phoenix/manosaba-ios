@@ -12,6 +12,7 @@
 //   - finally the registered main thread (no saved host context) exits through the fallback, waking a worker that waits on its handle.
 // Two builds: t_thread_exit (must pass) and t_thread_exit_old (-DDM_TEST_EXIT_ON_GUEST_STACK keeps the pre-fix exit on the guest stack; it must
 // fail, with a fault on the retired stack reported by the handler below).
+#include "../game.h"
 #include "../dm.h"
 #include <pthread.h>
 #include <signal.h>
@@ -63,6 +64,7 @@ static int on_host_stack(uintptr_t sp) {
 
 // ---------- Host facilities hle_thread.c / thread.c / entry.S need ----------
 struct dm_flags g_flag;
+const dm_game_profile dm_game = { .id = "test" };   // virtual cores off (hle_thread.c reads dm_game.virtual_cores)
 uint64_t g_t0_ns;
 pthread_key_t g_key18, g_keytls, g_keytlr, g_keygate;
 void *guest_sym(const char *name) { (void)name; return NULL; }
