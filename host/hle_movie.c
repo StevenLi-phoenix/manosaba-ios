@@ -12,18 +12,31 @@
 // at end of stream), the decoder restarts its read at the time of the next input once its own read has ended.
 // The output format (width, height, crop, stride, NV12 plane offsets / audio channels, sample rate) is announced with the format-changed event at
 // Start: Unity reads frame sizes in its format-changed handler (main+0x916a60). Crop is inclusive (Unity computes width = right − left + 1).
+// Tears of the Kingdom plays its pre-rendered cutscenes (Event/Movie/*.webm, VP9 1920x1080 30 fps, video only) with Extractor::SetDataSource(path)
+// ("content:/Event/Movie/....webm", opened in place through the fs mount table) and a VP9 decoder that decodes what the game sends, with libvpx
+// (see "Decoder for VP8 / VP9" below; without libvpx at build time the cutscenes cannot play).
 // DM_MOVIE=1 logs the calls.
 #include "hle.h"
 #include "movie_av.h"
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if __has_include(<vpx/vpx_decoder.h>)   // host/Makefile adds libvpx when it is installed (not in the iOS app yet)
+#define DM_HAVE_VPX 1
+#include <arm_neon.h>
+#include <vpx/vp8dx.h>
+#include <vpx/vpx_decoder.h>
+#else
+#define DM_HAVE_VPX 0
+#endif
 
-enum {
-    ST_OK = 0, ST_BUFFER_TOO_SMALL = 0x1005, ST_NOT_SUPPORTED = 0x1006, ST_IO = 0x1009, ST_OUT_NOT_AVAILABLE = 0x100e, ST_IN_NOT_AVAILABLE = 0x1011,
-    ST_EOS = 0x2000, ST_INVALID_CONFIG = 0x2001, ST_TRACK_NOT_FOUND = 0x3000, ST_NULL_EXTRACTOR = 0x3003, ST_UNSUPPORTED_MEDIA = 0x4000,
+enum {   // movie::Status (SDK movie/Status.h)
+    ST_OK = 0, ST_UNKNOWN = 0x1000, ST_BUFFER_TOO_SMALL = 0x1005, ST_NOT_SUPPORTED = 0x1006, ST_IO = 0x1009, ST_BAD_VALUE = 0x100b, ST_FAILED_TO_CONFIGURE = 0x100c,
+    ST_OUT_NOT_AVAILABLE = 0x100e, ST_INVALID_STATE = 0x100f, ST_IN_NOT_AVAILABLE = 0x1011,
+    ST_EOS = 0x2000, ST_INVALID_CONFIG = 0x2001, ST_FAILED_TO_START = 0x2002, ST_TRACK_NOT_FOUND = 0x3000, ST_NULL_EXTRACTOR = 0x3003,
+    ST_UNSUPPORTED_MEDIA = 0x4000, ST_INVALID_DIMENSIONS = 0x4005,
 };
-enum { BF_SYNC = 1, BF_EOS = 4 };
+enum { BF_SYNC = 1, BF_CODEC_CONFIG = 2, BF_EOS = 4 };
 enum { DEC_NONE = 0, DEC_AVC = 1, DEC_VP8 = 2, DEC_VP9 = 3, DEC_AAC = 4, DEC_VORBIS = 5 };
 #define NN_OS_DEFAULT_THREAD_PRIORITY 16
 #define MVLOG(fmt, ...) do { if (g_flag.movie) LOG("[movie] [%.3f] " fmt, (now_ns() - g_t0_ns) / 1e9, ##__VA_ARGS__); } while (0)
@@ -33,7 +46,7 @@ static int trace(void) { static int v = -1; if (v < 0) { const char *e = getenv(
 // ---------- Media cache: one temporary copy per source path, shared by the extractors that open it ----------
 // Unity opens the same clip twice (probe, then playback). The copy is removed when the last extractor using it is destroyed;
 // readers already created keep the file open.
-typedef struct mv_src { struct mv_src *next; char path[512], file[1024]; mav_media *media; int users; } mv_src;
+typedef struct mv_src { struct mv_src *next; char path[512], file[1024]; mav_media *media; int users, owned; } mv_src;   // owned: file is our temporary copy
 static pthread_mutex_t g_src_mu = PTHREAD_MUTEX_INITIALIZER;
 static mv_src *g_srcs;
 
@@ -55,13 +68,28 @@ static int copy_from_reader(void *reader, const char *path, const char *file) {
     MVLOG("copied %s: %lld bytes", path, (long long)off);
     return ok && off > 0 ? 0 : -1;
 }
-static mv_src *src_open(void *reader, const char *path) {
+static mv_src *src_find(const char *path) {
     pthread_mutex_lock(&g_src_mu);
-    for (mv_src *s = g_srcs; s; s = s->next)
-        if (!strcmp(s->path, path)) { s->users++; pthread_mutex_unlock(&g_src_mu); return s; }
+    mv_src *s = g_srcs; while (s && strcmp(s->path, path)) s = s->next;
+    if (s) s->users++;
     pthread_mutex_unlock(&g_src_mu);
-    mv_src *s = calloc(1, sizeof *s);
-    strlcpy(s->path, path, sizeof s->path);
+    return s;
+}
+static mv_src *src_add(mv_src *s) {
+    for (int i = 0; i < mav_track_count(s->media); i++) {
+        const mav_track *t = mav_track_at(s->media, i);
+        LOG("[movie] %s track %d: %s %dx%d %d fps, %d ch %d Hz, %.3f s", s->path, i, t->mime, t->width, t->height, t->frame_rate, t->channels, t->sample_rate,
+            t->duration_us / 1e6);
+    }
+    s->users = 1;
+    pthread_mutex_lock(&g_src_mu); s->next = g_srcs; g_srcs = s; pthread_mutex_unlock(&g_src_mu);
+    return s;
+}
+static mv_src *src_open(void *reader, const char *path) {   // through the game's ClientStreamReader, into a temporary copy
+    mv_src *s = src_find(path);
+    if (s) return s;
+    s = calloc(1, sizeof *s);
+    strlcpy(s->path, path, sizeof s->path); s->owned = 1;
     uint64_t h = 0xcbf29ce484222325ull; for (const char *p = path; *p; p++) h = (h ^ (uint8_t)*p) * 0x100000001b3ull;
     const char *tmp = getenv("DM_TEMP"); if (!tmp) tmp = getenv("TMPDIR"); if (!tmp) tmp = "/tmp";
     mkdir(tmp, 0755);
@@ -70,14 +98,16 @@ static mv_src *src_open(void *reader, const char *path) {
         LOG("[movie] [red] %s: no playable audio / video track", path);
         unlink(s->file); free(s); return NULL;
     }
-    for (int i = 0; i < mav_track_count(s->media); i++) {
-        const mav_track *t = mav_track_at(s->media, i);
-        LOG("[movie] %s track %d: %s %dx%d %d fps, %d ch %d Hz, %.3f s", path, i, t->mime, t->width, t->height, t->frame_rate, t->channels, t->sample_rate,
-            t->duration_us / 1e6);
-    }
-    s->users = 1;
-    pthread_mutex_lock(&g_src_mu); s->next = g_srcs; g_srcs = s; pthread_mutex_unlock(&g_src_mu);
-    return s;
+    return src_add(s);
+}
+static mv_src *src_open_path(const char *path) {   // a guest file path, read in place (the file is the game's: never removed)
+    mv_src *s = src_find(path);
+    if (s) return s;
+    s = calloc(1, sizeof *s);
+    strlcpy(s->path, path, sizeof s->path);
+    if (!dm_fs_host_file(path, s->file, sizeof s->file)) { LOG("[movie] [red] %s: no such file", path); free(s); return NULL; }
+    if (!(s->media = mav_open(s->file))) { LOG("[movie] [red] %s: no playable audio / video track", path); free(s); return NULL; }
+    return src_add(s);
 }
 static void src_close(mv_src *s) {
     if (!s) return;
@@ -86,7 +116,7 @@ static void src_close(mv_src *s) {
     if (last) for (mv_src **p = &g_srcs; *p; p = &(*p)->next) if (*p == s) { *p = s->next; break; }
     pthread_mutex_unlock(&g_src_mu);
     if (!last) return;
-    mav_release(s->media); unlink(s->file); free(s);
+    mav_release(s->media); if (s->owned) unlink(s->file); free(s);
 }
 
 // ---------- Allocator, events ----------
@@ -168,7 +198,7 @@ static void md_track(md_t *m, mav_media *media, int track) {
     if (t->bit_rate) md_i32(m, "bit-rate", t->bit_rate);
     if (t->kind == MAV_VIDEO) {
         md_i32(m, "width", t->width); md_i32(m, "height", t->height); md_i32(m, "frame-rate", t->frame_rate);
-        md_i32(m, "max-input-size", t->width * t->height * 3 / 2);
+        md_i32(m, "max-input-size", t->max_sample ? t->max_sample : t->width * t->height * 3 / 2);
     } else {
         md_i32(m, "channel-count", t->channels); md_i32(m, "sample-rate", t->sample_rate); md_i32(m, "max-input-size", 64 << 10);
         if (t->lang[0]) md_str(m, "media-language", t->lang);
@@ -209,7 +239,15 @@ static int ext_SetDataSourceReader(void **self, void *reader, const char *path) 
     MVLOG("Extractor %p SetDataSource %s: %d tracks", (void *)self, path, x->ntracks);
     return ST_OK;
 }
-static int ext_SetDataSourcePath(void **self, const char *path) { (void)self; LOG("[movie] [red] Extractor::SetDataSource(path) %s: not supported", path); return ST_NOT_SUPPORTED; }
+static int ext_SetDataSourcePath(void **self, const char *path) {
+    ext_t *x = EXT(self);
+    if (x->src) return ST_IO;
+    mv_src *s = src_open_path(path);
+    if (!s) return ST_UNSUPPORTED_MEDIA;
+    x->src = s; x->ntracks = mav_track_count(s->media);
+    MVLOG("Extractor %p SetDataSource %s: %d tracks", (void *)self, path, x->ntracks);
+    return ST_OK;
+}
 static int ext_SetDataSourceMem(void **self, const void *p, int n) { (void)self; (void)p; LOG("[movie] [red] Extractor::SetDataSource(memory, %d): not supported", n); return ST_NOT_SUPPORTED; }
 static int ext_GetTrackCount(void **self, int32_t *n) { ext_t *x = EXT(self); *n = x->ntracks; return x->src ? ST_OK : ST_NULL_EXTRACTOR; }
 static int ext_GetTrackConfiguration(void **self, int i, void **md) {
@@ -535,9 +573,329 @@ static void *const g_dec_vt[19] = {
     dec_Flush, dec_AcquireInputBufferIndex, dec_GetInputBuffer, dec_SendInputBufferForDecode, dec_AcquireOutputBufferIndex,
     dec_GetOutputBuffer, dec_GetOutputBufferSize, dec_ReleaseOutputBufferIndex, dec_GetLastError, dec_GetOutputBufferFmt, dec_GetOutputBufferFormat,
 };
+// ---------- Decoder for VP8 / VP9 (libvpx) ----------
+// Tears of the Kingdom creates Decoder(VideoVp9, VideoColorNv12, Cpu) for its cutscenes and feeds it the samples our extractor reads. Unlike the
+// decoder above, this one decodes the bytes the game sends. Behaviour and pacing follow MacNativeGames' runtime/movie_host.c
+// (ly05010419/MacNativeGames, MIT, reviewed at 41e1e0c; libvpx as there), ported by hand onto this file's host MediaData and Buffer:
+// - input (4) and output (8) buffer indices are handed out first in, first out; decoding is synchronous in SendInputBufferForDecode, and an input
+//   waits while every output buffer is taken (it is decoded when the game releases one);
+// - output is packed NV12 (Y rows, then rows of interleaved Cb Cr; stride = width) described as MediaCodec does ("video/raw", color-format 21, crop,
+//   nv12-* offsets); the format-changed event comes with the first frame;
+// - pacing: the game shows one decoded frame per game frame, so a frame is handed over when its presentation time is due, counted from the first
+//   one (dm_movie_tick at every present, on the guest clock), at most one per present. When the game falls behind (TotK drops to 20 fps under load)
+//   a frame more than 1.5 frame periods late is dropped if the next one is due too: the picture keeps time with the cutscene's sound instead of
+//   lagging. DM_MOVIE_PACE=0 hands every frame over as soon as it is decoded.
+// Stop only stops decoding (SDK docs: the client may still send the buffers it holds); Reset returns to the created state.
+#if DM_HAVE_VPX
+enum { VX_IN = 4, VX_OUT = 8, VX_IN_MIN = 2 << 20 };
+enum { EV_INPUT, EV_OUTPUT, EV_FORMAT, EV_ERROR };   // DecoderEvents order
+typedef struct { int index; uint32_t flags; int64_t pts; } vx_out;
+typedef struct { int index, off, size; uint32_t flags; int64_t pts; } vx_in;
+typedef struct vx_t {
+    struct vx_t *next;                         // live decoders (dm_movie_tick)
+    pthread_mutex_t mu;
+    int type, fmt, mode, configured, started, w, h, eos_in, format_sent, last_error;
+    void *ev[4];
+    vpx_codec_ctx_t vpx; int vpx_live;
+    uint8_t *in[VX_IN]; size_t in_cap; int in_free[VX_IN], nin_free;
+    vx_in pending[VX_IN]; int npending;        // sent while every output buffer was taken
+    uint8_t *out[VX_OUT]; int out_bytes[VX_OUT], out_held[VX_OUT];
+    vx_out ready[VX_OUT]; int nready;          // handed over: AcquireOutputBufferIndex takes them in order
+    vx_out decoded[VX_OUT]; int ndecoded;      // paced: decoded, not due yet
+    uint64_t t0; int64_t pts0;                 // paced: guest time and presentation time of the first frame handed over
+    int64_t duration_us;                       // of the configured track, for the output format
+    uint64_t frames, decode_ns, errors, dropped;
+} vx_t;
+static vx_t *g_vx; static pthread_mutex_t g_vx_mu = PTHREAD_MUTEX_INITIALIZER;   // lock order: g_vx_mu, then a decoder's mu
+static int g_vx_pace = -1;                                                        // DM_MOVIE_PACE (-1 = not read; the unit test sets it)
+static vx_t *VX(void *self) { return ((vx_t **)self)[1]; }
+static int vx_pace(void) { if (g_vx_pace < 0) { const char *e = getenv("DM_MOVIE_PACE"); g_vx_pace = !(e && !strcmp(e, "0")); } return g_vx_pace; }
+typedef struct { void *ev[8]; int n; } vx_sig;   // events are signalled after the locks are released: the woken game thread calls straight back in
+static void vx_note(vx_t *v, vx_sig *s, int which) { if (v->ev[which] && s->n < 8) s->ev[s->n++] = v->ev[which]; }
+static void vx_fire(const vx_sig *s) { for (int i = 0; i < s->n; i++) g_signal(s->ev[i]); }
+static int vx_frame_bytes(const vx_t *v) { return v->w * v->h + v->w * v->h / 2; }   // even sizes only (Configure)
+static void vx_nv12(const vpx_image_t *img, uint8_t *dst, int w, int h) {   // I420 (libvpx) → packed NV12
+    for (int y = 0; y < h; y++) memcpy(dst + (size_t)y * w, img->planes[VPX_PLANE_Y] + (size_t)y * img->stride[VPX_PLANE_Y], (size_t)w);
+    uint8_t *uv = dst + (size_t)w * h;
+    for (int y = 0; y < h / 2; y++) {
+        const uint8_t *u = img->planes[VPX_PLANE_U] + (size_t)y * img->stride[VPX_PLANE_U], *cr = img->planes[VPX_PLANE_V] + (size_t)y * img->stride[VPX_PLANE_V];
+        uint8_t *o = uv + (size_t)y * w; int x = 0;
+        for (; x + 16 <= w / 2; x += 16) { uint8x16x2_t p = {{vld1q_u8(u + x), vld1q_u8(cr + x)}}; vst2q_u8(o + 2 * x, p); }
+        for (; x < w / 2; x++) { o[2 * x] = u[x]; o[2 * x + 1] = cr[x]; }
+    }
+}
+static int vx_free_out(const vx_t *v) { for (int i = 0; i < VX_OUT; i++) if (!v->out_held[i]) return i; return -1; }
+static void vx_push(vx_t *v, vx_sig *s, int o, uint32_t flags, int64_t pts, int bytes) {
+    v->out_held[o] = 1; v->out_bytes[o] = bytes;
+    if (vx_pace()) { v->decoded[v->ndecoded++] = (vx_out){o, flags, pts}; return; }
+    v->ready[v->nready++] = (vx_out){o, flags, pts}; vx_note(v, s, EV_OUTPUT);
+}
+// One input into output buffers; 0 when it has to wait for a free output buffer
+static int vx_decode(vx_t *v, vx_sig *s, const vx_in *p) {
+    int data = p->size > 0 && !(p->flags & BF_CODEC_CONFIG), need = data + ((p->flags & BF_EOS) && !v->eos_in), nfree = 0;
+    for (int i = 0; i < VX_OUT; i++) nfree += !v->out_held[i];
+    if (nfree < need) return 0;
+    if (data) {
+        uint64_t t0 = now_ns();
+        vpx_codec_err_t e = vpx_codec_decode(&v->vpx, v->in[p->index] + p->off, (unsigned)p->size, NULL, 0);
+        if (e != VPX_CODEC_OK) {
+            v->errors++; v->last_error = ST_UNKNOWN; vx_note(v, s, EV_ERROR);
+            if (v->errors <= 4) LOG("[movie] [red] VP%d decode error on a %d-byte frame at %lld us: %s", v->type == DEC_VP9 ? 9 : 8, p->size, (long long)p->pts,
+                                    vpx_codec_error_detail(&v->vpx) ? vpx_codec_error_detail(&v->vpx) : vpx_codec_err_to_string(e));
+        } else {
+            vpx_codec_iter_t it = NULL; const vpx_image_t *img;
+            while ((img = vpx_codec_get_frame(&v->vpx, &it))) {
+                int o = vx_free_out(v);
+                if (img->fmt != VPX_IMG_FMT_I420 || (int)img->d_w != v->w || (int)img->d_h != v->h || o < 0) {
+                    if (!v->errors++) LOG("[movie] [red] VP%d frame %ux%u format %#x (configured %dx%d I420, free output buffer %d): left out", v->type == DEC_VP9 ? 9 : 8,
+                                          img->d_w, img->d_h, img->fmt, v->w, v->h, o);
+                    v->last_error = ST_INVALID_DIMENSIONS; vx_note(v, s, EV_ERROR); continue;
+                }
+                if (!v->format_sent) { v->format_sent = 1; vx_note(v, s, EV_FORMAT); }
+                vx_nv12(img, v->out[o], v->w, v->h);
+                vx_push(v, s, o, 0, p->pts, vx_frame_bytes(v)); v->frames++;
+            }
+        }
+        v->decode_ns += now_ns() - t0;
+    }
+    int after_eos = v->eos_in;
+    if ((p->flags & BF_EOS) && !v->eos_in) {
+        v->eos_in = 1; vx_push(v, s, vx_free_out(v), BF_EOS, p->pts, 0);
+        MVLOG("VP%d decoder: end of stream after %llu frames (%.2f ms per frame, %llu dropped to keep time, %llu errors)", v->type == DEC_VP9 ? 9 : 8,
+              (unsigned long long)v->frames, v->frames ? v->decode_ns / 1e6 / (double)v->frames : 0.0, (unsigned long long)v->dropped, (unsigned long long)v->errors);
+    }
+    // The end-of-stream input and every input after it stay here until Flush / Reset / Configure, as in the library's codec: ACodec's
+    // postFillThisBuffer (subsdk0 0x2bd214) offers no input buffer once the input port is at end of stream (+0x248, set by onInputBufferFilled).
+    // Handing them back made TotK's player send them straight back with the end-of-stream flag, signalling input available without end: its
+    // event loop takes the input event before the output event, so the end-of-stream output was never taken and the game waited after the movie.
+    if (!(p->flags & BF_EOS) && !after_eos) { v->in_free[v->nin_free++] = p->index; vx_note(v, s, EV_INPUT); }
+    return 1;
+}
+static void vx_drain(vx_t *v, vx_sig *s) {
+    while (v->npending && vx_decode(v, s, &v->pending[0])) memmove(v->pending, v->pending + 1, (size_t)--v->npending * sizeof v->pending[0]);
+}
+static uint64_t vx_due(const vx_t *v, const vx_out *d) { int64_t ahead = d->pts - v->pts0; return v->t0 + (uint64_t)(ahead > 0 ? ahead : 0) * 1000; }
+// One present: drop leading frames more than 1.5 frame periods late while the next one is due too, then hand over at most one due frame
+// (end of stream as soon as it is first in line)
+static void vx_release_due(vx_t *v, vx_sig *s, uint64_t now) {
+    int dropped = 0;
+    while (v->ndecoded > 1 && !(v->decoded[0].flags & BF_EOS) && !(v->decoded[1].flags & BF_EOS) && v->t0) {
+        uint64_t due = vx_due(v, &v->decoded[0]), next = vx_due(v, &v->decoded[1]);
+        if (now < next || now - due <= (next - due) * 3 / 2) break;
+        v->out_held[v->decoded[0].index] = 0; v->dropped++; dropped = 1;
+        memmove(v->decoded, v->decoded + 1, (size_t)--v->ndecoded * sizeof v->decoded[0]);
+    }
+    if (dropped) vx_drain(v, s);
+    if (!v->ndecoded) return;
+    vx_out d = v->decoded[0];
+    if (!(d.flags & BF_EOS)) {
+        if (!v->t0) { v->t0 = now; v->pts0 = d.pts; }
+        if (now < vx_due(v, &d)) return;
+    }
+    memmove(v->decoded, v->decoded + 1, (size_t)--v->ndecoded * sizeof v->decoded[0]);
+    v->ready[v->nready++] = d; vx_note(v, s, EV_OUTPUT);
+}
+static void vx_reset_queues(vx_t *v) {
+    v->nin_free = 0; for (int i = 0; i < VX_IN; i++) v->in_free[v->nin_free++] = i;
+    memset(v->out_held, 0, sizeof v->out_held); v->npending = v->nready = v->ndecoded = 0; v->eos_in = 0; v->t0 = 0;
+}
+static int vx_codec_init(vx_t *v) {
+    vpx_codec_dec_cfg_t cfg = {.threads = 4, .w = (unsigned)v->w, .h = (unsigned)v->h};
+    v->vpx_live = vpx_codec_dec_init(&v->vpx, v->type == DEC_VP9 ? vpx_codec_vp9_dx() : vpx_codec_vp8_dx(), &cfg, 0) == VPX_CODEC_OK;
+    return v->vpx_live;
+}
+static void vx_release(vx_t *v) {   // back to the created state
+    if (v->vpx_live) { vpx_codec_destroy(&v->vpx); v->vpx_live = 0; }
+    for (int i = 0; i < VX_IN; i++) { free(v->in[i]); v->in[i] = NULL; }
+    for (int i = 0; i < VX_OUT; i++) { free(v->out[i]); v->out[i] = NULL; }
+    v->configured = v->started = 0; vx_reset_queues(v);
+}
+static void vx_destroy(void **self) {
+    vx_t *v = VX(self); if (!v) return;
+    pthread_mutex_lock(&g_vx_mu);
+    for (vx_t **p = &g_vx; *p; p = &(*p)->next) if (*p == v) { *p = v->next; break; }
+    pthread_mutex_lock(&v->mu); pthread_mutex_unlock(&v->mu);   // wait for a dm_movie_tick in progress
+    pthread_mutex_unlock(&g_vx_mu);
+    MVLOG("VP%d decoder %p destroyed after %llu frames (%llu dropped to keep time)", v->type == DEC_VP9 ? 9 : 8, (void *)self, (unsigned long long)v->frames, (unsigned long long)v->dropped);
+    vx_release(v); pthread_mutex_destroy(&v->mu); free(v); self[1] = NULL;
+}
+static void vx_dtor(void **self) { vx_destroy(self); }
+static void vx_delete(void **self) { vx_destroy(self); g_delete(self); }
+static void vx_format(const vx_t *v, void **md) {
+    md_t *m = md_get(md); md_clear(m);
+    md_str(m, "mime", "video/raw"); md_i32(m, "width", v->w); md_i32(m, "height", v->h); md_i32(m, "stride", v->w); md_i32(m, "slice-height", v->h);
+    md_i32(m, "color-format", 21);   // COLOR_FormatYUV420SemiPlanar
+    md_rect(m, "crop", 0, 0, v->w - 1, v->h - 1); md_i32(m, "crop-width", v->w); md_i32(m, "crop-height", v->h);
+    md_i32(m, "nv12-y-stride", v->w); md_i32(m, "nv12-uv-stride", v->w); md_i32(m, "nv12-y-offset", 0); md_i32(m, "nv12-uv-offset", v->w * v->h);
+    if (v->duration_us > 0) md_i64(m, "durationUs", v->duration_us);
+}
+static int vx_Configure(void **self, void **md) {
+    vx_t *v = VX(self);
+    if (!md || !*md) return ST_BAD_VALUE;
+    const char *want = v->type == DEC_VP9 ? "video/x-vnd.on2.vp9" : "video/x-vnd.on2.vp8";
+    const md_ent *mime = md_find(md, "mime", 's'), *we = md_find(md, "width", 'i'), *he = md_find(md, "height", 'i'), *mis = md_find(md, "max-input-size", 'i'),
+                 *dur = md_find(md, "durationUs", 'l');
+    int w = we ? (int)we->i : 0, h = he ? (int)he->i : 0;
+    if (v->mode != 1 || v->fmt != 4) { LOG("[movie] [red] VP%d decoder: output format %d mode %d (only NV12 in CPU buffers)", v->type == DEC_VP9 ? 9 : 8, v->fmt, v->mode); return ST_INVALID_CONFIG; }
+    if (!mime || strcmp(mime->s, want)) { LOG("[movie] [red] VP%d decoder configured with %s", v->type == DEC_VP9 ? 9 : 8, mime ? mime->s : "no mime"); return ST_UNSUPPORTED_MEDIA; }
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192 || (w | h) & 1) { LOG("[movie] [red] VP%d decoder: %dx%d (even sizes up to 8192 only)", v->type == DEC_VP9 ? 9 : 8, w, h); return ST_INVALID_DIMENSIONS; }
+    pthread_mutex_lock(&v->mu);
+    vx_release(v); v->w = w; v->h = h; v->duration_us = dur ? dur->i : 0;
+    if (!vx_codec_init(v)) { pthread_mutex_unlock(&v->mu); LOG("[movie] [red] libvpx: VP%d decoder initialisation failed", v->type == DEC_VP9 ? 9 : 8); return ST_FAILED_TO_CONFIGURE; }
+    v->in_cap = mis && mis->i > VX_IN_MIN ? (size_t)mis->i : VX_IN_MIN;
+    for (int i = 0; i < VX_IN; i++) v->in[i] = malloc(v->in_cap);
+    for (int i = 0; i < VX_OUT; i++) v->out[i] = malloc((size_t)vx_frame_bytes(v));
+    vx_reset_queues(v); v->format_sent = 0; v->last_error = 0; v->configured = 1;
+    pthread_mutex_unlock(&v->mu);
+    MVLOG("VP%d decoder %p configured: %dx%d, %d input buffers of %zu KiB, %d output frames of %d bytes, libvpx %s", v->type == DEC_VP9 ? 9 : 8, (void *)self, w, h,
+          VX_IN, v->in_cap >> 10, VX_OUT, vx_frame_bytes(v), vpx_codec_version_str());
+    return ST_OK;
+}
+static int vx_RegisterClientEvents(void **self, void **ev) { vx_t *v = VX(self); if (!ev) return ST_BAD_VALUE; for (int i = 0; i < 4; i++) v->ev[i] = ev[i]; return ST_OK; }
+static int vx_GetOutputFormat(void **self, void **md) { vx_t *v = VX(self); if (!md) return ST_BAD_VALUE; if (!v->configured) return ST_INVALID_CONFIG; vx_format(v, md); return ST_OK; }
+static int vx_Start(void **self) {
+    vx_t *v = VX(self); vx_sig s = {0};
+    pthread_mutex_lock(&v->mu);
+    if (!v->configured) { pthread_mutex_unlock(&v->mu); return ST_FAILED_TO_START; }
+    v->started = 1; vx_note(v, &s, EV_INPUT);
+    pthread_mutex_unlock(&v->mu); vx_fire(&s);
+    MVLOG("VP%d decoder %p Start", v->type == DEC_VP9 ? 9 : 8, (void *)self);
+    return ST_OK;
+}
+static int vx_Stop(void **self) { vx_t *v = VX(self); pthread_mutex_lock(&v->mu); v->started = 0; pthread_mutex_unlock(&v->mu); MVLOG("VP decoder %p Stop after %llu frames", (void *)self, (unsigned long long)v->frames); return ST_OK; }
+static int vx_Reset(void **self) { vx_t *v = VX(self); pthread_mutex_lock(&v->mu); vx_release(v); v->last_error = 0; pthread_mutex_unlock(&v->mu); return ST_OK; }
+static int vx_Flush(void **self) {   // drop queued work; the next input starts a new decode (after a seek: a key frame)
+    vx_t *v = VX(self); vx_sig s = {0}; int st = ST_OK;
+    pthread_mutex_lock(&v->mu);
+    if (v->configured) {
+        if (v->vpx_live) { vpx_codec_destroy(&v->vpx); v->vpx_live = 0; }
+        if (!vx_codec_init(v)) st = ST_FAILED_TO_CONFIGURE;
+        vx_reset_queues(v);
+        if (v->started) vx_note(v, &s, EV_INPUT);
+    }
+    pthread_mutex_unlock(&v->mu); vx_fire(&s);
+    MVLOG("VP decoder %p Flush", (void *)self);
+    return st;
+}
+static int vx_AcquireInputBufferIndex(void **self, int32_t *idx, int32_t *remaining) {
+    vx_t *v = VX(self); int st = ST_IN_NOT_AVAILABLE;
+    if (!idx || !remaining) return ST_BAD_VALUE;
+    pthread_mutex_lock(&v->mu);
+    *idx = -1; *remaining = 0;
+    if (v->started && v->nin_free) { *idx = v->in_free[0]; memmove(v->in_free, v->in_free + 1, (size_t)--v->nin_free * sizeof v->in_free[0]); *remaining = v->nin_free; st = ST_OK; }
+    pthread_mutex_unlock(&v->mu);
+    MVTRACE("vp %p AcquireInput → %#x idx %d rem %d", (void *)self, st, *idx, *remaining);
+    return st;
+}
+static int vx_GetInputBuffer(void **self, int32_t i, mvbuf *b) {
+    vx_t *v = VX(self);
+    if (!b) return ST_BAD_VALUE;
+    if (i < 0 || i >= VX_IN || !v->in[i]) return ST_IN_NOT_AVAILABLE;
+    b->data = v->in[i]; b->cap = v->in_cap; b->off = b->size = 0;
+    return ST_OK;
+}
+static int vx_SendInputBufferForDecode(void **self, int32_t i, int32_t off, int32_t size, int64_t pts, uint32_t flags) {
+    vx_t *v = VX(self); vx_sig s = {0};
+    if (i < 0 || i >= VX_IN || off < 0 || size < 0 || (uint64_t)off + (uint64_t)size > v->in_cap) return ST_BAD_VALUE;
+    pthread_mutex_lock(&v->mu);
+    if (!v->started) { pthread_mutex_unlock(&v->mu); return ST_INVALID_STATE; }
+    vx_in p = {i, off, size, flags, pts};
+    MVTRACE("vp %p SendInput idx %d off %d size %d pts %lld flags %#x", (void *)self, i, off, size, (long long)pts, flags);
+    if (v->eos_in) {}   // after the end of stream the buffer stays here (vx_decode)
+    else if (v->npending || !vx_decode(v, &s, &p)) v->pending[v->npending++] = p;
+    pthread_mutex_unlock(&v->mu); vx_fire(&s);
+    return ST_OK;
+}
+static int vx_AcquireOutputBufferIndex(void **self, int32_t *idx, int64_t *pts, uint32_t *flags, int32_t *remaining) {
+    vx_t *v = VX(self); int st = ST_OUT_NOT_AVAILABLE;
+    if (!idx || !pts || !flags || !remaining) return ST_BAD_VALUE;
+    pthread_mutex_lock(&v->mu);
+    *idx = -1; *pts = 0; *flags = 0; *remaining = 0;
+    if (v->nready) {
+        vx_out r = v->ready[0]; memmove(v->ready, v->ready + 1, (size_t)--v->nready * sizeof v->ready[0]);
+        *idx = r.index; *pts = r.pts; *flags = r.flags; *remaining = v->nready; st = ST_OK;
+    }
+    pthread_mutex_unlock(&v->mu);
+    MVTRACE("vp %p AcquireOutput → %#x idx %d pts %lld flags %#x", (void *)self, st, *idx, (long long)*pts, *flags);
+    return st;
+}
+static int vx_copy_out(vx_t *v, int32_t o, mvbuf *b) {   // v->mu held
+    if (o < 0 || o >= VX_OUT || !v->out_held[o]) return ST_OUT_NOT_AVAILABLE;
+    int n = v->out_bytes[o];
+    if (n && (!b->data || b->cap < (uint64_t)n)) { LOG("[movie] [red] Decoder::GetOutputBuffer: buffer of %llu bytes for a %d-byte frame", (unsigned long long)b->cap, n); return ST_BUFFER_TOO_SMALL; }
+    if (n) memcpy(b->data, v->out[o], (size_t)n);
+    b->off = 0; b->size = n;
+    return ST_OK;
+}
+static int vx_GetOutputBuffer(void **self, int32_t o, mvbuf *b) {
+    vx_t *v = VX(self); if (!b) return ST_BAD_VALUE;
+    pthread_mutex_lock(&v->mu); int st = vx_copy_out(v, o, b); pthread_mutex_unlock(&v->mu);
+    return st;
+}
+static int vx_GetOutputBufferSize(void **self, int32_t *size, int32_t *align) {   // SDK docs: buffer size and alignment
+    vx_t *v = VX(self); if (!size || !align) return ST_BAD_VALUE;
+    *size = v->configured ? vx_frame_bytes(v) : 0; *align = 256;
+    return v->configured ? ST_OK : ST_INVALID_CONFIG;
+}
+static int vx_ReleaseOutputBufferIndex(void **self, int32_t o) {
+    vx_t *v = VX(self); vx_sig s = {0}; int st = ST_OUT_NOT_AVAILABLE;
+    pthread_mutex_lock(&v->mu);
+    if (o >= 0 && o < VX_OUT && v->out_held[o]) {
+        int queued = 0;
+        for (int i = 0; i < v->nready; i++) queued |= v->ready[i].index == o;
+        for (int i = 0; i < v->ndecoded; i++) queued |= v->decoded[i].index == o;
+        if (!queued) { v->out_held[o] = 0; vx_drain(v, &s); st = ST_OK; }
+    }
+    pthread_mutex_unlock(&v->mu); vx_fire(&s);
+    MVTRACE("vp %p ReleaseOutput idx %d → %#x", (void *)self, o, st);
+    return st;
+}
+static int vx_GetLastError(void **self) { return VX(self)->last_error; }
+static int vx_GetOutputBufferFormat(void **self, int32_t o, void **md) {
+    vx_t *v = VX(self); if (!md) return ST_BAD_VALUE;
+    pthread_mutex_lock(&v->mu); int held = o >= 0 && o < VX_OUT && v->out_held[o]; pthread_mutex_unlock(&v->mu);
+    if (!held) return ST_OUT_NOT_AVAILABLE;
+    vx_format(v, md); return ST_OK;
+}
+static int vx_GetOutputBufferFmt(void **self, int32_t o, mvbuf *b, void **md) {
+    vx_t *v = VX(self); if (!b && !md) return ST_BAD_VALUE;
+    int st = md ? vx_GetOutputBufferFormat(self, o, md) : ST_OK;
+    if (st == ST_OK && b) { pthread_mutex_lock(&v->mu); st = vx_copy_out(v, o, b); pthread_mutex_unlock(&v->mu); }
+    return st;
+}
+static void *const g_vx_vt[19] = {   // the same slot order as g_dec_vt
+    vx_dtor, vx_delete, vx_Configure, vx_RegisterClientEvents, vx_GetOutputFormat, vx_Start, vx_Stop, vx_Reset,
+    vx_Flush, vx_AcquireInputBufferIndex, vx_GetInputBuffer, vx_SendInputBufferForDecode, vx_AcquireOutputBufferIndex,
+    vx_GetOutputBuffer, vx_GetOutputBufferSize, vx_ReleaseOutputBufferIndex, vx_GetLastError, vx_GetOutputBufferFmt, vx_GetOutputBufferFormat,
+};
+static void vx_create(void **self, int type, int fmt, int mode) {
+    vx_t *v = calloc(1, sizeof *v); pthread_mutex_init(&v->mu, NULL);
+    v->type = type; v->fmt = fmt; v->mode = mode; vx_reset_queues(v);
+    pthread_mutex_lock(&g_vx_mu); v->next = g_vx; g_vx = v; pthread_mutex_unlock(&g_vx_mu);
+    self[0] = (void *)g_vx_vt; self[1] = v;
+    MVLOG("VP%d decoder %p created (libvpx %s): output format %d mode %d", type == DEC_VP9 ? 9 : 8, (void *)self, vpx_codec_version_str(), fmt, mode);
+}
+// Called at every present (gfx/nvn/hle_nvn.c, on the game's thread before it gives its core away): hands paced frames over
+void dm_movie_tick(void) {
+    if (!vx_pace()) return;
+    vx_sig s = {0};
+    pthread_mutex_lock(&g_vx_mu);
+    for (vx_t *v = g_vx; v; v = v->next) { pthread_mutex_lock(&v->mu); if (v->started) vx_release_due(v, &s, guest_ns()); pthread_mutex_unlock(&v->mu); }
+    pthread_mutex_unlock(&g_vx_mu);
+    vx_fire(&s);
+}
+#else
+void dm_movie_tick(void) {}
+#endif
+
 HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", "movie::Decoder → host (AVFoundation)",
           void, mv_Decoder, void **self, int type, int fmt, int mode, int prio) {
     (void)prio; guest_fns();
+#if DM_HAVE_VPX
+    if (type == DEC_VP9 || type == DEC_VP8) { vx_create(self, type, fmt, mode); return; }
+#else
+    if (type == DEC_VP9 || type == DEC_VP8) LOG("[movie] [red] Decoder type %d (VP%d): this build has no libvpx (brew install libvpx, then rebuild the host)", type, type == DEC_VP9 ? 9 : 8);
+#endif
     dec_t *d = calloc(1, sizeof *d); pthread_mutex_init(&d->mu, NULL);
     d->type = type; d->fmt = fmt; d->mode = mode;
     if (mode != 1 || (fmt != 1 && fmt != 4))   // DecoderMode_Cpu with AudioPcm16 / VideoColorNv12 only

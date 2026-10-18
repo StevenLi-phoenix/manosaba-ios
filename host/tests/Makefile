@@ -17,6 +17,7 @@ run: \
 	$(B)/t_guest_mem \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_script \
+	$(B)/t_movie \
 	$(B)/t_oe \
 	$(B)/t_romfs_validate \
 	$(B)/t_swkbd \
@@ -37,6 +38,7 @@ run: \
 	$(B)/t_guest_mem 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
 	$(B)/t_hid_script 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
 	$(B)/t_oe 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
 	$(B)/t_swkbd
@@ -79,6 +81,11 @@ $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h 
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
 $(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c
+# VP9 movies need libvpx (brew install libvpx), as the host build does (host/Makefile VPX)
+VPX ?= /opt/homebrew/opt/libvpx
+$(B)/t_movie: t_movie.c ../hle_movie.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -o $@ t_movie.c ../movie_av.m ../movie_webm.c $(VPX)/lib/libvpx.a \
+		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)

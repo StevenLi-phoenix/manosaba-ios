@@ -29,6 +29,7 @@ SRC = \
 	main.c \
 	memstat.m \
 	movie_av.m \
+	movie_webm.c \
 	romfs_validate.c \
 	thread.c \
 	$(sort $(wildcard hle_*.c)) \
@@ -40,6 +41,11 @@ HDR = $(wildcard *.h) $(GFX_H) $(wildcard $(GAMEDIR)/*.h)
 FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework CoreAudio -framework ImageIO \
 	-framework UniformTypeIdentifiers -framework GameController -framework Network -framework AVFoundation -framework CoreMedia -framework CoreVideo
 INCLUDES = -I. -I../gfx/nvn/include -I$(GAMEDIR)
+# VP8 / VP9 movies (hle_movie.c: Tears of the Kingdom's cutscenes) decode with libvpx when it is installed (brew install libvpx; the static library is
+# linked in, BSD-3-Clause). -isystem and the archive are not taken over by the iOS app (ios/tools/gen_build.py), which has no VP9 decoder yet
+VPX ?= /opt/homebrew/opt/libvpx
+VPX_LIB := $(wildcard $(VPX)/lib/libvpx.a)
+VPX_FLAGS := $(if $(VPX_LIB),-isystem $(VPX)/include $(VPX_LIB))
 .DEFAULT_GOAL := dmhost
 
 $(PROFILE): $(GAMEDIR)/game.json ../tools/gen_game.py
@@ -53,13 +59,13 @@ FORCE:
 .PHONY: FORCE profile
 
 dmhost: $(SRC) $(GFX) $(HDR) gen/last_game
-	clang $(CFLAGS) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS)
+	clang $(CFLAGS) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS) $(VPX_FLAGS)
 
 # Older-API host (graphics backend without Metal 4, macOS 15; see DM_NVN_M3 in gfx/nvn/nvn_mtl.m): same sources, one more switch. make dmhost_m3
 MACOS_MIN_M3 ?= 15.0
 CFLAGS_M3 = $(subst -mmacosx-version-min=$(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN_M3),$(CFLAGS)) -DDM_NVN_M3=1
 dmhost_m3: $(SRC) $(GFX) $(HDR) gen/last_game
-	clang $(CFLAGS_M3) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS)
+	clang $(CFLAGS_M3) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS) $(VPX_FLAGS)
 
 print-macos-min:
 	@echo $(MACOS_MIN)

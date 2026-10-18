@@ -274,6 +274,8 @@ static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create)
     }
     errno = ENOENT; return 0;
 }
+// For host code that opens a guest file itself (the movie extractor's SetDataSource(path)): read-only resolution through the mount table, overlays included
+int dm_fs_host_file(const char *path, char *out, size_t n) { PATH_LOCK(); return host_path_ex(path, out, n, NULL, 0); }
 static int set_guest_name(const char *hp, const char *path) {
     const char *end = path + strlen(path); while (end > path && end[-1] == '/') end--;
     const char *start = end; while (start > path && start[-1] != '/' && start[-1] != ':') start--;

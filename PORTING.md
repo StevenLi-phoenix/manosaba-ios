@@ -17,7 +17,8 @@ ios/run.sh build / install / push-data / launch;  tools/mac_app.sh
 
 - Apple silicon Mac, macOS 26 (the host uses Metal 4; `make -C host dmhost_m3` builds for macOS 15+), Xcode with the iOS SDK and the Metal
   toolchain (used: Xcode 27.0).
-- Homebrew: `dotnet` (shader translator), `spirv-cross`, `xcodegen` (iOS project); `libimobiledevice` only for the live iOS log (`iproxy`).
+- Homebrew: `dotnet` (shader translator), `spirv-cross`, `xcodegen` (iOS project); `libvpx` for VP8 / VP9 movies (linked statically into the Mac
+  host when installed; without it such movies cannot play); `libimobiledevice` only for the live iOS log (`iproxy`).
 - Python 3 venv at `$DM_ROOT/build/cache/dm/venv` (the scripts' default interpreter, `DM_PY` overrides):
   `pip install -r tools/requirements.txt`, and for Unity games `pip install --no-deps -r engines/unity/requirements.txt`.
 - The shader translator: `DOTNET_ROOT=$(brew --prefix dotnet)/libexec dotnet build -c Release gfx/tools/dmsh_xlate/dmsh_xlate.csproj -o $DM_ROOT/build/gfx/dmsh_xlate`

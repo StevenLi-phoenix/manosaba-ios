@@ -1,7 +1,10 @@
 // Host media backend of the movie library, see movie_av.h. One AVAssetReader per track and reader, so tracks are read independently.
 // Compressed reads split sample buffers that carry several samples (audio packets) into single samples, as a container demuxer returns them.
+// WebM / Matroska files go to movie_webm.c (AVFoundation does not read them): compressed reads only, straight from the mapped file.
 #import <AVFoundation/AVFoundation.h>
 #include "movie_av.h"
+#include "movie_webm.h"
+#include "dm.h"
 #include <stdatomic.h>
 
 @interface MavMedia : NSObject {
@@ -11,9 +14,11 @@
     mav_track info[8];
     int n;
     _Atomic int refs;
+    webm *wm; int wtrack[8];   // WebM: the demuxer and the webm track of each entry
 }
 @end
 @implementation MavMedia
+- (void)dealloc { webm_close(wm); }
 @end
 
 @interface MavReader : NSObject {
@@ -25,6 +30,8 @@
     CMSampleBufferRef cur;     // compressed: sample buffer being split
     CMItemCount next, count;
     uint8_t *buf; size_t cap;  // copy of the current sample
+    MavMedia *media;           // WebM: keeps the mapping alive
+    const webm_frame *frames; int wnext, wcount;
 }
 @end
 @implementation MavReader
@@ -33,7 +40,44 @@
 
 static int64_t us_of(CMTime t) { return CMTIME_IS_NUMERIC(t) ? (int64_t)(CMTimeGetSeconds(t) * 1e6) : -1; }
 
+static int is_ebml(const char *file) {
+    FILE *f = fopen(file, "rb"); uint8_t b[4] = {0}; size_t n = f ? fread(b, 1, sizeof b, f) : 0;
+    if (f) fclose(f);
+    return n == 4 && b[0] == 0x1A && b[1] == 0x45 && b[2] == 0xDF && b[3] == 0xA3;
+}
+static const char *webm_mime(const webm_track *t) {
+    if (t->type == WEBM_VIDEO) return !strcmp(t->codec, "V_VP9") ? "video/x-vnd.on2.vp9" : !strcmp(t->codec, "V_VP8") ? "video/x-vnd.on2.vp8" : "video/unknown";
+    return !strcmp(t->codec, "A_VORBIS") ? "audio/vorbis" : "audio/unknown";
+}
+static mav_media *open_webm(const char *file) {
+    char why[200]; webm *w = webm_open(file, why, sizeof why);
+    if (!w) { LOG("[movie] [red] %s: %s", file, why); return NULL; }
+    MavMedia *m = [MavMedia new]; m->wm = w;
+    for (int i = 0; i < webm_track_count(w) && m->n < 8; i++) {
+        const webm_track *t = webm_track_at(w, i); const webm_frame *f = webm_frames(w, i);
+        if ((t->type != WEBM_VIDEO && t->type != WEBM_AUDIO) || !t->nframes) continue;
+        if (t->laced) LOG("[movie] [red] %s track %d: %d laced blocks left out (lacing is not split)", file, t->number, t->laced);
+        mav_track *ti = &m->info[m->n];
+        memset(ti, 0, sizeof *ti);
+        ti->kind = t->type == WEBM_VIDEO ? MAV_VIDEO : MAV_AUDIO; ti->mime = webm_mime(t);
+        int64_t span = f[t->nframes - 1].pts_us - f[0].pts_us, bytes = 0;
+        for (int k = 0; k < t->nframes; k++) bytes += f[k].size;
+        ti->duration_us = webm_duration_us(w) > 0 ? webm_duration_us(w) : span + t->default_ns / 1000;
+        ti->bit_rate = ti->duration_us > 0 ? (int32_t)(bytes * 8 * 1000000 / ti->duration_us) : 0;
+        ti->max_sample = (int32_t)t->max_size;
+        if (t->type == WEBM_VIDEO) {
+            ti->width = t->width; ti->height = t->height;
+            ti->frame_rate = t->default_ns > 0 ? (int32_t)llround(1e9 / (double)t->default_ns) : span > 0 ? (int32_t)llround((t->nframes - 1) * 1e6 / (double)span) : 0;
+        } else { ti->channels = t->channels; ti->sample_rate = (int32_t)llround(t->sample_rate); }
+        strlcpy(ti->lang, t->lang, sizeof ti->lang);
+        m->wtrack[m->n++] = i;
+    }
+    if (!m->n) { LOG("[movie] [red] %s: no video or audio frames", file); return NULL; }
+    atomic_store(&m->refs, 1);
+    return (mav_media *)CFBridgingRetain(m);
+}
 mav_media *mav_open(const char *file) {
+    if (is_ebml(file)) return open_webm(file);
     @autoreleasepool {
         AVURLAsset *a = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(file)] options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @YES}];
         MavMedia *m = [MavMedia new];
@@ -82,6 +126,14 @@ mav_reader *mav_reader_new(mav_media *m_, int track, int64_t start_us, int compr
         MavMedia *m = (__bridge MavMedia *)m_;
         if (track < 0 || track >= m->n) return NULL;
         const mav_track *ti = &m->info[track];
+        if (m->wm) {
+            if (!compressed) return NULL;
+            MavReader *r = [MavReader new];
+            r->media = m; r->kind = ti->kind; r->compressed = 1; r->width = ti->width; r->height = ti->height;
+            r->frames = webm_frames(m->wm, m->wtrack[track]); r->wcount = webm_track_at(m->wm, m->wtrack[track])->nframes;
+            r->wnext = start_us > 0 ? webm_seek_frame(m->wm, m->wtrack[track], start_us) : 0;
+            return (mav_reader *)CFBridgingRetain(r);
+        }
         NSError *err = nil;
         AVAssetReader *rd = [[AVAssetReader alloc] initWithAsset:m->asset error:&err];
         if (!rd) return NULL;
@@ -102,7 +154,7 @@ mav_reader *mav_reader_new(mav_media *m_, int track, int64_t start_us, int compr
 }
 void mav_reader_free(mav_reader *r) {
     if (!r) return;
-    @autoreleasepool { MavReader *rr = CFBridgingRelease(r); [rr->reader cancelReading]; }
+    @autoreleasepool { MavReader *rr = CFBridgingRelease(r); if (rr->reader) [rr->reader cancelReading]; }
 }
 
 static uint8_t *room(MavReader *r, size_t n) {
@@ -137,6 +189,12 @@ int mav_reader_next(mav_reader *r_, mav_sample *out) {
     @autoreleasepool {
         MavReader *r = (__bridge MavReader *)r_;
         memset(out, 0, sizeof *out);
+        if (r->media) {   // WebM: the next indexed frame, from the mapping
+            if (r->wnext >= r->wcount) return 0;
+            const webm_frame *f = &r->frames[r->wnext++];
+            out->data = webm_frame_data(r->media->wm, f); out->size = f->size; out->pts_us = out->dts_us = f->pts_us; out->sync = f->key;
+            return 1;
+        }
         for (;;) {
             if (r->cur && r->next < r->count) {   // compressed: next sample of the current buffer
                 CMSampleBufferRef sb = r->cur; CMItemCount i = r->next++;

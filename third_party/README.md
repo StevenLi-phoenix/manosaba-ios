@@ -9,3 +9,6 @@ Shipped with the repository so nothing has to be downloaded. Each component keep
 
 Third-party code outside this directory: `gfx/nvn/include/nvn.h` (MIT, author in the file header) and the texture layout size algorithm in
 `gfx/nvn/nvn_tex.c`, ported from deko3d (zlib license).
+
+Linked, not shipped: libvpx (WebM Project, BSD-3-Clause), from Homebrew (`brew install libvpx`). `host/Makefile` links its static library into the
+Mac host when it is installed, for VP8 / VP9 movies (`host/hle_movie.c`); a host built from it carries libvpx's copyright notice and license terms.
