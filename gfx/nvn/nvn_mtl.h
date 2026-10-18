@@ -12,6 +12,7 @@ void bf_want_note(const char *key);
 void mtl_pool_add(const void *mem, uint64_t size);
 void mtl_pool_del(const void *mem);
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off);   // 1 on success; buf is a (__bridge) id<MTLBuffer>
+int mtl_pool_has(uint64_t addr, uint64_t len);                          // 1 when [addr, addr + len) lies in a registered memory pool (no residency side effect, unlike mtl_addr)
 
 typedef struct {
     uint32_t pso, cps, shaders, dss;

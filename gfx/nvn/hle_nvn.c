@@ -705,57 +705,76 @@ static void cs_dump(void) {   // Called once per frame (at present)
     int on = g_cs.on; memset(&g_cs, 0, sizeof g_cs); g_cs.on = on; g_cs.frame0 = f; pthread_mutex_unlock(&g_cs_mu);
 }
 static void put_hdr(uint8_t *p, uint32_t op, uint32_t size) { op_hdr h = {op, size}; memcpy(p, &h, sizeof h); if (op) cs_op(op, size); }
-// New segment: if recording is in progress, write a JUMP at the end of the old segment to link it
+// While recording, link the old segment to the next one with a JUMP at the write position. The JUMP counts as used: the game places what it
+// records next after the bytes GetCommandMemoryUsed reports, and a JUMP left outside them was overwritten (its target first: the case where only
+// END went on to the next segment reported 8 bytes less than the recording took)
+static void cmd_link(cmd_t *o, uint8_t *to) {
+    if (cs_on() && o->end > o->cur) { pthread_mutex_lock(&g_cs_mu); g_cs.waste += (uint64_t)(o->end - o->cur); pthread_mutex_unlock(&g_cs_mu); }
+    put_hdr(o->cur, OP_JUMP, 16); memcpy(o->cur + 8, &to, 8); o->used += 16;
+}
+// New segment of the game's command memory
 static void cmd_new_segment(cmd_t *o, uint8_t *mem, size_t n) {
     uint8_t *start = align8(mem), *end = mem + n;
-    if (o->recording && o->cur) { if (cs_on() && o->end > o->cur) { pthread_mutex_lock(&g_cs_mu); g_cs.waste += (uint64_t)(o->end - o->cur); pthread_mutex_unlock(&g_cs_mu); } put_hdr(o->cur, OP_JUMP, 16); memcpy(o->cur + 8, &start, 8); }
+    if (o->recording && o->cur) cmd_link(o, start);
     o->cur = start; o->end = end;
 }
 // Host-supplied segment when the game's own command memory runs out: when the game's out-of-memory callback cannot allocate from its command memory pool, it calls AddCommandMemory with an empty pool (p = NULL, n = 0)
 // (opening the advanced stats page on the level 88 sorceress save: many list items in one frame, and the original implementation segfaulted here reading NULL+8). Our records are larger than real-device NVN commands, so the budget the game reserved for real-device usage is not necessarily enough,
 // so this is not an error state of the game but something we must catch: provide a segment of host memory to keep recording; the segment is replayed in place at submit.
 // Reclaim follows the game's command memory, not a frame count (nxnative, seedds, MIT): a game may keep a recorded command handle and CALL it every frame until it records it again, so a segment reclaimed
-// 8 frames after lending was rewritten while still in use (nxnative saw it in Super Mario Bros. Wonder). A segment hangs off one recording through the JUMP at the end of its guest part; that recording occupies
-// [BEGIN, end of JUMP) in guest memory, and the game gives those bytes out again only once they are dead. So a segment remembers that guest range and is reclaimed when the game gives out memory overlapping it;
-// a segment overflowing from a host segment keeps the same range. The pool grows on demand (TotK and SMBW have many small command buffers that each overflow); abort only beyond HOSTSEG_CAP in total.
+// 8 frames after lending was rewritten while still in use (nxnative saw it in Super Mario Bros. Wonder). A segment is linked from one place, the JUMP the recording wrote when it ran out of room, and lives
+// as long as that JUMP: it sits in the game's command memory (or in the host segment the recording overflowed from) within the bytes GetCommandMemoryUsed reported, which the game writes over only once
+// the recording is dead. So a segment is free once its JUMP is gone: overwritten, in a memory pool that no longer exists, or in a host segment that is free or was taken again. A segment a recording began
+// in (an empty pool given before BeginRecording) has no JUMP and is kept. Reclaiming when the game merely gave out memory overlapping the recording (until 2026-10-18) freed live segments: Tears of the
+// Kingdom gives each per-draw recording a 512-byte window at slot + used, which reaches into the next slots' recordings; a later recording took the segment, and its binds became the tail of a cached
+// draw handle the game calls every other frame (in the prologue the wrong skeleton buffer, and Zelda's cloak and face alternated). The pool grows on demand; abort only beyond HOSTSEG_CAP in total.
 #define HOSTSEG_SZ (256u << 10)
 #define HOSTSEG_CAP (1u << 30)
 uint64_t dm_nvn_frame_count(void);
-typedef struct { uint8_t *mem; uint64_t frame; int busy; uintptr_t org_lo, org_hi; } hostseg_t;   // org: the guest range of the recording it hangs off (0 = unknown, never reclaimed)
+// jump_at: the JUMP linking it (0 = none); parent: the host segment that JUMP is in (-1 = game memory) and that segment's gen at the time (gen counts takes)
+typedef struct { uint8_t *mem; uintptr_t jump_at; int busy, parent; uint32_t gen, parent_gen; } hostseg_t;
 static hostseg_t *g_hostseg; static int g_nhostseg, g_caphostseg;
+static uint64_t g_hostseg_freed;   // segments found free because their JUMP was gone
 static pthread_mutex_t g_hostseg_mu = PTHREAD_MUTEX_INITIALIZER;
-// Take a segment: origin = the current recording's guest bytes [BEGIN, end of JUMP); when the write pointer is already in a host segment (overflowing again), that segment's origin
-static uint8_t *hostseg_take(const cmd_t *o) {
-    static unsigned total; uint64_t f = dm_nvn_frame_count(); uint8_t *m = NULL;
-    uintptr_t lo = 0, hi = 0, cur = o ? (uintptr_t)o->cur : 0;
-    pthread_mutex_lock(&g_hostseg_mu);
-    int in_seg = 0;
-    for (int i = 0; i < g_nhostseg && cur; i++) if (cur >= (uintptr_t)g_hostseg[i].mem && cur <= (uintptr_t)g_hostseg[i].mem + HOSTSEG_SZ) { lo = g_hostseg[i].org_lo; hi = g_hostseg[i].org_hi; in_seg = 1; break; }
-    if (!in_seg && o && o->recording && o->cur) { lo = o->begin && (uintptr_t)o->begin <= cur ? (uintptr_t)o->begin : cur; hi = cur + 16; }
-    for (int i = 0; i < g_nhostseg && !m; i++)
-        if (!g_hostseg[i].busy) { g_hostseg[i] = (hostseg_t){ g_hostseg[i].mem, f, 1, lo, hi }; m = g_hostseg[i].mem; }
-    if (!m && (uint64_t)(g_nhostseg + 1) * HOSTSEG_SZ <= HOSTSEG_CAP) {
-        if (g_nhostseg == g_caphostseg) { g_caphostseg = g_caphostseg ? g_caphostseg * 2 : 64; g_hostseg = realloc(g_hostseg, sizeof *g_hostseg * (size_t)g_caphostseg); }
-        m = malloc(HOSTSEG_SZ);
-        g_hostseg[g_nhostseg++] = (hostseg_t){ m, f, 1, lo, hi };
-    }
-    unsigned t = ++total; int n = g_nhostseg;
-    pthread_mutex_unlock(&g_hostseg_mu);
-    if (!m) die("NVN command memory: game pool empty and %u MB of host segments not reclaimed by the game's memory", HOSTSEG_CAP >> 20);
-    if (t == 1 || t % 1024 == 0) LOG("[nvn] game command memory short, host segment supplied (total %u, frame %llu, pool %d x %u KB)", t, (unsigned long long)f, n, HOSTSEG_SZ >> 10);
-    return m;
+static int hostseg_linked(int i, int depth) {   // g_hostseg_mu held
+    const hostseg_t *s = &g_hostseg[i];
+    if (!s->busy) return 0;
+    if (!s->jump_at) return 1;
+    if (s->parent >= 0) { if (depth > 64 || g_hostseg[s->parent].gen != s->parent_gen || !hostseg_linked(s->parent, depth + 1)) return 0; }
+    else if (!mtl_pool_has(s->jump_at, 16)) return 0;   // its pool is gone (and the memory may be too: read only inside a live pool)
+    op_hdr h; uint64_t to; memcpy(&h, (const void *)s->jump_at, sizeof h); memcpy(&to, (const void *)(s->jump_at + 8), 8);
+    return h.op == OP_JUMP && h.size == 16 && to == (uint64_t)(uintptr_t)s->mem;
 }
-// The game gives out [lo, hi): segments whose recording's guest bytes overlap it are dead, reclaim them
-static void hostseg_release(uintptr_t lo, uintptr_t hi) {
+// Continue o in a host segment: a free one, else one whose JUMP is gone, else a new one; linked from the write position under the lock (no other
+// thread sees it taken but not yet linked)
+static void cmd_host_segment(cmd_t *o) {
+    static unsigned total; uint64_t f = dm_nvn_frame_count();
+    uintptr_t at = o->recording && o->cur ? (uintptr_t)o->cur : 0;
     pthread_mutex_lock(&g_hostseg_mu);
-    for (int i = 0; i < g_nhostseg; i++) if (g_hostseg[i].busy && g_hostseg[i].org_hi > lo && g_hostseg[i].org_lo < hi) g_hostseg[i].busy = 0;
+    int parent = -1, k = -1;
+    for (int i = 0; i < g_nhostseg && at; i++) if (at >= (uintptr_t)g_hostseg[i].mem && at < (uintptr_t)g_hostseg[i].mem + HOSTSEG_SZ) { parent = i; break; }
+    for (int i = 0; i < g_nhostseg && k < 0; i++) if (!g_hostseg[i].busy) k = i;
+    if (k < 0)   // sweep: free every segment whose JUMP is gone (a segment freed here frees the ones it links at the next sweep)
+        for (int i = 0; i < g_nhostseg; i++) if (i != parent && g_hostseg[i].busy && !hostseg_linked(i, 0)) { g_hostseg[i].busy = 0; g_hostseg_freed++; if (k < 0) k = i; }
+    if (k < 0 && (uint64_t)(g_nhostseg + 1) * HOSTSEG_SZ <= HOSTSEG_CAP) {
+        if (g_nhostseg == g_caphostseg) { g_caphostseg = g_caphostseg ? g_caphostseg * 2 : 64; g_hostseg = realloc(g_hostseg, sizeof *g_hostseg * (size_t)g_caphostseg); }
+        uint8_t *m = malloc(HOSTSEG_SZ); if (!m) die("NVN command memory: host segment allocation failed");
+        g_hostseg[g_nhostseg] = (hostseg_t){ m, 0, 0, -1, 0, 0 }; k = g_nhostseg++;
+    }
+    if (k < 0) die("NVN command memory: game pool empty and %u MB of host segments all linked from live recordings", HOSTSEG_CAP >> 20);
+    hostseg_t *s = &g_hostseg[k];
+    s->busy = 1; s->gen++; s->jump_at = at; s->parent = parent; s->parent_gen = parent >= 0 ? g_hostseg[parent].gen : 0;
+    uint8_t *m = s->mem;
+    if (at) cmd_link(o, m);
+    unsigned t = ++total; int n = g_nhostseg; uint64_t freed = g_hostseg_freed;
     pthread_mutex_unlock(&g_hostseg_mu);
+    o->cur = m; o->end = m + HOSTSEG_SZ;
+    if (t == 1 || t % 1024 == 0) LOG("[nvn] game command memory short, host segment supplied (total %u, frame %llu, pool %d x %u KB, %llu freed by their JUMP being gone)", t, (unsigned long long)f, n, HOSTSEG_SZ >> 10, (unsigned long long)freed);
 }
 NVN(nvnCommandBufferAddCommandMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t off, size_t n) {
     const pool_t *pl = (const pool_t *)p;
-    if (!pl || n < 64) { if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.hostseg++; pthread_mutex_unlock(&g_cs_mu); } cmd_new_segment(CB(c), hostseg_take(CB(c)), HOSTSEG_SZ); return; }
+    if (!pl || n < 64) { if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.hostseg++; pthread_mutex_unlock(&g_cs_mu); } cmd_host_segment(CB(c)); return; }
     if (!pl->mem) { LOG("[red] AddCommandMemory: pool has no CPU storage"); return; }
-    hostseg_release((uintptr_t)(pl->mem + off), (uintptr_t)(pl->mem + off + n));
     if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.grants++; g_cs.grant_bytes += n; if (!g_cs.grant_min || n < g_cs.grant_min) g_cs.grant_min = n; if (n > g_cs.grant_max) g_cs.grant_max = n; pthread_mutex_unlock(&g_cs_mu); }
     cmd_new_segment(CB(c), pl->mem + off, n);
 }
@@ -770,7 +789,7 @@ static uint8_t *cmd_alloc(cmd_t *o, uint32_t size) {
         if (o->cb_off || !o->cb || tries == 2) {
             if (size + OP_RESERVE > HOSTSEG_SZ) die("NVN record of %u bytes does not fit a host segment", size);
             if (!o->cb_off) { static int once; if (!once++) LOG("[nvn] command memory: the game's callback cannot supply enough (cb=%p, %u bytes needed), host segments instead", (void *)o->cb, size + OP_RESERVE); }
-            cmd_new_segment(o, hostseg_take(o), HOSTSEG_SZ); break;
+            cmd_host_segment(o); break;
         }
         if (cs_on()) { pthread_mutex_lock(&g_cs_mu); g_cs.cbs++; pthread_mutex_unlock(&g_cs_mu); }
         o->cb((NVNcommandBuffer *)o, NVN_COMMAND_BUFFER_MEMORY_EVENT_OUT_OF_COMMAND_MEMORY, size + OP_RESERVE, o->cb_data);
@@ -786,7 +805,7 @@ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     uint8_t *p = cmd_alloc(o, 8); put_hdr(p, OP_BEGIN, 8); o->begin = p;
 }
 // Memory used by this recording (TotK main 0x8c7ccc asks after recording; nxnative found that a game treats 0 as an empty recording): record bytes over all
-// segments; the host uses no control memory
+// segments and the JUMPs linking them (cmd_link); the host uses no control memory
 NVN(nvnCommandBufferGetCommandMemoryUsed, size_t, const NVNcommandBuffer *c) { const cmd_t *m = (const cmd_t *)c; return m->begin ? (size_t)m->used : 0; }
 NVN(nvnCommandBufferGetControlMemoryUsed, size_t, const NVNcommandBuffer *c) { (void)c; return 0; }
 NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {

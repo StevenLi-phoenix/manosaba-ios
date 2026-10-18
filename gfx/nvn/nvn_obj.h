@@ -85,13 +85,17 @@ FITS(win_t, NVNwindow);
 // Command buffer: commands are written into the command memory given by the game (AddCommandMemory), handle = segment start address; when it runs out, the game is called back for more memory
 typedef struct {
     uint32_t magic, recording;
-    uint8_t *cur, *end;                  // Write pointer / end of the current command memory segment
+    uint8_t *cur;                        // Write pointer of the current command memory segment
+    uint64_t guest_flags;                // +0x10 belongs to the game: Tears of the Kingdom's NVN 55 inline wrappers (main 0xba70 and 664 more) store a byte here before every call,
+                                         // also with their inline path off (it is while the SDK's nvnPrivate0, a .bss word, stays 0, as here). It was end's low byte: segments ended up to 255 bytes early
+    uint8_t *end;                        // End of the current command memory segment
     uint8_t *begin;                      // BEGIN record of this recording
     PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb; void *cb_data;
     NVNdevice *dev;
-    uint64_t used;                       // Record bytes written since BeginRecording, over all segments (GetCommandMemoryUsed)
+    uint64_t used;                       // Record bytes written since BeginRecording, over all segments, and the JUMPs linking them (GetCommandMemoryUsed)
     uint8_t cb_off;                      // The game turned the out-of-command-memory callback off (SetCommandMemoryCallbackEnabled)
 } cmd_t;                                                                                     FITS(cmd_t, NVNcommandBuffer);
+_Static_assert(__builtin_offsetof(cmd_t, guest_flags) == 0x10, "the game writes cmd_t + 0x10");
 
 // ---------- State objects (defaults follow the NVN / GL defaults) ----------
 typedef struct { uint32_t blend_en : 8, logic_op : 4, alpha_func : 4; } color_st;            FITS(color_st, NVNcolorState);

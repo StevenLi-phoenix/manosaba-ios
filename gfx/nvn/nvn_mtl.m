@@ -423,6 +423,10 @@ int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     pthread_mutex_unlock(&g_mu);
     return ok;
 }
+int mtl_pool_has(uint64_t addr, uint64_t len) {
+    pthread_mutex_lock(&g_mu); int i = pool_find(&g_pfind, g_pools, sizeof *g_pools, g_npool, addr, len); pthread_mutex_unlock(&g_mu);
+    return i >= 0;
+}
 int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {
     int ok = 0;
     pthread_mutex_lock(&g_mu);
