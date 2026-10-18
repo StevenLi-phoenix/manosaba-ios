@@ -100,6 +100,10 @@ void *guest_sym(const char *name) {
     for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return p; }
     return NULL;
 }
+void *dm_host_page(const char *module) {
+    for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, module)) return g_mod[i].host_page_off ? g_mod[i].base + g_mod[i].host_page_off : NULL;
+    return NULL;
+}
 module_t *module_of(const void *p) {
     for (int i = 0; i < g_nmod; i++)
         if ((const uint8_t *)p >= g_mod[i].base && (const uint8_t *)p < g_mod[i].base + g_mod[i].size) return &g_mod[i];
@@ -163,6 +167,7 @@ static void read_layout(module_t *m, const char *dir) {
         if (!strcmp(key, "PATCH_OFF")) m->patch_off = v;
         else if (!strcmp(key, "KEY_PAGE_OFF")) m->key_page_off = v;
         else if (!strcmp(key, "KEY_PAGE_SIZE")) m->key_page_size = v;
+        else if (!strcmp(key, "HOST_PAGE_OFF")) m->host_page_off = v;
         else if (!strcmp(key, "TEXT_END")) m->text_end = v;
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
@@ -176,6 +181,8 @@ static void read_layout(module_t *m, const char *dir) {
     fclose(f);
     if (!m->patch_off || m->key_page_off % 0x4000 || m->key_page_size != 0x4000 || seen != 0xff)
         die("%s: product from an old rewriter; rebuild it with the current one (PRODUCT)", path);
+    if (m->host_page_off && (m->host_page_off % 0x4000 || m->host_page_off < m->key_page_off + m->key_page_size || m->host_page_off + 0x4000 > m->patch_off))
+        die("%s: host page %#llx outside the writable part before the patch area", path, (unsigned long long)m->host_page_off);
 }
 
 static void install_key_page(module_t *m) {

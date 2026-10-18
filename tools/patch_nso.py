@@ -32,24 +32,44 @@ TEXT_END = segs[0][2]
 RO_OFF, DATA_OFF = segs[1][1], segs[2][1]
 KEY_PAGE_OFF = (len(IMG) + 0x3FFF) & ~0x3FFF
 IMG.extend(bytes(0x4000))
-PATCH_OFF = (len(IMG) + 0xFFFF) & ~0xFFFF
 
 # ---- Game rules: games/<id>/rules.py (--rules <file> or DM_RULES), keyed by the NSO build ID of each module ----
-#   CUTS   {build ID: [(offset, original bytes hex, new bytes hex, reason)]}: byte replacements; the original bytes are asserted first
-#   OBS    {build ID: [(offset, gate number, original instruction word hex, reason)]}: observation gates at function entries (host: gate_obs_set)
-#   PARAMS {build ID: [(offset A, word A hex, offset B, word B hex, register, key, reason)]}: parameter slots (see the PARAMS section below)
+#   CUTS     {build ID: [(offset, original bytes hex, new bytes hex, reason)]}: byte replacements; the original bytes are asserted first
+#   OBS      {build ID: [(offset, gate number, original instruction word hex, reason)]}: observation gates at function entries (host: gate_obs_set)
+#   PARAMS   {build ID: [(offset A, word A hex, offset B, word B hex, register, key, reason)]}: parameter slots (see the PARAMS section below)
+#   HOSTREFS {build ID: [(offset, original instruction word hex, (kind, ...), reason)]}: instructions that address the host page, a 16 KiB page of
+#            zeros right after the key page that stays writable and that the host fills (dm_host_page): ('adrp', d) = adrp xd, host page;
+#            ('ldr_s', t, n, byte offset) = ldr st, [xn, #byte offset]. They become cuts (asserted, listed in cuts.tsv, checked as cuts); a module with
+#            HOSTREFS gets the page and HOST_PAGE_OFF in its fixups header, the others keep their layout
 # A module whose build ID has no entry gets the generic rewrite only.
 def load_rules():
     path = os.environ.get('DM_RULES')
     if '--rules' in sys.argv: path = sys.argv[sys.argv.index('--rules') + 1]
-    if not path: return {}, {}, {}
+    if not path: return {}, {}, {}, {}
     import importlib.util
     sys.dont_write_bytecode = True   # no __pycache__ next to the game's rules
     spec = importlib.util.spec_from_file_location('game_rules', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return getattr(m, 'CUTS', {}), getattr(m, 'OBS', {}), getattr(m, 'PARAMS', {})
-CUTS, OBS, PARAMS = load_rules()
+    return getattr(m, 'CUTS', {}), getattr(m, 'OBS', {}), getattr(m, 'PARAMS', {}), getattr(m, 'HOSTREFS', {})
+CUTS, OBS, PARAMS, HOSTREFS = load_rules()
 BUILD_ID = d[0x40:0x50].hex()
 cuts = list(CUTS.get(BUILD_ID, []))
+hostrefs = HOSTREFS.get(BUILD_ID, [])
+HOST_PAGE_OFF = 0
+if hostrefs:
+    HOST_PAGE_OFF = KEY_PAGE_OFF + 0x4000
+    IMG.extend(bytes(max(0, HOST_PAGE_OFF + 0x4000 - len(IMG))))
+    for off, ow, form, why in hostrefs:
+        w = struct.unpack_from('<I', IMG, off)[0]
+        assert f'{w:08x}' == ow, f'host page reference {off:#x}: original instruction differs ({w:08x})'
+        if form[0] == 'adrp':
+            imm = (HOST_PAGE_OFF >> 12) - (off >> 12); assert -(1 << 20) <= imm < (1 << 20)
+            nw = 0x90000000 | ((imm & 3) << 29) | (((imm >> 2) & 0x7FFFF) << 5) | form[1]
+        elif form[0] == 'ldr_s':
+            t, n, bo = form[1:]; assert bo % 4 == 0 and 0 <= bo < 0x4000
+            nw = 0xBD400000 | ((bo // 4) << 10) | (n << 5) | t
+        else: raise AssertionError(f'host page reference {off:#x}: unknown form {form}')
+        cuts.append((off, struct.pack('<I', w).hex(), struct.pack('<I', nw).hex(), f'{why} [host page +{HOST_PAGE_OFF:#x}]'))
+PATCH_OFF = (len(IMG) + 0xFFFF) & ~0xFFFF
 for off, ob, nb, why in cuts:
     ob, nb = bytes.fromhex(ob), bytes.fromhex(nb)
     assert len(ob) == len(nb) and IMG[off:off + len(ob)] == ob, f'cut {off:#x}: original bytes differ ({bytes(IMG[off:off + len(ob)]).hex()})'
@@ -772,6 +792,7 @@ with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:
     f.write(hashlib.sha256(open(os.path.abspath(__file__), 'rb').read()).hexdigest() + '  patch_nso.py\n')
 with open(P('fixups.tsv'), 'w') as f:
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
+    if HOST_PAGE_OFF: f.write(f'# HOST_PAGE_OFF\t{HOST_PAGE_OFF:#x}\n')
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
 with open(P('gates.tsv'), 'w') as f:
     for ret, k, arg, orig in gates: f.write(f'{ret:#x}\t{k}\t{arg}\t{orig:#x}\n')

@@ -27,6 +27,7 @@ typedef struct {
     uint8_t *base;             // Start address of the image (including the patch area) in the host address space
     size_t size;
     uint64_t text_end, ro_off, data_off, patch_off, key_page_off, key_page_size;   // From the rewriter fixups header
+    uint64_t host_page_off;    // 16 KiB writable page the host fills for the game's HOSTREFS rules (fixups HOST_PAGE_OFF), 0 = none
     unsigned key_idx[8];
     const Elf64_Dyn *dyn;
     const Elf64_Sym *symtab;
@@ -50,6 +51,8 @@ void run_module_inits(void);
 void *module_sym(module_t *m, const char *name);
 void *guest_sym(const char *name);
 module_t *module_of(const void *p);
+// The host page of a module (rewriter HOSTREFS rules: guest code reads values the host writes there), NULL when its product has none
+void *dm_host_page(const char *module);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates: the rewriter's OBS rules (games/<id>/rules.py) number them; a game's hook code attaches a read-only callback, called on every hit.

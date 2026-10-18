@@ -27,6 +27,7 @@ Select the game with `GAME=<id>` for `make -C host` and with `DM_GAME=<id>` for 
 | `guest_heap_mb` | Heap region size on iOS (default 256); the rest of the address space reservation goes to the alias region |
 | `device_api` | NVN API version `"major.minor"` that `nvnDeviceGetInteger` reports (default `"55.15"`, as nxnative). Some games check it and create no device on a mismatch (TotK: major 55, minor ≥ 15); `DM_NVN_API` overrides it |
 | `depth_mode` | The depth convention the game sets with `nvnDeviceSetDepthMode`: `near_is_zero` (Metal's own; manosaba) or `near_is_minus_w` (GL; Tears of the Kingdom), for which the shader build remaps z in every vertex shader. The host logs the game's choice at startup (`[nvn] depth mode`) and reports red when it differs from this field |
+| `present_interval`, `window_unfocused`, `virtual_cores` | `"game"`: with a window too, present at the game's interval; `"in_focus"`: a visible window that is not key keeps the game in focus; `true`: guest threads hold one of three virtual cores while they run guest code (`host/hle_thread.c`). The comments in `host/game.h` give the details |
 | `nvn_c2` | Where the game's shaders read texture / sampler / image handles in the NVN driver bank c[2]: `["0x base", slots]` per table, 8 bytes a slot. It depends on the NVN version the shaders were compiled for: manosaba textures `0x168`, Tears of the Kingdom (and the games nxnative ports) textures `0x20`; samplers `0x568` and images `0x120` in both. `new_game.py` writes the second; a wrong layout shows as many "binding without a slot" lines in `dmsh_build.py`'s summary |
 | `romfs.files` | Key RomFS files and their exact sizes; checked before the game starts, which also catches the wrong game version |
 | `romfs.tree`, `tree_files`, `tree_bytes` | A RomFS directory (`.` = all of it) whose file count and byte total must match: catches half-copied data |
@@ -63,6 +64,9 @@ are at the top of `patch_nso.py`.
   attaches a read-only callback with `gate_obs_set(id, fn)` (`host/dm.h`).
 - `PARAMS` — a constant built by a `movz`/`movk` pair is read from host thread slot `KPARAM0..3` instead; the game's C code sets the value
   through `g_keyparam[]` (`host/dm.h`).
+- `HOSTREFS` — `adrp xd` / `ldr st, [xn, #offset]` that address the module's host page, 16 KiB of zeros right after the key page that stays
+  writable; the game's C code fills it (`dm_host_page(module)`, `host/dm.h`) and the game's code reads it (Tears of the Kingdom's real-time frame
+  step). They become cuts; only a module with HOSTREFS gets the page (`HOST_PAGE_OFF` in its fixups header).
 
 Every rule is checked statically by `verify/structck.py` and dynamically by `verify/equiv.py`.
 
@@ -72,6 +76,7 @@ Sources in the game directory are compiled into the host. They may implement the
 
 - `dm_game_boot()` — on the guest main thread, after the modules' constructors, right before `nnMain`
 - `dm_game_mount_save(dir)` — before the save directory is mounted
+- `dm_game_present()` — every `nvnQueuePresentTexture`, on the game's thread (once per game frame)
 - `dm_game_save_precommit(workdir)` — during `nn::fs::Commit`, before the working directory is swapped in; side files written into `workdir`
   are committed atomically with the game's own files (`dm_fs_save_poison(err)` refuses the commit)
 

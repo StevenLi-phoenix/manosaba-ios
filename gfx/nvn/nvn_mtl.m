@@ -5962,7 +5962,13 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 static CAMetalDisplayLink *g_link; static CFRunLoopRef g_link_rl; static int g_link_started;
 static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: nextDrawable throws while the layer has the display link object attached, so the present thread that takes its own drawable and the display link object are mutually exclusive
 static int link_on(void) { return g_dm_present_link && g_link != nil; }
-static CAFrameRateRange link_range(int mode) { return mode == 3 ? CAFrameRateRangeMake(30, 30, 30) : mode == 2 ? CAFrameRateRangeMake(60, 120, 120) : CAFrameRateRangeMake(60, 60, 60); }
+// Mode 1 ticks at the present rate (hle_nvn.c present_cfg: 60, or DM_PRESENT_HZ for a game whose step follows the measured frame time: 90, 120)
+static _Atomic int g_link_hz = 60;
+void mtl_link_set_rate(int hz) { atomic_store(&g_link_hz, hz < 30 ? 30 : hz > 120 ? 120 : hz); }
+static CAFrameRateRange link_range(int mode) {
+    float hz = (float)atomic_load(&g_link_hz);
+    return mode == 3 ? CAFrameRateRangeMake(30, 30, 30) : mode == 2 ? CAFrameRateRangeMake(60, 120, 120) : CAFrameRateRangeMake(hz, hz, hz);
+}
 static int g_link_mode = 1;   // Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
 static void *link_main(void *arg) {   // Display link thread: started when switching to display-link mode, exits when switching back to 0
     (void)arg;
@@ -5982,14 +5988,17 @@ static void *link_main(void *arg) {   // Display link thread: started when switc
     return NULL;
 }
 static void link_sync(void) {   // Called every frame by the game's present thread: aligns the display link object's state to g_dm_present_link and the power-saving mode (can change at run time)
-    static int applied;
+    static int applied, applied_hz = 60;
     if (g_rescue_mode && now_ns() >= g_rescue_back_at) {   // rescue period over: try the display link again (stall timing restarts, so the old stall does not trigger another rescue at once)
         pthread_mutex_lock(&g_pq_mu); g_dm_present_link = g_rescue_mode; g_rescue_mode = 0; g_stall_t0 = 0; g_link_tick_ns = now_ns(); pthread_mutex_unlock(&g_pq_mu);
         MLOG("display link: rescue period over, back to pacing mode %d (frame %llu)", g_dm_present_link, (unsigned long long)atomic_load(&g_cur_frame)); }
     int want = g_dm_present_link;
     if (want < 0 || want > 2) { g_dm_present_link = applied == 3 ? 1 : applied; return; }
     if (want && mtl_fps_target() == 30) want = 3;   // Power-saving mode: display link at 30 Hz
-    if (want == applied) return;
+    int hz = atomic_load(&g_link_hz);
+    if (want == applied && (want != 1 || hz == applied_hz || !g_link)) return;
+    if (want == applied) { g_link.preferredFrameRateRange = link_range(want); MLOG("display link rate %d → %d Hz (frame %llu)", applied_hz, hz, (unsigned long long)atomic_load(&g_cur_frame)); applied_hz = hz; return; }
+    applied_hz = hz;
     g_link_mode = want;
     if (!g_link_started) {
         if (!want) { applied = 0; return; }

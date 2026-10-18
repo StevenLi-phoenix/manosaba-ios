@@ -1445,6 +1445,8 @@ static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic cl
     mach_wait_until(mach_absolute_time() + (dl - now) * tb.denom / tb.numer);
 }
 // Present is fixed at 60 Hz: the adaptive mechanism stepped down at frame 60 in 24/24 real-device logs and never came back up, so for this phase 60 fps is the hard floor.
+// DM_PRESENT_HZ=30..120 sets the rate one present interval stands for (the display link ticks at it): only for a game whose step follows the measured
+// frame time (Tears of the Kingdom with its real-time frame step, games/totk/frame_step.c); a game that steps per frame runs at rate / 60 speed.
 // DM_PRESENT_HZ=0 (uncapped frame rate) serves only as an explicit performance profiling switch: some of the game's UI logic counts frames (with the same save, uncapped gives
 // 4181 SaveIndicatorPanel entries and capped at 60 fps gives 0, which matches the ground truth), so uncapped is a semantically wrong way to run and must not be used as a criterion / cross-check / default. Unit tests set it directly with nvn_present_config
 static int g_hz = -1, g_display_mode;
@@ -1454,6 +1456,8 @@ static void present_cfg(const win_t *o) {
     // With a window the default is still display interval mode; without a window the default is game mode. Environment variables can override the fixed 60 Hz.
     int scr = mtl_display_hz();
     const char *e = getenv("DM_PRESENT_HZ"); g_hz = e ? atoi(e) : 60;
+    if (g_hz > 0 && (g_hz < 30 || g_hz > 120)) { LOG("[nvn] [red] DM_PRESENT_HZ=%d outside 30..120: 60", g_hz); g_hz = 60; }
+    if (g_hz > 0) { void mtl_link_set_rate(int hz); mtl_link_set_rate(g_hz); }
     if (!g_hz) LOG("[nvn] [warning] DM_PRESENT_HZ=0: uncapped frame rate, frame pacing differs from a real device and UI logic may diverge (for performance profiling only; not valid for criteria / cross-checks)");
     // Cut (intentional deviation from the original game's behavior): with DM_PRESENT_INTERVAL=display the present interval set by the game is not followed and one frame is presented per display-link tick,
     // with a fixed hard floor of 60 fps; the logic stays at 25 ticks, and the client's frame-counted UI logic is unaffected -
@@ -1463,7 +1467,7 @@ static void present_cfg(const win_t *o) {
     // as fast in display mode: game.json present_interval "game" keeps the game's interval with a window too
     const char *m = getenv("DM_PRESENT_INTERVAL"); g_display_mode = m ? !strcmp(m, "display") : scr > 0 && !dm_game.present_game_interval;
     LOG("[nvn] present rate %d Hz, interval mode %s (game-set present interval %d; %s)", g_hz, g_display_mode ? "display (one frame per tick, cut)" : "game (original semantics)", o->interval,
-        scr > 0 ? (dm_game.present_game_interval && !m ? "window, fixed 60 Hz, game.json present_interval game" : "window, fixed 60 Hz") : "no window, fixed 60 Hz");
+        scr > 0 ? (dm_game.present_game_interval && !m ? "window, game.json present_interval game" : "window") : "no window");
 }
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);
@@ -1472,7 +1476,9 @@ static uint64_t present_period(const win_t *o) {
 }
 int (*g_nvn_loadscreen_up)(void);   // optional game hook: is a loading screen up right now (waits for the pipeline warm-up there; marks long frames hidden behind it)
 __attribute__((weak)) void dm_movie_tick(void) {}   // host hle_movie.c: hands paced movie frames over, one per game frame; none in the graphics unit tests
+__attribute__((weak)) void dm_game_present(void) {}   // game hook (host/game.h): every present, on the game's thread; none in the graphics unit tests
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
+    dm_game_present();
     dm_movie_tick();   // before the core is given away: it signals the game's movie events (guest code)
     NVN_BLOCKING();
     (void)q; win_t *o = (win_t *)w; o->presents++;
