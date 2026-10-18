@@ -256,9 +256,99 @@ ticks as the game's interval (30 fps). game.json `window_unfocused` "in_focus" k
   `t_nvn` 5a checks the dirty byte, the JUMP in used, a host segment surviving an overlapping window and its reuse once its JUMP is
   overwritten; each fails with the old code.
 
+**The first cutscene (2026-10-18):** after the tutorial the game plays its first pre-rendered cutscene, `Event/Movie/DmT_OP_GanonWakeUp_PreRender.webm`,
+and crashed: `Extractor::SetDataSource(path)` was not implemented (only the stream-reader source Unity uses), and the game went on to call
+`nn::os::LockMutex` on +0x178 of a null object (main+0x2b45c68 → sdk+0x13f5b8). The 28 movies in `Event/Movie` are WebM with one VP9 track (1920x1080, 30 fps,
+no sound track: the game plays the cutscene's sound itself). Now:
+- `SetDataSource(path)` opens the guest path in place through the fs mount table (`dm_fs_host_file`), and `movie_av.m` hands EBML files to a
+  WebM / Matroska demuxer (`host/movie_webm.c`, element layout from RFC 9559 and RFC 8794; every block is indexed when the file is opened and
+  read from the mapped file);
+- a VP8 / VP9 decoder decodes the bytes the game sends with libvpx, with MacNativeGames' behaviour and pacing (NV12 output described as
+  MediaCodec does, the format change with the first frame, at most one frame per game frame on the guest clock, late frames dropped when the game
+  runs below the movie's rate so the picture keeps time with the sound). The game ignores both outputs of GetOutputBufferSize (main+0x2b44d68);
+  the second is the alignment (SDK docs), 256. Status codes follow the SDK's `movie/Status.h`. libvpx comes from Homebrew and is linked
+  statically when installed (`host/Makefile`); the iOS app has no VP9 decoder yet;
+- `t_movie` (host tests) encodes VP9 with libvpx, muxes a WebM with a Void element, a BlockGroup with a ReferenceBlock and an unknown-sized
+  Cluster, and checks extraction (bytes, times, sync flags, seek), decoding (NV12 values exact, events, end of stream, output format) and pacing
+  (one frame per game frame at 30 fps; at 10 fps late frames are dropped and the picture keeps time); each fails with its fault put back.
+  `t_movie <file>` probes a real movie: all 6421 frames of the Ganon cutscene decode without an error, 1.0 ms per frame;
+- the player draws with an NV12 → RGB shader (`nv12decode`) from agl's `agl_common.sharcb`, which the extractor did not read:
+  `engines/bnsh/shader_extract.py` now reads the sharcb archives (12 in TotK: agl, gsys, Terrain, application; layout in the script),
+  2478 more shaders, among them 141 that had come only from run-time captures (all byte-identical) and 20 of the 27 that were missing in the
+  first play session (all 27 were captured by `DM_SHDUMP` there). The capture holds 27077 shaders and the library was rebuilt from it: 27075
+  translate; SPIRV-Cross fails on two of the new ones (a vertex shader of `AglShader.sharcb`, "nullptr", and a compute shader of
+  `agl_technique_pfx.sharcb` using subgroup builtins where SPIRV-Cross does not allow them), neither of which has run so far. `c1_guard`: 49
+  shaders whose c1 index is not proven bounded (47 before).
+
+**After the movie (2026-10-19):** with the picture there, the game stayed black after the Ganon movie's last frame (30 fps, two draws a frame,
+for good). Its player (main+0x2b43xxx) sends every input buffer it can take back with the end-of-stream flag once the extractor is at the end
+(main+0x2b45338), and its decoder thread waits with `WaitAny` on holders linked quit, input, output, format (main+0x2b44690). We handed each
+end-of-stream input straight back with input available, so input was always signalled, `WaitAny` always returned the input holder and the
+output handler (main+0x2b45564), which takes the end-of-stream output and sets the player's end flag (+0x708, read by main+0x2b43ba8), never
+ran: a `sample` of the stuck process had 2377 samples in the input handler and none in the output handler. The library's codec does not hand
+input back after the end: ACodec's `postFillThisBuffer` (subsdk0 0x2bd214) returns at once while the input port is at end of stream (+0x248, set
+in `onInputBufferFilled`). Now the end-of-stream input and every input after it stay in the decoder until Flush / Reset / Configure (MacNativeGames
+hands them back as we did). `t_movie` (31 checks): after the end of stream, inputs sent back stay, no input event, Flush gives all four back; the
+first fails with the old code. Played: the Ganon movie and the first blood moon movie end and the game goes on.
+
+**60 / 90 fps (2026-10-19):** from MacNativeGames' `game_patches_v143.c` (MIT; their seven controller words and their real-time step method),
+in our rules and host:
+- `games/totk/rules.py` CUTS: the seven words of the frame-rate controller (main 0x2db174) that lower its minimum interval from 2 to 1. The
+  controller still raises the interval to 2 or 3 when frames do not fit.
+- Real-time step: the game's step was 60 / (the controller's fps) at its two producers (0x2daa54: ratio, stored at 0x3a22128; 0x3e5638: ticks
+  before a 0.5 / 1 selector). New rewriter rule kind `HOSTREFS` (`tools/patch_nso.py`): instructions that address a 16 KiB writable host page
+  after the key page (fixups `HOST_PAGE_OFF`, only in modules that use it; the others keep their layout byte for byte), resolved into cuts so
+  structck / equiv check them as cuts. The producers now load ratio (+0 = seconds × 30) and ticks (+4 = seconds × 60) from main's page;
+  MacNativeGames puts a veneer at 0x3e5658, we do the same in place (x9 free between 0x3e562c and 0x3e5644). `games/totk/frame_step.c` writes the
+  mean of the last five present intervals on the guest clock (each 1/120 .. 1/15 s; above 0.25 s or below 1 ms restarts) at every present
+  (new game hook `dm_game_present`); `DM_FRAME_STEP_MS` pins it. The loader reads `HOST_PAGE_OFF` (`dm_host_page`).
+- `DM_PRESENT_HZ=30..120`: the display link (mode 1) now ticks at the present rate, so one present interval is 1 / that rate.
+- `games/totk/check_frame_rate.py <product> <main NSO>` (17 checks): the controller run in Unicorn reaches interval 1 on 10 ms frames, 2 on 25 ms,
+  3 on 40 ms and back, sys+0x250 = 60 / interval; the original main never picks 1 (negative control); both producers read the page (the original
+  computes 60 / 30 and ignores it); `tests/t_frame_step.c` (the mean, the clamps, the page layout). `verify/regress.sh` OK (main cuts 16).
+- The product with these rules is `work/build/totk/product60` (`host/dmhost work/build/totk/product60`); the default product was left at 30 fps
+  while the blood moon crash below is open. A 75 s prologue run: interval 1, frame time p50 16.8 ms.
+
+**Flicker in the dive from the Great Sky Island (2026-10-19):** many objects flickered while falling from the first cliff, and some frames were
+wrong over the whole screen (rock walls in front of the camera, a flat ground). Repro: a manual save at the cliff edge, the dive scripted with
+`DM_KEYS="A@26.5,A@31,A@35,LSU@f1380+240,X@f1400"`, and `DM_NVN_LIVEROWS=<file>` (16 rows of every presented picture; a present that differs
+from both neighbours more than they differ from each other is a wrong frame): wrong frames at presents ~1719 / 1893 / 1913 in two of four runs.
+- Ruled out by measurement, with probes since removed: occlusion queries (every samples-passed report forced large: still wrong frames; the
+  occlusion table that replaced a 256-entry ring stays, it is right but was not the cause), CALLs of re-recorded command memory (each recording's
+  hash checked at every CALL: 0 mismatches), sync waits that time out (none), GPU lag across frames (the previous frame had completed at every
+  submit), the present waiting for the GPU (wrong frames with it on).
+- Cause: `DM_NVN_GPUWATCH=<first>-<last>` copies the uniform ranges a submission binds at its commit and compares them when it completes: in the
+  dive 1041 (frame 1814), 662 (1817), 128 (1895) and 197 (1915) ranges changed meanwhile, 0 in the other frames, all vertex stage slot 4, 256
+  bytes (the objects' transforms). Once a frame is submitted the game's workers rebuild those per-object constant pools; on the console the GPU
+  has read them by then, here the submit replays for 11-17 ms first. MacNativeGames found the same (main+0x87a604 from main+0x874f50, "rock walls
+  while jumping"; their `usnap`). (A first, page-granular version of the watch also flagged pages that main+0x8cbbf4 writes next to the ranges.)
+- Fix (method from MacNativeGames' usnap, MIT, written anew in `gfx/nvn/nvn_mtl.m` `mtl_sub_snapshot`): when a submission starts, every uniform
+  range it binds is copied into its argument arena (ranges up to 256 bytes apart in one pool merged, at most 1 MiB, each at its offset modulo
+  256); uniform bindings (graphics and compute) and replay-time reads (`pend_read`, `ubo_float`) use the copy. A GPU write within the submission
+  (inline update, buffer copy, texture-to-buffer copy, a writable storage buffer, the storage buffer table c0) drops the copies it reaches from
+  then on; a range a GPU write of an earlier submission still running reaches is not copied. `DM_NVN_UBO_SNAPSHOT=0` reads live memory. Cost in
+  the dive: ~12,200 bindings in ~1,200 copies, 2.4 MB, 0.9 ms per submission on the submit thread (MacNativeGames copies on helper threads).
+- Checks: `gfx/tests/t_usnap.m` (29, also in run-m3): a draw reads the bytes of the submit call although the CPU rewrites them during the replay,
+  and the rewritten ones with snapshots off (negative control); after an inline update the draws before it read the copy, those after it the
+  update; merging and alignment; a running GPU write keeps its range out. In the game, snapshots off: wrong frames at presents 1719 and 1893, 707
+  changed ranges read from memory at frame 1814; three runs with snapshots (one with the present not waiting): no wrong frame, the ranges that
+  changed (866 / 529 / 723 at frames 1814 / 1815 / 1817) all read from the copies, none from memory. Frame times unchanged (30 fps, p50 33.3 ms).
+- Diagnostics kept: `DM_NVN_GPUWATCH=<first>-<last>` (above), `DM_NVN_LIVEROWS=<file>` (window play: finds single wrong frames without pausing the
+  game) and `DM_NVN_LIVESHOT=<first>,<count>:<path with %d>` (those presents in full).
+- Lesson: MacNativeGames' `nvn_mtl.m` describes this symptom and its fix in the comment above its `usnap`, and the clone was at hand. Search the
+  references for a symptom (its words, the game, the area of code) before building probes; then measure to confirm the cause here.
+
+**Open (2026-10-19):** after skipping the second blood moon movie (`DmT_SY_BloodyMoonDarkZelda`, stopped at frame 233) the game crashed 3 s later in
+its resource control thread (0x1006, loop main+0x154bd0, which names `ClearCachesForKeepAllocSize` / `Unload(ForSync)`): main+0xa2ef08 reads the
+resource at +0x28 of a binder of type 0xe (+0xc) after waiting for it (`WaitLightEvent` at 0xa2ee2c) and +0x28 is null; registers name
+`Obj_TreeWhiteBirch…`. The SDK's `WaitLightEvent` trusts a 0 result of `WaitForAddress`, and our address arbiter only returns 0 from
+`SignalToAddress`. Not reproduced yet. The thread dump now marks the thread that writes it, and `DM_CRASH_MEM` takes `*xN` (one dereference).
+Also seen: `nn::os::WaitForAddress(long const*, long)` (sdk 0x146fb0) uses arbitration type 3 (64-bit wait if equal), which svc 0x34 treats
+as type 0; main and subsdk0 do not import it. The vertex shader `1eee2726aae7493e` (SPIRV-Cross "nullptr") is now drawn with.
+
 Known gaps: two 4x4 textures are re-uploaded every frame (the CPU rewrites their pages; MacNativeGames hashes small textures instead); alpha
 test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn (red line); GPUs without BC
-(iOS) do not get the BC render target path; 60 fps needs MacNativeGames' real-time step and controller patches; iOS needs `DM_CACHE` and the
+(iOS) do not get the BC render target path; iOS needs `DM_CACHE` and the
 large heap; hid six-axis is a stub. Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
 `DM_NVN_TEXSNAP` (ordered on the replay's encoder, `@WxH` and ranges), `DM_NVN_TEXNZ`, `DM_NVN_TEXCLASS`, `DM_NVN_REUPLOG`; the pass dump prints
 cull / depth range / index type, the inline uniform data, the first vertices and the counters seen by conditional rendering. Run after

@@ -102,6 +102,9 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool
   buffer, the inline-uniform ring and per-stage vertex shader padding, credited in the code.
 - **tomodachi-native** (kuosuko, MIT), a fork of nxnative: the variant of the duplicated colour slot handling that keeps the slot the pass writes.
+- **MacNativeGames** (ly05010419, MIT), a Tears of the Kingdom port on the same lineage: which RomFS files hold the shaders, virtual cores, clears
+  drawn as quads, BC render targets through an auxiliary texture, storage buffers addressed from uniform buffers, stale texture views, and the
+  behaviour and pacing of the VP9 movie decoder, ported by hand and credited in the code.
 - **LASRecomp** (hjqcan, MIT): its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled
   textures of Tears of the Kingdom.
 - **LibHac** (Alex Barney, MIT): reads NSP, XCI and NCA containers in `tools/game_extract`.
@@ -109,6 +112,7 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
 - **deko3d** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c`.
 - **nvn.h** (h1k421, MIT): NVN declarations in `gfx/nvn/include/nvn.h`.
 - **bcdec** (iOrange, MIT or Unlicense): BC texture decoding.
+- **libvpx** (WebM Project, BSD-3-Clause): VP8 / VP9 movie decoding, linked statically from Homebrew when installed.
 - Tools: SPIRV-Cross, XcodeGen, .NET, Capstone, Unicorn, lz4, UnityPy, hactool, nxdumptool, libimobiledevice.
 
 ## License
