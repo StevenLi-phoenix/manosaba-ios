@@ -192,6 +192,13 @@ int main(void) {
     EXPECT("buffer copy 64 B all equal", 0, memcmp(src, dst, 64));
     uint64_t ts[2]; memcpy(ts, cnt, 16);
     EXPECT("TIMESTAMP report: counter half 0, timestamp half non-zero (NVN: the counter value is always zero)", 1, ts[0] == 0 && ts[1] != 0);
+    {   // Counter timestamps run on the guest clock (the system tick's base; here the weak default, mach_absolute_time): Tears of the Kingdom subtracts
+        // its frame's start tick from the last report's timestamp. On CLOCK_MONOTONIC they were ahead by the Mac's total sleep time (25 hours here)
+        uint64_t tns = P(nvnDeviceGetTimestampInNanoseconds)(&dev, (const NVNcounterData *)cnt), now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        uint64_t cur = P(nvnDeviceGetCurrentTimestampInNanoseconds)(&dev);
+        EXPECT("TIMESTAMP report on the guest clock: written in the last 5 s, current timestamp on the same clock", 1,
+               tns <= now + 1000 && now - tns < 5000000000ull && cur + 1000 >= now && cur - now < 1000000000ull);
+    }
 
     // 5b. Sync must hold the CPU back: first queue 24 copies of 64 MiB to keep the GPU busy, with the last one copying src to dst;
     //     the CPU rewrites src only after the fence wait returns. If the wait is released early, that last copy reads the rewritten src.
@@ -205,10 +212,13 @@ int main(void) {
         P(nvnCommandBufferBeginRecording)(&cb);
         for (int i = 0; i < 24; i++) P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)busy_a, (NVNbufferAddress)busy_b, big, 0);
         P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)bsrc, (NVNbufferAddress)bdst, big, 0);
+        uint64_t *tsr = (uint64_t *)(busy_a + 4096); tsr[0] = tsr[1] = 0x1111111111111111ull;   // a TIMESTAMP report after the busy copies (inside the pool, not copied over)
+        P(nvnCommandBufferReportCounter)(&cb, NVN_COUNTER_TYPE_TIMESTAMP, (NVNbufferAddress)tsr);
         NVNcommandHandle hb2 = P(nvnCommandBufferEndRecording)(&cb);
         NVNsync sb; P(nvnSyncInitialize)(&sb, &dev);
         uint64_t t0 = now_ns();
         P(nvnQueueSubmitCommands)(&q, 1, &hb2); P(nvnQueueFenceSync)(&q, &sb, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
+        uint64_t ts_early = tsr[1], cnt_early = tsr[0];
         int w0 = P(nvnSyncWait)(&sb, 0);
         int w1 = P(nvnSyncWait)(&sb, 10000000000ull);
         double ms = (now_ns() - t0) / 1e6;
@@ -218,6 +228,10 @@ int main(void) {
         EXPECT("zero-timeout wait right after submit = timeout(2)", 2, w0);
         EXPECT("long wait = satisfied(1)", 1, w1);
         EXPECT("dst all pre-rewrite values (16384 places sampled)", 0, bad);
+        // A report's timestamp appears only when the GPU has run it (Tears of the Kingdom read a timestamp written at replay as "the GPU is past
+        // this point" and its frames alternated); its counter half is written in command order (conditional rendering compares it at replay)
+        EXPECT("TIMESTAMP report while the GPU is busy: counter half 0, timestamp half not written yet", 1, cnt_early == 0 && ts_early == 0x1111111111111111ull);
+        EXPECT("TIMESTAMP report after the wait: timestamp written", 1, tsr[1] != 0x1111111111111111ull);
         P(nvnMemoryPoolFinalize)(&hp); free(heap);
     }
 
@@ -423,6 +437,68 @@ int main(void) {
         EXPECT("RENDER_IF_EQUAL on equal values cleared, the clear with rendering off was discarded (blue)", 0, bad2);
         EXPECT("TIMESTAMP_TOP report wrote 0 into the counter half", 0, (long long)X[0]);
         P(nvnTextureFinalize)(&tc); P(nvnTextureFinalize)(&td); P(nvnMemoryPoolFinalize)(&cp2);
+    }
+
+    // 6c3. Clears a load action cannot do: a scissored colour clear, a channel-masked clear, a scissored depth clear and one with a partial stencil
+    //      mask (drawn as a triangle, nvn_mtl.m clear_quad / clear_ds_quad); they had been dropped, and the depth one had cleared the whole plane
+    {
+        static uint8_t qm[256 << 10] __attribute__((aligned(16384)));
+        NVNmemoryPoolBuilder qpb; NVNmemoryPool qp; P(nvnMemoryPoolBuilderSetDefaults)(&qpb); P(nvnMemoryPoolBuilderSetStorage)(&qpb, qm, sizeof qm);
+        P(nvnMemoryPoolInitialize)(&qp, &qpb);
+        NVNtextureBuilder b; NVNtexture tc, tz; P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b);
+        P(nvnTextureBuilderSetWidth)(&b, 8); P(nvnTextureBuilderSetHeight)(&b, 4); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8);
+        P(nvnTextureBuilderSetStorage)(&b, &qp, 0); P(nvnTextureInitialize)(&tc, &b);
+        P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_DEPTH24_STENCIL8); P(nvnTextureBuilderSetStorage)(&b, &qp, 0x10000); P(nvnTextureInitialize)(&tz, &b);
+        const float red[4] = {1, 0, 0, 1}, green[4] = {0, 1, 0, 1}, blue[4] = {0, 0, 1, 1};
+        const NVNtexture *rt[1] = {&tc};
+        P(nvnCommandBufferBeginRecording)(&cb);
+        P(nvnCommandBufferSetRenderTargets)(&cb, 1, rt, NULL, &tz, NULL);
+        P(nvnCommandBufferSetScissor)(&cb, 0, 0, 8, 4);
+        P(nvnCommandBufferClearColor)(&cb, 0, red, NVN_CLEAR_COLOR_MASK_RGBA);
+        P(nvnCommandBufferClearDepthStencil)(&cb, 1.0f, 1, 0x0f, 0xff);
+        P(nvnCommandBufferSetScissor)(&cb, 0, 0, 4, 2);
+        P(nvnCommandBufferClearColor)(&cb, 0, green, NVN_CLEAR_COLOR_MASK_RGBA);                   // top left 4x2 only
+        P(nvnCommandBufferClearDepthStencil)(&cb, 0.25f, 1, 0, 0);                                // depth of the top left 4x2 only
+        P(nvnCommandBufferSetScissor)(&cb, 0, 0, 8, 4);
+        P(nvnCommandBufferClearColor)(&cb, 0, blue, NVN_CLEAR_COLOR_MASK_B_BIT);                  // blue channel only, everywhere
+        P(nvnCommandBufferClearDepthStencil)(&cb, 0.0f, 0, 0xf0, 0x30);                           // stencil bits 4-5 only: depth untouched
+        NVNcommandHandle hq = P(nvnCommandBufferEndRecording)(&cb);
+        P(nvnQueueSubmitCommands)(&q, 1, &hq); P(nvnQueueFinish)(&q);
+        NVNcopyRegion all = {0, 0, 0, 8, 4, 1}; uint8_t g[8 * 4 * 4]; float z[8 * 4];
+        P(nvnTextureReadTexels)(&tc, NULL, &all, g); P(nvnTextureReadTexels)(&tz, NULL, &all, z);   // a GPU-written depth-stencil texture reads back its depth as float (Depth32Float_Stencil8); stencil is not readable here
+        int badc = 0, badz = 0;
+        for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) { int i = y * 8 + x, in = x < 4 && y < 2;
+            badc += g[i * 4] != (in ? 0 : 255) || g[i * 4 + 1] != (in ? 255 : 0) || g[i * 4 + 2] != 255;
+            badz += z[i] != (in ? 0.25f : 1.0f); }
+        EXPECT("scissored colour clear: green only in the top left 4x2; blue-channel clear: B = 255 everywhere, R / G kept", 0, badc);
+        EXPECT("scissored depth clear: 0.25 only in the top left 4x2, 1.0 elsewhere; the stencil-only clear left depth alone", 0, badz);
+        P(nvnTextureFinalize)(&tc); P(nvnTextureFinalize)(&tz); P(nvnMemoryPoolFinalize)(&qp);
+    }
+
+    // 6c4. A BC4 texture as a render target through an RGBA16UI view (one texel = one 8-byte block, as Tears of the Kingdom encodes BC4 on the GPU): the pass
+    //      draws into an auxiliary texture and the blocks land in the BC4 texture (nvn_mtl.m blk_aux); the attachment used to be left out
+    {
+        static uint8_t bm[64 << 10] __attribute__((aligned(16384)));
+        NVNmemoryPoolBuilder bpb; NVNmemoryPool bp; P(nvnMemoryPoolBuilderSetDefaults)(&bpb); P(nvnMemoryPoolBuilderSetStorage)(&bpb, bm, sizeof bm);
+        P(nvnMemoryPoolInitialize)(&bp, &bpb);
+        NVNtextureBuilder b; NVNtexture t4; P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b);
+        P(nvnTextureBuilderSetWidth)(&b, 8); P(nvnTextureBuilderSetHeight)(&b, 8); P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGTC1_UNORM);
+        P(nvnTextureBuilderSetStorage)(&b, &bp, 0); P(nvnTextureInitialize)(&t4, &b);
+        NVNtextureView vw; P(nvnTextureViewSetDefaults)(&vw); P(nvnTextureViewSetFormat)(&vw, NVN_FORMAT_RGBA16UI);
+        const NVNtexture *rt[1] = {&t4}; const NVNtextureView *rv[1] = {&vw};
+        const float blk[4] = {0x1234, 0x5678, 0x9abc, 0xdef0};   // the 8 bytes of every block: 34 12 78 56 bc 9a f0 de
+        P(nvnCommandBufferBeginRecording)(&cb);
+        P(nvnCommandBufferSetRenderTargets)(&cb, 1, rt, rv, NULL, NULL);
+        P(nvnCommandBufferSetScissor)(&cb, 0, 0, 8, 8);
+        P(nvnCommandBufferClearColor)(&cb, 0, blk, NVN_CLEAR_COLOR_MASK_RGBA);
+        NVNcommandHandle hb = P(nvnCommandBufferEndRecording)(&cb);
+        P(nvnQueueSubmitCommands)(&q, 1, &hb); P(nvnQueueFinish)(&q);
+        NVNcopyRegion all = {0, 0, 0, 8, 8, 1}; uint8_t g[2 * 2 * 8]; memset(g, 0, sizeof g);
+        P(nvnTextureReadTexels)(&t4, NULL, &all, g);
+        static const uint8_t want[8] = {0x34, 0x12, 0x78, 0x56, 0xbc, 0x9a, 0xf0, 0xde}; int bad = 0;
+        for (int k = 0; k < 4; k++) bad += memcmp(g + 8 * k, want, 8) != 0;
+        EXPECT("BC4 render target through an RGBA16UI view: all 4 blocks hold the cleared 8 bytes", 0, bad);
+        P(nvnTextureFinalize)(&t4); P(nvnMemoryPoolFinalize)(&bp);
     }
 
     // 6d. Lifecycle: in-flight GPU work is 0 when suspend returns; submits are blocked during suspend and let through after resume

@@ -128,6 +128,17 @@ static uint64_t query_case(int reordered, int mode) {
     const char *names[]={"query","same_interval_query","later_reset_overrides_query"};
     save_raw(names[mode],reordered,q,sizeof q); mtl_pool_del(c.p); free(c.p); return q[0];
 }
+// Counting starts inside a pass that began without it (a draw, then the reset, then the counted draw on the same target): the pass is split so the
+// counted draw has a visibility buffer (it had counted nothing: Tears of the Kingdom's 256x144 occluder pass resets after its first draw)
+static uint64_t midpass_query_case(void) {
+    tex_t a=texture(8,1,0); chain c=make_chain(); uint64_t q[2]={UINT64_MAX,0}, type=NVN_COUNTER_TYPE_SAMPLES_PASSED;
+    stencil(&c,0,8,1,255,255,0); blending(&c,0); clear(&c,&a,0,NULL,0,0,0); draw_prog(&c,0,0);
+    emit(&c,OP_RESET_COUNTER,&type,8); draw_prog(&c,0,0);
+    uint64_t report[2]={type,(uint64_t)q}; emit(&c,OP_REPORT_COUNTER,report,sizeof report); emit(&c,OP_END,NULL,0);
+    state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); mtl_exec(c.p);
+    EXPECT("mid-pass query completed",1,mtl_wait(mtl_sub_commit(),5000000000ull));
+    mtl_pool_del(c.p); free(c.p); return q[0];
+}
 static void uniform_case(int reordered,uint8_t pixels[256]) {
     void *mem=NULL; if(posix_memalign(&mem,getpagesize(),getpagesize())) abort(); memset(mem,0,getpagesize());
     float red[4]={1,0,0,1},green[4]={0,1,0,1}; memcpy(mem,red,16); mtl_pool_add(mem,getpagesize());
@@ -252,6 +263,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     }
     uint64_t q0=query_case(0,0),q1=query_case(1,0); EXPECT("reset, original interval 4x4 samples passed",16,q0); EXPECT("across reset negative 4x4+8x8 samples passed",80,q1);
     EXPECT("query lifetime cannot be treated as independent",all_independent?1:0,q0==q1);
+    EXPECT("counting started mid-pass: the 8x8 draw after the reset counts 64 samples",64,midpass_query_case());
     uint8_t u0[256],u1[256]; uniform_case(0,u0); uniform_case(1,u1); uniform_pixels("UB original order first draw red",u0,255,0,0,255); uniform_pixels("across UB write first draw green",u1,0,255,0,255);
     EXPECT("UB write cannot be moved across draws",all_independent?1:0,!memcmp(u0,u1,256));
     for(int array=0;array<2;array++) { const char *name=array?"whole_slice_range":"whole_mip_range"; printf("CASE %s\n",name);

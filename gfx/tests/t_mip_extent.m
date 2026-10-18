@@ -83,8 +83,17 @@ static void colour_case(const char *name,int lv,int sc,int clear_only,int slot,i
     else {h_nvnCommandBufferBindProgram(&r.cb,(const NVNprogram *)&colour_pg,3);h_nvnCommandBufferDrawArrays(&r.cb,NVN_DRAW_PRIMITIVE_TRIANGLES,0,3);}
     finish(&r);NSUInteger pre_w,pre_h;rt_dims(&pre_w,&pre_h);EXPECT("pre-check first target selected width upper bound",W[lv],pre_w);EXPECT("pre-check first target selected height upper bound",H[lv],pre_h);
     if(sc!=3||!clear_only){EXPECT("actual pass effective width",w,g_pass.tw);EXPECT("actual pass effective height",h,g_pass.th);}
-    colour_check(name,&t,lv,clear_only?(sc==3?0:1):2,w,h,sc==3);
+    colour_check(name,&t,lv,clear_only?1:2,w,h,sc==3);   // a clear honours the scissor (the partial one is drawn as a triangle: nvn_mtl.m clear_quad; it used to be dropped)
     if(mrt)colour_check("MRT_unwritten_attachment",&other,-1,0,0,0,0);
+}
+// A draw with no colour and no depth target (NVN rasterizes it; side effects go through storage buffers / images): a pass of the scissor's size
+// without attachments (Tears of the Kingdom draws one under a 1x1 scissor); it used to be dropped ("none of the render targets ...")
+static void attachless_case(void) {
+    recording r=begin();h_nvnCommandBufferSetRenderTargets(&r.cb,0,NULL,NULL,NULL,NULL);h_nvnCommandBufferSetScissor(&r.cb,0,0,3,2);
+    h_nvnCommandBufferBindProgram(&r.cb,(const NVNprogram *)&depth_pg,1);uint64_t d0=g_stat_draw,p0=g_stat_pass;
+    h_nvnCommandBufferDrawArrays(&r.cb,NVN_DRAW_PRIMITIVE_TRIANGLES,0,3);finish(&r);
+    EXPECT("attachmentless: the draw was encoded",1,g_stat_draw-d0);EXPECT("attachmentless: one pass",1,g_stat_pass-p0);
+    EXPECT("attachmentless pass width from the scissor",3,g_pass.tw);EXPECT("attachmentless pass height from the scissor",2,g_pass.th);
 }
 static void plane_case(const char *name,int stencil,int clear_only) {
     tex_t t=make_tex(8,6,4,stencil?NVN_FORMAT_DEPTH32F_STENCIL8:NVN_FORMAT_DEPTH32F);seed(&t);recording r=begin();target(&r,&t,1,0,NULL,0,1);
@@ -112,9 +121,10 @@ int main(int argc,char **argv){@autoreleasepool{
     if(stencil_only){plane_case("stencil_only",1,0);EXPECT("existing stencil-only mode",3,g_enc_mode);EXPECT("stencil only, no depth attached",1,g_pass.hs&&!g_pass.hd);}
     else if(argc>1&&!strcmp(argv[1],"--default"))colour_case("default",1,0,0,0,0);
     else if(argc>1&&!strcmp(argv[1],"--oversized"))colour_case("oversized",1,2,0,0,0);
-    else {for(int lv=0;lv<4;lv++){char name[64];snprintf(name,sizeof name,"bounded_L%d",lv);colour_case(name,lv,1,0,0,0);
+    else {attachless_case();
+        for(int lv=0;lv<4;lv++){char name[64];snprintf(name,sizeof name,"bounded_L%d",lv);colour_case(name,lv,1,0,0,0);
             snprintf(name,sizeof name,"clear_L%d",lv);colour_case(name,lv,1,1,0,0);}
-        colour_case("partial_draw",1,3,0,0,0);colour_case("partial_clear_reject",1,3,1,0,0);colour_case("slot1_clear",1,1,1,1,0);
+        colour_case("partial_draw",1,3,0,0,0);colour_case("partial_clear_scissored",1,3,1,0,0);colour_case("slot1_clear",1,1,1,1,0);
         if(argc==1){colour_case("default",1,0,0,0,0);colour_case("oversized",1,2,0,0,0);colour_case("MRT_min",0,0,0,0,1);plane_case("depth",0,0);plane_case("stencil",1,0);plane_case("depth_clear",0,1);plane_case("stencil_clear",1,1);}}
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 }}

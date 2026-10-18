@@ -174,12 +174,11 @@ NVN(nvnDeviceRegisterFastClearDepth, NVNboolean, NVNdevice *d, float z) { (void)
 // Combined texture handle = texture ID | sampler ID << 20, the encoding of the separate handles; the replay layer takes the sampler from the high bits
 // of a texture slot where the shader needs one (nvn_mtl.m NVN_RB_SAMPT). From nxnative (seedds, MIT); TotK main 0x2d34cc
 NVN(nvnDeviceGetTextureHandle, NVNtextureHandle, const NVNdevice *d, int tex, int samp) { (void)d; return (NVNtextureHandle)((uint64_t)(uint32_t)tex | (uint64_t)(uint32_t)samp << 20); }
-// Counter timestamps are written by the replay layer as 19.2 MHz ticks of CLOCK_MONOTONIC (nvn_mtl.m gpu_ticks: ns × 12 / 625); these convert back to
-// and read the same clock, so a counter timestamp and the current time can be subtracted (nxnative found returning the raw ticks gave garbage)
+// Counter timestamps are written by the replay layer as 19.2 MHz ticks of the guest clock (nvn_mtl.m gpu_ticks: guest_ns × 12 / 625); these convert back to
+// and read the same clock, so a counter timestamp, the current time and the guest's system tick can be subtracted from each other (nxnative found
+// returning the raw ticks gave garbage; Tears of the Kingdom's frame-rate controller subtracts the system tick, see gpu_ticks)
 NVN(nvnDeviceGetTimestampInNanoseconds, uint64_t, const NVNdevice *d, const NVNcounterData *c) { (void)d; return c->timestamp * 625 / 12; }
-NVN(nvnDeviceGetCurrentTimestampInNanoseconds, uint64_t, const NVNdevice *d) {
-    (void)d; struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return ((uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec) * 12 / 625 * 625 / 12;
-}
+NVN(nvnDeviceGetCurrentTimestampInNanoseconds, uint64_t, const NVNdevice *d) { (void)d; return guest_ns() * 12 / 625 * 625 / 12; }
 // Separate texture / sampler handles: value = descriptor index (the sampler index goes in bit 20 and above, consistent with the bit layout of combined handles)
 NVN(nvnDeviceGetSeparateTextureHandle, NVNseparateTextureHandle, const NVNdevice *d, int id) { (void)d; return (NVNseparateTextureHandle){(uint64_t)id}; }
 NVN(nvnDeviceGetSeparateSamplerHandle, NVNseparateSamplerHandle, const NVNdevice *d, int id) { (void)d; return (NVNseparateSamplerHandle){(uint64_t)id << 20}; }
@@ -1208,7 +1207,12 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     return 1;
 }
 NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return ((const win_t *)w)->interval; }
-NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) { if (((win_t *)w)->interval != v) LOG("[nvn] game set present interval %d → %d", ((win_t *)w)->interval, v); ((win_t *)w)->interval = v; }
+__attribute__((weak)) void dm_backtrace(uint64_t fp) { (void)fp; }   // host crash.c (guest frame chain); none in the graphics unit tests
+// The caller is logged with the change: Tears of the Kingdom's frame-rate controller picks 2 (30 fps) or 3 (20 fps) itself
+NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) {
+    if (((win_t *)w)->interval != v) { LOG("[nvn] game set present interval %d → %d", ((win_t *)w)->interval, v); dm_backtrace((uint64_t)__builtin_frame_address(0)); }
+    ((win_t *)w)->interval = v;
+}
 NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
     win_t *o = (win_t *)w; int v[4] = {x, y, ww, hh};
     if (memcmp(o->crop, v, sizeof v)) LOG("[nvn] WindowCrop %d,%d %dx%d", x, y, ww, hh);
@@ -1229,6 +1233,7 @@ static uint64_t g_frame;
 static uint64_t g_acq_wait_ns, g_pq_wait_ns;   // Accumulated display-link wait / wait for the present queue to return inside acquire, recorded per frame at present (there can be several acquires within one frame)
 uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
+static int g_display_mode;   // present_cfg (tentative definition: the variable is defined with the present rate further down)
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     NVN_BLOCKING();
     win_t *o = (win_t *)w;
@@ -1240,7 +1245,8 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
         static uint64_t rt_period; uint64_t period = present_period(o);
         if (period && rt_period != period) { rt_period = period; set_time_constraint(period); }
         rt_comp_tick(period);
-        if (mtl_link_active()) { if (!mtl_link_wait_tick(period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the next display-link tick when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
+        if (mtl_link_active()) { void mtl_link_set_interval(int n); mtl_link_set_interval(g_display_mode ? 1 : o->interval);   // game interval mode: as many ticks as the interval (it waited one: 60 fps at interval 2, the game ran twice as fast)
+            if (!mtl_link_wait_tick(period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the next display-link tick when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
     } else {   // DM_DETCLOCK_PACE=1 (used by the screenshot gate): while the guest clock advances per frame, each frame's wall clock is no shorter than one step -- frame count and in-game time are deterministic, and the background loading thread has at least one step of wall clock available per frame;
                // When the machine is fully loaded frames only get slower and the background only gets more wall clock, so the picture captured at "the Nth frame after the message" is independent of load
@@ -1434,9 +1440,11 @@ static void present_cfg(const win_t *o) {
     // with a fixed hard floor of 60 fps; the logic stays at 25 ticks, and the client's frame-counted UI logic is unaffected -
     // with the same save and the same input, the UI message streams of the two modes match message by message. Proof (before character select): r9 game / display 60 ×3 / display 120 ×2, 6 groups in total, uicmp consistent
     // (the save indicator is exempted as a timing race), and the timing differences of key messages are within game mode's own noise band; proof after entering a run is still missing, pending action script coverage
-    const char *m = getenv("DM_PRESENT_INTERVAL"); g_display_mode = m ? !strcmp(m, "display") : scr > 0;
+    // A game whose step is per frame (Tears of the Kingdom: its controller picks interval 2 or 3 and every frame advances 1/30 or 1/20 s) runs twice
+    // as fast in display mode: game.json present_interval "game" keeps the game's interval with a window too
+    const char *m = getenv("DM_PRESENT_INTERVAL"); g_display_mode = m ? !strcmp(m, "display") : scr > 0 && !dm_game.present_game_interval;
     LOG("[nvn] present rate %d Hz, interval mode %s (game-set present interval %d; %s)", g_hz, g_display_mode ? "display (one frame per tick, cut)" : "game (original semantics)", o->interval,
-        scr > 0 ? "window, fixed 60 Hz" : "no window, fixed 60 Hz");
+        scr > 0 ? (dm_game.present_game_interval && !m ? "window, fixed 60 Hz, game.json present_interval game" : "window, fixed 60 Hz") : "no window, fixed 60 Hz");
 }
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);

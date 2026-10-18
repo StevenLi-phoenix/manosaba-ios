@@ -352,8 +352,12 @@ def reflect(key, stage, msl, res):
             off = b['cb_offset'] * 4 if b and b['cb_slot'] == 0 else None
             if stage == 'cs' and off is not None and 0x210 <= off < 0x310 and (off - 0x210) % 16 == 0:
                 e.update(kind='ubo_ptr', reg=(off - 0x210) // 16)   # compute-stage uniform slot r: address at c0[0x210 + 0x10 r], read through global memory (checked against cs_lut_combine_c reading cb10[66])
+            elif b and 3 <= b['cb_slot'] <= 16:
+                # The address (and size) is read from a uniform buffer the game binds: cb slot n = NVN uniform slot n − 3, at byte cb_offset × 4
+                # (MacNativeGames' "sbuf_ubo", ly05010419/MacNativeGames, MIT; 21 of Tears of the Kingdom's vertex shaders); the host reads it at bind time
+                e.update(kind='sbuf_ubo', reg=b['cb_slot'] - 3, off=b['cb_offset'] * 4)
             else: e['reg'] = (off - base) // 16 if off is not None and base is not None and 0 <= off - base < 0x100 and (off - base) % 16 == 0 else None
-            e['rw'] = bool(b and b['flags'] & 2)
+            e['rw'] = bool(b and b['flags'] & 1)   # Ryujinx BufferUsageFlags.Write = 1 << 0 (this tested bit 1, so no storage buffer was ever writable)
     return binds
 
 DRV_FILL = {0: [(0x110, 0x210), (0x310, 0x410), (0x510, 0x610)],   # c0: storage buffer address tables (vertex / compute / pixel, 16 slots × 0x10 each)
@@ -435,6 +439,19 @@ if os.path.exists(os.path.join(cap_dir, 'pairs.tsv')):
         _f = _ln.split()
         if len(_f) == 2 and not _ln.startswith('#'): PAIRS[_f[0]].add(_f[1])
 
+# Integer render targets: <capture dir>/fout.tsv, "<pixel key> <target> uint|sint" per line, written by the host when a pipeline failed because the
+# shader writes float to an integer colour attachment (nvn_mtl.m; DM_SHDUMP). The translator then declares that output integer and stores the
+# register bits unchanged (Ryujinx answers QueryGraphicsState's fragment output types from the render target formats the same way). Tears of the
+# Kingdom's BC4 encoder writes RGBA16UI. Part of the shader's cache key
+FOUT = collections.defaultdict(dict)
+if os.path.exists(os.path.join(cap_dir, 'fout.tsv')):
+    for _ln in open(os.path.join(cap_dir, 'fout.tsv')):
+        _f = _ln.split()
+        if _ln.startswith('#') or len(_f) != 3: continue
+        if not _f[1].isdigit() or not 0 <= int(_f[1]) < 8 or _f[2] not in ('uint', 'sint'): sys.exit(f'[red] fout.tsv: bad line {_ln.strip()!r}')
+        if FOUT[_f[0]].get(_f[1], _f[2]) != _f[2]: sys.exit(f'[red] fout.tsv: {_f[0]} target {_f[1]} is both uint and sint')
+        FOUT[_f[0]][_f[1]] = _f[2]
+
 def vs_pad_locs(key):
     """Locations the paired pixel shaders of a vertex shader read, from their built MSL (the vertex shader's own outputs are subtracted in vs_pad,
     once its MSL exists). Part of the vertex shader's cache key"""
@@ -513,12 +530,15 @@ def wave(wkeys):
         rec = CAP_RECS[key]
         pw = vs_pad_locs(key) if stage_of[key] == 'vs' else []
         digests[key] = shader_key(key, 'capture', rec) if not pw else hashlib.sha256((shader_key(key, 'capture', rec) + '\0pad\0' + ' '.join(map(str, pw))).encode()).hexdigest()
+        fo = FOUT.get(key) if stage_of[key] == 'ps' else None
+        if fo: digests[key] = hashlib.sha256((digests[key] + '\0fout\0' + ' '.join(f'{t}:{fo[t]}' for t in sorted(fo))).encode()).hexdigest()
         rule_fps[key] = hashlib.sha256(shader_rule_source('capture')).hexdigest()
         hit, cache_reasons[key] = cache_lookup(key, digests[key], rule_fps[key], CODE_FP)
         if hit: cache_hits.add(key)
         else:
             jobs[key], c1s[key] = job_for(key, rec, w)
             if pw: jobs[key]['pad_want'] = pw
+            if fo: jobs[key]['fout'] = dict(fo)
     misses = [key for key in wkeys if key not in cache_hits]
     chunks = [misses[i::NJ] for i in range(NJ)]
     def xl(ch):
@@ -554,7 +574,7 @@ ok = [r[3] for r in res if r[1] == 'ok']
 rd = [x for x in ok if x['drv_reads']]
 print(f'shaders reading driver banks at run time: {len(rd)} (c0 {sum("0" in x["drv_reads"] for x in rd)}, c2 {sum("2" in x["drv_reads"] for x in rd)}); reading what the replay layer cannot fill: {sum(bool(x["drv_unfillable"]) for x in ok)}')
 for e, n in collections.Counter(u for x in ok for u in x['drv_unfillable']).most_common(15): print(f'  unfillable {n:5d}  {e}')
-SLOTK = {'cbuf', 'samp', 'samp_tex', 'tex', 'img', 'tbuf', 'sbuf', 'ubo_ptr'}
+SLOTK = {'cbuf', 'samp', 'samp_tex', 'tex', 'img', 'tbuf', 'sbuf', 'ubo_ptr', 'sbuf_ubo'}
 noreg = [x for x in ok if any(b['kind'] in SLOTK and b.get('reg') is None for b in x['bindings'])]
 unk = [x for x in ok if any(b['kind'] == '?' for b in x['bindings'])]
 print(f'shaders with a binding without a slot: {len(noreg)}, with an unknown binding kind: {len(unk)} (loading them reports red)')

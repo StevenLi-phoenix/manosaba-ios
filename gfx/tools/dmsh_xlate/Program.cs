@@ -114,6 +114,10 @@ static class SwshXlate
                 false /* no Y flip */, true /* origin upper-left */, false);
         }
         public bool QueryHostSupportsTextureShadowLod() => true;
+        // Metal has no 64-bit floats ("'double' is not supported in Metal"): the translator's own DoubleToFloat pass runs double arithmetic as float and
+        // turns PackDouble2x32 / UnpackDouble2x32 into IEEE double <-> float helpers, so register pairs still hold double bits (Tears of the Kingdom's
+        // vertex shaders do DMUL / DFMA dot products on uniform data; 7 of them failed to compile)
+        public bool QueryHostSupportsShaderFloat64() => false;
         // Metal has no depth clip control: with the GL convention the translator remaps z itself (EmitterContext.PrepareForVertexReturn)
         public bool QueryHostSupportsDepthClipControl() => !_nearMinusW;
         // Job reduced = true: relaxed precision - the translator marks NoContraction only on operations that must be exact (the default marks all: keeps the bit-exact results of Maxwell's separate rounding, at the cost of many optimization-disabled spvFMul etc. in the MSL)
