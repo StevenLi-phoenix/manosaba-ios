@@ -15,7 +15,7 @@ import ast, inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tem
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
 cap_dir, out = sys.argv[1:3]; want = set(sys.argv[3:]); cache_root = out
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain, dmsh_fetch   # translation chain: the tools are checked against the lock file; output goes into b-<V>/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain, dmsh_fetch, dmsh_mtlcache   # translation chain: the tools are checked against the lock file; output goes into b-<V>/
 _bad = dmsh_chain.check_tools()
 if _bad: sys.exit('\n'.join('[red] translation chain tool differs from the lock file: ' + b for b in _bad) + '\n(after changing a tool: dmsh_chain.py --update-lock and commit it; if only the translator was not rebuilt: rebuild it)')
 CHAIN = dmsh_chain.version(); out = os.path.join(out, 'b-' + CHAIN)
@@ -31,7 +31,17 @@ XC = ['--msl', '--msl-version', '20300', '--msl-argument-buffers', '--msl-textur
 CAS = os.environ.get('DMSH_CAS', os.path.join(cache_root, 'cas'))
 CAS_LOCKS, CAS_LOCKS_GUARD = {}, threading.Lock()
 PRE_STATS = collections.Counter()
-MAC_RECORD = 'xcrun -sdk macosx metal -c; xcrun -sdk macosx metallib'
+# Metal compile convention (macOS; ios_metal.py has the iOS one with the same flags):
+# -fpreserve-invariance: vertex positions are marked [[invariant]], but without the flag Metal does not promise that two different shaders compute the
+#   same expression to the same value; on Maxwell the same multiply-adds always agree. A depth pre-pass drawn by one shader and a G-buffer drawn by
+#   another with depth test less-or-equal then failed on whole blocks (seedds/nxnative f1cc6be, MIT: Super Mario Odyssey's ground in 32x32 blocks)
+# -fmetal-math-mode=safe: no unsafe floating-point optimizations (the default, fast, broke the integer division a Tears of the Kingdom tile-light vertex
+#   shader does in float: MacNativeGames compiles every shader with MTLMathModeSafe, MIT)
+MAC_METAL = ['xcrun', '-sdk', 'macosx', 'metal', '-c', '-fpreserve-invariance', '-fmetal-math-mode=safe']
+MAC_RECORD = ' '.join(MAC_METAL) + '; xcrun -sdk macosx metallib'
+def mac_compile(msl, air, lib):   # the interface of ios_metal.compile
+    subprocess.run([*MAC_METAL, msl, '-o', air], check=True)
+    subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', air, '-o', lib], check=True)
 # c[2] handle tables of the game's NVN driver (game.json nvn_c2: {"tex": [base, slots], "samp": [...], "img": [...]}, bases as hex strings, 8 bytes
 # per slot). manosaba: textures 0x168, samplers 0x568, images 0x120 (inferred from cs_lut_combine_c writing u4 = 0x140, checked with u5 = 0x148);
 # Tears of the Kingdom: textures 0x20 (as nxnative for the games on the same SDK). Each translator job carries tex / img, each reflection all three.
@@ -45,13 +55,7 @@ TEX_BASE, TEX_END = C2['tex'][0], C2['tex'][0] + 8 * C2['tex'][1]
 SAMP_BASE, SAMP_END = C2['samp'][0], C2['samp'][0] + 8 * C2['samp'][1]
 IMG_BASE, IMG_END = C2['img'][0], C2['img'][0] + 8 * C2['img'][1]
 
-def clone(src, dst):
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    tmp = dst + '.tmp-' + str(os.getpid()) + '-' + str(threading.get_ident())
-    r = subprocess.run(['cp', '-c', src, tmp], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60)
-    if r.returncode:
-        shutil.copyfile(src, tmp)
-    os.replace(tmp, dst)
+def clone(src, dst): dmsh_mtlcache.clone(src, dst)   # APFS copy-on-write through the clonefile call (no cp process per file)
 
 def atomic_json(path, value):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -191,9 +195,8 @@ def fetch_finish(key, src, refl):
                 open(fmsl, 'w').write(fv)
                 fair = fmsl[:-6] + '.air'; flib = os.path.join(out, key + '_bf.metallib')
                 try:
-                    subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', fmsl, '-o', fair], check=True)
                     tmp_flib = flib + '.tmp-' + str(os.getpid())
-                    subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', fair, '-o', tmp_flib], check=True)
+                    mac_compile(fmsl, fair, tmp_flib)
                     os.replace(tmp_flib, flib)
                     ilib = None
                     if IOSOUT:
@@ -360,17 +363,23 @@ def reflect(key, stage, msl, res):
             e['rw'] = bool(b and b['flags'] & 1)   # Ryujinx BufferUsageFlags.Write = 1 << 0 (this tested bit 1, so no storage buffer was ever writable)
     return binds
 
-DRV_FILL = {0: [(0x110, 0x210), (0x310, 0x410), (0x510, 0x610)],   # c0: storage buffer address tables (vertex / compute / pixel, 16 slots × 0x10 each)
-            2: [(TEX_BASE, TEX_END), (SAMP_BASE, SAMP_END)]}         # c2: texture handle table, sampler handle table (nvn_c2)
+# What the replay layer fills of the driver segments, per stage (nvn_mtl.m drv_fill). c0: the storage buffer table (16 slots × 0x10) at 0x110 (vertex),
+# 0x310 (compute), 0x510 (pixel); compute also the dispatch size at 0x200 and the uniform buffer table at 0x210; the graphics stages the largest point
+# size at 0x610. c2: the texture and sampler handle tables (nvn_c2)
+DRV_FILL = {'vs': {0: [(0x110, 0x210), (0x610, 0x620)]}, 'cs': {0: [(0x200, 0x410)]}, 'ps': {0: [(0x510, 0x620)]}}   # whole vec4s (the rest of a vec4 reads 0)
+for _st in DRV_FILL: DRV_FILL[_st][2] = [(TEX_BASE, TEX_END), (SAMP_BASE, SAMP_END)]
+DRV_PREFIX = {'vs': 'vp', 'ps': 'fp', 'cs': 'cp'}   # spirv-cross names the segments <stage>p_c0 / <stage>p_c2
 
-def drv_reads(src):
-    """Reads of driver segments c0 / c2 in the MSL: constant index → byte range; non-constant indices are recorded as dynamic.
+def drv_reads(src, stage):
+    """Reads of driver segments c0 / c2 in the MSL of a shader of this stage: constant index → byte range; non-constant indices are recorded as dynamic.
+    (This scanned fragment-shader names only, fp_c0, so vertex and compute shaders reading c0 were given an all-zero segment: nxnative 9579030 /
+    MacNativeGames' drv_scan; in Tears of the Kingdom's library 229 vertex and 146 compute shaders)
     words = offsets of the 4-byte words actually read: an index followed by components (.x / .yz ...) records only those components, without components the whole vec4
     (c2's handle tables use 8 bytes per slot, not vec4-aligned: with manosaba's layout _m0[22].z = 0x168 is texture slot 0, counting by vec4 would falsely report 0x160)"""
     out = {}
     for bank in (0, 2):
         offs, words, dyn = set(), set(), False
-        for m in re.finditer(r'fp_c%d\)\._m0\[([^\]]+)\](\.[xyzw]{1,4}\b)?' % bank, src):
+        for m in re.finditer(r'%s_c%d\)\._m0\[([^\]]+)\](\.[xyzw]{1,4}\b)?' % (DRV_PREFIX[stage], bank), src):
             idx = m.group(1).rstrip('u')
             if not idx.isdigit(): dyn = True; continue
             o = int(idx) * 16; offs.add(o)
@@ -378,13 +387,23 @@ def drv_reads(src):
         if offs or dyn: out[str(bank)] = {'vec4_offsets': sorted(offs), 'words': sorted(words), 'dynamic': dyn}
     return out
 
-def unfillable(dr):
+def unfillable(dr, stage):
     bad = []
     for bank, d in dr.items():
         if d['dynamic']: bad.append(f'c{bank} dynamic index')
         for o in d['words']:
-            if not any(a <= o and o + 4 <= b for a, b in DRV_FILL[int(bank)]): bad.append(f'c{bank}+{o:#x}')
+            if not any(a <= o and o + 4 <= b for a, b in DRV_FILL[stage][int(bank)]): bad.append(f'c{bank}+{o:#x}')
     return bad
+
+def vs_init(src):
+    """Every float4 output of a vertex shader starts as (0, 0, 0, 1) before the translated body: on the hardware that is what an unwritten component
+    reads. The translator's source starts from out = {}, all zeros; an output written only in xyz (a world position) that the pixel shader divides by its
+    w then divided by 0 (seedds/nxnative e81d66f, MIT: Link's Awakening was in shadow everywhere outdoors). Components the body writes are overwritten"""
+    i = src.find('struct main0_out\n{\n'); j = src.find('\n};', i); k = src.find('main0_out out = {};')
+    if i < 0 or j < 0 or k < 0: return src
+    outs = re.findall(r'\n    float4 (\w+) \[\[user\(locn\d+\)\]\];', src[i:j])
+    k += len('main0_out out = {};')
+    return src[:k] + ''.join(f'\n    out.{n} = float4(0.0, 0.0, 0.0, 1.0);' for n in outs) + src[k:]
 
 RULES = []   # MSL rewrite rules attached by shader name (function, applicability test); the former dark-range remap toe has been removed (back to the original Switch brightness)
 # The first-stage code fingerprint does not include dmsh_fetch.py; readable-tile variants get a separate second-stage cache keyed on the generated MSL.
@@ -484,29 +503,24 @@ def finish(key, w, j, c1):
     if j['stage'] == 'vs' and j.get('pad_want'):   # outputs the paired pixel shaders read but this one does not write get (0, 0, 0, 1) (see vs_pad)
         src, pad = vs_pad(src, j['pad_want'])
         if pad: open(msl, 'w').write(src); res['notes'].append('outputs padded for the paired pixel shaders: locations ' + ' '.join(map(str, pad)))
+    if j['stage'] == 'vs':   # outputs start as (0, 0, 0, 1) (vs_init)
+        src = vs_init(src); open(msl, 'w').write(src)
     vi_locs = []
     if j['stage'] == 'vs':   # the variant goes into the compiled source only; everything below analyzes the original (src)
         vsrc, vi_locs = vi_variant(src)
         if vi_locs: open(msl, 'w').write(vsrc); res['notes'].append('integer vertex input variant main0_vi: locations ' + ' '.join(map(str, vi_locs)))
-    try:
-        subprocess.run(['xcrun', '-sdk', 'macosx', 'metal', '-c', msl, '-o', air], check=True)
-        tmp_lib = lib + '.tmp-' + str(os.getpid())
-        subprocess.run(['xcrun', '-sdk', 'macosx', 'metallib', air, '-o', tmp_lib], check=True)
-        os.replace(tmp_lib, lib)
+    try: MTL.compile('mac', msl, lib)   # an MSL compiled before takes that library (dmsh_mtlcache.py)
     except subprocess.CalledProcessError as e:
         return 'metal failed', str(e)[:160], None
     clone(msl, os.path.join(out, key + '_b.metal'))
     if IOSOUT:   # iOS: the same MSL goes through iOS's single compile convention (ios_metal.py) to produce an iphoneos metallib
-        ilib = os.path.join(IOSOUT, key + '_b.metallib')
-        try:
-            ios_metal.compile(msl, msl[:-6] + '.ios.air', ilib + '.tmp')
-            os.replace(ilib + '.tmp', ilib)
+        try: MTL.compile('ios', msl, os.path.join(IOSOUT, key + '_b.metallib'))
         except subprocess.CalledProcessError as e: return 'iOS metal failed', str(e)[:160], None
     entry = re.search(r'(vertex|fragment|kernel)\s+\S+\s+(\w+)\s*\(', src)
-    dr = drv_reads(src)
+    dr = drv_reads(src, j['stage'])
     refl = {'key': key + '_b', 'route': 'B', 'chain': CHAIN, 'dm_ctl': key, 'source': 'capture', 'stage': j['stage'],
             'entry': entry.group(2) if entry else 'main0', 'msl_entry_kind': entry.group(1) if entry else None,
-            'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'c2': C2, 'depth_mode': DEPTH, 'notes': res['notes'], 'drv_reads': dr, 'drv_unfillable': unfillable(dr),
+            'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'c2': C2, 'depth_mode': DEPTH, 'notes': res['notes'], 'drv_reads': dr, 'drv_unfillable': unfillable(dr, j['stage']),
             'bindings': reflect(key, j['stage'], src, res),
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
             'raster': raster_facts(j['stage'], src), 'vs_pad': pad}
@@ -519,6 +533,14 @@ keys = sorted(want) if want else sorted(CAP_RECS)
 NJ = int(os.environ.get('J', '8'))
 os.makedirs(out, exist_ok=True)
 w = tempfile.mkdtemp(prefix='dmsh_', dir=os.environ.get('WORK'))
+MTL = dmsh_mtlcache.Cache(os.path.join(CAS, 'metallib'), {'mac': ('macosx', MAC_RECORD, mac_compile), **({'ios': ('iphoneos', ios_metal.RECORD, ios_metal.compile)} if IOSOUT else {})}, w)
+# First take the libraries earlier chain versions left on disk: the b-*/ folders beside the output (iOS: the folder of the same name) and the roots
+# DMSH_PREFILL lists (<mac root>[=<iOS root>], separated by ':')
+for _spec in [cache_root + ('=' + os.path.dirname(IOSOUT) if IOSOUT else '')] + [x for x in os.environ.get('DMSH_PREFILL', '').split(os.pathsep) if x]:
+    _mac, _, _ios = _spec.partition('=')
+    for _b in sorted(os.listdir(_mac)) if os.path.isdir(_mac) else []:
+        if _b.startswith('b-') and os.path.realpath(os.path.join(_mac, _b)) != os.path.realpath(out):
+            for _ln in MTL.fill(os.path.join(_mac, _b), os.path.join(_ios, _b) if _ios else None): print(_ln, flush=True)
 jobs, c1s = {}, {}
 digests, rule_fps, cache_reasons, cache_hits = {}, {}, {}, set()
 xerr = {}
@@ -564,6 +586,7 @@ print(f'vertex shaders padded for their pixel shaders: {sum(1 for r in res if r[
 shutil.rmtree(w, ignore_errors=True)
 st = collections.Counter(r[1] for r in res)
 print(f'shaders {len(res)}: ok {st["ok"]}' + ''.join(f', {k} {v}' for k, v in st.items() if k != 'ok'))
+print(MTL.summary())
 print(f'shader cache: {PRE_STATS["hit"]} hits, {PRE_STATS["miss"]} rebuilt')
 for reason in ('new key', 'rule changed', 'code fingerprint changed: everything rebuilt'):
     if PRE_STATS[reason]: print(f'  {reason} {PRE_STATS[reason]}')

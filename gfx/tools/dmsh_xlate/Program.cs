@@ -157,7 +157,7 @@ static class SwshXlate
                         p = Translator.CreateContext(0, acc, new TranslationOptions(TargetLanguage.Spirv, TargetApi.Vulkan, flags)).Translate();
                     }
                 }
-                File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), p.BinaryCode);
+                File.WriteAllBytes(Path.Combine(outDir, key + ".spv"), VertexCounterLowering.Apply(code, (string)job["stage"], p.BinaryCode, acc.Notes));
                 var res = new JsonObject
                 {
                     ["key"] = key, ["stage"] = (string)job["stage"], ["notes"] = new JsonArray(acc.Notes.ConvertAll(n => (JsonNode)n).ToArray()),
@@ -175,5 +175,51 @@ static class SwshXlate
         }
         Console.WriteLine($"translated {ok}, failed {bad}");
         return bad == 0 ? 0 : 1;
+    }
+}
+
+// Tears of the Kingdom 1.4.3's visibility counter (one vertex shader, matched by the SHA-256 of its code: capture 1eee2726aae7493e): each invocation
+// that passes its test joins a subgroup ballot, and the highest active lane adds popcount(ballot) to s1[0]. SPIRV-Cross gives a Metal vertex function no
+// subgroup builtins ("Subgroup builtins are not available in this type of function"), so the shader never built and its draws were skipped. Lowered to
+// one-lane groups: lane id 0 and ballot(true) = (1, 0, 0, 0), so every passing invocation adds one; the atomic's result is unused, so the final sum
+// (mod 2^32) is the same. Not a general subgroup fallback: it runs only on these analysed bytes.
+// From MacNativeGames (games/totk/tools/totk_xlate/VertexCounterLowering.cs, MIT) as seedds/nxnative carries it (771f62f, MIT).
+static class VertexCounterLowering
+{
+    const string InstanceCodeHash = "F5F4D23149565ACD852F6B7091F64CC8CB3AA019CCB33BA3F88CED62C6D1FF7B";
+
+    internal static byte[] Apply(byte[] code, string stage, byte[] spirv, List<string> notes)
+    {
+        if (stage != "vs" || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(code)) != InstanceCodeHash) return spirv;
+        uint[] w = new uint[spirv.Length / 4]; Buffer.BlockCopy(spirv, 0, w, 0, spirv.Length);
+        uint lane = 0, uintType = 0, vectorType = 0, trueId = 0; int ballots = 0, loads = 0;
+        for (int i = 5; i < w.Length; i += (int)(w[i] >> 16))
+        {
+            uint op = w[i] & 65535;
+            if (op == 71 && w[i + 2] == 11 && w[i + 3] == 41) lane = w[i + 1];   // OpDecorate BuiltIn SubgroupLocalInvocationId
+            if (op == 21 && w[i + 2] == 32 && w[i + 3] == 0) uintType = w[i + 1];   // OpTypeInt 32 unsigned
+            if (op == 41) trueId = w[i + 2];   // OpConstantTrue
+            if (op == 339) { vectorType = w[i + 1]; ballots++; if (w[i + 4] != trueId) throw new InvalidOperationException("visibility counter: ballot predicate changed"); }   // OpGroupNonUniformBallot
+        }
+        if (lane == 0 || uintType == 0 || vectorType == 0 || ballots != 1) throw new InvalidOperationException("visibility counter: SPIR-V shape changed");
+        uint zero = w[3]++, one = w[3]++, mask = w[3]++;   // new ids past the bound
+        var result = new List<uint>(w.Length + 16); result.AddRange(w.AsSpan(0, 5).ToArray());
+        bool constants = false;
+        for (int i = 5; i < w.Length; i += (int)(w[i] >> 16))
+        {
+            uint op = w[i] & 65535;
+            if (op == 54 && !constants)   // before the first OpFunction: uint 0, uint 1, uvec4(1, 0, 0, 0)
+            {
+                result.AddRange(new uint[] { (4u << 16) | 43, uintType, zero, 0, (4u << 16) | 43, uintType, one, 1, (7u << 16) | 44, vectorType, mask, one, zero, zero, zero });
+                constants = true;
+            }
+            if (op == 61 && w[i + 3] == lane) { result.AddRange(new uint[] { (4u << 16) | 83, w[i + 1], w[i + 2], zero }); loads++; }   // OpLoad lane id -> OpCopyObject 0
+            else if (op == 339) result.AddRange(new uint[] { (4u << 16) | 83, w[i + 1], w[i + 2], mask });   // ballot(true) -> OpCopyObject (1, 0, 0, 0)
+            else result.AddRange(w.AsSpan(i, (int)(w[i] >> 16)).ToArray());
+        }
+        if (loads != 1 || !constants) throw new InvalidOperationException("visibility counter: lane id use changed");
+        notes.Add("visibility counter lowered to one-lane groups (one atomic add per passing vertex)");
+        byte[] output = new byte[result.Count * 4]; Buffer.BlockCopy(result.ToArray(), 0, output, 0, output.Length);
+        return output;
     }
 }
