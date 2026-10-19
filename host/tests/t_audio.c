@@ -1,5 +1,7 @@
 // hle_audio.c unit test (silent sink): 3 buffers of 100 ms each -> released in order at about 100/200/300 ms, each release triggering the event.
 // Expected values are computed directly from the sample rate and block length: 4800 frames / 48 kHz = 100 ms.
+// Host PCM output (the audio renderer's): dm_pcmout_wait returns when the first 100 ms block is released (90-115 ms after start), not a poll
+// interval later, and times out with 0 when nothing is playing.
 #include "../hle_audio.c"
 #include <time.h>
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
@@ -64,5 +66,17 @@ int main(void) {
     int sig2 = atomic_load_explicit(&g_sig, memory_order_acquire);
     int ok2 = got2 == 6 && order_ok && sig2 == 6 && total > 520;
     printf("pause / resume: released %d/6 in order=%d events %d (want 6), total at least 520 ms, got %.0f ms %s\n", got2, order_ok, sig2, total, ok2 ? "ok" : "FAIL");
-    return !ok2;
+
+    // Scenario 3: the host PCM output (silent sink) and dm_pcmout_wait
+    unsetenv("DM_AUDIO");
+    void *po = dm_pcmout_open(2); gbuf b3[2]; static int16_t pcm3[2][4800 * 2];
+    for (int i = 0; i < 2; i++) { h_au_SetBuf(&b3[i], pcm3[i], sizeof pcm3[i], sizeof pcm3[i]); dm_pcmout_append(po, &b3[i]); }
+    uint64_t t3 = now_ns(); dm_pcmout_start(po);
+    int w3 = dm_pcmout_wait(po, 1000000000); double ms3 = (now_ns() - t3) / 1e6; gbuf *r3 = dm_pcmout_released(po);
+    int ok3 = w3 == 1 && ms3 >= 90 && ms3 <= 115 && r3 == &b3[0];
+    printf("pcmout wait: returned %d after %.1f ms with block %ld released (want 1, 90-115 ms, block 0) %s\n", w3, ms3, r3 ? (long)(r3 - b3) : -1L, ok3 ? "ok" : "FAIL");
+    while (dm_pcmout_wait(po, 300000000)) if (dm_pcmout_released(po) == &b3[1]) break;   // the second block
+    int w4 = dm_pcmout_wait(po, 20000000);
+    printf("pcmout wait with nothing playing: %d after the 20 ms timeout (want 0) %s\n", w4, w4 == 0 ? "ok" : "FAIL");
+    return !ok2 || !ok3 || w4 != 0;
 }

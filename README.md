@@ -102,7 +102,7 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
 ## Acknowledgements
 
 - **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** ([jhaizhou](https://github.com/jhaizhou-ops), MIT): the architecture and most of
-  the host, graphics layer and verification tools.
+  the host, graphics layer and verification tools; later the controller mapping, silent no-ops reported, the per-program reflection summary.
 - **d2r-mobile contributors** [SepheTT](https://github.com/SepheTT) (buffer ↔ texture copy strides) and
   [BossaMelon](https://github.com/BossaMelon) (the declared launch screen).
 - **[nxnative](https://github.com/seedds/nxnative)** ([seedds](https://github.com/seedds), MIT) and **botw-mobile**
@@ -114,7 +114,9 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool buffer,
   the inline-uniform ring and per-stage vertex shader padding; later the autorelease pool for retired objects, the driver segment for vertex and
   compute shaders, clears on a left-out attachment slot, the growable dirty-range table, QueueFinish without present waits, two translator fixes,
-  vertex output defaults, invariance and the Metal compile cache; then precise SleepThread, credited in the code.
+  vertex output defaults, invariance and the Metal compile cache; then precise SleepThread, yield back-off (opt-in), targeted wakes, waits on
+  upload completion and buffer releases, a per-thread pool cache, the dirty range kept per texture, residency no-op skips, page runs, a spare
+  texture for re-uploads and VP9 row multithreading, credited in the code.
 - **[tomodachi-native](https://github.com/kuosuko/tomodachi-native)** ([kuosuko](https://github.com/kuosuko), MIT), a fork of nxnative: the
   variant of the duplicated colour slot handling that keeps the slot the pass writes.
 - **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** ([ly05010419](https://github.com/ly05010419), MIT), a Tears of the Kingdom

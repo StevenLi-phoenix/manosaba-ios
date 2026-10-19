@@ -29,6 +29,7 @@ typedef struct {
     int16_t *mixbuf;                   // 6-channel staging for the downmix (MIXMAX frames)
     pthread_t null_th; _Atomic int null_run;
     dispatch_semaphore_t notify_sem;
+    dispatch_semaphore_t rel_sem;      // signaled with every release batch: what dm_pcmout_wait blocks on (the audio renderer used to poll every millisecond)
     pthread_t notify_th; _Atomic int notify_run, notify_pending, notify_armed;
 } aout;
 
@@ -40,6 +41,7 @@ static int g_suspended;
 static aout *ao(const void *g) { aout *a = objmap_get(g); if (!a) die("AudioOut %p was not created by the host", g); return a; }
 
 static void notify_release(aout *a) {
+    dispatch_semaphore_signal(a->rel_sem);
     atomic_store_explicit(&a->notify_pending, 1, memory_order_release);
     if (atomic_exchange_explicit(&a->notify_armed, 1, memory_order_acq_rel) == 0)
         dispatch_semaphore_signal(a->notify_sem);
@@ -177,7 +179,7 @@ HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKN
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
     atomic_init(&a->null_run, 0); atomic_init(&a->notify_run, 1);
     atomic_init(&a->notify_pending, 0); atomic_init(&a->notify_armed, 0);
-    a->notify_sem = dispatch_semaphore_create(0);
+    a->notify_sem = dispatch_semaphore_create(0); a->rel_sem = dispatch_semaphore_create(0);
     pthread_create(&a->notify_th, NULL, event_notify, a);
     if (ev) hle_bind_system_event(ev, 1);   // Buffer release event: bind a kernel event on the guest thread (auto-clear), afterwards signaled by the audio thread
     objmap_put(g, a);
@@ -221,7 +223,7 @@ HLE_FORCE("_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE", "close the audio output
     for (int i = 0; i < AOMAX; i++) if (g_aos[i] == a) g_aos[i] = NULL;
     pthread_mutex_unlock(&g_aos_lock);
     if (a->au) { AudioUnitUninitialize(a->au); AudioComponentInstanceDispose(a->au); }
-    dispatch_release(a->notify_sem);
+    dispatch_release(a->notify_sem); dispatch_release(a->rel_sem);
     free(a->mixbuf); pthread_mutex_destroy(&a->m); free(a);
 }
 HLE_FORCE("_ZN2nn5audio16GetAudioOutStateEPKNS0_8AudioOutE", "playback state", int, h_au_State, const void *g) { return atomic_load_explicit(&ao(g)->state, memory_order_acquire); }
@@ -268,6 +270,9 @@ void *dm_pcmout_open(int ch) {
 void dm_pcmout_start(void *k) { h_au_Start(k); }
 int dm_pcmout_append(void *k, void *b) { return (int)h_au_Append(k, b); }
 void *dm_pcmout_released(void *k) { return h_au_Released(k); }
+// Block until the output releases a buffer or ns pass (nxnative e06a8ec's dm_pcmout_wait, MIT): 1 = something was released (take it with
+// dm_pcmout_released), 0 = timed out
+int dm_pcmout_wait(void *k, int64_t ns) { return dispatch_semaphore_wait(ao(k)->rel_sem, dispatch_time(DISPATCH_TIME_NOW, ns)) == 0; }
 
 // Front-end lifecycle / audio session interruption: suspend real audio output, with the silent sink taking over real-time consumption meanwhile (pacing unbroken); switch back to the AudioUnit on resume.
 // The front end calls with 1 on going to background / interruption began, and with 0 on returning to foreground / interruption ended (shouldResume).

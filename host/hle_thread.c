@@ -50,13 +50,15 @@ typedef struct thr {
     pthread_t pt; pthread_cond_t cv;
     // Current wait: kind 0=none 1=lock 2=condition 3=address 4=synchronization object
     int wkind, woke; uint64_t waddr, wkey; uint32_t wtag; int64_t wres;
-    uint32_t whs[8]; int whn;  // WaitSynchronization's handles (the first 8) and their count, for the thread dump (SkyRecomp's kernel dump does the same)
+    const uint32_t *whp; int whn;   // a blocked WaitSynchronization's handle array (guest memory, valid while it waits) and count: whom a signal wakes, and the thread dump
     uint64_t wseq;             // Sequence number of wait registration: at equal priority first come, first woken (same order as the Horizon kernel's KThread wait tree)
     struct thr *next;          // Wait chain
     struct thr *all;           // All-threads chain (for the state dump)
     int last_svc; uint64_t last_lr;
     int closed;                // Handle closed: the object is freed only when this holds together with exited (Horizon: the thread object goes away with the last reference)
     uint64_t nsvc;             // SVC count (for the state dump)
+    uint64_t nyield, nyield_seen, nbackoff, nbackoff_seen;   // yields and those the back-off turned into short sleeps, both at the last power line (dm_yield_top)
+    uint64_t yrun_svc, yrun_t0;   // the current run of yields: nsvc of its last yield and when it began (a run lasts while no other SVC comes between two yields)
     mach_port_t mport;         // Host thread port (to get CPU time)
     uint32_t qos;
     // Host context saved in thread_main before switching to the guest stack. ExitThread jumps back here before publishing the exit: the SDK unmaps
@@ -340,7 +342,7 @@ static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads cha
 }
 static const char *thr_name(thr_t *t, char *buf, size_t n);
 __attribute__((weak)) void wp_thread_start(void) {}   // diag.c (DM_WATCHPOINT, Mac) provides the real one; iOS and the unit tests link without it
-static void wake_sync_waiters(void);
+static void wake_sync_waiters(void *obj);
 // Publish the exit: record the time, mark exited and wake synchronization waiters. Once G is released a waiter may close the handle and free t,
 // and the guest may unmap the guest stack, so the caller must neither touch t nor run on the guest stack afterwards
 static void thread_publish_exit(thr_t *t) {
@@ -348,7 +350,7 @@ static void thread_publish_exit(thr_t *t) {
     pthread_mutex_lock(&G);
     core_put(t);
     t->exited = 1;
-    wake_sync_waiters();
+    wake_sync_waiters(t);
     pthread_setspecific(g_keythr, NULL);
     if (t->closed) thr_free(t);
     pthread_mutex_unlock(&G);
@@ -429,8 +431,15 @@ static int sig_obj(uint32_t h, int *bad) {    // 1 = signaled (holding G)
     default: *bad = 1; return 0;
     }
 }
-static void wake_sync_waiters(void) {
-    for (thr_t *w = g_wait; w; ) { thr_t *n = w->next; if (w->wkind == 4) wake(w, -1); w = n; }
+// A signaled event or an exited thread wakes only the WaitSynchronization waiters holding a handle to it (nxnative e06a8ec, MIT): it used to wake every
+// such waiter, each re-checking its handles and blocking again (holding G)
+static int waits_on(const thr_t *w, const void *obj) {
+    for (int i = 0; i < w->whn; i++) { unsigned x = w->whp[i] - 0x1000; if (x && x < MAX_H && g_h[x].obj == obj) return 1; }
+    return 0;
+}
+uint64_t g_sync_wakes;   // WaitSynchronization waiters woken by a signal or a thread exit (t_waitsync counts them)
+static void wake_sync_waiters(void *obj) {
+    for (thr_t *w = g_wait; w; ) { thr_t *n = w->next; if (w->wkind == 4 && waits_on(w, obj)) { wake(w, -1); g_sync_wakes++; } w = n; }
 }
 
 static int64_t now_mono_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000000000ll + ts.tv_nsec; }
@@ -550,7 +559,7 @@ void svc_thread_dump(void) {
                 g_keythr && t == pthread_getspecific(g_keythr) ? " ← the thread writing this dump (after a CRASH line: the one that crashed)" : "");
         if (t->wkind == 4 && t->whn > 0) {   // which objects a WaitSynchronization waits for, and whether each is signaled now (the address column is not used by it)
             char hl[400]; int q = 0;
-            for (int i = 0; i < t->whn && i < 8; i++) { uint32_t h = t->whs[i]; unsigned x = h - 0x1000; int ty = x && x < MAX_H ? g_h[x].type : O_FREE;
+            for (int i = 0; i < t->whn && i < 8; i++) { uint32_t h = t->whp[i]; unsigned x = h - 0x1000; int ty = x && x < MAX_H ? g_h[x].type : O_FREE;
                 const char *what = h == H_CUR_THREAD ? "current thread" : ty == O_THREAD ? (((thr_t *)g_h[x].obj)->exited ? "thread, exited" : "thread, running") :
                                    ty == O_EVENT_R ? (((event_t *)g_h[x].obj)->signaled ? "event, signaled" : "event, not signaled") : ty == O_EVENT_W ? "event write end (invalid here)" : "no such handle";
                 q += snprintf(hl + q, sizeof hl - q, "%s%#x (%s)", i ? ", " : "", h, what); if (q >= (int)sizeof hl) break; }
@@ -589,6 +598,32 @@ void svc_thread_dump(void) {
     }
 }
 
+// Yield back-off (nxnative e06a8ec, MIT), off unless DM_YIELD_BACKOFF=<cap in µs> (250 is nxnative's): on the Switch a yield with nothing else to run
+// costs nothing, but a guest loop that polls the tick and yields becomes a host busy spin (Three Houses yielded 228,105 times a frame on an iPhone;
+// there, Mac CPU energy 3.5 W -> 0.5 W at equal frame times). With it, a run of yields with no other SVC between them goes as plain yields for its
+// first 200 µs, then each yield sleeps an eighth of the run so far, 10 µs to the cap. Off by default because Tears of the Kingdom's prologue on an
+// M5 used more CPU energy with it (0.32-0.38 W against 0.21-0.29 W with plain yields, per 300 frames): the short sleeps raised wakeups from 585 to
+// about 2,700 a second and moved the work from efficiency to performance cores (19-29 % -> 70-94 % of CPU time), and one window ran at 44 ms p50
+static uint64_t yield_backoff_ns(uint64_t run_ns) {
+    static int64_t cap = -1; if (cap < 0) { const char *e = getenv("DM_YIELD_BACKOFF"); cap = e && *e ? atoll(e) * 1000 : 0; if (cap) LOG("DM_YIELD_BACKOFF: runs of yields back off to sleeps of at most %lld µs", (long long)(cap / 1000)); }
+    if (!cap || run_ns < 200000) return 0;
+    uint64_t s = run_ns / 8; if (s < 10000) s = 10000;
+    return s < (uint64_t)cap ? s : (uint64_t)cap;
+}
+// The two threads that yielded most since the last call (the power line every 300 frames, hle_nvn.c): "handle name N (back-off sleeps M)"
+void dm_yield_top(char *out, size_t n) {
+    thr_t *top[2] = {0}; uint64_t d[2] = {0}, b[2] = {0};
+    pthread_mutex_lock(&G);
+    for (thr_t *t = g_all; t; t = t->all) {
+        uint64_t y = t->nyield - t->nyield_seen, bo = t->nbackoff - t->nbackoff_seen; t->nyield_seen = t->nyield; t->nbackoff_seen = t->nbackoff;
+        if (y > d[0]) { top[1] = top[0]; d[1] = d[0]; b[1] = b[0]; top[0] = t; d[0] = y; b[0] = bo; } else if (y > d[1]) { top[1] = t; d[1] = y; b[1] = bo; }
+    }
+    size_t o = 0; char nb[32];
+    for (int i = 0; i < 2 && top[i] && o < n; i++)
+        o += snprintf(out + o, n - o, "%s%#x \"%s\" %llu (back-off sleeps %llu)", i ? ", " : "", top[i]->handle, thr_name(top[i], nb, sizeof nb), (unsigned long long)d[i], (unsigned long long)b[i]);
+    pthread_mutex_unlock(&G);
+    if (!o && n) snprintf(out, n, "none");
+}
 // SleepThread sleeps to its deadline in steps: macOS timer slack made one nanosleep of 5 ms take 6.17 ms and one of 33.3 ms 37.6 ms on this M5
 // (default QoS, mean of 60 / 20), and a game pacing itself with SleepThread ran slow (nxnative a9c56fd: Metroid Dread's 30 Hz sound thread drives its
 // cutscenes, 27 fps instead of 30). Each step sleeps three quarters of what is left, until within 20 µs: within 0.03 ms here
@@ -640,12 +675,21 @@ int svc_thread(int num, uint64_t *regs) {
             while (guest_ns() < deadline) { struct timespec ts = {0, 1000000}; nanosleep(&ts, 0); }
         } else if (ns > 0) sleep_precise(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + (uint64_t)ns);
         else {   // Yield (0 / -1 / -2). Count and time of the main thread's yields are recorded: the game's render task graph "wait for everything to finish" is pure polling + yield (main+0x15ee898); measure how much of a frame it takes
-            thr_t *me = pthread_getspecific(g_keythr); uint64_t y0 = me && me->handle == 0x1001 ? now_ns() : 0;
-            int give = 0;   // Horizon yield: the core goes to a waiting thread of equal or higher priority
-            if (me && me->cur_core >= 0) { pthread_mutex_lock(&G); for (thr_t *w = g_core_wait; w && !give; w = w->cnext) give = core_allowed(w, me->cur_core) && w->prio <= me->prio;
-                                           if (give) { core_put(me); core_take(me); } pthread_mutex_unlock(&G); }
-            if (!give) sched_yield();
-            if (y0) { g_main_yield_ns += now_ns() - y0; g_main_yield_n++; }
+            thr_t *me = pthread_getspecific(g_keythr); uint64_t y0 = me ? now_ns() : 0;
+            uint64_t bo = 0;
+            if (me) { me->nyield++; if (me->yrun_svc + 1 != me->nsvc) me->yrun_t0 = y0; me->yrun_svc = me->nsvc; bo = yield_backoff_ns(y0 - me->yrun_t0); }
+            if (bo) {   // a long run of yields: sleep a little, the virtual core given up meanwhile
+                me->nbackoff++;
+                if (me->cur_core >= 0) { pthread_mutex_lock(&G); core_put(me); pthread_mutex_unlock(&G); }
+                struct timespec ts = {0, (long)bo}; nanosleep(&ts, 0);
+                if (cores_enabled()) { pthread_mutex_lock(&G); core_take(me); pthread_mutex_unlock(&G); }
+            } else {
+                int give = 0;   // Horizon yield: the core goes to a waiting thread of equal or higher priority
+                if (me && me->cur_core >= 0) { pthread_mutex_lock(&G); for (thr_t *w = g_core_wait; w && !give; w = w->cnext) give = core_allowed(w, me->cur_core) && w->prio <= me->prio;
+                                               if (give) { core_put(me); core_take(me); } pthread_mutex_unlock(&G); }
+                if (!give) sched_yield();
+            }
+            if (me && me->handle == 0x1001) { g_main_yield_ns += now_ns() - y0; g_main_yield_n++; }
         }
         if (ns > 0 && self && cores_enabled()) { pthread_mutex_lock(&G); core_take(self); pthread_mutex_unlock(&G); }
         if (g_flag.bootprof) { uint64_t d = now_ns() - t0; dm_prof_add(PROF_SLEEP, d, 0); thr_t *me = pthread_getspecific(g_keythr); if (me && me->handle == 0x1001) dm_prof_add(PROF_MAIN_WAIT, d, 0); }
@@ -772,7 +816,7 @@ int svc_thread(int num, uint64_t *regs) {
         int64_t r = 0;
         if (!e) { r = (num == 0x17 && h_peek(h, O_THREAD)) ? R_BAD_STATE : R_BAD_HANDLE;
                   if (r == R_BAD_HANDLE) LOG("event SVC %#x: invalid handle %#x", num, h); }
-        else if (num == 0x11) { e->signaled = 1; wake_sync_waiters(); }
+        else if (num == 0x11) { e->signaled = 1; wake_sync_waiters(e); }
         else if (num == 0x17 && !e->signaled) r = R_BAD_STATE;
         else e->signaled = 0;
         pthread_mutex_unlock(&G);
@@ -794,7 +838,7 @@ int svc_thread(int num, uint64_t *regs) {
             if (t->cancel) { t->cancel = 0; r = R_CANCELLED; break; }
             int64_t left = ns < 0 ? -1 : deadline - (dm_detclock_enabled() ? (int64_t)guest_ns() : now_mono_ns());
             if (ns > 0 && left <= 0) { r = R_TIMEOUT; break; }
-            t->whn = n; memcpy(t->whs, hs, (size_t)(n < 8 ? (n > 0 ? n : 0) : 8) * sizeof *hs);
+            t->whp = hs; t->whn = n > 0 ? n : 0;
             int64_t br = block(t, 4, left);
             if (br == R_TIMEOUT) { r = R_TIMEOUT; break; }
             if (br == R_CANCELLED) { r = R_CANCELLED; break; }   // CancelSynchronization while blocked
@@ -859,6 +903,6 @@ void hle_signal_system_event(void *ev) {   // An unbound one is bound on the spo
     pthread_mutex_lock(&G);
     event_t *e = h_get(wh, O_EVENT_W);
     if (!e) die("SystemEvent writable handle invalid: %#x", wh);
-    e->signaled = 1; wake_sync_waiters();
+    e->signaled = 1; wake_sync_waiters(e);
     pthread_mutex_unlock(&G);
 }

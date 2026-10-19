@@ -2,6 +2,8 @@
 // content instead of write-protected pages (pkg_hashed), a texture ID's cached view survives generation steps for other serials (ser_unaffected) and,
 // for a texture that does not follow guest memory, guest writes (treg_kind / treg_stamp); nvn_dirty_state answers tracked + written in one lookup.
 // Negative controls: DM_NVN_CHECK_ONCE=0 and DM_NVN_PKG_HASH=0 fail the checks marked so.
+// A re-upload writes into the texture before the last one once no submission reads it (the spare), with the new content; a spare still in use is
+// not touched; a spare unused for PKG_SPARE_KEEP submissions is released.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -72,6 +74,24 @@ int main(void) { @autoreleasepool {
     EXPECT("... and its ID reads the new one", 1, by_id(30) == t2);
     sub_end();
     sub_begin(); EXPECT("not written: the next submission keeps it", 1, tex_mtl(&p) == t2); sub_end();
+    // 4b. The spare: t1 became the spare when t2 was uploaded; written again, the next re-upload writes into t1 (its submission has completed)
+    {   uint64_t r0 = g_pkg_spare_reuse;
+        sub_begin(); dm_guest_write_prepare(p.mem, p.size); fill(&p, 0x03000000); sub_end();
+        sub_begin(); id<MTLTexture> t3 = tex_mtl(&p); sub_end(); up_wait_zero(&g_up_pending);
+        EXPECT("4b. third upload: written into the spare (the first texture)", 1, t3 == t1 && g_pkg_spare_reuse - r0 == 1);
+        id<MTLCommandQueue> q = [g_dev newCommandQueue]; id<MTLBuffer> rb = [g_dev newBufferWithLength:64 * 32 * 4 options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cb = [q commandBuffer]; id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+        [be copyFromTexture:t3 sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 32, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 32];
+        [be endEncoding]; [cb commit]; [cb waitUntilCompleted];
+        static uint32_t lin[64 * 32]; int nz = 0; memcpy(lin, rb.contents, sizeof lin); for (int i = 0; i < 64 * 32; i++) nz += (lin[i] >> 24) == 3;
+        EXPECT("4b. ... holding the new content (every texel from the third fill)", 64 * 32, nz);
+        NvPkg *pk = (NvPkg *)serial_get(p.serial); pk->spare_fence = g_fence + 1000;   // as if a submission still read the spare (t2)
+        sub_begin(); dm_guest_write_prepare(p.mem, p.size); fill(&p, 0x04000000); sub_end();
+        uint64_t r1 = g_pkg_spare_reuse; sub_begin(); id<MTLTexture> t4 = tex_mtl(&p); sub_end();
+        EXPECT("4b. a spare still in use is not written: a new texture", 1, t4 != t2 && t4 != t3 && g_pkg_spare_reuse == r1);
+        uint64_t d0 = g_pkg_spare_drop;
+        for (int i = 0; i < PKG_SPARE_KEEP + 2; i++) { sub_begin(); sub_end(); }
+        sub_begin(); EXPECT("4b. not re-uploaded for PKG_SPARE_KEEP submissions: the spare is released", 1, tex_mtl(&p) == t4 && g_pkg_spare_drop - d0 == 1 && pk->spare == nil); sub_end(); }
     // 5. A small CPU-filled texture (8x8 RGBA8, 256 bytes): its pages are not write-protected; a change is found by its content at the next submission
     tex_t s = tex_new(7300, 8, 8, 0xC0000, 1); fill(&s, 0x03000000);
     sub_begin(); id<MTLTexture> s1 = tex_mtl(&s); sub_end();

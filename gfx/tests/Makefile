@@ -103,6 +103,10 @@ t_gputime: t_gputime.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_gputime.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_vfmt: t_vfmt.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vfmt.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_upwait: t_upwait.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upwait.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_poolcache: t_poolcache.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_poolcache.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_samp: t_samp.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_samp.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -131,6 +135,7 @@ run: \
 	t_pend \
 	t_pfv \
 	t_pool_find \
+	t_poolcache \
 	t_poolcheck \
 	t_present_crop \
 	t_present_fx \
@@ -153,6 +158,7 @@ run: \
 	t_ub \
 	t_ubren \
 	t_uppool \
+	t_upwait \
 	t_usnap \
 	t_vfmt \
 	t_ussort \
@@ -168,6 +174,7 @@ run: \
 	./t_cover
 	./t_copy_pitch
 	./t_pool_find
+	./t_poolcache
 	./t_poolcheck
 	./t_tex_auto
 	./t_d16clear
@@ -202,6 +209,7 @@ run: \
 	./t_chunk --no-chunks
 	MTL_DEBUG_LAYER=1 ./t_esfilter
 	./t_uppool
+	./t_upwait
 	MTL_DEBUG_LAYER=1 ./t_restart
 	MTL_DEBUG_LAYER=1 ./t_drvseg
 	MTL_DEBUG_LAYER=1 ./t_mip_extent

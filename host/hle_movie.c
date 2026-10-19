@@ -702,6 +702,10 @@ static void vx_reset_queues(vx_t *v) {
 static int vx_codec_init(vx_t *v) {
     vpx_codec_dec_cfg_t cfg = {.threads = 4, .w = (unsigned)v->w, .h = (unsigned)v->h};
     v->vpx_live = vpx_codec_dec_init(&v->vpx, v->type == DEC_VP9 ? vpx_codec_vp9_dx() : vpx_codec_vp8_dx(), &cfg, 0) == VPX_CODEC_OK;
+    // VP9 row multithreading (nxnative's hle_movie.c, MIT): rows of a tile decode in parallel, not only tiles (a 1080p movie has few tile columns).
+    // DM_VPX_ROW_MT=0 turns it off
+    static int row_mt = -1; if (row_mt < 0) { const char *e = getenv("DM_VPX_ROW_MT"); row_mt = !(e && !strcmp(e, "0")); }
+    if (v->vpx_live && v->type == DEC_VP9 && row_mt) vpx_codec_control(&v->vpx, VP9D_SET_ROW_MT, 1);
     return v->vpx_live;
 }
 static void vx_release(vx_t *v) {   // back to the created state

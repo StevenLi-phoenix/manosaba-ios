@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 module_t g_mod[MAX_MOD];
@@ -101,5 +102,30 @@ int main(void) {
     EXPECT("shared page: B no longer tracked after it is destroyed", 0, nvn_dirty_tracked(pb, tex));
     nvn_dirty_remove_range(pa);
     munmap(blk, 4 * pg);
+
+    // A host write over 8 protected pages unprotects them in one mprotect (it took one per page), and each page counts as written
+    {   uint8_t *m = mmap(NULL, 16 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); nvn_dirty_add_range(m, 16 * pg);
+        nvn_dirty_protect(m + 4 * pg, 8 * pg); uint64_t s0 = nvn_dirty_now(), c0, c1, pg0, pg1, ns;
+        nvn_dirty_mp_stats(&c0, &pg0, &ns);
+        dm_guest_write_prepare(m + 4 * pg, 8 * pg); memset(m + 4 * pg, 7, 8 * pg);
+        nvn_dirty_mp_stats(&c1, &pg1, &ns);
+        EXPECT("host write over 8 protected pages: mprotect calls", 1, c1 - c0);
+        EXPECT("... pages unprotected", 8, pg1 - pg0);
+        int all = 1; for (int k = 4; k < 12; k++) all &= nvn_dirty_since(m + k * pg, pg, s0);
+        EXPECT("... every page counts as written", 1, all);
+        nvn_dirty_protect(m + 4 * pg, 2 * pg); nvn_dirty_protect(m + 8 * pg, 2 * pg);   // two runs with an unprotected gap
+        nvn_dirty_mp_stats(&c0, &pg0, &ns); dm_guest_write_prepare(m + 4 * pg, 6 * pg); nvn_dirty_mp_stats(&c1, &pg1, &ns);
+        EXPECT("two protected runs with a gap: two mprotect calls", 2, c1 - c0);
+        EXPECT("... 4 pages unprotected", 4, pg1 - pg0);
+        // the range a texture lives in is remembered: one walk, then none; a removed and reused slot is found again
+        int hint = -1; uint64_t w0 = nvn_dirty_hint_walks(); uint64_t s1 = nvn_dirty_now();
+        EXPECT("hint: clean texture", 0, nvn_dirty_state_hint(m + 2 * pg, pg, s1, &hint));
+        EXPECT("... found by one walk", 1, nvn_dirty_hint_walks() - w0);
+        EXPECT("hint: checked again, no walk", 0, nvn_dirty_state_hint(m + 2 * pg, pg, s1, &hint) + (int)(nvn_dirty_hint_walks() - w0 - 1));
+        nvn_dirty_remove_range(m);
+        uint8_t *m2 = mmap(NULL, 4 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); nvn_dirty_add_range(m2, 4 * pg);   // likely the freed slot
+        EXPECT("hint after its pool is gone: not tracked", 2, nvn_dirty_state_hint(m + 2 * pg, pg, s1, &hint));
+        EXPECT("... and the hint is cleared", -1, hint);
+        nvn_dirty_remove_range(m2); munmap(m2, 4 * pg); munmap(m, 16 * pg); }
     return g_fail != 0;
 }

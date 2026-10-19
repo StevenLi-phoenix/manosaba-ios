@@ -64,6 +64,8 @@ static int busy_wait(range_t *r, uintptr_t p) {
     }
     return 1;
 }
+static _Atomic uint64_t g_hint_walks;   // nvn_dirty_state_hint calls that had to walk the ranges
+uint64_t nvn_dirty_hint_walks(void) { return atomic_load(&g_hint_walks); }
 static int live_at(int i) { return atomic_load_explicit(&rg(i)->live, memory_order_acquire); }
 // The registered range that holds all of [a, a+len) (a texture's tracking, protection and dirty check use it)
 static range_t *find_span(uintptr_t a, size_t len) {
@@ -95,14 +97,26 @@ static int on_fault(void *addr, int is_write, void *uc) {
         { range_t *r = rg(i); if (live_at(i) && a >= r->base && a < r->end) ours |= release_page(r, (a - r->base) >> g_shift, &g_faults); }
     return ours;
 }
+// Before a host write: the protected pages it covers become writable, consecutive ones in one mprotect (nxnative e06a8ec's release_pages, MIT;
+// a large host write used to take one call per page). Pages another thread is changing (BUSY) go through release_page, which waits for it
 static void prep_write(void *addr, size_t len) {
     uintptr_t a = (uintptr_t)addr, e = a + len; int n = atomic_load(&g_nr);
     if (!len) return;
     for (int i = 0; i < n; i++) {
         range_t *r = rg(i);
         if (!live_at(i) || e <= r->base || a >= r->end) continue;
-        uintptr_t lo = a > r->base ? a : r->base, hi = e < r->end ? e : r->end;
-        for (uintptr_t p = (lo - r->base) >> g_shift, q = (hi - 1 - r->base) >> g_shift; p <= q; p++) release_page(r, p, &g_preps);
+        uintptr_t lo = a > r->base ? a : r->base, hi = e < r->end ? e : r->end, run = 0; int open = 0;
+        for (uintptr_t p = (lo - r->base) >> g_shift, q = (hi - 1 - r->base) >> g_shift; p <= q + 1; p++) {
+            uint8_t st = PG_NONE; int took = p <= q && (st = PG_PROT, atomic_compare_exchange_strong(&r->state[p], &st, PG_BUSY));
+            if (took) { if (!open) { run = p; open = 1; } continue; }
+            if (open) {   // pages [run, p) are ours (BUSY): one mprotect, then each stamped and released
+                mp(r->base + (run << g_shift), (p - run) << g_shift, PROT_READ | PROT_WRITE);
+                uint64_t g = atomic_fetch_add(&g_now, 1) + 1;
+                for (uintptr_t k = run; k < p; k++) { atomic_store(&r->gen[k], g); atomic_store(&r->state[k], PG_NONE); }
+                atomic_fetch_add(&g_preps, p - run); open = 0;
+            }
+            if (p <= q && st == PG_BUSY) release_page(r, p, &g_preps);
+        }
     }
 }
 
@@ -185,6 +199,19 @@ int nvn_dirty_state(const void *addr, size_t len, uint64_t stamp) {   // one wal
     range_t *r = find_span((uintptr_t)addr, len);
     if (!r) return 2;
     return len && span_written(r, (uintptr_t)addr, len, stamp);
+}
+// nvn_dirty_state with the caller's remembered range (*hint: its slot, -1 at first; nxnative e06a8ec's nvn_dirty_span, MIT): a texture's storage
+// stays in one pool, so the walk over every range (about 3,000 in Tears of the Kingdom) is done once and later calls only check that the slot is still
+// live and still holds the span; a removed or reused slot falls back to the walk
+int nvn_dirty_state_hint(const void *addr, size_t len, uint64_t stamp, int *hint) {
+    uintptr_t a = (uintptr_t)addr; int n = atomic_load(&g_nr), h = *hint; range_t *r = NULL;
+    if (h >= 0 && h < n && live_at(h)) { range_t *c = rg(h); if (a >= c->base && a + len <= c->end) r = c; }
+    if (!r) {
+        for (int i = 0; i < n && !r; i++) { range_t *c = rg(i); if (live_at(i) && a >= c->base && a + len <= c->end) { r = c; *hint = i; } }
+        if (!r) { *hint = -1; return 2; }
+        atomic_fetch_add(&g_hint_walks, 1);
+    }
+    return len && span_written(r, a, len, stamp);
 }
 void nvn_dirty_slot_stats(int *live, int *used_slots, uint64_t *adds_total) {
     int n = atomic_load(&g_nr), active = 0;

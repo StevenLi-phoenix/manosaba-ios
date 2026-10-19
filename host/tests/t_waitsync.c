@@ -3,6 +3,7 @@
 // timed out, both keeping the flag, and only a wait that would block returns cancelled. A thread blocked in the wait when it is cancelled
 // returns cancelled and keeps no flag. (LASRecomp 1144aea found the order on the same symptom; ours checked the flag first.)
 // The thread dump lists the handles a blocked WaitSynchronization waits for, with each one's state (it showed only an unrelated address before).
+// A signal wakes only the waiters holding a handle to that event: two threads blocked on different events, signalling one wakes one (it woke both).
 #include "../dm.h"
 #include <pthread.h>
 #include <stdatomic.h>
@@ -11,6 +12,7 @@ int svc_thread(int num, uint64_t *regs);
 uint32_t svc_thread_main_init(void);
 void (*dm_test_cv_after_release)(void);   // DM_TEST_HOOKS (t_condvar uses it)
 void svc_thread_dump(void);
+extern uint64_t g_sync_wakes;
 static int n, fail;
 #define EXPECT(name, want, got) do { unsigned long long w_ = (want), g_ = (got); n++; printf("%-74s expected %#-8llx → got %#-8llx %s\n", name, w_, g_, w_ == g_ ? "✓" : "✗"); fail += w_ != g_; } while (0)
 enum { R_TIMEOUT = 0xEA01, R_CANCELLED = 0xEC01 };
@@ -18,6 +20,11 @@ static uint32_t g_th, g_rd; static _Atomic int g_waiting; static uint64_t g_bloc
 static uint32_t g_w2, g_r2, g_r3; static _Atomic int g_waiting2; static uint64_t g_idx2 = 9;
 static uint64_t wait1(uint32_t h, int64_t ns, uint64_t *idx) { uint64_t r[8] = {0, (uint64_t)&h, 1, (uint64_t)ns}; svc_thread(0x18, r); if (idx) *idx = r[1]; return r[0]; }
 static void cancel(uint32_t th) { uint64_t r[8] = {th}; svc_thread(0x19, r); }
+static uint32_t g_ea_w, g_ea_r, g_eb_w, g_eb_r; static _Atomic int g_blocked_ab;
+static void *waiter(void *a) {   // blocks on one event's read end until it is signaled
+    svc_thread_main_init(); uint32_t h = (uint32_t)(uintptr_t)a; uint64_t w[8] = {0, (uint64_t)&h, 1, (uint64_t)-1};
+    atomic_fetch_add(&g_blocked_ab, 1); svc_thread(0x18, w); return NULL;
+}
 static void *guest(void *a) {
     (void)a; g_th = svc_thread_main_init();
     uint64_t r[8] = {0}; svc_thread(0x45, r); uint32_t wr = (uint32_t)r[1]; g_rd = (uint32_t)r[2];
@@ -52,5 +59,15 @@ int main(void) {
     EXPECT("the dump names both awaited handles and their state", 1, strstr(dump, a) != NULL);
     uint64_t s2[8] = {g_w2}; svc_thread(0x11, s2);   // release the waiter
     pthread_join(t, NULL);
+    // targeted wakes: two waiters on two events; signalling A wakes one waiter, not both
+    { uint64_t r[8] = {0}; svc_thread(0x45, r); g_ea_w = (uint32_t)r[1]; g_ea_r = (uint32_t)r[2]; svc_thread(0x45, r); g_eb_w = (uint32_t)r[1]; g_eb_r = (uint32_t)r[2];
+      // (svc_thread_main_init remakes the thread key, so B registers only once A is inside its wait)
+      pthread_t ta, tb; pthread_create(&ta, NULL, waiter, (void *)(uintptr_t)g_ea_r); while (atomic_load(&g_blocked_ab) < 1) usleep(1000); usleep(20000);
+      pthread_create(&tb, NULL, waiter, (void *)(uintptr_t)g_eb_r); while (atomic_load(&g_blocked_ab) < 2) usleep(1000);
+      usleep(50000);
+      uint64_t w0 = g_sync_wakes; uint64_t sa[8] = {g_ea_w}; svc_thread(0x11, sa); pthread_join(ta, NULL);
+      EXPECT("signal event A: one waiter woken (B, waiting on event B, is not)", 1, g_sync_wakes - w0);
+      uint64_t sb[8] = {g_eb_w}; svc_thread(0x11, sb); pthread_join(tb, NULL);
+      EXPECT("signal event B: its waiter woken", 2, g_sync_wakes - w0); }
     printf("t_waitsync: %d checks, %d failed\n", n, fail); return fail != 0;
 }

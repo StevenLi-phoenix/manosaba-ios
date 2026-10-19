@@ -773,12 +773,18 @@ Tier 1, small and local. Correctness:
 - [x] batch 1 · 12 thread dumps list the handles of a WaitSynchronization with each one's state (`t_waitsync`)
 
 Tier 1, performance:
-- [ ] 13 busy-yield back-off releasing the virtual core, a power line every 300 frames
-- [ ] 14 targeted wakes; semaphores instead of the `usleep` polls
-- [ ] 15 replay lookups: per-thread pool cache, dirty range on the texture, residency no-op skip, `mprotect` over page runs
-- [ ] 16 a spare texture for re-uploaded CPU textures
-- [ ] 17 reflection summary per program, attachment events once per pass
-- [ ] 18 libvpx row multithreading
+- [x] batch 2 · 13 busy-yield back-off releasing the virtual core, a power line every 300 frames (`t_sleep`: 20 ms of yields 354 against 81,062
+  plain). Off by default, `DM_YIELD_BACKOFF=<µs>` turns it on: in Tears of the Kingdom's prologue on the M5 it cost energy (two runs, 0.27-0.38 W
+  against 0.23-0.24 W a 300-frame window; wakeups 2,700-3,800 against about 580 a second; the work moved to performance cores, and frames
+  2100-2400 fell to 23.5 / 25.4 fps both times). The power line shows manosaba at about 25,000 wakeups a second, all on performance cores: a
+  thing to look at
+- [x] batch 2 · 14 targeted wakes (`t_waitsync`); upload waits on a condition variable (`t_upwait`: 0.015 against 1.03 ms after completion); the audio
+  renderer blocks on buffer releases (`t_audio` scenario 3)
+- [x] batch 2 · 15 replay lookups: per-thread pool cache (`t_poolcache`), dirty range on the texture and `mprotect` over page runs (`t_dirty_slots`),
+  residency no-op skip (`t_poolcache`)
+- [x] batch 2 · 16 a spare texture for re-uploaded CPU textures, dropped after 120 submissions unused (`t_texcheck` 4b)
+- [x] batch 2 · 17 reflection summary per program, attachments walked once per pass (`t_zskip`)
+- [x] batch 2 · 18 libvpx row multithreading (`DM_VPX_ROW_MT=0` off): the Ganon movie 1.02-1.03 → 0.95 ms a frame, frames identical
 
 Tier 1, iOS and Mac:
 - [ ] 19 a Metal 4 launch check with a screen

@@ -24,6 +24,7 @@ void *dm_pcmout_open(int ch);
 void dm_pcmout_start(void *k);
 int dm_pcmout_append(void *k, void *b);
 void *dm_pcmout_released(void *k);
+int dm_pcmout_wait(void *k, int64_t ns);
 
 // P_SIZE: bytes of the game's AudioRendererParameter copied before the two fields are changed (SDK 16's struct is 0x38 bytes, SDK 8's has its
 // revision at +0x38; the SDK reads only its own size of the copy)
@@ -63,7 +64,7 @@ static void render_main(void *arg) {
         while (!nfree) {   // wait for the output to hand a buffer back (silent sink / sound card)
             gbuf *b = dm_pcmout_released(out);
             if (b) { free_list[nfree++] = b; break; }
-            usleep(1000);
+            dm_pcmout_wait(out, 5000000);   // until the output hands one back (5 ms: g_open is checked again)
             if (!atomic_load(&g_open)) return;
         }
         const int16_t *src; int got;

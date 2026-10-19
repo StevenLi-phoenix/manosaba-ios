@@ -30,7 +30,7 @@ static int run(int mode, int enabled, uint8_t px[256]) {
     float av = mode==2 ? 0.5f : 0.0f;
     set_rt(&c,&a,NULL,0); clear_color(&c,0,av,av,av); c.n -= 0;
     { p_clear_color *last=(p_clear_color *)(c.p + c.n - ((8+sizeof(p_clear_color)+7)&~7ull) + 8); last->rgba[3] = av; }   /* The clear_color helper fixes alpha at 1: here it is changed to match rgb (0 = all zeros) */
-    if (mode==3) { ds_off(&c); bind_prog(&c,&pg[0]); draw_cmd(&c); }
+    if (mode==3 || mode==5) { ds_off(&c); bind_prog(&c,&pg[0]); draw_cmd(&c); if (mode==5) { draw_cmd(&c); draw_cmd(&c); } }   /* 5: three draws into A in one pass */
     if (mode==1) copy_cmd(&c,&a,&c2);
     float bv = mode==4 ? 0.25f : 0.0f;
     set_rt(&c,&b,NULL,0); clear_color(&c,0,bv,bv,bv);
@@ -45,4 +45,6 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0);setenv("DM_NVN_TBD
     static const char *nm[5]={"positive (A cleared to 0)","propagation (A cleared to 0 → copied to C)","negative (A cleared to non-zero)","negative (A drawn to after being cleared to 0)","negative (B's clear value non-zero)"}; static const int want[5]={1,1,0,0,0};
     for(int m=0;m<5;m++){ run(m,0,off); n=run(m,1,on); char t1[96],t2[96]; snprintf(t1,sizeof t1,"%s: skip count",nm[m]); snprintf(t2,sizeof t2,"%s: on/off byte-identical",nm[m]);
         EXPECT(t1,want[m],n); EXPECT(t2,0,(uint64_t)(memcmp(on,off,256)!=0)); if(m==2) EXPECT("negative (A non-zero): B reads back non-zero",1,on[0]!=0); if(m==0) EXPECT("positive: B reads back all 0",0,on[0]|on[1]|on[2]|on[3]); }
+    { uint64_t w0 = g_udc_rt_walks; int n5 = run(5,1,on);   /* udc_note_draw walks a pass's attachments once, not per draw */
+      EXPECT("A drawn three times in one pass, then B drawn once: two attachment walks (one per pass)",2,g_udc_rt_walks-w0); EXPECT("... and A no longer counts as zero: no skip",0,n5); }
     printf("== %d checks, %d failed ==\n",count,fail); return fail!=0; }}
