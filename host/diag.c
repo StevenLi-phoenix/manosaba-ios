@@ -17,7 +17,7 @@ int crash_set_trap_hook(int (*fn)(ucontext_t *uc));
 
 // ---------- Probes DM_PROBE=module:offset[@x0 offset][,...] (Mac development only) ----------
 // Writes a brk into the guest code page at runtime and runs the original instruction from a trampoline afterwards. iOS cannot do this (signed code
-// pages are not writable, runtime code is not executable). On a hit: x0..x3 (with readable strings they point to), x19..x23, x8 and a backtrace.
+// pages are not writable, runtime code is not executable). On a hit: x0..x3 (with readable strings they point to), x9..x12, x19..x23, x8 and a backtrace.
 // @off prints 16 bytes at x0+off, @*off at *(x0+off). The trampoline borrows x16: probe only at function entries or where x16 is dead, and not on
 // PC-relative instructions (adr / adrp / b / bl / ldr literal / cbz ...).
 // DM_PROBE_DUMP=module:offset:length[:file] writes that guest memory to a file on the first probe hit. DM_THROWLOG=1 probes the SDK's __cxa_throw.
@@ -182,6 +182,7 @@ static int probe_hit(ucontext_t *uc) {   // SIGTRAP hook of crash.c
         if (g_probe[i].fn) { g_probe[i].hits++; g_probe[i].fn(uc); uc->uc_mcontext->__ss.__pc = (uint64_t)g_probe[i].slot; return 1; }
         fprintf(stderr, "[dm] PROBE %s #%u [%.4fs]", g_probe[i].name, ++g_probe[i].hits, (now_ns() - g_t0_ns) / 1e9);
         for (int r = 0; r < 4; r++) { uint64_t v = uc->uc_mcontext->__ss.__x[r]; fprintf(stderr, " x%d=%#llx", r, v); probe_str(v); }
+        for (int r = 9; r < 13; r++) fprintf(stderr, " x%d=%#llx", r, uc->uc_mcontext->__ss.__x[r]);   // (temporaries: a value the compiler keeps in w9-w12)
         for (int r = 19; r < 24; r++) fprintf(stderr, " x%d=%#llx", r, uc->uc_mcontext->__ss.__x[r]);
         { uint64_t x8 = uc->uc_mcontext->__ss.__x[8]; Dl_info di; fprintf(stderr, " x8=%#llx", x8);   // indirect call targets often sit in x8
           if (dladdr((void *)x8, &di) && di.dli_sname) fprintf(stderr, " (%s+%#lx)", di.dli_sname, (unsigned long)(x8 - (uint64_t)di.dli_saddr)); }

@@ -306,7 +306,8 @@ in our rules and host:
 - `games/totk/check_frame_rate.py <product> <main NSO>` (17 checks): the controller run in Unicorn reaches interval 1 on 10 ms frames, 2 on 25 ms,
   3 on 40 ms and back, sys+0x250 = 60 / interval; the original main never picks 1 (negative control); both producers read the page (the original
   computes 60 / 30 and ignores it); `tests/t_frame_step.c` (the mean, the clamps, the page layout). `verify/regress.sh` OK (main cuts 16).
-- The product with these rules is `work/build/totk/product60` (`host/dmhost work/build/totk/product60`); the default product was left at 30 fps
+- The product with these rules is `work/build/totk/product60` (`host/dmhost work/build/totk/product60`; `DM_RENDER_RES=<w>x<h>` sets its scene
+  render size, item 52 below); the default product was left at 30 fps
   while the blood moon crash below is open. A 75 s prologue run: interval 1, frame time p50 16.8 ms.
 - RomFS overlay for 60 fps and up (601258f): `work/build/cache/dm/venv/bin/python -I games/totk/romfs_overlay.py work/data/switch/totk-1.4.3/RomFS
   work/build/totk/romfs_overlay` builds it from the game's own RomFS (the quick menus' background was black at 60 fps; the game over menu would
@@ -965,7 +966,20 @@ Tier 3, medium:
   at random (222 commits, 22 kills after a commit not yet reported): every file one whole version, the last reported or the next; a commit that
   removes the committed save before cloning in its place (`-DDM_TEST_FS_COMMIT_INPLACE`) tears it 14 times of 60. `t_lifecycle_check.py`: 10
   checks; not comparing the guest clock fails 1. The home button and the app switcher themselves need UI automation on a phone (item 70)
-- [ ] 52 scene render resolution on 1.4.3 (`HOSTREFS`, a Unicorn check)
+- [x] batch 14 · 52 scene render size on 1.4.3, `DM_RENDER_RES=<w>x<h>` with the rules product (after MacNativeGames PR #19, merged
+  2026-10-19, MIT): main 0x585da0 reads the size from the graphics parameter into w11 / w10 and stores it as floats at renderer +0xcc4 /
+  +0xcc8, from which every scene target is sized. The four words of the PR checked in our main: 0x585e48 `scvtf s0, w11` → `adrp x17, host
+  page` (HOSTREFS), 0x585e50 → `ldp s0, s1, [x17, #16]`, 0x585e54 → `str s0, [x19, #0xcc4]`, 0x585e60 → `str s1, [x19, #0xcc8]` (CUTS). x17,
+  not the PR's x3: the function (0x585da0-0x586000, 152 instructions) uses neither, and x3 is an argument register of the calls after it. A
+  probe at 0x585e4c (now printing x9-x12) read the parameter once at boot: docked 1600x900 with w9 = 1920 output, handheld 1280x720 with 1280;
+  `games/totk/frame_step.c` writes that at host page +16 unless `DM_RENDER_RES` is set, so the rules product looks as before (its pass sizes
+  in one frame the same as the previous product60's). With 960x540 the scene passes are 960x536, 480x268, 240x134, the UI stays sharp; GPU
+  p50 5.93 against 6.30 ms in the window to frame 3600. Without the host's value (an older host) the scene is 0x0 and the passes 8x8 and
+  smaller. `games/totk/check_render_size.py <product> <main NSO>`: 8 checks in Unicorn (the page's size stored, w9's output size and x9 kept,
+  the argument registers as before; the original stores the parameter's); with x9 as the MacNativeGames 1.0 code has it, the output size is
+  overwritten (2 fail). `t_frame_step`: 22 checks with the size choice. `work/build/totk/product60` rebuilt with these rules (main cuts 20,
+  sdk and subsdk0 byte for byte the same; the previous one is `product60.prev`); `verify/regress.sh` OK for it and for manosaba, after its
+  gate bench got the host stack sources it needs since item 40 (it did not build since batch 6)
 - [ ] 53 frame pacing between 30 and 60 fps, the 30 fps constants checked
 - [ ] 54 user mod folders (Atmosphère layout)
 - [ ] 55 CoreAudio opened off the calling thread (measure first)

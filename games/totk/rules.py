@@ -25,6 +25,10 @@ CUTS = {
         (0x2daa74, '01102c1e', '1f2003d5', 'step ratio: fmov s1, #0.5 → nop'),
         (0x2daa78, '0008211e', '1f2003d5', 'step ratio: fmul s0, s0, s1 → nop (ratio stored as read)'),
         (0x3e564c, '2018201e', '1f2003d5', 'step ticks: fdiv s0, s1, s0 → nop (s0 is read from the host page)'),
+        # Scene render size (with HOSTREFS below): {width, height} read from the host page +16 instead of the graphics parameter's
+        (0x585e50, '60c60cbd', '2006422d', 'scene size: str s0, [x19, #0xcc4] → ldp s0, s1, [x17, #16] (host page +16: width, height)'),
+        (0x585e54, '4001221e', '60c60cbd', 'scene size: scvtf s0, w10 → str s0, [x19, #0xcc4] (width)'),
+        (0x585e60, '60ca0cbd', '61ca0cbd', 'scene size: str s0, [x19, #0xcc8] → str s1, [x19, #0xcc8] (height)'),
     ],
 }
 OBS = {}
@@ -37,11 +41,17 @@ PARAMS = {}
 #  - 0x3e562c..0x3e5658: s8 = 60 / (float)sys+0x250 × (sys+0x1da bit 0 ? 0.5 : 1). Now s0 = ticks read at 0x3e5638 and the fdiv at 0x3e564c is gone;
 #    x9 is free between 0x3e562c and 0x3e5644, where it is loaded. MacNativeGames puts a veneer at 0x3e5658 instead (load, fmul, branch back);
 #    this does the same in place.
+# Scene render size (plan item 52, after MacNativeGames PR #19, merged 2026-10-19, MIT): 0x585da0 reads the scene size {w11, w10} from the graphics
+# parameter (ldp at 0x585e38: docked 1600x900, handheld 1280x720 per the PR) and stores it as floats at renderer +0xcc4 / +0xcc8, from which every scene
+# render target is sized; 0x585e64 converts w9 (the output size) to +0xcc0, so w9 / x9 stay. Every path reaches 0x585e48. Now x17 = host page
+# (0x585e48), s0 / s1 = page +16 / +20 (0x585e50), stored at 0x585e54 / 0x585e60. x17 instead of the PR's x3: the function (0x585da0-0x586000,
+# 152 instructions) uses neither, and x17 is no argument register for the calls after it. The host writes the page (games/totk/frame_step.c).
 HOSTREFS = {
     '277178b7dba1b6d4949a84778d4abc58': [
         (0x2daa54, 'bd425260', ('adrp', 9), 'step ratio: ldr s0, [x19, #0x250] → adrp x9, host page'),
         (0x2daa58, '52a84e08', ('ldr_s', 0, 9, 0), 'step ratio: mov w8, #0x42700000 → ldr s0, [x9] (host page +0: ratio)'),
         (0x3e562c, 'bd4252c0', ('adrp', 9), 'step ticks: ldr s0, [x22, #0x250] → adrp x9, host page'),
         (0x3e5638, '5e21d800', ('ldr_s', 0, 9, 4), 'step ticks: scvtf s0, s0 → ldr s0, [x9, #4] (host page +4: ticks)'),
+        (0x585e48, '1e220160', ('adrp', 17), 'scene size: scvtf s0, w11 → adrp x17, host page'),
     ],
 }

@@ -1,4 +1,5 @@
-// The host half of the real-time frame step (games/totk/frame_step.c): the mean of the present intervals and the page layout. Built and run by
+// The host half of the real-time frame step (games/totk/frame_step.c): the mean of the present intervals and the page layout; the scene size the
+// page carries at +16 (DM_RENDER_RES or the game's own for the operation mode, plan item 52). Built and run by
 // games/totk/check_frame_rate.py (clang -DFRAME_STEP_TEST -I host).
 #include <stdio.h>
 #include <math.h>
@@ -29,6 +30,14 @@ int main(void) {
     uint64_t bits = atomic_load(&page); float v[2]; memcpy(v, &bits, sizeof v);
     expect("page +0: ratio = seconds x 30", 1.0 / 3, v[0], 1e-6);
     expect("page +4: ticks = seconds x 60", 2.0 / 3, v[1], 1e-6);
+    float sz[2]; int r;
+    r = scene_size(NULL, 1, sz); expect("scene size unset, docked: the game's 1600 ...", 1600, sz[0], 0); expect("... x 900, its own (0)", 900 * 10 + 0, sz[1] * 10 + r, 0);
+    r = scene_size("", 0, sz); expect("unset, handheld: 1280 ...", 1280, sz[0], 0); expect("... x 720, its own (0)", 720 * 10 + 0, sz[1] * 10 + r, 0);
+    r = scene_size("0", 1, sz); expect("DM_RENDER_RES=0: the game's own (0)", 1600 * 10 + 0, sz[0] * 10 + r, 0);
+    r = scene_size("960x540", 1, sz); expect("960x540: width", 960, sz[0], 0); expect("... height, from the variable (1)", 540 * 10 + 1, sz[1] * 10 + r, 0);
+    const char *bad[] = {"960x", "32x32", "5000x100", "960x540x", "abc"};
+    for (int i = 0; i < 5; i++) { char what[64]; r = scene_size(bad[i], 0, sz); snprintf(what, sizeof what, "%s: refused (-1), the game's own 1280", bad[i]);
+        expect(what, 1280 * 10 - 1, sz[0] * 10 + r, 0); }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

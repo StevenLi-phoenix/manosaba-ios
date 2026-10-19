@@ -48,7 +48,7 @@ for m in $MODS; do
 done
 # Gate function regression: build a test bench on the spot from the host's current entry.S and run _dm_gate gate by gate to check the write-back contract
 GT=$RUN/gate_test_$TS
-if cc -O1 -o "$GT" "$HERE/gatefn/gate_test.c" "$HERE/gatefn/gate_tramp.S" "$DM/host/entry.S" >> "$LOG" 2>&1; then
+if cc -O1 -I "$DM/host" -o "$GT" "$HERE/gatefn/gate_test.c" "$HERE/gatefn/gate_tramp.S" "$DM/host/entry.S" "$DM/host/hstack.S" "$DM/host/hstack.c" >> "$LOG" 2>&1; then   # (entry.S calls through the host stack switch since item 40)
   G=(); for m in $MODS; do [ -s "$OUT/$m.gates.tsv" ] && G+=("$OUT/$m.gates.tsv"); done
   "$GT" "${G[@]}" >> "$LOG" 2>&1 || rc=1; rm -f "$GT"
 else echo "FAIL gate test bench did not compile" >> "$LOG"; rc=1; fi
