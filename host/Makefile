@@ -39,6 +39,7 @@ SRC = \
 	mods.c \
 	movie_av.m \
 	movie_webm.c \
+	options.c \
 	romfs_validate.c \
 	sead.c \
 	thread.c \

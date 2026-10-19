@@ -307,7 +307,8 @@ in our rules and host:
   3 on 40 ms and back, sys+0x250 = 60 / interval; the original main never picks 1 (negative control); both producers read the page (the original
   computes 60 / 30 and ignores it); `tests/t_frame_step.c` (the mean, the clamps, the page layout). `verify/regress.sh` OK (main cuts 16).
 - The product with these rules is `work/build/totk/product60` (`host/dmhost work/build/totk/product60`; `DM_RENDER_RES=<w>x<h>` sets its scene
-  render size, item 52 below); the default product was left at 30 fps
+  render size, item 52 below; since item 57 its changes are code options, `options.default` turning on all three and `DM_OPTIONS=none` none);
+  the default product was left at 30 fps
   while the blood moon crash below is open. A 75 s prologue run: interval 1, frame time p50 16.8 ms.
 - RomFS overlay for 60 fps and up (601258f): `work/build/cache/dm/venv/bin/python -I games/totk/romfs_overlay.py work/data/switch/totk-1.4.3/RomFS
   work/build/totk/romfs_overlay` builds it from the game's own RomFS (the quick menus' background was black at 60 fps; the game over menu would
@@ -1016,14 +1017,26 @@ Tier 3, medium:
   footprint 2.6 GB); manosaba has 40 MB of such textures in all. Dropping the cold ones would free about 3 % at the price of a re-upload when they
   come back: not now; with Tears of the Kingdom on a device (62) the memory-low lines say whether to. `t_uppool`: the census (one texture used
   again in the first bucket, eleven in 301-1800); with a later use not noted 2 fail
-- [ ] 57 code patches chosen at launch (one product for 30 and 60 fps)
+- [x] batch 19 · 57 code patches chosen at launch, one product for 30 and 60 fps (after tomodachi-native 0428c80, MIT): rules.py `OPTIONS`
+  (`tools/patch_nso.py`: entries as CUTS or as HOSTREFS forms, checked against the original, not written into the image, listed in
+  `<module>.options.tsv` with their final bytes; asserted not to overlap a cut and to be left alone by the rewrite), applied by the Mac loader
+  before it seals the code to those `DM_OPTIONS` names, or else the product's `options.default` (`host/options.c`: originals checked again, an
+  option whole or not at all, unknown names in red, `dm_option_on`). Tears of the Kingdom's changes are now the options `fps60` (the 7
+  controller words), `realtime` (the frame step) and `scene` (the scene size); `games/totk/frame_step.c` and the uncapped pacing follow them.
+  `work/build/totk/product60` is rebuilt this way with `options.default` = `fps60,realtime,scene`: with all three applied its main is byte for
+  byte the previous product60's (sdk and subsdk0 too), `DM_OPTIONS=none` runs the game's code as shipped (frame time p50 33.8 ms, its own step),
+  the default 120 fps uncapped (p50 8.3 ms); `check_frame_rate.py` (17) and `check_render_size.py` (8) apply the product's options
+  (`verify/nsoimg.py product_image`). The default 30 fps product (`work/build/totk/product`) is left as it is. The manosaba product rebuilt with the
+  new rewriter: byte for byte the same images, only the stamp (`.prev57` kept). `host/tests/t_options.c`: 9 checks; written without checking the
+  originals, an option is half applied (1 fails). iOS maps the signed executable's code: options there need the changed pages embedded
+  (tomodachi-native afd88e9), item 62
 - [ ] 58 on-screen controls with drag-to-look on iOS
 - [ ] 59 iOS 17: deployment target 17.0, metallibs rebuilt
 - [ ] 60 indirect draws and dispatches (when a game calls them)
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it)
-- [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit
+- [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
 - [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52)
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN
 

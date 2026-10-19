@@ -41,7 +41,7 @@ def expect(what, want, got):
     print(f'{what:<92} expected {want!s:<26} got {got!s:<26} {"✓" if ok else "✗"}')
 
 fx = {l.split()[1]: int(l.split()[2], 0) for l in open(os.path.join(sys.argv[1], 'main.fixups.tsv')) if l.startswith('# ')}
-prod = open(os.path.join(sys.argv[1], 'main.patched.bin'), 'rb').read()
+prod = nsoimg.product_image(sys.argv[1], 'main')   # (its options applied: rules.py OPTIONS)
 orig = nsoimg.load(sys.argv[2])
 expect('the product has a host page after the key page', fx['KEY_PAGE_OFF'] + 0x4000, fx.get('HOST_PAGE_OFF'))
 p, pr, p9 = run(prod, fx['HOST_PAGE_OFF'], (960.0, 540.0))

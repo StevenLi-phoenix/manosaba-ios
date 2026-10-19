@@ -48,7 +48,7 @@ def expect(what, want, got):
     n += 1; ok = want == got; fail += not ok
     print(f'{what:<88} expected {want!s:<12} got {got!s:<12} {"✓" if ok else "✗"}')
 
-prod = open(os.path.join(sys.argv[1], 'main.patched.bin'), 'rb').read()
+prod = nsoimg.product_image(sys.argv[1], 'main')   # (its options applied: rules.py OPTIONS)
 orig = nsoimg.load(sys.argv[2])
 light, heavy, heavier = [10.0] * 40, [25.0] * 40, [40.0] * 40   # ms: desired = trunc(ms * 60 / 1000) + 1 = 1, 2, 3
 seq = light + heavy + heavier + light + light

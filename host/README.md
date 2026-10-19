@@ -72,6 +72,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `app_mac.m` | Mac app form: prepares what the command line would set when packaged as an `.app` |
 | `gamepad.m` | Game controllers (GameController framework) → Switch controller input, shared by Mac and iOS |
 | `cloud.m`, `cloud.h`, `cloudsync.c` | iCloud save sync of the profile's `save_sync` files (Mac app and iOS; file-level core in `cloudsync.c`) |
+| `options.c` | Code options (`DM_OPTIONS`, or the product's `options.default`): changes the rewriter lists in `<module>.options.tsv`, applied before the code is sealed (Mac) |
 | `mods.c` | User mod folders (`DM_MODS`): each mod's RomFS (mod folders or the Atmosphère layout) as an overlay layer in front of the game's |
 | `sead.c` | sead heaps (Tears of the Kingdom): every heap by class, the heaps and block holding an address (`DM_CRASH_HEAP`, the channel's `heap`), list watch (`DM_LIST_WATCH`) |
 | `cmdchan.c` | Live command channel (`DM_CMD`): keys, waits, screenshots, pass records, thread dump, memory snapshot, quit, while the game runs |
@@ -90,6 +91,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_WINDOW=1`, `DM_AUDIO=1` | Open a window; play sound (`DM_AUDIO_MUTE=1`: the sound card is opened and fed, silence goes out) |
 | `DM_KEYS` | Scripted input, e.g. `A@10+0.2` (press A at 10 s for 0.2 s), `T0.5:0.5@15+0.1` (touch at normalized x, y), `A@f3600+12` (at presented frame 3600 for 12 frames: does not drift when the machine is busy), left stick `LSL` / `LSR` / `LSU` / `LSD` |
 | `DM_CMD=<file>` | Live command channel: lines appended to the file run while the game runs (`key A 200`, `down ZR` / `up ZR`, `wait <frames>`, `sleep <ms>`, `shot <png>`, `passdump <frames>`, `threads`, `memsnap <path>`, `hlecount`, `heaps`, `heap <addr>`, `quit`; `#` comments); a line runs once its newline is written. See `cmdchan.c` |
+| `DM_OPTIONS=<a,b>` or `none` | The product's code options to apply (default: its `options.default`); e.g. Tears of the Kingdom's `fps60,realtime,scene` (60 fps) or none (as shipped) |
 | `DM_MODS=<dir>` | Mods: each entry's `romfs`, `contents/<program id>/romfs` or `atmosphere/contents/<program id>/romfs` (or loose files) in front of the RomFS, in name order, the first winning; names starting with `.` or `-` are off; code mods are not applied (iOS: `Documents/mods`) |
 | `DM_CRASH_HEAP=<reg>,...`, `DM_LIST_WATCH=[heap+]<addr>,...` | sead games: on a crash, the heaps and block holding each register's address; watch intrusive lists and dump the threads when one gets a null next (`sead.c`) |
 | `DM_TEST_BG=<s>,<len>[;...]` | The iPhone's trip to the background and back at those times (focus, audio, guest clock, graphics), on the Mac too; `tools/lifecycle_check.py` judges the log |

@@ -317,6 +317,9 @@ void loader_hash_log(void) {
     }
 }
 
+// Code options asked for (options.c): applied to each module's image before its code is sealed
+static char g_options_wanted[256];
+void dm_options_wanted(const char *dir, char *out, size_t n); int dm_options_apply(const char *dir, const char *module, uint8_t *img, size_t sz, const char *wanted); int dm_options_check(const char *wanted);
 #if TARGET_OS_IPHONE
 // iOS does not allow code loaded at run time to execute, and Apple allows an executable only one segment with execute permission (ITMS-90999): the image is compiled into this executable by ios/tools/gen_embed.py --
 // the two code blocks (original text, patch area) are sections in __TEXT, and W (the rest of ro + data + bss) is a separate RW segment. The three blocks are not adjacent in the file; here one contiguous address range is reserved,
@@ -345,6 +348,7 @@ static void map_image(module_t *m, const char *dir) {
     remap_at(m, base + z0, w, zw, TRUE, VM_PROT_READ | VM_PROT_WRITE);
     remap_at(m, base + m->patch_off, x1, z1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
+    if (*g_options_wanted) LOG("[red] %s: options %s are not applied on iOS (the code is the signed executable's; changed pages would have to be embedded, plan item 62)", m->name, g_options_wanted);
 }
 #else
 static uint8_t *slurp(const char *path, size_t *n) {
@@ -365,6 +369,7 @@ static void map_image(module_t *m, const char *dir) {
     m->base = mmap(NULL, m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (m->base == MAP_FAILED) die("%s mmap", m->name);
     memcpy(m->base, raw, sz); free(raw); install_key_page(m);
+    if (*g_options_wanted) dm_options_apply(dir, m->name, m->base, sz, g_options_wanted);   // before the code is sealed (options.c)
     uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
     uint64_t po = m->patch_off & ~0x3FFFull;
@@ -382,6 +387,7 @@ void load_modules(const char *dir, const char **names, int n) {
         read_layout(m, dir);
     }
     read_main_build(dir);
+    dm_options_wanted(dir, g_options_wanted, sizeof g_options_wanted);   // DM_OPTIONS or the product's options.default (options.c)
     create_keys();
     for (int i = 0; i < n; i++) {
         module_t *m = &g_mod[i];
@@ -392,6 +398,7 @@ void load_modules(const char *dir, const char **names, int n) {
         LOG("%s: base %p size %#zx", names[i], m->base, m->size);
         g_nmod++;
     }
+    if (*g_options_wanted) { dm_options_check(g_options_wanted); LOG("options asked for: %s", g_options_wanted); }
     force_init();
     t = now_ns(); for (int i = 0; i < g_nmod; i++) relocate(&g_mod[i]); tr = now_ns() - t;
     force_check();

@@ -74,3 +74,19 @@ def relocs(img):
                 name = cstr(d[5] + nm); val = sv if shn else None
             out.append((off, typ, name, val, add))
     return out
+
+def product_image(out_dir, mod, options=None):
+    """<mod>.patched.bin of a product with its code options applied as the host's loader does (host/options.c): those named (a list), or all the
+    product's <mod>.options.tsv lists (None); each row's original bytes checked first."""
+    import os
+    img = bytearray(open(os.path.join(out_dir, f'{mod}.patched.bin'), 'rb').read())
+    p = os.path.join(out_dir, f'{mod}.options.tsv')
+    if os.path.exists(p):
+        for line in open(p):
+            if line.startswith('#'): continue
+            name, off, ob, nb = line.rstrip('\n').split('\t')[:4]
+            if options is not None and name not in options: continue
+            off, ob, nb = int(off, 0), bytes.fromhex(ob), bytes.fromhex(nb)
+            assert img[off:off + len(ob)] == ob, f'{mod} option {name} {off:#x}: not the original the product lists'
+            img[off:off + len(nb)] = nb
+    return img

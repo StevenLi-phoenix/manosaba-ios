@@ -47,20 +47,24 @@ static void frame_step_store(_Atomic uint64_t *page, double seconds) {
 static _Atomic uint64_t *g_page;
 static frame_mean g_mean;
 static double g_pin;
+static int g_realtime;   // the option realtime is on: the step is the measured frame time
 void dm_game_boot(void) {
     g_page = dm_host_page("main");
     if (!g_page) { LOG("[red] frame step: main has no host page (product built without rules.py HOSTREFS): the game's step stays at its chosen interval"); return; }
     const char *e = getenv("DM_FRAME_STEP_MS"); g_pin = e ? atof(e) / 1000 : 0;
     frame_step_store(g_page, g_pin > 0 ? g_pin : 1.0 / 30);   // the controller starts at interval 2
-    float sz[2]; int from = scene_size(getenv("DM_RENDER_RES"), dm_opmode(), sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
-    if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, from 64x64 up to 1920x1080; the game's own size", getenv("DM_RENDER_RES"));
-    LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? "DM_RENDER_RES" : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
+    if (dm_option_on("scene")) {
+        float sz[2]; int from = scene_size(getenv("DM_RENDER_RES"), dm_opmode(), sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
+        if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, from 64x64 up to 1920x1080; the game's own size", getenv("DM_RENDER_RES"));
+        LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? "DM_RENDER_RES" : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
+    } else if (getenv("DM_RENDER_RES")) LOG("[red] DM_RENDER_RES needs the option scene (DM_OPTIONS)");
+    if (!(g_realtime = dm_option_on("realtime"))) { LOG("[frame step] the game's own (option realtime not on: DM_OPTIONS or the product's options.default)"); return; }
     if (g_pin > 0) LOG("[frame step] pinned at %.3f ms (DM_FRAME_STEP_MS, diagnostics)", g_pin * 1000);
     else LOG("[frame step] real time: the mean of the last five present intervals (1/120 .. 1/15 s each)");
 }
-int dm_game_realtime_step(void) { return g_page && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
+int dm_game_realtime_step(void) { return g_realtime && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
 void dm_game_present(void) {
-    if (!g_page || g_pin > 0) return;
+    if (!g_realtime || g_pin > 0) return;
     double s = frame_mean_add(&g_mean, guest_ns());
     if (s > 0) frame_step_store(g_page, s);
 }

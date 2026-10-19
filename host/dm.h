@@ -54,6 +54,7 @@ void *guest_sym(const char *name);
 module_t *module_of(const void *p);
 // The host page of a module (rewriter HOSTREFS rules: guest code reads values the host writes there), NULL when its product has none
 void *dm_host_page(const char *module);
+int dm_option_on(const char *name);   // a code option applied at load (options.c: DM_OPTIONS or the product's options.default)
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates: the rewriter's OBS rules (games/<id>/rules.py) number them; a game's hook code attaches a read-only callback, called on every hit.

@@ -10,7 +10,7 @@
 #   observation gates (OBS): one instruction at the entry is replaced with "enter the host observation callback → execute the original instruction → jump back", so diagnostics modify zero code at runtime; listed in <name>.obs.tsv
 #   parameter slots (PARAMS): a constant built by two instructions is read from a host thread slot instead
 # The key page only stores "actual key number × 8" at the end of the data segment, and patch code fetches thread slots indirectly through the key page: the loader may use any key number.
-# Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.obs.tsv, <name>.params.tsv
+# Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.options.tsv, <name>.obs.tsv, <name>.params.tsv
 import struct, re, sys, os
 from itertools import combinations
 import lz4.block
@@ -41,6 +41,11 @@ IMG.extend(bytes(0x4000))
 #            zeros right after the key page that stays writable and that the host fills (dm_host_page): ('adrp', d) = adrp xd, host page;
 #            ('ldr_s', t, n, byte offset) = ldr st, [xn, #byte offset]. They become cuts (asserted, listed in cuts.tsv, checked as cuts); a module with
 #            HOSTREFS gets the page and HOST_PAGE_OFF in its fixups header, the others keep their layout
+#   OPTIONS  {build ID: {option name: [entries as in CUTS, or as in HOSTREFS when the third item is a (kind, ...) form]}}: changes the host applies
+#            at load to the options DM_OPTIONS or the product's options.default names (host/loader.c, plan item 57: one product for 30 and 60 fps).
+#            Asserted against the original here but not written into the image; listed in <name>.options.tsv with their final bytes. They must not
+#            overlap a cut and must stay outside the rewritten code (asserted after the rewrite: the host writes them where the original still is).
+#            A host page form gives the module the page as HOSTREFS does
 # A module whose build ID has no entry gets the generic rewrite only.
 def rules_path():
     path = os.environ.get('DM_RULES')
@@ -48,30 +53,40 @@ def rules_path():
     return path
 def load_rules():
     path = rules_path()
-    if not path: return {}, {}, {}, {}
+    if not path: return {}, {}, {}, {}, {}
     import importlib.util
     sys.dont_write_bytecode = True   # no __pycache__ next to the game's rules
     spec = importlib.util.spec_from_file_location('game_rules', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return getattr(m, 'CUTS', {}), getattr(m, 'OBS', {}), getattr(m, 'PARAMS', {}), getattr(m, 'HOSTREFS', {})
-CUTS, OBS, PARAMS, HOSTREFS = load_rules()
+    return getattr(m, 'CUTS', {}), getattr(m, 'OBS', {}), getattr(m, 'PARAMS', {}), getattr(m, 'HOSTREFS', {}), getattr(m, 'OPTIONS', {})
+CUTS, OBS, PARAMS, HOSTREFS, OPTIONS = load_rules()
 BUILD_ID = d[0x40:0x50].hex()
 cuts = list(CUTS.get(BUILD_ID, []))
 hostrefs = HOSTREFS.get(BUILD_ID, [])
+options = OPTIONS.get(BUILD_ID, {})
 HOST_PAGE_OFF = 0
-if hostrefs:
+def hostref_word(off, ow, form):   # the instruction a host page reference becomes (the original word asserted)
+    w = struct.unpack_from('<I', IMG, off)[0]
+    assert f'{w:08x}' == ow, f'host page reference {off:#x}: original instruction differs ({w:08x})'
+    if form[0] == 'adrp':
+        imm = (HOST_PAGE_OFF >> 12) - (off >> 12); assert -(1 << 20) <= imm < (1 << 20)
+        return w, 0x90000000 | ((imm & 3) << 29) | (((imm >> 2) & 0x7FFFF) << 5) | form[1]
+    if form[0] == 'ldr_s':
+        t, n, bo = form[1:]; assert bo % 4 == 0 and 0 <= bo < 0x4000
+        return w, 0xBD400000 | ((bo // 4) << 10) | (n << 5) | t
+    raise AssertionError(f'host page reference {off:#x}: unknown form {form}')
+if hostrefs or any(isinstance(e[2], tuple) for rows in options.values() for e in rows):
     HOST_PAGE_OFF = KEY_PAGE_OFF + 0x4000
     IMG.extend(bytes(max(0, HOST_PAGE_OFF + 0x4000 - len(IMG))))
     for off, ow, form, why in hostrefs:
-        w = struct.unpack_from('<I', IMG, off)[0]
-        assert f'{w:08x}' == ow, f'host page reference {off:#x}: original instruction differs ({w:08x})'
-        if form[0] == 'adrp':
-            imm = (HOST_PAGE_OFF >> 12) - (off >> 12); assert -(1 << 20) <= imm < (1 << 20)
-            nw = 0x90000000 | ((imm & 3) << 29) | (((imm >> 2) & 0x7FFFF) << 5) | form[1]
-        elif form[0] == 'ldr_s':
-            t, n, bo = form[1:]; assert bo % 4 == 0 and 0 <= bo < 0x4000
-            nw = 0xBD400000 | ((bo // 4) << 10) | (n << 5) | t
-        else: raise AssertionError(f'host page reference {off:#x}: unknown form {form}')
+        w, nw = hostref_word(off, ow, form)
         cuts.append((off, struct.pack('<I', w).hex(), struct.pack('<I', nw).hex(), f'{why} [host page +{HOST_PAGE_OFF:#x}]'))
+opts = []   # (option, offset, original bytes hex, new bytes hex, reason): checked against the original, not written
+for name, rows in options.items():
+    for off, o, n, why in rows:
+        if isinstance(n, tuple): w, nw = hostref_word(off, o, n); ob, nb = struct.pack('<I', w), struct.pack('<I', nw); why = f'{why} [host page +{HOST_PAGE_OFF:#x}]'
+        else: ob, nb = bytes.fromhex(o), bytes.fromhex(n); assert len(ob) == len(nb) and IMG[off:off + len(ob)] == ob, f'option {name} {off:#x}: original bytes differ ({bytes(IMG[off:off + len(ob)]).hex()})'
+        assert not any(c[0] < off + len(ob) and off < c[0] + len(bytes.fromhex(c[1])) for c in cuts), f'option {name} {off:#x} overlaps a cut'
+        opts.append((name, off, ob.hex(), nb.hex(), why))
 PATCH_OFF = (len(IMG) + 0xFFFF) & ~0xFFFF
 for off, ob, nb, why in cuts:
     ob, nb = bytes.fromhex(ob), bytes.fromhex(nb)
@@ -795,6 +810,8 @@ for oa, wa, ob_, wb, r, key, why in params:
 
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
+for name, off, ob, nb, why in opts:   # the host writes an option where the original still is: the rewrite must not have touched it
+    assert IMG[off:off + len(ob) // 2].hex() == ob, f'option {name} {off:#x}: rewritten here ({IMG[off:off + len(ob) // 2].hex()}), cannot be applied at load'
 open(P('patched.bin'), 'wb').write(IMG + bytearray(PATCH_OFF - len(IMG)) + patch)
 import hashlib
 with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:
@@ -818,10 +835,13 @@ with open(P('sites.tsv'), 'w') as f:
 with open(P('cuts.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, ob, nb, why in cuts: f.write(f'{off:#x}\t{ob}\t{nb}\t{why}\n')   # columns: offset, original bytes, new bytes, reason
+with open(P('options.tsv'), 'w') as f:   # columns: option, offset, original bytes, new bytes, reason (host/loader.c)
+    f.write(f'# BUILD_ID\t{BUILD_ID}\n')
+    for name, off, ob, nb, why in opts: f.write(f'{name}\t{off:#x}\t{ob}\t{nb}\t{why}\n')
 with open(P('params.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for oa, wa, ob_, wb, r, key, why in params: f.write(f'{oa:#x}\t{ob_:#x}\tx{r}\t{key}\t{why}\n')
 with open(P('obs.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, oid, ow, why in obs: f.write(f'{off:#x}\t{oid}\t{ow}\t{why}\n')
-print(NAME, stats, 'cuts', len(cuts), 'obs', len(obs), 'patch', len(patch), 'PATCH_OFF', hex(PATCH_OFF), 'slot_refs', len(fix), 'gates', len(gates))
+print(NAME, stats, 'cuts', len(cuts), 'options', len(opts), 'obs', len(obs), 'patch', len(patch), 'PATCH_OFF', hex(PATCH_OFF), 'slot_refs', len(fix), 'gates', len(gates))

@@ -35,6 +35,8 @@ run: \
 	$(B)/t_mods_case \
 	$(B)/t_movie \
 	$(B)/t_oe \
+	$(B)/t_options \
+	$(B)/t_options_nocheck \
 	$(B)/t_padmap \
 	$(B)/t_romfs_validate \
 	$(B)/t_sead \
@@ -97,6 +99,11 @@ run: \
 	 fi; echo "t_mods_case: paths built with the program ID as asked break on a file system that tells cases apart, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
 	$(B)/t_oe 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_options 2>/dev/null
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_options_nocheck > $(B)/t_options_nocheck.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ c with a row" $(B)/t_options_nocheck.log; then \
+	   cat $(B)/t_options_nocheck.log; echo "t_options_nocheck: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_options_nocheck: an option written without checking its originals is half applied, as expected"
 	$(B)/t_padmap
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
 	$(B)/t_sead 2>/dev/null
@@ -163,8 +170,8 @@ $(B)/t_gameslot: t_gameslot.c ../game_slot.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_gameslot.c ../game_slot.c
 $(B)/t_ktrace: t_ktrace.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_ktrace.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+$(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c ../options.c
 $(B)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mods.c
 $(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
@@ -202,6 +209,10 @@ VPX ?= /opt/homebrew/opt/libvpx
 $(B)/t_movie: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -o $@ t_movie.c ../movie_av.m ../movie_webm.c ../hstack.S ../hstack.c $(VPX)/lib/libvpx.a \
 		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
+$(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
+$(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_OPTIONS_NO_CHECK -I.. -o $@ t_options.c
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
