@@ -810,7 +810,7 @@ Correctness, small:
   newest-first sampling numbers (atone/nxnative `hle_hid.c:138-217`; SkyRecomp's resting state), before any gyro work (67).
 - **Red lines for what the next game would hit silently**: a second sampler pool (`OP_SET_SAMP_POOL` is ignored; Dark Souls switches 12 within a
   frame, lordran b826e34), packaged layout byte 1 ≠ 0 (bayonetta3; 0 in all our 2,134 logged layouts), SRC1 blend factors (dual-source: the
-  translator is always told `dualSourceBlendEnable` false, checked here), an unimplemented svc or import with its caller (blade2 `DM_UNIMPL_ABORT`).
+  translator is always told `dualSourceBlendEnable` false, checked here), an unimplemented svc or import with its caller (`DM_UNIMPL_ABORT` in bayonetta3-mobile's copy of blade2-mobile).
 
 Tears of the Kingdom:
 - **Shrines run at a fixed interval 2** (nxnative PR #11, 97172c1 / a6b7191 `patch_nso.py:169-189`, 1.4.3): shrines force the fixed interval
@@ -884,7 +884,7 @@ Larger:
 - For 64: `CopyCommands` copies at call time (the NVN guide; ours replays the source like a CALL), HSETP2 `.H_AND` as LASRecomp and yuzu (0 uses
   in our games; ours ANDs the halves first), depth bounds on Apple10 (`setDepthTestMinBound:maxBound:`), rasterizer discard with void vertex
   variants, two queues, `SetScissors` / `SetDepthRanges` batches (GirlNet), `getentropy` as HLE_FORCE and `nn::pl::GetSharedFont` (GirlNet),
-  AVC / AAC from the bytes the game sends (lordran acfb424), the control section length by GPU code version (blade2), LDN as dr3 (Bonjour, an
+  AVC / AAC from the bytes the game sends (lordran acfb424), the control section length by GPU code version (bayonetta3-mobile `nvn_control.h`), LDN as dr3 (Bonjour, an
   HMAC-signed control protocol, a two-process test), VideoToolbox VP9.
 - For 67: the vibration handles per style with only the connected style forwarded (digitalhivehub 7db9248: games send zeros to the others), the
   Pro Controller's IMU and HD rumble over IOHID on the Mac (atone; GameController reports its motion as zeros, and an 8BitDo in Pro mode too,
@@ -908,6 +908,130 @@ lab tools, PR #86; GirlNet's per-draw conditional render (a CPU stall), GPU prim
 argument buffers), stale-program detector (ours keys by hash), condvar order and Break result (ours); justr4mzi's SignalToAddress kind 2 (do not
 take: ours is current Atmosphère); lordran's in-place re-upload (ours: a spare texture, 16); totk-mobile's audio renderer and virtual pools (ours
 closer or equal).
+
+### Deep review of 2026-10-20 (to do)
+
+A third review the same day, at the user's request ("totk-mobile and the other games can all be included; learn from where others do better"):
+five reviewers, read only, each project's own work against its base, and which of its tests could check ours. Reviewed: OJZen/totk-mobile 510d95b
+(two reviewers; Apache-2.0, its `core/` byte-identical to upstream b94670c; its own work is `script/prepare_graphics.py`, 1,164 lines of exact-match
+replacements applied to `core/` at build time, 6,211 lines of `host/nvn_*`, kernel / services / iOS app, 74 tests; it credits masagrator's
+FPSLocker-Warehouse TotK 1.4.3 patch file, which has no licence: facts only), enginefuture/bayonetta3-mobile e5ce116 (MIT; on blade2-mobile c981fcb,
+62 changed or new files, about 50 tests, `docs/UPSTREAM_CHANGES.md` items 1-56; 308 NVN entry points against our 296, none of the 47 extra called by
+our games), huajiaoshu520/acnh-mobile c2af194 (MIT; on upstream b94670c plus nxnative files of 10-15; 72 tests), enginefuture/dr3-mobile a31c36c
+(MIT; a 3,087-line patch on nxnative 9579030; 27 tests), ha7rock/blade2-mobile 43e760e (Blade II, UE4 4.17; on upstream f43480d), vecStardo/VA-11_ns2ios
+(GameMaker through GLES, no NVN, not Unity: little to take, its AudioOut is wrong), hyc1743/super-mario-odyssey-ios 6cd140f (its own rewrite),
+armyja/nxnative-aa-port df997fa (Ace Attorney: Unity 2017 / 2022 IL2CPP and RE Engine, on nxnative 280ead9). Correction to the section above: the
+`DM_UNIMPL_ABORT` strict mode and the control length by GPU code version are bayonetta3-mobile's (its vendored blade2 copy), not blade2's. "Checked
+here" = confirmed in our code when merging; the rest is the reviewer's reading.
+
+Correctness, small:
+- **Pipeline keys carry the blend state of targets whose blending is off** (checked here: `pso_key_fill` copies `blend[i]` for every target with a
+  format, the descriptor reads it only when `blend_en` has the bit). Measured on our own `pso_user.tsv`: Tears of the Kingdom's 729 unique keys
+  become 397 with disabled slots zeroed (older keys 3,628 → 2,441); manosaba 32 → 32. About 45 % of TotK's pipeline builds are duplicates (super-mario-
+  odyssey-ios 693bc6b had the idea).
+- **SyncWait on a sync never fenced** (checked here): ours returns TIMEOUT_EXPIRED ("as on a real device", and `t_nvn` asserts it); the SDK's enum
+  docs: "Waiting on a sync object that has not been signaled with a fence command is an error and will produce a result of FAILED" (dr3 follows them,
+  also for QueueWaitSync). Count such waits in both games first: a loop waiting until "not timeout" spins forever on ours.
+- **The Metal 3 buffer table stops at 512** (checked here: `M3_BUFS` 512, `m3_buf_add` drops the rest; a miss skips the bind or the indexed draw
+  with one red line). TotK has 1,294 live pools, so the Metal 3 build (`dmhost_m3`, the iOS 18 app) would lose draws; acnh-mobile c2af194 fixed missing
+  houses and bridges this way (`t_m3_buffers.m`, 1,537 buffers). Index it like `nvn_pool_find.h`.
+- **Dirty-page state kept per pool range, not per host page** (acnh-mobile `nvn_dirty.c` page records, `t_dirty_shared.c` drop-in with our API): a slot
+  reused on the same 16 KiB page loses a CPU write by reading; `DM_NVN_DIRTYCHECK` saw none in our runs (latent; the old botw-mobile 1d69c8ae idea).
+- **The self-sampling guard compares serials** (bayonetta3 compares storage ranges): our storage sharing gives two serials one texture, so a merged
+  pass may sample a partner attachment without a split (item 42's count may be low).
+- **Cull FRONT_AND_BACK drops points and lines** (checked here: both draw paths return for every primitive); the SDK says only polygons have a face.
+- **A pass without attachments is sized from the scissor only, at one sample** (bayonetta3: the larger of viewport and scissor, samples from the
+  multisample state; `test_attachmentless.m`: a 4x3 viewport gives 12 fragments). TotK's known case has a 1x1 scissor.
+- **The silent audio sink bursts after an iOS suspension** (checked here: `null_sink` adds 5 ms per pull and never resets; acnh-mobile and nxnative
+  3bd1e9e restart when more than 100 ms behind). Our lifecycle test simulates the background in-process and cannot see it.
+- **The display-link step ignores the applied rate** (checked here by reading: power-saving mode runs the link at 30 Hz while the step still counts
+  60 Hz ticks × the game's interval, so TotK at interval 2 with the 30 fps setting shows 15 fps).
+- **Stick directions are never set as NpadButton bits 16-23** (checked here; the SDK names StickLLeft = 16 … StickRDown = 23, dead zone a circle of
+  AnalogStickMax / 2; blade2: UE4's tutorial card never closed without them).
+- **Crash and diagnostics bugs of ours**: the backtrace dereferences frame pointers inside the signal handler unguarded (a corrupt x29, as in a
+  memory-corruption crash like 72, loses the rest of the report; totk-mobile reads each frame with `mach_vm_read_overwrite`); the svc stub log runs
+  `module_of` on a module-relative address and always prints "?", Break mixes two modules; 13 of 74 `RED_ONCE` tags are shared by unrelated messages
+  (checked here), so the first to fire silences the others; the shader capture writes `.ctl` before the code (checked here: a crash between leaves a
+  capture later runs trip on; bayonetta3 writes atomically).
+- **Our texture view is 10 bytes, the SDK's 16** (bayonetta3 `nvn_view.h` with the SDK's byte vector; TotK reports API 55.15 as Bayonetta's 55.12):
+  `SetDefaults` leaves bytes 10-15 as they were and a view's depth / stencil mode is not stored. Check TotK's own setters in Unicorn first.
+- **The Mac mouse monitor swallows title-bar clicks** (checked here: a mouse-down outside the game rectangle returns nil); App Nap is never held off
+  (blade2: a hidden window without sound turned a 10 ms sleep into 200 ms).
+
+Tears of the Kingdom:
+- **MINIMAL_LAYOUT and LINEAR_RENDER_TARGET sizes against the SDK** (deepens 82): totk-mobile's rule (`prepare_graphics.py:1112-1133`: with 0x200 and
+  no packaged block height, the whole mip chain with one-GOB blocks when smaller; 0x40 alone is pitch-linear, "the game sets only 0x40 plus an
+  explicit stride and writes the rows with the CPU") and eight sizes from TotK 1.4.3's SDK (`test_nvn_objects.c:81-128`), six of which ours gets
+  wrong by a model of `nvn_tex.c`: 320x320 0x3b 204,800 (ours 245,760), RG8 260x260 with 9 levels — the terrain normal maps — 214,528 (332,800),
+  3D 64x64x13 212,992 (262,144), a 320x320x6 array 1,228,800 (1,474,560); the grass height maps (R16 260x260, 0x40, stride 640) 166,400 against our
+  221,184. Their cave note: two 200 KiB textures right before vertex data, "both CPU writes must stay inside"; our `mtl_write_texels` re-swizzles a
+  whole level in our larger layout and would write past the slot (unverified in the game). Also: super-mario-odyssey-ios compares each BNTX's own
+  total size with the layout code (TotK has 14,921 BNTX files to check ours against); blade2 found 8-GOB blocks for BC1 / BC3 at 512² where ours gives 16.
+- **Pre-rendered cutscenes held at 30 fps** (FPSLocker's TotK file and totk-mobile `game_timing.py:84-96`): a movie flag set at main 0x2b36100 and
+  cleared at 0x2b33918 (FPSLocker stores the bool passed to `nn::oe::SetUserInactivityDetectionTimeExtended` there); FPSLocker marks TotK's cutscenes
+  "must be blocked to certain framerate to not cause issues". Ours paces them like play. Our blood moon crash follows a skipped pre-rendered movie: a
+  hypothesis to test (the skip with the cap, without it, and with the 30 fps product). The cap can come from our own oe HLE, no code change.
+- **Dynamic resolution's time budget stays at 30 fps** (FPSLocker: main 0xA1B94 loads a factor of target / 30000; README "must be adjusted to target
+  other FPS"): at 60 fps the game still budgets 33 ms, so it never lowers the resolution to hold 60 (and item 46 never saw it move). A HOSTREFS pair.
+- **The HeapDef values for a 1080p scene** (for 95): totk-mobile patches `Product.Nin_NX_NVN.HeapDef.byml.zs` (source SHA b84a6a64…) at decompressed
+  offsets 2732 (DynamicTextureAllocatorMem 113,664 → 163,840 KiB) and 2920 (Graphics 201,728 → 251,904), with the stock application pool.
+- **The wave program draws wide lines** (totk-mobile `nvn_wide_line.inc`: vertex 0cd9edc0a623c237 / fragment e04d541253557805, expanded on the GPU):
+  ours draws 1 px (and no run of ours has reached it).
+- **Render targets of virtual pools in a heap** (totk-mobile `nvn_texture_alias.inc`: Great Sky Island has 354 targets, 373 MiB of layouts in a 111 MiB
+  pool; a heap of 1.25× the pool places all but 3 MiB): ours shares a texture only for identical storage, so about 3× the memory; for iOS (62).
+- **A different frame step** (FPSLocker: one routine replaces the controller body at 0x2db18c, step = clamp(elapsed, 1/target, 1/15), the fps as float at
+  sys+0x224 read by the two producers; totk-mobile repays short frames): the interval never flips. An alternative to measure against ours, not proven
+  better. FPSLocker also says gameplay speed, physics, UI and logic follow this step alone (evidence for 71c), "remove double buffer" at 0xBE14A8
+  (measure whether our acquire ever waits first), and the world clock's per-frame increment at 0x68c15c (a probe for 71c).
+- **Patches always applied, chosen by data on the page** (totk-mobile: one patched main for Mac and iPad, the ceiling, render scale and day rate as
+  floats in the host page): `fps60`'s `mov w8, #1` as a load from the page (2 = the original) would leave iOS no option pages to embed (57, 62).
+- **Code caves in the rewriter** (totk-mobile `patch_module.py`: routines appended to the patch area, originals checked, Unicorn tests that registers
+  and flags are kept): what item 63's veneers need.
+
+Shaders (one chain rebuild with 100-102):
+- **One varying interface as a fallback** (bayonetta3: every vertex shader exports the union of all fragment inputs, 2,045 libraries against a 14-location
+  interface, no pipeline failure in 181 new pairs): ours pads a vertex shader only for pixel shaders recorded together in `pairs.tsv`, which
+  `ProgramSetShaders` alone writes (checked here: pairs made through BindProgram masks are never recorded). Older TotK runs had 19-45 "not written by
+  vertex shader" failures each (none in the latest 5); iOS captures nothing. TotK's fragment shaders use 24 locations. A fallback library for pairs not
+  recorded, and pairs noted at bind time.
+
+iOS:
+- **The audio session asks for nothing** (checked here: no preferred sample rate or I/O buffer): RemoteIO then pulls about 1,024 frames a callback
+  against our 4 × 240 queued (nxnative 18c6143: every callback underran, crackling; with 48 kHz / 5 ms none); an underrun counter in AudioOut (ours
+  zero-fills silently); the unit rebuilt after a media services reset (super-mario-odyssey-ios d30e994).
+- **Low Power Mode or thermal Serious → 30 fps automatically** (super-mario-odyssey-ios); `ENABLE_DEBUG_DYLIB: NO` (a Debug build moves the embedded
+  images into a debug dylib; blade2).
+- For 62: iPhone Air numbers from Bayonetta 3 (1568x720 → MetalFX 2736x1256, median 17.1 ms, GPU 9.4 ms, footprint 2.4 GB, thermal 1, no jetsam; a
+  present buffer lost to GPU recovery at launch, the class of 80), totk-mobile's 12.5 GB reservation with extended addressing on an iPhone 15 Pro and
+  M1 iPads (exit if above 2^39) and the stock application pool, RomFS as one image or 1 GiB parts with an index (totk-mobile, acnh-mobile), "do not
+  push the large resource files with devicectl directly" (totk-mobile: it can exhaust the Mac's memory and disk).
+
+Tests to take (vectors are data; code reimplemented): the layout rows and WriteTexels regions (totk-mobile, bayonetta3), the format swizzle
+read-backs (totk-mobile), `t_dirty_shared.c` and `t_m3_buffers.m` (acnh-mobile), the vertex-fetch GPU vectors (dr3: UNORM8 {0, 64, 128, 255} →
+{0, 0x3e808081, 0x3f008081, 0x3f800000}, a NaN payload kept; our `main0_vi` has no GPU test), the svc vectors of totk-mobile `test_kernel.c` (our
+`svc_dispatch` takes the same register array: SetHeapSize granularity, a regrow reading zeros, MapPhysicalMemory, QueryMemory, the core table, event
+errors; two fail ours), the time-zone cases (acnh-mobile, without its invalid-date case: the SDK returns 0 results with success), RELR vectors and a
+pool-lookup overflow case, NaN references for `t_alpha`, depth-bounds pixels (bayonetta3), the rewriter's word sequences (bayonetta3
+`test_rewriter.py`, super-mario-odyssey-ios's synthetic NSO), the vibration pulses for 67 (totk-mobile's captured TotK landing pulse, dr3's envelopes).
+
+For 61: deferred bindings frozen at submit and binds of more than 32 handles split (bayonetta3 `nvn55_snapshot.h`; ours re-reads them at each walk and
+drops binds over 32), a per-frame critical-path trace (totk-mobile `timeline.c`), per-pass costs and full-screen draws as compute (totk-mobile: a
+dependent pass 38-57 µs on an M4).
+For 64: the 47 NVN functions bayonetta3 has and we do not (deferred binds, ClearBuffer, indirect draws, depth bounds, patch size, ZCull, subtiles,
+getters), several descriptor pools, tessellation through a Metal 3 command buffer, CopyCommands as a staged copy with a handle registry (dr3, 64
+checks), symbol resolution as Horizon's rtld (default-visibility symbols through the global list: UE4 overrides malloc; ours takes the module's own
+first), a SystemEvent kept while its detached read end waits (blade2, UE4's audio renderer), IL2CPP's `stat` and the crypto RNG (armyja), AudioOut
+volume and counters, named time-zone rules, `IsSaveDataExisting` from the directory.
+For 67: TotK's vibration calls (`nn::hid::detail::` permit / send / enqueue + flush / actual; handles 3 and 0x10003; bool arguments not extended by
+Switch callers, so mask them) and the landing pulse {0.1, 198.7 Hz, 0, 299.9 Hz}.
+For 72: the cutscene cap above, the guarded backtrace, and a thread dump when frames stop (107).
+For manosaba: IL2CPP class names at a crash (armyja: class at +0x10 / +0x18; our `il2cpp.json` has 106,577 methods), FIFO frame consumption for a
+game that steps per frame (acnh-mobile; manosaba on the iPhone dropped 14 stale frames by tick 1,549).
+
+Checked, not better or already here: totk-mobile's audio renderer, saves, arbiter (it refuses type 3), per-axis stick clamp, rewriter jump tables,
+D-pad background fix (ours: the overlay); bayonetta3's two signed main images, VP9 transcoded to AVC, launcher page; acnh-mobile's packaged texture
+copy (the SDK says ignored), conditional ledger, pool cache; dr3's program snapshot, socket facts (to 84 / 64); blade2's HLE mixer; VA-11 as a whole;
+super-mario-odyssey-ios's audio ring and touch ABI; armyja's system clock context (ours better).
 
 ### Plan: all of the wider review, simple to complex (2026-10-19)
 
@@ -1220,7 +1344,7 @@ Tier 3b, from the wider review of 2026-10-20 (sources and evidence in that secti
 - [ ] 80 the present's command buffer with the residency set committed
 - [ ] 81 a sync's fence stored before its flag (release / acquire)
 - [ ] 82 NVN texture layout per the SDK: a census of cube arrays, LINEAR_RENDER_TARGET alone, MINIMAL_LAYOUT and packaged 3D in both games first;
-  then the rules with driver vectors (`t_tex_auto`)
+  then the rules with driver vectors (`t_tex_auto`; totk-mobile's eight TotK SDK sizes, see the deep review)
 - [ ] 83 the format's own swizzle (R/B of the RGB 16-bit family, alpha 1 of the X formats): which formats the games sample first
 - [ ] 84 socket errno ENetDown = 100
 - [ ] 85 sticks inside the circle (a radial clamp for every source)
@@ -1235,7 +1359,7 @@ Tier 3b, Tears of the Kingdom:
 - [ ] 92 the two BNSH files inside `main` in the offline extraction
 - [ ] 93 the half-step selector measured against the interval
 - [ ] 94 GPU-rendered textures in CPU-cached pools: count them, compare the grass with the console footage; a write-back if the tiles are wrong
-- [ ] 95 `DM_RENDER_RES` above the output size through the HeapDef overlay and the application pool
+- [ ] 95 `DM_RENDER_RES` above the output size through the HeapDef overlay and the application pool (totk-mobile's 1080p values first)
 - [ ] 96 anisotropic filtering as a switch, off by default
 
 Tier 3b, performance and power (measure first):
@@ -1258,6 +1382,42 @@ Tier 3b, iOS and tooling:
 - [ ] 109 touch camera sensitivity and inversion
 - [ ] 110 resumable data transfer to the device
 - [ ] 111 UBSan for the C parsers and a public-content audit in CI; LDC.64 vectors in `t_xlate_ops.py`
+
+Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, before Tier 4). Correctness, small:
+- [ ] 115 pipeline keys without the blend state of targets whose blending is off (TotK 729 → 397 keys)
+- [ ] 116 SyncWait on a sync never fenced: FAILED as the SDK says (count such waits in both games first)
+- [ ] 117 the Metal 3 buffer table without the 512 cap, indexed
+- [ ] 118 dirty-page state per host page (acnh-mobile's test as is)
+- [ ] 119 the self-sampling guard by storage overlap
+- [ ] 120 cull FRONT_AND_BACK keeps points and lines
+- [ ] 121 a pass without attachments sized from viewport and scissor, samples from the multisample state
+- [ ] 122 the silent audio sink resynchronized after a suspension
+- [ ] 123 the display-link step from the applied rate
+- [ ] 124 stick directions as NpadButton bits 16-23
+- [ ] 125 a guarded backtrace, the svc and Break module names, unique `RED_ONCE` tags (with a test), the shader capture written atomically
+- [ ] 126 the texture view in the SDK's 16-byte layout (TotK's setters in Unicorn first)
+- [ ] 127 the Mac mouse monitor leaving the title bar to AppKit, App Nap held off
+- [ ] 128 tests from the deep review: WriteTexels, vertex fetch on the GPU, the svc vectors, time zones, RELR, pool lookup overflow, alpha NaN refs
+- [ ] 129 rewriter: swapped-operand jump tables, disassembly past undecodable words, the CBZ success path in equiv, a narrower TSD filter, a
+  synthetic NSO self-test in CI
+
+Tier 3c, Tears of the Kingdom:
+- [ ] 130 pre-rendered cutscenes at 30 fps, and the blood moon skip with and without the cap (72)
+- [ ] 131 dynamic resolution's time budget from the frame rate
+- [ ] 132 the wave program's wide lines
+- [ ] 133 FPSLocker's frame step measured against ours; double buffering and the world clock probed (71c)
+
+Tier 3c, iOS:
+- [ ] 134 the audio session's sample rate and I/O buffer, an underrun counter, the unit rebuilt after a media services reset
+- [ ] 135 Low Power Mode and thermal Serious → 30 fps; `ENABLE_DEBUG_DYLIB: NO`
+- [ ] 136 patches always applied, chosen by the page (no option pages on iOS)
+
+Tier 3c, larger:
+- [ ] 137 one varying interface as a fallback library, pairs noted at bind time (a chain rebuild)
+- [ ] 138 render targets of virtual pools in a heap (memory for 62)
+- [ ] 139 code caves in the rewriter (for 63)
+- [ ] 140 FIFO frame consumption for games that step per frame (manosaba)
+- [ ] 141 IL2CPP class names in crash reports and memory snapshots (manosaba)
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)
@@ -1283,4 +1443,4 @@ Tier 5, needs the user's devices, controller or account:
   as the guide)
 
 Open:
-- [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip
+- [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; the cutscene cap of 130 first
