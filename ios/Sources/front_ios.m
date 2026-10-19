@@ -230,8 +230,8 @@ void front_ios_focus_event(int ev) {
     }
 }
 
-// Called by main.m when the host starts: no auto-lock, thermal logging, audio session (Playback: sound plays with the mute switch on, as games do;
-// stopping in the background and on interruptions is handled here)
+// Called by main.m when the host starts: no auto-lock, thermal logging, audio session (Playback: sound plays with the mute switch on, as games do,
+// mixed with other apps' sound; stopping in the background and on interruptions is handled here)
 void front_ios_lifecycle_install(void) {
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     NSProcessInfo *pi = NSProcessInfo.processInfo;
@@ -240,7 +240,12 @@ void front_ios_lifecycle_install(void) {
     [nc addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:mq usingBlock:^(NSNotification *n) {
         (void)n; LOG("front: thermal state %ld", (long)NSProcessInfo.processInfo.thermalState); }];
     AVAudioSession *as = AVAudioSession.sharedInstance; NSError *e = nil;
-    if (![as setCategory:AVAudioSessionCategoryPlayback error:&e] || ![as setActive:YES error:&e]) LOG("[red] front: audio session setup failed: %s", e.localizedDescription.UTF8String);
+    // Playback: sound with the silent switch on. MixWithOthers: Playback alone does not mix, and activating the session interrupted other apps'
+    // sound (music, a voice call, screen sharing) for as long as the game was in front, whatever its volume (upstream 9393b00, #77)
+    if (![as setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&e] || ![as setActive:YES error:&e])
+        LOG("[red] front: audio session setup failed: %s", e.localizedDescription.UTF8String);
+    LOG("front: audio session category %s, options %#lx (mixes with other apps: %s), other audio playing %d", as.category.UTF8String, (unsigned long)as.categoryOptions,
+        (as.categoryOptions & AVAudioSessionCategoryOptionMixWithOthers) ? "yes" : "no", (int)as.isOtherAudioPlaying);
     [nc addObserverForName:AVAudioSessionInterruptionNotification object:as queue:mq usingBlock:^(NSNotification *n) {
         AVAudioSessionInterruptionType t = [n.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
         if (t == AVAudioSessionInterruptionTypeBegan) { LOG("front: audio interrupted"); g_audio_intr = 1; audio_apply(); return; }
