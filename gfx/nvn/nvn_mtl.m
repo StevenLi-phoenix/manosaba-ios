@@ -530,12 +530,20 @@ static uint64_t g_cnt_report[32], g_cnt_reset[32];       // Report / reset count
 // DM_NVN_COUNTS=1 counters (see count_self_sample)
 static int g_cnt_on = -1;
 static uint64_t g_cnt_self, g_cnt_self_ov, g_cnt_self_dep, g_cnt_ts, g_cnt_ts_multi, g_cnt_cleartex, g_cnt_nodraw, g_cnt_pass_d0, g_cnt_bar_at, g_cnt_first_ts; static int g_cnt_sub_ts;
+static uint64_t g_cnt_rp, g_cnt_rp_sub, g_cnt_rp_px, g_cnt_rp_out, g_cnt_rp_subc, g_cnt_rp_outc; static uint32_t g_cnt_ext_x, g_cnt_ext_y; static int g_cnt_ext_clr;   // item 46: the part of a pass its draws reach
 __attribute__((weak)) void dm_watch_load(uint64_t addr, uint64_t len) { (void)addr; (void)len; }   // host/diag.c (Mac)
 __attribute__((weak)) void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n) {   // host/hle_svc.c
     *alias = *stack = *heap = NULL; *alias_n = *stack_n = *heap_n = 0; }
 static char g_cnt_why[200];   // the first overlap of the draw being counted
 static int counts_on(void) { if (g_cnt_on < 0) g_cnt_on = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0"); return g_cnt_on; }
-void mtl_counts(uint64_t out[7]) { uint64_t v[7] = {g_cnt_self, g_cnt_self_ov, g_cnt_self_dep, g_cnt_ts, g_cnt_ts_multi, g_cnt_cleartex, g_cnt_nodraw}; memcpy(out, v, sizeof v); }
+void mtl_counts(uint64_t out[13]) { uint64_t v[13] = {g_cnt_self, g_cnt_self_ov, g_cnt_self_dep, g_cnt_ts, g_cnt_ts_multi, g_cnt_cleartex, g_cnt_nodraw, g_cnt_rp, g_cnt_rp_sub, g_cnt_rp_px, g_cnt_rp_out, g_cnt_rp_subc, g_cnt_rp_outc}; memcpy(out, v, sizeof v); }
+static inline void cnt_extent(MTLScissorRect sc, double vx0, double vy0, double vx1, double vy1) {   // the right and bottom edges a draw can reach (scissor and viewport)
+#ifdef DM_TEST_EXTENT_BROKEN   // negative control of t_extent only: the viewport left out
+    vx0 = vx1 = (double)(sc.x + sc.width); vy0 = vy1 = (double)(sc.y + sc.height);
+#endif
+    double x1 = MIN((double)(sc.x + sc.width), MAX(vx0, vx1)), y1 = MIN((double)(sc.y + sc.height), MAX(vy0, vy1));
+    if (x1 > g_cnt_ext_x) g_cnt_ext_x = (uint32_t)ceil(x1); if (y1 > g_cnt_ext_y) g_cnt_ext_y = (uint32_t)ceil(y1);
+}
 static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; g_vis_base = 0; }
 #ifndef DM_TEST_VIS_NO_FOLD   // negative control of t_visibility only: the slots stay listed and read the reused buffer
 static void vis_recycle(id<MTLBuffer> b) {   // b's last submission has completed and b is about to be used again
@@ -1032,7 +1040,9 @@ void mtl_vis_state(int *open, uint64_t *folded) { *open = g_nvs; *folded = g_vis
 // (main 0x2b3cff8). CLOCK_MONOTONIC counts the Mac's sleep too, mach_absolute_time does not: after 25 hours of sleep the "GPU time" came out as
 // 25 hours, and the controller held the game at present interval 3 (20 fps) with CPU and GPU idle most of the frame
 uint64_t guest_ns(void);
-static uint64_t gpu_ticks(void) { return guest_ns() * 12 / 625; }
+static uint64_t gpu_ticks(void) {   // DM_NVN_TS_LATE_US=<n>: reports n µs later (the game sees a slower GPU: what does it do then)
+    static int64_t late = -1; if (late < 0) { const char *e = getenv("DM_NVN_TS_LATE_US"); late = e ? atoll(e) * 1000 : 0; if (late) MLOG("DM_NVN_TS_LATE_US: counter timestamps %lld µs late", (long long)(late / 1000)); }
+    return (guest_ns() + (uint64_t)late) * 12 / 625; }
 
 // ---------- Boot instrumentation (DM_BOOTPROF=1): metallib loading, pipeline creation (both happen synchronously during replay on the submit thread), texture upload, first-frame present ----------
 static uint64_t bp_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
@@ -2619,6 +2629,11 @@ static int g_fbx_nact; static inline void args_dirty_all(void);
 static void rp_end(void) { if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }   // the attachment copies of a draw stand in only for it (fbx_prepare)
     if (g_enc) {
     if (g_cnt_on > 0 && g_stat_draw == g_cnt_pass_d0) g_cnt_nodraw++;
+    if (g_cnt_on > 0 && g_cnt_ext_x) { uint64_t tw = g_pass.tw, th = g_pass.th, ew = MIN(g_cnt_ext_x, tw), eh = MIN(g_cnt_ext_y, th); g_cnt_rp++; g_cnt_rp_px += tw * th;
+        if (ew < tw || eh < th) { if (g_cnt_ext_clr) g_cnt_rp_outc += tw * th - ew * eh; else g_cnt_rp_out += tw * th - ew * eh;
+            if ((g_cnt_ext_clr ? g_cnt_rp_subc++ : g_cnt_rp_sub++) < 12) MLOG("[counts] pass %llu %llux%llu%s: its draws reach %llux%llu (%d colour targets, depth %d)", (unsigned long long)g_stat_pass,
+                (unsigned long long)tw, (unsigned long long)th, g_cnt_ext_clr ? " (a clear on load)" : "", (unsigned long long)ew, (unsigned long long)eh, R.rt.n, R.rt.depth != NULL); } }
+    g_cnt_ext_x = g_cnt_ext_y = 0;
     if (enc_label_on()) { static uint64_t lf = ~0ull, base; uint64_t f = atomic_load(&g_cur_frame); if (f != lf) { lf = f; base = g_stat_pass - 1; }   // Intra-frame serial: the same pass has the same name every frame, so the table can aggregate by name
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
     sd_finish(); enc_r_end(g_enc); zskip_commit_clears(); g_enc = nil; g_rt_merged = 0; g_lay.active = 0; g_rt_range_active = g_rt_range_pending = 0; ts_after(); if (g_lp.count) lp_finish(); fz_end();
@@ -2924,6 +2939,9 @@ static RENC rp_begin_ex(int clear_only) {
     g_enc = enc_r_begin(pd);
     args_dirty_all();
     g_stat_pass++; g_cnt_pass_d0 = g_stat_draw;
+    if (counts_on()) { g_cnt_ext_x = g_cnt_ext_y = 0; g_cnt_ext_clr = pd.depthAttachment.loadAction == MTLLoadActionClear && pd.depthAttachment.texture;
+        g_cnt_ext_clr |= pd.stencilAttachment.loadAction == MTLLoadActionClear && pd.stencilAttachment.texture;
+        for (int i = 0; i < R.rt.n && i < 8; i++) g_cnt_ext_clr |= pd.colorAttachments[i].texture && pd.colorAttachments[i].loadAction == MTLLoadActionClear; }
     if (enc_label_on()) { id<MTLTexture> lt = pd.colorAttachments[0].texture ?: pd.depthAttachment.texture ?: pd.stencilAttachment.texture; g_el_w = (int)lt.width; g_el_h = (int)lt.height; g_el_draws = 0; g_el_key[0] = 0; }
     return g_enc;
 }
@@ -2965,6 +2983,9 @@ static void clear_quad_draw(RENC en, id<MTLRenderPipelineState> ps, id<MTLDepthS
     enc_r_pso(en, ps); g_enc_pso = nil; enc_r_dss(en, ds); g_enc_dss = nil;
     if (g_enc_vis) { enc_r_visibility(en, MTLVisibilityResultModeDisabled, 0); g_enc_vis = 0; }
     enc_r_stencil_ref(en, ref, ref); enc_r_viewport(en, (MTLViewport){0, 0, (double)g_pass.tw, (double)g_pass.th, 0, 1}); enc_r_scissor(en, sc);
+#ifndef DM_TEST_EXTENT_BROKEN   // (and clear quads not counted)
+    if (g_cnt_on > 0) cnt_extent(sc, 0, 0, g_pass.tw, g_pass.th);
+#endif
     enc_r_cull(en, MTLCullModeNone); enc_r_fill(en, MTLTriangleFillModeFill); enc_r_depth_bias(en, 0, 0, 0); enc_r_depth_clip(en, YES);
     enc_r_draw_instanced(en, MTLPrimitiveTypeTriangle, 0, 3, 1, 0);
 }
@@ -6070,6 +6091,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
     }
     enc_r_scissor(en, sc);
+    if (g_cnt_on > 0) { if (S.has_vp) cnt_extent(sc, S.vp[0][0], S.vp[0][1], S.vp[0][0] + S.vp[0][2], S.vp[0][1] + S.vp[0][3]); else cnt_extent(sc, 0, 0, tw, th); }
     if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) return;
     { static int nocull = -1; if (nocull < 0) { nocull = getenv("DM_NVN_NOCULL") != NULL; if (nocull) MLOG("DM_NVN_NOCULL: face culling off (diagnostic, rendering is wrong)"); }   // diagnostic: does a missing draw come back without culling?
       enc_r_cull(en, nocull ? MTLCullModeNone : S.poly.cull == NVN_FACE_FRONT ? MTLCullModeFront : S.poly.cull == NVN_FACE_BACK ? MTLCullModeBack : MTLCullModeNone); }

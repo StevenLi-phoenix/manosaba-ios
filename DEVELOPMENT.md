@@ -913,7 +913,13 @@ Tier 3, medium:
 - [-] batch 8 · 45 counted: about 31,000-34,000 system counter reads a second in Tears of the Kingdom (manosaba 4,500-9,800); a gate round trip
   costs 13-25 ns on the M5 (`t_hstack` prints it), so about 1.5 ms of CPU a second in all with the lookup and the clock: not worth an inline read
   that would have to keep the background freeze and `DM_DETCLOCK`
-- [ ] 46 render area limited to the drawn part (only if a game draws sub-rects)
+- [-] batch 9 · 46 counted (`DM_NVN_COUNTS=1`: how far each render pass's draws reach right and down, scissor and viewport, clear quads
+  included): no pass of Tears of the Kingdom's prologue (90-122 with draws a frame) or of manosaba (2.5-5.5) draws only a top-left part, with or
+  without a clear on load, so the render area stays the attachments' size. The console's dynamic resolution (900p, toward 720p while the camera
+  moves: Digital Foundry) did not show here; counter timestamps reported 8, 15 or 25 ms late (`DM_NVN_TS_LATE_US=<µs>`, new: the game sees a
+  slower GPU) changed the game's present interval between 2 and 3 (3, 5 and 16 times in 120 s against once) and still no pass drew a part.
+  `gfx/tests/t_extent.m`: 12 checks on the GPU with API validation (after LASRecomp 59a7507's render area); with the viewport and clear quads
+  left out 3 fail
 - [ ] 47 a live command channel
 - [ ] 48 sead heap walk and list watch at a crash
 - [ ] 49 per-pass GPU time with MTL4CounterHeap
