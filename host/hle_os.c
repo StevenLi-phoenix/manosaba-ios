@@ -79,6 +79,7 @@ void guest_clock_freeze_for(int reason, int on) {
     pthread_mutex_unlock(&g_gfz_mu);
 }
 void guest_clock_freeze(int on) { guest_clock_freeze_for(0, on); }
+int guest_clock_frozen_for(int reason) { pthread_mutex_lock(&g_gfz_mu); int r = !!(g_gfz_reasons & (1u << reason)); pthread_mutex_unlock(&g_gfz_mu); return r; }
 // Entropy source: true random by default (arc4random); with DM_DETCLOCK on it becomes a fixed-seed splitmix64 stream (so that replay pictures are byte-for-byte comparable, the camp blue fire particles differed between two passes).
 // The two outlets (libc getentropy, svc GetInfo RandomEntropy) share one stream; the call count is reported in the log (first call and every 1000 calls)
 static _Atomic uint64_t g_detrng = 0x5357444554524e47ull; static _Atomic uint64_t g_detrng_n;

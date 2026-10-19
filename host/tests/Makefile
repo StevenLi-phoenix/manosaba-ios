@@ -20,6 +20,8 @@ run: \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
+	$(B)/t_fs_kill \
+	$(B)/t_fs_kill_inplace \
 	$(B)/t_gameslot \
 	$(B)/t_guest_mem \
 	$(B)/t_hid_receipt \
@@ -42,7 +44,9 @@ run: \
 	$(B)/t_thread_exit \
 	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
-	$(B)/t_touch
+	$(B)/t_touch \
+	$(B)/t_watchdog \
+	$(B)/t_watchdog_nobg
 	$(B)/t_altstack
 	$(B)/t_arbiter
 	$(B)/t_audio
@@ -62,6 +66,11 @@ run: \
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_fs_kill
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_fs_kill_inplace > $(B)/t_fs_kill_inplace.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ after every kill" $(B)/t_fs_kill_inplace.log; then \
+	   cat $(B)/t_fs_kill_inplace.log; echo "t_fs_kill_inplace: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_fs_kill_inplace: a commit that removes the committed save before cloning in its place tears it under SIGKILL, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_gameslot 2>/dev/null
 	$(B)/t_guest_mem 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
@@ -100,6 +109,11 @@ run: \
 	 fi; echo "t_thread_exit_old: the pre-fix exit faults on the retired guest stack, as expected"
 	$(B)/t_thread_leak
 	$(B)/t_touch
+	$(B)/t_watchdog
+	@status=0; $(B)/t_watchdog_nobg > $(B)/t_watchdog_nobg.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ away" $(B)/t_watchdog_nobg.log; then \
+	   cat $(B)/t_watchdog_nobg.log; echo "t_watchdog_nobg: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_watchdog_nobg: a watchdog that counts the background kills the app away from the screen, as expected"
 
 $(GEN):
 	$(MAKE) -C .. GAME=$(GAME) profile
@@ -120,6 +134,10 @@ $(B)/t_cmdchan: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cmdchan.c
 $(B)/t_cmdchan_partial: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_CMD_PARTIAL -I.. -o $@ t_cmdchan.c
+$(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
+$(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_WATCH_NO_BG -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
 $(B)/t_crash_stderr: t_crash_stderr.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../crash.c
 $(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
@@ -154,6 +172,10 @@ $(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
+$(B)/t_fs_kill: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game.c $(GEN)
+$(B)/t_fs_kill_inplace: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_FS_COMMIT_INPLACE -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_index: t_fs_index.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_index.c ../game.c $(GEN)
 $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)

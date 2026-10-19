@@ -22,6 +22,7 @@ static unsigned g_watch_stall;
 static void (*g_dump_hook)(void);
 __attribute__((weak)) void mtl_crash_note(void) {}   // nvn_mtl.m provides the real one; the host's unit tests link crash.c without the graphics layer
 static void (*g_wait_dump)(void);
+__attribute__((weak)) int guest_clock_frozen_for(int reason) { (void)reason; return 0; }   // hle_os.c; the unit tests link crash.c without it
 
 static uint64_t watch_now_ns(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -48,6 +49,11 @@ static void *watchdog_main(void *arg) {
         // now − last underflows into "no progress for 18446744073 s" — a false hang and exit. This way last ≤ now; a clock that goes back is ignored
         uint64_t last = atomic_load(&g_watch_last_ns), now = watch_now_ns();
         if (last > now) continue;
+#ifndef DM_TEST_WATCH_NO_BG   // negative control of t_watchdog only
+        // In the background (guest clock frozen for reason 1: the iPhone's scene, the Mac's DM_TEST_BG) no frame comes by design: the time away is
+        // not "no progress" (a DM_TEST_BG run was killed 15 s into its background). Counting starts again at the return
+        if (guest_clock_frozen_for(1)) { atomic_store(&g_watch_last_ns, now); continue; }
+#endif
         // Second-scale stall (progress has stopped for more than 1 second but has not yet reached the kill threshold): do not exit, dump what each thread is waiting on. When hitting a case of "only one frame every 2 seconds", the 15-second threshold cannot catch it and the log has nothing on what it is waiting for.
         // Dump only after entering a run; at most 3 dumps per process, at least 10 seconds between two dumps (the loading screen and the pause menu also stop ticks, do not let them flood the log)
         { static int dumps; static uint64_t last_dump, dumped_for;

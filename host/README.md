@@ -90,6 +90,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_KEYS` | Scripted input, e.g. `A@10+0.2` (press A at 10 s for 0.2 s), `T0.5:0.5@15+0.1` (touch at normalized x, y), `A@f3600+12` (at presented frame 3600 for 12 frames: does not drift when the machine is busy), left stick `LSL` / `LSR` / `LSU` / `LSD` |
 | `DM_CMD=<file>` | Live command channel: lines appended to the file run while the game runs (`key A 200`, `down ZR` / `up ZR`, `wait <frames>`, `sleep <ms>`, `shot <png>`, `passdump <frames>`, `threads`, `memsnap <path>`, `hlecount`, `heaps`, `heap <addr>`, `quit`; `#` comments); a line runs once its newline is written. See `cmdchan.c` |
 | `DM_CRASH_HEAP=<reg>,...`, `DM_LIST_WATCH=[heap+]<addr>,...` | sead games: on a crash, the heaps and block holding each register's address; watch intrusive lists and dump the threads when one gets a null next (`sead.c`) |
+| `DM_TEST_BG=<s>,<len>[;...]` | The iPhone's trip to the background and back at those times (focus, audio, guest clock, graphics), on the Mac too; `tools/lifecycle_check.py` judges the log |
 | `DM_WATCH=<s>` | Stop after that many seconds (exit 142) |
 | `DM_LANG` | Override the profile's language |
 | `DM_MOVIE=1` (`2` = trace), `DM_TOUCH_LOG=1`, `DM_FS=1`, `DM_THROWLOG=1`, `DM_HLECOUNT=<file>` | Movie, touch, file system, managed exception and HLE call logging |

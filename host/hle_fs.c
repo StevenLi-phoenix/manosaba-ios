@@ -383,9 +383,13 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv; transactional save: the working tree
     char neu[1100]; snprintf(neu, sizeof neu, "%s.new", g_mnt[i].commit);
     Result r = RES_OK;
     if (!access(neu, F_OK)) rm_tree(neu);
+#ifndef DM_TEST_FS_COMMIT_INPLACE
     if (clonefile(g_mnt[i].dir, neu, 0)) { LOG("[red] save commit: clonefile %s failed, errno=%d (committed save unchanged)", neu, errno); r = RES_FAIL; }
     else if (renamex_np(neu, g_mnt[i].commit, RENAME_SWAP)) { LOG("[red] save commit: atomic swap failed, errno=%d (committed save unchanged)", errno); rm_tree(neu); r = RES_FAIL; }
     else rm_tree(neu);                                                  // the old version that was swapped out
+#else   // negative control of t_fs_kill only: the committed directory removed, then the working one cloned in its place (not atomic)
+    if (rm_tree(g_mnt[i].commit) || clonefile(g_mnt[i].dir, g_mnt[i].commit, 0)) r = RES_FAIL;
+#endif
     // Timing readouts (integer microseconds, no floating point): how long the pre-commit hook and the clone + atomic swap each took; how long in total from this transaction's first save write to the end of the commit (the game writing files + the commit; 0 = no save write in this transaction)
     static int n; if (r == RES_OK) { uint64_t tc2 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
         LOG("save commit #%d: %s swapped into %s (%d save writes so far) (hook %llu us, clone + swap %llu us, %llu us since the first write of the transaction)", ++n, g_mnt[i].dir, g_mnt[i].commit, atomic_load(&g_save_writes),

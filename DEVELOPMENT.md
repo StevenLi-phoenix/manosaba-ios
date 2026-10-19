@@ -946,8 +946,25 @@ Tier 3, medium:
   run came to 13 ms (an index is no identity when frames have 100-260 passes). Passes overlap: on Metal 3 a light pass after a heavy one spans 13
   ms (its vertex stage starts during the heavy one's fragments) and adds 0. `gfx/tests/t_passgpu.m`: 8 checks on the GPU with API validation,
   Metal 4 and Metal 3; without the end timestamps no row comes out (both fail)
-- [ ] 50 soak and fixed-camera measurement
-- [ ] 51 lifecycle and swipe-away tests back
+- [x] batch 13 · 50 soak and fixed-scene measurement, `tools/soak.py` (after MacNativeGames' `mac_v143_soak.py` / `mac_v143_smoke.py`; their
+  fixed camera teleports a played save to world coordinates, which a new save cannot): `run` keeps the host going for M minutes with
+  `DM_MEMSTAT` and screenshots and a quit through the command channel, then reports the memory slope after the warm-up (a quarter of the run, at
+  least 2 minutes), frame and GPU time early against late, and red lines first seen late; `window` runs N times to a frame and gives the frame
+  and GPU time over a frame window, with `--clean` emptying the save before each run. Tears of the Kingdom, 20 minutes from a new save:
+  footprint −1 MB/h and Metal +0 after the first 5 minutes (124 → 2,648 → 2,638 MB), frame time p50 33.69 → 33.74 ms, GPU 7.18 → 7.12, no late red
+  line; manosaba: +4 MB/h, 16.66 ms throughout, no red line. Frames 1800-3300 of the prologue, 3 runs: frame time p50 33.72-33.74 ms, GPU p50
+  7.13-7.33 ms (the noise a GPU change there has to beat, about 3 %). `tools/tests/t_soak.py`: 13 checks; counting the warm-up in the slope
+  fails 2 (a flat run reads as growth)
+- [x] batch 13 · 51 lifecycle and swipe-away tests (upstream `ios/tools/lifecycle.sh` criteria, `logred.sh`): `DM_TEST_BG=<s>,<len>` on the Mac
+  too (`host/front_mac.m`, the order and lines of the iPhone's scene events), `tools/lifecycle_check.py` judges a log (suspended while away,
+  the guest clock the same back, audio paused and resumed, presenting goes on, no new kind of red line), `ios/run.sh lifecycle` runs it on a
+  device with the background simulated in the app. Found on the way: the no-progress watchdog counted the background, so a run with DM_WATCH
+  was killed 15 s into it; it now skips while the clock is frozen for the background (`t_watchdog`: 3 cases; counting it fails "away"). Tears of
+  the Kingdom and manosaba with `DM_TEST_BG=40,20`: LIFECYCLE OK (the guest clock 217236.755 s at the background and at the return). A save
+  killed at any moment (an app swiped away while suspended gets SIGKILL): `host/tests/t_fs_kill.c` kills a process committing saves 60 times
+  at random (222 commits, 22 kills after a commit not yet reported): every file one whole version, the last reported or the next; a commit that
+  removes the committed save before cloning in its place (`-DDM_TEST_FS_COMMIT_INPLACE`) tears it 14 times of 60. `t_lifecycle_check.py`: 10
+  checks; not comparing the guest clock fails 1. The home button and the app switcher themselves need UI automation on a phone (item 70)
 - [ ] 52 scene render resolution on 1.4.3 (`HOSTREFS`, a Unicorn check)
 - [ ] 53 frame pacing between 30 and 60 fps, the 30 fps constants checked
 - [ ] 54 user mod folders (Atmosphère layout)
@@ -970,7 +987,7 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
-- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it)
+- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51)
 - [ ] 71 an iOS 17 device test (which device: to ask)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups

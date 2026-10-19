@@ -189,7 +189,30 @@ static void tests_start(NSWindow *win, NSView *v) {
     if ((e = getenv("DM_TEST_QUIT_AT"))) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(atof(e) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ app_quit("DM_TEST_QUIT_AT"); });
 }
 
+// DM_TEST_BG=<start s>,<duration s>[;...]: the iPhone's "to the background and back" at those times (plan item 51; the order and log lines of
+// front_ios.m's front_ios_focus_event, so tools/lifecycle_check.py reads a Mac run and an iPhone's boot.txt alike): resign active, background (focus
+// 3, audio paused, guest clock frozen, graphics suspended), back to the foreground, active. On a queue of its own: a windowless run has no main queue
+static void test_bg_event(int ev) {
+    static const char *k[] = {"sceneWillResignActive", "sceneDidEnterBackground", "sceneWillEnterForeground", "sceneDidBecomeActive"};
+    LOG("front: %s (guest clock %.3f s, audio callbacks %llu)", k[ev], guest_ns() / 1e9, (unsigned long long)dm_audio_render_calls());
+    switch (ev) {
+    case 0: dm_focus_set(2); break;
+    case 1: dm_focus_set(3); dm_audio_suspend(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); break;
+    case 2: dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); dm_audio_suspend(0); dm_focus_set(2); break;
+    case 3: dm_focus_set(1); break;
+    }
+}
+static void test_bg_start(void) {
+    const char *tb = getenv("DM_TEST_BG"); double at, dur;
+    dispatch_queue_t q = dispatch_queue_create("dm.test_bg", DISPATCH_QUEUE_SERIAL);
+    for (const char *tp = tb; tp && sscanf(tp, "%lf,%lf", &at, &dur) == 2; tp = strchr(tp, ';') ? strchr(tp, ';') + 1 : NULL) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(at * 1e9)), q, ^{ LOG("front: DM_TEST_BG enter background"); test_bg_event(0); test_bg_event(1); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((at + dur) * 1e9)), q, ^{ LOG("front: DM_TEST_BG return"); test_bg_event(2); test_bg_event(3); });
+    }
+}
+
 void front_run(void (*guest)(void)) {
+    test_bg_start();
     if (!getenv("DM_WINDOW")) { guest(); return; }
     @autoreleasepool {
         if (dm_game.screen_w > 0 && dm_game.screen_h > 0) g_aspect = (double)dm_game.screen_w / dm_game.screen_h;

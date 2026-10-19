@@ -7,6 +7,9 @@
 #   run.sh install            install the built app
 #   run.sh launch [seconds]   launch it (ends a running instance), wait, then fetch Documents/boot.txt
 #   run.sh log                fetch Documents/boot.txt (or boot.launch.txt) now
+#   run.sh lifecycle [at] [len]  launch with a trip to the background simulated in the app at <at> s for <len> s (DM_TEST_BG, default 40 and 20),
+#                             fetch boot.txt and judge it (tools/lifecycle_check.py: LIFECYCLE OK / RED). The real home button and app switcher
+#                             need UI automation on the phone and are not this
 #   run.sh push-data          copy the game's RomFS and shared fonts from the workspace into the app (Library/Application Support)
 # Build switches: DM_FREE_ACCOUNT=1 (free developer account: no iCloud / memory / sustained-execution entitlements), DM_IOS_M3=1 (older-API build,
 # iOS 18), DM_DEVICE_FAMILY=1 (iPhone only), DM_ENV_FILE=<file> (DM_* switches read at launch, as Documents/env.txt is).
@@ -114,6 +117,13 @@ launch)
 log)
   pull boot.txt "$R/boot.txt" || pull boot.launch.txt "$R/boot.txt" || { t "[red] no log"; exit 1; }
   t "log: $R/boot.txt"; tail -40 "$R/boot.txt"; exit 0 ;;
+lifecycle)
+  AT=${2:-40}; LEN=${3:-20}; WAIT=$((AT + LEN + 40))
+  DEVICECTL_CHILD_DM_TEST_BG="$AT,$LEN" xcrun devicectl device process launch --device "$D" --terminate-existing "$B" > "$R/launch.log" 2>&1
+  grep -q Launched "$R/launch.log" || { t "[red] launch failed"; tail -8 "$R/launch.log"; exit 1; }
+  t "launched; to the background at ${AT}s for ${LEN}s, waiting ${WAIT}s"; sleep "$WAIT"
+  pull boot.txt "$R/lifecycle_boot.txt" || { t "[red] no log"; exit 1; }
+  t "log: $R/lifecycle_boot.txt"; python3 -I ../tools/lifecycle_check.py "$R/lifecycle_boot.txt"; exit $? ;;
 push-data)
   for x in romfs:romfs sysfont:sysfont; do
     src=$(ws "${x%%:*}") || continue; [ -d "$src" ] || { t "skipped ${x%%:*}: no $src"; continue; }
@@ -124,5 +134,5 @@ push-data)
   done
   t "done"; exit 0 ;;
 *)
-  sed -n '2,13p' "$0"; exit 1 ;;
+  sed -n '2,16p' "$0"; exit 1 ;;
 esac
