@@ -72,7 +72,7 @@ What works is in the README's status. Open, roughly by value:
    tried. Not tested: the iOS 18 build on iOS 26.
 4. Smaller: 13 NVN functions the game looks up that the layer does not know (returned as NULL, never called); compute dispatch never seen at
    run time; keyboard, mouse and controller input untested with this game; Metal HUD on iOS 18; generic upstream changes not ported yet
-   (present pacing to the screen refresh, Mac occlusion, audio notifier QoS, `hle_fs` robustness).
+   (Mac occlusion, audio notifier QoS: see "Wider review of 2026-10-19"; present pacing to the screen refresh does not apply, see there).
 
 Devices on 2026-10-16: iPhone 17 Pro (iOS 26.4) runs a build from before 1f54dad (the copy encoder fix), iPad mini 7 (iOS 18.6.2) a build of
 68c048b, iPad Pro M4 (iOS 18.5) the unsigned IPA above (build 1792140837) with the iPad mini's save of 2026-10-16 17:10.
@@ -366,7 +366,7 @@ Upstream PR #55 (x18 scan prefilter, n3crosis) is in `tools/patch_nso.py` (76 s 
 
 ## Upstream and other ports to draw from
 
-Reviewed 2026-10-17 and again 2026-10-19 (candidates in "Review of 2026-10-19" below). Fetch them into a scratch repository, read only, never run their code; port by hand with a test per item, check our
+Reviewed 2026-10-17 and again 2026-10-19 (candidates in "Review of 2026-10-19" below, then a wider pass the same day: "Wider review of 2026-10-19"). Fetch them into a scratch repository, read only, never run their code; port by hand with a test per item, check our
 code first (several fixes are already here in another form), and credit the source in the commit and the README.
 
 ### Upstream: [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)
@@ -451,6 +451,7 @@ RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) an
   save thread with 8 KB; NVN functions other than command recording, d6cd8a8…). Our HLE functions run on the calling guest thread's stack too
   (imports resolve straight to them), and the file system ones keep path buffers on it. Not ported yet: an assembly trampoline that only
   carries register arguments, and it cuts the guest backtrace of crash reports at the switch; wants a game whose small stacks overflow.
+  MacNativeGames' version keeps the backtrace: see "Wider review of 2026-10-19".
 - **Diagnostics**: `DM_NVN_KEYDUMP` (every input of one fragment shader's draws) and sampler / swizzle output in PASSDUMP
   (734a286328d18404fd5a67785a1e05d2149c5986).
 - **nn::ro .nro modules**: nx-port `dm/host/hle_ro.c` and loader changes (3e6366b…).
@@ -476,7 +477,7 @@ RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) an
   leak class as a593388); nx-port geometry shader point-to-quad, alpha test, newer NVN object sizes (3e6366b…).
 - **iOS 17 devices**: 4ppp44/d2r-mobile-ios17 (above).
 - Small: an ad-hoc signature for LiveContainer (Kamisorara 95d6caa903bc19e602493bb5a5568650d39f52cf), gamepad face buttons by printed glyph
-  (8429dc1727cbca079c60427e3b59258683f1c924).
+  (8429dc1727cbca079c60427e3b59258683f1c924; an earlier variant, the fix is 55c6fba / upstream 46cb318, see "Wider review of 2026-10-19").
 
 ### Review of 2026-10-19
 
@@ -572,3 +573,271 @@ M5 (16 GB, macOS 26), 30 fps product, two runs where stated.
 Not worth porting: nxnative's prebuilt .NET DLLs, Android/Vulkan and MoltenVK runtimes (dodola, imink/hades-ios), the upstream D2R-only
 parts. Forks of d2r-mobile with their own pushes are mostly branches for pull requests that upstream has merged; on 2026-10-17 the renamed
 ones (jeoichu-rgb/switch-mobile, Kelvin-Link/ns-mobile, wysl/-game-d2r-mobile) had no commits of their own.
+
+### Wider review of 2026-10-19 (to do)
+
+Eight reviewers in parallel, one group of references each, read only (nothing of theirs built or run): new commits on every branch, all pull
+requests and issues, forks with commits of their own (forks pushed after creation, compared with their parent through the API), and the code as
+it stands against ours. Reviewed through: upstream 9393b00 (39 PRs, 47 issues; 1086 forks, 19 ahead, 157 branches compared), nxnative 2b31dbd (4
+PRs, 5 issues, 4 forks ahead), MacNativeGames f5cc151 (13 PRs, 7 issues, 2 forks ahead), LASRecomp main d23597d, beta_5 7597ec3 and 15 other
+branches (131 PRs, 63 issues, 6 forks ahead; hjqcan's fork carries a `multi` branch 205 commits past beta_5), mush8 975040b (GPL-3.0, ideas only;
+3 PRs, 2 forks ahead), tomodachi-native 5587d1b, nx-port 3e6366b, Kamisorara 1539d80, 4ppp44 2a7b1c6, SkyRecomp d876287, BotWRecomp 2b84b82, and
+25 projects found by search. "Checked here" = the gap was confirmed in our code when the reports were merged; the rest is the reviewer's reading,
+to confirm before porting.
+
+Carried over from "Review of 2026-10-19" (not done there):
+- The 2K canvas and MetalFX scene / output upscaling (MacNativeGames): code patches with a veneer, which the rewriter cannot place yet, a HeapDef
+  overlay and a larger application pool. The scene resolution patch below (PR #19) is a smaller first step.
+- Gyro and rumble: needs a controller to check; the references below.
+- BC → ASTC for iOS: waits until Tears of the Kingdom runs on iOS (iOS items below).
+- Checks not run yet: MixWithOthers on a device (46b63f4); the game over flow with the overlay in play (checked by bytes only,
+  `games/totk/tests/t_romfs_overlay.py`); manosaba's iOS app rebuilt with chain 1e41705de87b and run on the devices (its metallibs are built in
+  `work/build/ios/dmsh_b/b-1e41705de87b`; the last device builds recorded are from 2026-10-16).
+- Open: the blood moon crash ("Open (2026-10-19)" above); svc 0x34 type 3 and the host stack item below bear on it.
+- The encode stage stays off (`DM_NVN_RENDER_STREAM=1`); the translation thread below takes its place as the plan.
+
+New references:
+- [T5eng/nxnative_totk](https://github.com/T5eng/nxnative_totk) (MIT, 1c22d16): Tears of the Kingdom 1.4.3 on an iPhone Air (iOS 27.0.1) as
+  patches on MacNativeGames: boot, saves, play, audio and touch. Its `docs/TECHNICAL.md`: about 6 GiB of address space below 2^39 on iOS 27 (heap
+  and alias reserved anywhere, then checked against 2^39), arm64-iphoneos metallibs (MSL compiled on the device gave argument encoders of length
+  0), opus and libvpx cross-built for iOS, a translation thread (frame p50 22.9 → 16.67 ms).
+- [Nishikori-Yui/lordran-native](https://github.com/Nishikori-Yui/lordran-native) (MIT, from nxnative, Dark Souls Remastered, 8f5b96a): alpha
+  test, occlusion counts across submissions, command-buffer FenceSync, sampler reduction, each with GPU tests.
+- [atone/nxnative](https://github.com/atone/nxnative) (MIT, 185cfda): Pro Controller motion (HID report 0x30) and HD rumble (report 0x10).
+- [GirlNet/d2r-mobile](https://github.com/GirlNet/d2r-mobile) branches `codex/p5r-runtime` and `codex/p5r-shaders-verified` (Persona 5 Royal
+  bring-up): sampler LOD bias and reduction, NVN functions we lack.
+- [catoncat/d2r-port-radar](https://github.com/catoncat/d2r-port-radar) (MIT): an index of derivative ports refreshed every few hours, with UE4 /
+  CRIWARE findings; start the next review there.
+
+Correctness, small:
+- **svc 0x34 type 3** (checked here): `host/hle_thread.c` treats every type but 2 as a 32-bit "less than". Atmosphère's address arbiter has type
+  3 = wait if equal on a 64-bit value (8-byte aligned) and refuses unknown types for svc 0x34 and 0x35; the SDK's `nn::os::WaitForAddress(long
+  const*, long)` (sdk 0x146fb0) uses type 3. With a race test as LASRecomp's `tools/test_condvar.c` (a user-space adder against the kernel's
+  updates; a plain store instead of the compare-and-swap must fail it). Bears on the open blood moon crash (`WaitLightEvent` trusts a 0 result).
+- **Controller face buttons swapped twice on Nintendo controllers** (checked here): `host/gamepad.m` swaps by position when `is_nintendo`, which
+  its own comment says comes from the header convention only. Upstream 46cb318 (issue #57: a Switch Pro on iPadOS 27.0.1 recognised as Nintendo
+  and still swapped) maps buttonA..Y straight and has an 18-case `t_padmap.c`; Kamisorara 55c6fba is the same fix (8429dc1 under "Small" above
+  was its earlier, wrong variant).
+- **Three scans ignore the BindProgram stage mask** (checked here): the Q scan of `defer_try` and steps four and five of `fuse_try` take the
+  program as is instead of `prog_bind`; with Unity's two-call binds (manosaba) a deferral can miss a sampled attachment and step five never
+  fuses. Upstream PR #70 (open, SepheTT) covers every site with tests.
+- **1,568 Tears of the Kingdom shaders missing from the offline extraction** (checked here: all 27,101 of our keys are among nxnative's 28,669):
+  BAHS `.sharcb` entries share control sections but point at different code, and `engines/bnsh/shader_extract.py` takes one code area per control
+  section. nxnative `dm/gfx/tools/shader_split.py` `bahs_shaders` reads the entry table (`agl_technique_pfx` 777, `agl_technique_shdw` 300,
+  `agl_common` 174, `agl_technique_lght` 99, ...), plus the Title layout's `bgsh` and the older control layout of
+  `Lib/NintendoSDK/TextureShader.bnsh`. None was missed in our runs so far (title, prologue, dive); later areas and iOS (no capture at run time)
+  need them.
+- **FMZ multiplies** (checked here: `Fmz` is decoded and used nowhere under `Instructions/`): Maxwell gives 0 for 0 × Inf / NaN with FMZ, IEEE
+  math gives NaN, which blurs spread (tomodachi-native a0aa6c2). Shader chain bump.
+- **SHF with a clamped or zero shift, I2I.SAT across signedness** in the Ryujinx translator (LASRecomp d4c2ff6, PR #134: 29 hand-worked vectors,
+  15 failed on their old translator; ours read, not run). Run their vectors through our chain; scan the TotK library for those forms.
+- **Sampler LOD bias and reduction** (checked here: `lod_bias` is stored and printed, never applied): `MTLSamplerDescriptor` `lodBias` /
+  `reductionMode` (macOS / iOS 26); TotK calls SetLodBias 861 times. GirlNet 0293081, lordran 0a35532 (292 GPU checks).
+- **GPU time per frame is a sum of command-buffer spans** (checked here: `gpu_tag_done` adds GPUEndTime − GPUStartTime): Apple GPUs overlap
+  command buffers, so the union is what the frame costs (LASRecomp PR #197: summed 13-17 ms against a union of 6.5-7 ms). The GPU p50 numbers
+  above are inflated by an unknown amount; the direction of each change holds.
+- **A snapshot copy of an unmapped page ends the process** (checked here: `us_copy_range` is a plain memcpy, also on worker threads):
+  MacNativeGames guards the copy with a SIGSEGV / SIGBUS fault guard and drops that copy (a helper died once in about 12 sessions).
+- **Overlay directory listings stop at 2048 names** without a word (checked here: `dir_snapshot` in `host/hle_fs.c`, with a quadratic duplicate
+  check). TotK has directories of 75,940 / 29,356 / 15,067 entries and the overlay is on by default; whether the game lists them is not known.
+- **Silent no-ops** (checked here): SetPatchSize, MultiDraw*IndirectCount, DispatchComputeIndirect and DownsampleTextureView do nothing without a
+  line; red on first call (upstream 44a6770), the indirect ones implemented when a game calls them (nxnative's DispatchComputeIndirect /
+  DrawElementsIndirect).
+- **Occlusion counts across submissions** (lordran 3ef6915: 64 samples, then 32 in the next submission, read 64): our visibility ring and slot
+  numbering look the same; not checked whether TotK counts across a submission.
+- Smaller: precise SleepThread against macOS timer slack (nxnative a9c56fd: 33 ms sleeps took 36.4 ms); rodata read-only and svc 0x02 honoured so
+  a wild write faults at the writer (MacNativeGames `loader.c` `seal` / `check_permissions`); RG8_UI2F / UI2F / I2F vertex formats (jiangjifeng's
+  nxnative fork ae9082d); `R_AARCH64_TLSDESC` and symbol precedence for .nro modules (nx-port).
+
+Correctness, medium:
+- **Host calls and svcs on a per-thread host stack** (MacNativeGames `games/totk/runtime/gate.S`, `hle_stack.S`, `hle_stack.c`: 4096 static
+  thunks and a frame record that links back to the guest caller, so backtraces stay whole; mush8 has the same idea). `host/entry.S` puts 800
+  bytes on the guest stack and host functions run there (a RomFS open with the overlay stacks about 5.6 KB of path buffers); their note says
+  Tears of the Kingdom makes threads with stacks as small as 4 KiB, and 16 KiB host pages make 4 KiB guard pages writable. A possible cause of
+  the blood moon crash (unproven): log the least free stack per thread at gate entry first. Replaces "Small guest stacks" above; manosaba's
+  stop-the-world reads host frames on the guest stack and would need the guest sp the switch saves.
+- **A draw that samples the attachment it draws into** (tomodachi-native 4dbd30f + da08d11 `fbx_hazard`: every draw, mip aware, copies from a
+  pool of 32, views held until completion): we split only merged continuations (`draw_samples_rt`). Count such draws in the dive and in manosaba
+  first.
+- **Counter timestamps where the report sits on the GPU** (LASRecomp PR #93 splits the command buffer at each ReportCounter): ours give every
+  report of a submission one completion time. Check whether TotK subtracts two reports of one submission.
+
+Performance:
+- **NVN translation on a thread of its own**, now in four places with numbers: upstream b94670c (+ `t_nvn` case 8; dropped frames per 300 85 → 56
+  on an iPhone 17 Pro Max), LASRecomp `runtime/nvn/rqueue.c` (PR #199; game-thread CPU 5.20 → 3.02 ms a frame on an M3 Max), MacNativeGames
+  `TOTK_ASYNC_REPLAY` (`hle_nvn.c`, in the 70729e9 tree), T5eng on an iPhone Air (frame p50 22.9 → 16.67 ms). A fence is the submit counter
+  ("translated and GPU done"); Finish, texel reads, write-back and destroys drain the queue; presents are queued in order. The uniform snapshot
+  stays at the submit call. Large; the way to take replay off the game thread, rather than our encode stage (which lost at frames 1800 / 2400).
+- **Busy yields** (nxnative e06a8ec): after 200 µs of back-to-back SleepThread(0) each yield sleeps an eighth of the run (10-250 µs); Three
+  Houses: Mac CPU energy 3.5 → 0.5 W at equal frame times; a `power_line` logs TASK_POWER_INFO_V2 every 300 frames. With virtual cores the sleep
+  has to release the core.
+- **Targeted wakes** (nxnative e06a8ec): an event wakes only the waiters whose handle set holds it (ours wakes every WaitSynchronization waiter);
+  semaphores instead of `usleep` polls in `host/hle_audren.c` and three places in `nvn_mtl.m`.
+- **Replay lookups without the lock or a walk** (nxnative e06a8ec): a per-thread pool cache with a generation, the dirty range kept on the
+  texture (our `find_span` walks about 3,000 ranges), residency adds skipped when nothing changes, page runs unprotected with one `mprotect`;
+  dodola 7ccbb3f keeps the newest write per 64-page block.
+- **Re-uploaded CPU textures alternate with a kept spare** (nxnative `NvPkg` spare; Link's Awakening 1.64 → 0.37 ms a submission); ours makes a
+  new MTLTexture per re-upload. Check cutscenes with `DM_NVN_REUPLOG`.
+- **Clears kept on the texture, ClearTexture included** (LASRecomp TexDefer, PRs #96 / #129: passes 42 → 33 and clear-only passes 12 → 3 in one
+  scene); ours opens a store-only pass for every ClearTexture. Count them first.
+- Smaller: the reflection summary cached per program and attachment events once per pass (upstream 44a6770 / afad65c); `mrs cntpct_el0` read
+  inline with a key-page multiplier instead of a gate (mush8 idea; 43 sites in TotK's sdk; count the reads first; the background freeze and
+  `DM_DETCLOCK` must keep working); the render area limited to the drawn part (LASRecomp 59a7507); libvpx row multithreading (nxnative
+  `VP9D_SET_ROW_MT`).
+
+iOS:
+- **A launch check for Metal 4** (upstream b94670c, issue #41): iOS 26 runs on A13, Metal 4 needs A14 / M1, and ours stops with "failed to create
+  MTL4CommandQueue". Show a screen instead (and offer the Metal 3 build).
+- **Tears of the Kingdom's guest memory on iOS**: nxnative 2b31dbd (a 5 GB reservation without extended addressing, a 2.375 GB alias region, a
+  2.125 GB heap region because the game calls SetHeapSize(0x86000000); ours has `guest_heap_mb` 256 → 0xD401 on iOS) and T5eng (iOS 27: about 6
+  GiB below 2^39; log our reservation base against 2^39).
+- **VP9 on iOS**: nxnative vendors the VP9-decoder part of libvpx v1.17.0 (71 files and the generated config, compiled into the iOS app); T5eng
+  cross-builds it.
+- **increased-memory-limit with a free account**: BotWRecomp `ios/PORTING.md` (Xcode made a Personal Team profile with it) and mush8
+  `make-ios.sh` (FREE=1 keeps it) say yes; `ios/tools/project_free.py` strips it and `ios/README.md` says a free account cannot sign it. One
+  signing attempt decides (`embedded.mobileprovision`, `os_proc_available_memory`); it would lift the 3.4 GB limit of item 2 at the top.
+- **iOS 17 / Metal 3 devices**: the only unguarded iOS 18 APIs are the residency set (`nvn_mtl.m`) and `hasPerformanceProfile` (`front_ios.m`)
+  (4ppp44 compiles the set out; `@available` keeps one binary); deployment target 17.0 in `ios/tools/project_m3.py` and `gfx/tools/ios_metal.py`
+  (rebuild the metallibs).
+- **Game data excluded from backups** (`NSURLIsExcludedFromBackupKey`, BotWRecomp); TotK's RomFS is 17 GB.
+- **On-screen controls with drag-to-look** for TotK (BotWRecomp `runtime/src/host/touch.cpp`, MIT, with a self-test hook); nxnative's
+  `DmGamepad.m` is the alternative listed above.
+- Smaller: `env.txt` switches on the device (nxnative 5aabb96); the audio notifier thread at USER_INTERACTIVE (upstream afad65c: late wakes 16 →
+  0 in 240 s); CoreAudio opened off the calling thread (tomodachi-native d7f52e1, one open took about 40 s there); cold CPU-uploaded textures
+  dropped under memory pressure (justr4mzi's mush8 fork aafef22, ideas only); `GCSupportsGameMode` for iOS 18-25; already-compressed files
+  stored, not deflated, in the IPA (nxnative `zip_store`); code patches chosen at launch, so one product serves 30 and 60 fps (tomodachi-native
+  0428c80 / afd88e9).
+
+Features (Tears of the Kingdom):
+- Gyro and rumble, references now: atone/nxnative (Pro Controller IMU and HD rumble, MIT), mush8 (CoreMotion / CoreHaptics mapping, ideas only),
+  LASRecomp `docs/rumble.md` (clamping, mixed by maximum, renewal, stop on focus loss), smbw-mobile `front_haptics_mac.m`, SkyRecomp's resting
+  six-axis state.
+- Scene render resolution on 1.4.3 (MacNativeGames PR #19: four loads at main+0x585e48.. from the host page; a `HOSTREFS` rule can express it).
+- Frame pacing between 30 and 60 fps: with our real-time step, the interval pinned to 1 presents frames as they finish (BotWRecomp `fps.cpp`,
+  ideas only). Its list of BotW's 30 fps constants and of cutscenes that crash above 30 fps says what to check in TotK, first whether the blood
+  moon crash happens with the 30 fps product.
+- User mod folders as overlay layers (SkyRecomp `runtime/mods.c`, with the Atmosphère layout).
+- Quit waits for a save in progress (MacNativeGames `frontend.m`, up to 15 s); a covered Mac window discards presents (upstream afad65c).
+- Alpha test: lordran a63dd76 (8 comparisons in the fragment epilogue, function constants, 54 GPU cases) or nx-port's; TotK never called
+  ColorStateSetAlphaTest in our logs, so the known gap above is not hit there.
+- For the next game: add-on content mounts (upstream PR #69), command-buffer FenceSync (lordran c6af84b), ClearBuffer / ClearTexturei /
+  SetScissors / SetDepthRanges / Downsample as a resolve / depth bounds / rasterizer discard (GirlNet's P5R branches), LDN / lan-play (mush8's
+  design), UE4 / CRIWARE notes (d2r-port-radar).
+
+Diagnostics and tooling:
+- **A live command channel** (MacNativeGames `input.c`, a polled file: keys, shots, pass dump, graphics flags without a restart, thread dump,
+  host-call trace, frame step).
+- **One game at a time on the Mac** (MacNativeGames `game_slot.c`, a flock with a queue; two games used 13 of 16 GB and the GPU driver panicked
+  the kernel four times there).
+- **Continuous integration** now that the repository is public: a macOS runner that builds the host and runs the host tests that need no GPU
+  (GirlNet's nxnative fork bfc0376, LASRecomp `ci.yml`; a synthetic NSP as in hitsmaxft/nsp-dawrin, GPL-3.0, would go further).
+- Smaller: thread dumps list the handles of a WaitSynchronization (SkyRecomp `kernel.c`); a ring of the last 256 condvar / mutex operations and a
+  delay injected into condvar waits (LASRecomp: a 1-in-6 hang reproduced 3 times of 3); sead heap walk and list watch at a crash
+  (MacNativeGames); `DM_MEMSNAP` raw guest memory at chosen frames for the manosaba leak (tomodachi-native a71964e); per-pass GPU time with
+  MTL4CounterHeap (upstream 44a6770); soak and fixed-camera measurement (MacNativeGames `mac_v143_soak.py` / `mac_v143_smoke.py`); a stamp of the
+  rewriter's sources in the product, the rewriter refusing system registers it does not know, the SDK's abort text in the log (mush8 ideas); the
+  lifecycle and swipe-away tests back (upstream `Lifecycle.swift`, `lifecycle.sh`, `logred.sh`); upstream's `t_loader_weak`.
+
+Checked, not better or already here: the Opus table leak (we run the SDK's decoder in the game's storage), macOS 27 fixed reservations (ours are
+anywhere), a Metal 3 backend (we have one), compiling shaders at launch and skipping draws until ready (not taken: content drawn once would stay
+missing), separate texture and sampler descriptor pools (one pool in our games), present pacing to the screen refresh (games that step per frame
+would run fast; only TotK's real-time step can use it, through `DM_PRESENT_HZ`), SignalToAddress −2 (Atmosphère corrected it to −1 in 5f2d713;
+ours is right), Metal binary archives (LASRecomp PR #145 closed; still "not to do"), nx-port's clamp of fragment outputs to ±65504 (breaks R32F),
+lordran's deswizzle change (same offsets as ours), the audio mixers of LASRecomp, SkyRecomp, MacNativeGames and nx-port (our in-process SDK
+renderer is closer), saves (ours are transactional), the condvar and WaitSynchronization order (ours is closer to Horizon than theirs).
+
+### Plan: all of the wider review, simple to complex (2026-10-19)
+
+Everything above is to be done, in this order. `[ ]` open, `[x] <commit>` done, `[-]` measured and not needed (with the number). Each item gets a
+unit test and a broken version that must fail it; each batch ends with the gfx tests (Metal 4 and Metal 3), the host tests, a manosaba and a Tears
+of the Kingdom smoke run, then one commit. Sources and evidence per item are in "Wider review of 2026-10-19" above.
+
+Tier 1, small and local. Correctness:
+- [ ] 1 svc 0x34 type 3 (64-bit wait if equal), unknown types refused by 0x34 / 0x35, an arbiter race test
+- [ ] 2 controller face buttons by the printed letter on Nintendo controllers, a pure mapping function and an 18-case table test
+- [ ] 3 the BindProgram stage mask at the three scans (`defer_try` Q scan, `fuse_try` steps four and five)
+- [ ] 4 sampler LOD bias (and reduction where the GPU has it)
+- [ ] 5 GPU time per frame as the union of command-buffer spans
+- [ ] 6 a fault guard around uniform snapshot copies
+- [ ] 7 overlay directory listings without the 2048-name cap, duplicates found by hash
+- [ ] 8 the silent NVN no-ops red on first call
+- [ ] 9 precise SleepThread
+- [ ] 10 rodata read-only, svc 0x02
+- [ ] 11 RG8_UI2F / UI2F / I2F vertex formats
+- [ ] 12 thread dumps list the handles of a WaitSynchronization
+
+Tier 1, performance:
+- [ ] 13 busy-yield back-off releasing the virtual core, a power line every 300 frames
+- [ ] 14 targeted wakes; semaphores instead of the `usleep` polls
+- [ ] 15 replay lookups: per-thread pool cache, dirty range on the texture, residency no-op skip, `mprotect` over page runs
+- [ ] 16 a spare texture for re-uploaded CPU textures
+- [ ] 17 reflection summary per program, attachment events once per pass
+- [ ] 18 libvpx row multithreading
+
+Tier 1, iOS and Mac:
+- [ ] 19 a Metal 4 launch check with a screen
+- [ ] 20 game data excluded from backups
+- [ ] 21 `GCSupportsGameMode`
+- [ ] 22 `env.txt` switches on the device
+- [ ] 23 audio notifier thread at USER_INTERACTIVE
+- [ ] 24 compressed files stored, not deflated, in the IPA
+- [ ] 25 iOS 17 code guards (`@available` around the residency set and `hasPerformanceProfile`)
+- [ ] 26 quit waits for a save in progress (up to 15 s)
+- [ ] 27 a covered Mac window discards presents
+
+Tier 1, tooling and diagnostics:
+- [ ] 28 one game at a time on the Mac (flock with a queue)
+- [ ] 29 a stamp of the rewriter's sources in the product
+- [ ] 30 the rewriter refuses system registers it does not know
+- [ ] 31 the SDK's abort text in the log
+- [ ] 32 a kernel operation ring, a delay injected into condvar waits
+- [ ] 33 upstream's `t_loader_weak`
+- [ ] 34 `DM_MEMSNAP`
+- [ ] 35 GitHub Actions: build the host, run the tests that need no GPU
+
+Tier 2, small code, one shader chain rebuild for all four:
+- [ ] 36 the 1,568 BAHS shaders in the offline extraction
+- [ ] 37 FMZ in the translator
+- [ ] 38 SHF with a clamped or zero shift, I2I.SAT across signedness (LASRecomp's vectors first)
+- [ ] 39 alpha test
+
+Tier 3, medium:
+- [ ] 40 host calls and svcs on a per-thread host stack, backtraces kept (manosaba's stop-the-world needs the saved guest sp)
+- [ ] 41 occlusion counts across submissions
+- [ ] 42 draws that sample their own attachment (count first)
+- [ ] 43 counter timestamps where the report sits (check first)
+- [ ] 44 clears kept on the texture, ClearTexture included (count first)
+- [ ] 45 `cntpct_el0` read inline (count first)
+- [ ] 46 render area limited to the drawn part (only if a game draws sub-rects)
+- [ ] 47 a live command channel
+- [ ] 48 sead heap walk and list watch at a crash
+- [ ] 49 per-pass GPU time with MTL4CounterHeap
+- [ ] 50 soak and fixed-camera measurement
+- [ ] 51 lifecycle and swipe-away tests back
+- [ ] 52 scene render resolution on 1.4.3 (`HOSTREFS`, a Unicorn check)
+- [ ] 53 frame pacing between 30 and 60 fps, the 30 fps constants checked
+- [ ] 54 user mod folders (Atmosphère layout)
+- [ ] 55 CoreAudio opened off the calling thread (measure first)
+- [ ] 56 cold CPU textures dropped under memory pressure
+- [ ] 57 code patches chosen at launch (one product for 30 and 60 fps)
+- [ ] 58 on-screen controls with drag-to-look on iOS
+- [ ] 59 iOS 17: deployment target 17.0, metallibs rebuilt
+- [ ] 60 indirect draws and dispatches (when a game calls them)
+
+Tier 4, large:
+- [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it)
+- [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59)
+- [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52)
+- [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN
+
+Tier 5, needs the user's devices, controller or account:
+- [ ] 65 increased-memory-limit with a free account (one signing attempt)
+- [ ] 66 a Switch Pro controller check of 2
+- [ ] 67 gyro and rumble (implemented here, checked with the controller)
+- [ ] 68 MixWithOthers on an iPhone
+- [ ] 69 the game over flow with the overlay, in play
+- [ ] 70 manosaba's iOS app with chain 1e41705de87b on the devices
+- [ ] 71 an iOS 17 device test (which device: to ask)
+
+Open:
+- [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip
