@@ -121,7 +121,7 @@ enum {
     OP_BIND_PROGRAM, OP_BIND_STATE, OP_BIND_VATTR, OP_BIND_VSTREAM, OP_BIND_VBUF,
     OP_BIND_UBO, OP_BIND_SSBO, OP_BIND_TEX, OP_BIND_SAMP,
     OP_STENCIL, OP_POLY_OFFSET, OP_DRAW, OP_DRAW_IDX, OP_DISPATCH, OP_BARRIER,
-    OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_DEPTH_CLAMP, OP_COPY_IMAGE_STRIDE, OP_RENDER_ENABLE, OP_COUNT_
+    OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_DEPTH_CLAMP, OP_COPY_IMAGE_STRIDE, OP_RENDER_ENABLE, OP_PRIM_RESTART, OP_COUNT_
 };
 // Payload (immediately follows op_hdr)
 typedef struct { int32_t n; const tex_t *color[8]; view_t cview[8]; uint8_t has_cview[8]; const tex_t *depth; view_t dview; uint8_t has_dview; } p_set_rt;
@@ -150,7 +150,8 @@ typedef struct { const tex_t *src, *dst; view_t sv, dv; uint8_t has_sv, has_dv; 
 typedef struct { const tex_t *tex; view_t view; uint8_t has_view, is_uint; NVNcopyRegion r; int32_t mask; union { float f[4]; uint32_t u[4]; } c; } p_clear_tex;
 typedef struct { int64_t stride; } p_copy_stride;
 typedef struct { float rgba[4]; } p_blend_color;
-typedef struct { int32_t enable; } p_depth_clamp;   // 1 = depth clamp (fragments beyond the near / far planes are kept at the boundary depth, Metal DepthClipModeClamp)
+typedef struct { int32_t enable; } p_depth_clamp;
+typedef struct { int32_t enable; uint32_t index; } p_prim_restart;   // SetPrimitiveRestart   // 1 = depth clamp (fragments beyond the near / far planes are kept at the boundary depth, Metal DepthClipModeClamp)
 
 // Entry point of the Metal replay layer (nvn_mtl.m): replays a set of command handles into the current submission
 void mtl_exec(const uint8_t *handle);
@@ -185,6 +186,7 @@ double mtl_presented_time(uint64_t n);
    // Actual presentation time (seconds) of the n-th present (counted from 1); 0 = not ready, −1 = dropped
 // Texture release (at Finalize)
 void mtl_tex_release(tex_t *t);
+void mtl_tex_live(const tex_t *t);   // nvnTextureInitialize: the texture now living at its storage (nvn_mtl.m)
 const tex_t *mtl_tex_snap(const tex_t *t);   // Host copy of a texture object (by serial) for commands to record instead of the game's object
 uint64_t mtl_tex_snap_count(void);
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads);

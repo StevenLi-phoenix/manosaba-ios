@@ -240,7 +240,8 @@ NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, 
 NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { return (NVNbufferAddress)((const pool_t *)p)->mem; }
 // Pool memory is the real memory given by the game (same address for CPU and GPU), so mapping returns the original pointer; cache maintenance has nothing to do
 NVN(nvnMemoryPoolMap, void *, const NVNmemoryPool *p) { return ((const pool_t *)p)->mem; }
-NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
+void mtl_pool_invalidate(const pool_t *p, uint64_t off, uint64_t n);   // the CPU is about to read what the GPU wrote: GPU results of this range are written back (nvn_mtl.m)
+NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { if (off >= 0) mtl_pool_invalidate((const pool_t *)p, (uint64_t)off, n); }
 NVN(nvnMemoryPoolGetSize, size_t, const NVNmemoryPool *p) { return ((const pool_t *)p)->size; }
 NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { return (NVNmemoryPoolFlags)((const pool_t *)p)->flags; }
 NVN(nvnMemoryPoolBuilderGetSize, size_t, const NVNmemoryPoolBuilder *b) { return ((const pool_builder_t *)b)->size; }
@@ -330,6 +331,9 @@ NVN(nvnTextureBuilderSetFormat, void, NVNtextureBuilder *b, NVNformat f) { TB(b)
 NVN(nvnTextureBuilderSetSamples, void, NVNtextureBuilder *b, int s) { TB(b)->d.samples = s; }
 NVN(nvnTextureBuilderSetStride, void, NVNtextureBuilder *b, ptrdiff_t s) { TB(b)->d.stride = (uint32_t)s; }
 NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, ptrdiff_t off) { { uint64_t lr = (uint64_t)__builtin_return_address(0); module_t *m = module_of((void *)lr); OLOG("TextureBuilderSetStorage b=%p pool=%p off=%#llx lr=%s+%#llx", (void *)b, (void *)p, (long long)off, m ? m->name : "?", m ? lr - (uint64_t)m->base : lr); } TB(b)->pool = (pool_t *)p; TB(b)->off = off; }
+// The SDK reference says the console ignores this pointer: packaged data is expected to be in the texture's pool storage already (only the Windows
+// reference implementation converts and copies it). Tears of the Kingdom calls it
+NVN(nvnTextureBuilderSetPackagedTextureData, void, NVNtextureBuilder *b, const void *data) { (void)b; (void)data; }
 NVN(nvnTextureBuilderSetPackagedTextureLayout, void, NVNtextureBuilder *b, const NVNpackagedTextureLayout *l) {
     TB(b)->has_layout = l != NULL; if (l) memcpy(TB(b)->layout, l->layout, 8);
     TB(b)->d.pkg_block_h = l ? l->layout[0] + 1 : 0;
@@ -390,6 +394,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     { nvn_texlayout L; nvn_tex_layout(&o->d, &L); o->size = (uint32_t)L.size; o->layer_size = (uint32_t)L.layer_size; if (L.size >> 32) LOG("[red] TextureInitialize: storage %#llx exceeds 4 GB", L.size); }
     o->mem = s->pool && s->pool->mem ? s->pool->mem + s->off : NULL;
     o->serial = nvn_new_serial();
+    mtl_tex_live(o);   // the texture now at this storage (a registration of a finalized one there follows it: nvn_mtl.m tex_by_id)
     { const char *why = !o->d.format ? "format 0" : nvn_texdesc_metal_check(&o->d); if (why) tex_diag("TextureInitialize", -1, o, why, (uint64_t)__builtin_return_address(0)); }
     if (g_log && o->d.width == 1920 && o->d.height == 1080) { const uint8_t *q = (const uint8_t *)t; char hx[0xC0 * 2 + 1]; for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] Texture %p 0xC0 bytes: %s", (void *)t, hx); }
     OLOG("Texture %p ser %llu %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx mem=%p", (void *)t, o->serial, o->d.width, o->d.height, o->d.depth,
@@ -890,6 +895,7 @@ NVN(nvnCommandBufferSetViewport, void, NVNcommandBuffer *c, int x, int y, int w,
     r->v[0][0] = (float)x; r->v[0][1] = (float)y; r->v[0][2] = (float)w; r->v[0][3] = (float)h;
 }
 NVN(nvnCommandBufferSetDepthClamp, void, NVNcommandBuffer *c, uint32_t en) { REC(c, OP_DEPTH_CLAMP, p_depth_clamp)->enable = B(en) != 0; }
+NVN(nvnCommandBufferSetPrimitiveRestart, void, NVNcommandBuffer *c, uint32_t en, int index) { p_prim_restart *r = REC(c, OP_PRIM_RESTART, p_prim_restart); r->enable = B(en) != 0; r->index = (uint32_t)index; }   // replay: nvn_mtl.m draw
 // Conservative rasterization: no Metal equivalent. Disabling it (Unity's normal case) needs nothing; enabling it is reported red
 NVN(nvnCommandBufferSetConservativeRasterEnable, void, NVNcommandBuffer *c, uint32_t en) {
     (void)c; static int red; if (B(en) && !red++) LOG("[red] CommandBufferSetConservativeRasterEnable 1: Metal has no conservative rasterization, drawing with normal rasterization");
@@ -1278,7 +1284,12 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // The previous present of this texture has not yet been processed by the present thread (display cannot keep up, a whole swapchain round behind): wait for it to be returned, then hand it to the game to draw
     uint64_t tk = *idx < 4 ? o->ticket[*idx] : 0;
     if (tk) { uint64_t w0 = now_ns(); mtl_present_wait(tk); g_pq_wait_ns += now_ns() - w0; }
-    if (s) { ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = mtl_last_fence(); }   // The swapchain texture becomes available once the commits before this point have completed
+    // The acquire sync means "the display path no longer reads this texture": mtl_present_wait above waited for its last present to be committed, and
+    // every later use of the texture is ordered after that present on the one Metal queue. Fencing it to the newest submission instead held the game's
+    // CPU here until the whole previous frame had run, so the replay of a frame and the GPU work of the one before never overlapped (MacNativeGames,
+    // MIT: TOTK_ACQ_SYNC). DM_NVN_ACQ_SYNC=newest restores that (A/B)
+    if (s) { static int newest = -1; if (newest < 0) { const char *e = getenv("DM_NVN_ACQ_SYNC"); newest = e && !strcmp(e, "newest"); if (newest) LOG("[nvn] DM_NVN_ACQ_SYNC=newest: the acquire sync waits for the newest submission"); }
+             ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = newest ? mtl_last_fence() : 0; }
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
 

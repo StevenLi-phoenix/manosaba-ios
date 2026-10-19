@@ -13,6 +13,10 @@ t_dirty_race: t_dirty_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_di
 	clang $(CFLAGS) -o $@ t_dirty_race.c ../../host/crash.c
 t_deswz_gpu: t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../tex/nvn_deswizzle.h ../tex/nvn_deswizzle_gpu.h ../nvn/nvn_tex.c ../nvn/nvn_tex.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../nvn/nvn_tex.c -framework Metal -framework Foundation
+t_tex_auto: t_tex_auto.c ../nvn/nvn_tex.c ../nvn/nvn_tex.h ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle.h
+	clang -O1 -Wall -o $@ t_tex_auto.c ../nvn/nvn_tex.c ../tex/nvn_deswizzle.c
+t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
+	clang $(CFLAGS) -fobjc-arc -o $@ t_d16clear.m -framework Metal -framework Foundation
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
 	clang -O1 -Wall -o $@ t_hmap.c
 t_cover: t_cover.c ../nvn/nvn_cover.h
@@ -43,6 +47,44 @@ t_xv: t_xv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ub: t_ub.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_drvseg: t_drvseg.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_drvseg.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_restart: t_restart.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_restart.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_live: t_live.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_live.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_wb: t_wb.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_wb.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_pend: t_pend.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pend.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_keepalive: t_keepalive.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_keepalive.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_chunk: t_chunk.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_chunk.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_esfilter: t_esfilter.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_esfilter.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_uppool: t_uppool.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_retire: t_retire.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_retire.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ubren: t_ubren.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ubren.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ussort: t_ussort.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ussort.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_rstream: t_rstream.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rstream.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_layer: t_layer.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_layer.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_stor: t_stor.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_stor.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_poolcheck: t_poolcheck.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_poolcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_snapreap: t_snapreap.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_snapreap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_usnap: t_usnap.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_usnap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c $(GFX) $(GFX_H)
@@ -60,31 +102,52 @@ t_refl: t_refl.m ../nvn/nvn_refl.m ../nvn/nvn_refl.h
 t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 run: \
+	t_chunk \
 	t_copy_pitch \
 	t_cover \
+	t_d16clear \
 	t_defer_chain \
+	t_drvseg \
 	t_deswz_gpu \
 	t_dirty_race \
 	t_dirty_slots \
+	t_esfilter \
+	t_findrain \
 	t_fuse_check \
 	t_hmap \
+	t_keepalive \
+	t_layer \
+	t_live \
 	t_mip_extent \
 	t_nvn \
 	t_pace \
+	t_pend \
 	t_pfv \
 	t_pool_find \
+	t_poolcheck \
 	t_present_crop \
 	t_present_fx \
 	t_pso_skey \
 	t_refl \
+	t_restart \
+	t_rstream \
+	t_retire \
 	t_reorder_chain \
 	t_rt_depth_ro \
 	t_rt_range \
 	t_rt_range_shape \
 	t_rt_srgb_view \
+	t_snapreap \
+	t_stor \
+	t_tex_auto \
 	t_tex_fit \
+	t_texcheck \
 	t_ub \
+	t_ubren \
+	t_uppool \
 	t_usnap \
+	t_ussort \
+	t_wb \
 	t_xv \
 	t_zskip
 	./t_nvn
@@ -96,6 +159,9 @@ run: \
 	./t_cover
 	./t_copy_pitch
 	./t_pool_find
+	./t_poolcheck
+	./t_tex_auto
+	./t_d16clear
 	./t_fuse_check
 	./t_present_crop
 	MTL_DEBUG_LAYER=1 ./t_present_fx
@@ -105,6 +171,28 @@ run: \
 	./t_xv
 	./t_ub
 	MTL_DEBUG_LAYER=1 ./t_usnap
+	./t_ussort
+	DM_NVN_RENDER_STREAM=1 MTL_DEBUG_LAYER=1 ./t_rstream
+	DM_NVN_RENDER_STREAM=0 ./t_rstream --off
+	MTL_DEBUG_LAYER=1 ./t_layer
+	MTL_DEBUG_LAYER=1 ./t_stor
+	DM_NVN_LAYER_MERGE=0 ./t_layer --off
+	./t_retire
+	./t_snapreap
+	./t_findrain
+	MTL_DEBUG_LAYER=1 ./t_texcheck
+	MTL_DEBUG_LAYER=1 ./t_ubren
+	DM_NVN_UB_RENAME=0 ./t_ubren --expect-split
+	./t_live
+	./t_wb
+	./t_pend
+	./t_keepalive
+	MTL_DEBUG_LAYER=1 ./t_chunk
+	./t_chunk --no-chunks
+	MTL_DEBUG_LAYER=1 ./t_esfilter
+	./t_uppool
+	MTL_DEBUG_LAYER=1 ./t_restart
+	MTL_DEBUG_LAYER=1 ./t_drvseg
 	MTL_DEBUG_LAYER=1 ./t_mip_extent
 	MTL_DEBUG_LAYER=1 ./t_mip_extent --stencil-only
 	./t_rt_depth_ro

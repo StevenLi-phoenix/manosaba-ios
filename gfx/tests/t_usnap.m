@@ -66,8 +66,8 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init();
         update_ub(&c,u,BLUE,16);
         set_rt(&c,&b); draw_cmd(&c); emit(&c,OP_END,NULL,0);
         begin(&c); memcpy(um,GREEN,16); mtl_exec(c.p);
-        EXPECT("2. the update drops the copy",1,g_us_drops-d0);
         EXPECT("2. draw before the update: the copy (red)",C_RED,px0(&a));   // a and b are read back in two submissions: the first commit carries both draws
+        EXPECT(ub_rename_on()?"2. renamed: the update keeps the copy (private copies add it)":"2. DM_NVN_UB_RENAME=0: the update drops the copy",ub_rename_on()?0:1,g_us_drops-d0);
         mtl_sub_begin(); EXPECT("2. draw after the update: the update's bytes (blue)",C_BLUE,px0(&b));
     }
 

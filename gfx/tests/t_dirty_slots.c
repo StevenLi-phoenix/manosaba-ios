@@ -58,6 +58,21 @@ int main(void) {
         munmap(live[i], 4096);
     }
 
+    // More pools alive at once than the fixed 4,096 slots held (seedds/nxnative 7dde056, MIT: Breath of the Wild reaches 4,006 in its first shrine):
+    // the table grows, and the last pool is tracked
+    enum { NMANY = 5000 };
+    void **many = malloc(NMANY * sizeof *many);
+    for (int i = 0; i < NMANY; i++) { many[i] = page_map(); nvn_dirty_add_range(many[i], 4096); }
+    void *last = many[NMANY - 1];
+    EXPECT("5000 pools alive at once: the last one is tracked", 1, nvn_dirty_tracked(last, 4096));
+    nvn_dirty_protect(last, 4096);
+    stamp = nvn_dirty_now();
+    EXPECT("the 5000th pool, protected and not written: clean", 0, nvn_dirty_since(last, 4096, stamp));
+    ((volatile uint8_t *)last)[0] = 5;
+    EXPECT("the 5000th pool written by the game: dirty", 1, nvn_dirty_since(last, 4096, stamp));
+    for (int i = 0; i < NMANY; i++) { nvn_dirty_remove_range(many[i]); munmap(many[i], 4096); }
+    free(many);
+
     // Adjacent pools sharing a host page (pools are 4 KB aligned, host pages 16 KB). From seedds/nxnative c2c0105 (MIT): there, the first page of
     // an ASTC texture pool was shared with a small preceding pool, judged untracked, and the textures were re-uploaded on every use
     size_t pg = (size_t)getpagesize();

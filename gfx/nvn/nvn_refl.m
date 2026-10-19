@@ -66,6 +66,10 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
         }
         NSDictionary *dr = j[@"drv_reads"];
         if ([dr isKindOfClass:[NSDictionary class]]) { o->drv_read[0] = dr[@"0"] != nil; o->drv_read[2] = dr[@"2"] != nil; }
+        // A declared driver-segment binding means the shader reads it (spirv-cross declares only what the shader uses): the build's drv_reads scan
+        // matched only fragment-shader names (fp_c0), so the vertex and compute shaders reading c0 were given an all-zero segment (nxnative 9579030,
+        // MIT; in Tears of the Kingdom's library 229 vertex and 146 compute shaders, all of which declare it)
+        for (int i = 0; i < o->nb; i++) { if (o->b[i].kind == NVN_RB_DRV0) o->drv_read[0] = 1; else if (o->b[i].kind == NVN_RB_DRV2) o->drv_read[2] = 1; }
         NSArray *uf = j[@"drv_unfillable"];
         if ([uf isKindOfClass:[NSArray class]] && uf.count) FAIL("driver-segment locations read at run time that the replay layer cannot fill: %s", [[uf componentsJoinedByString:@" "] UTF8String]);
         NSString *c1 = j[@"c1"];

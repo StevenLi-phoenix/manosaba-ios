@@ -425,20 +425,52 @@ int main(void) {
         P(nvnMemoryPoolFinalize)(&fp);
     }
 
-    // 6c. Write-protected dirty pages: after a packaged texture is uploaded its pool pages are read-only; game write → page fault → mark dirty → re-upload on next use; a direct host read() write needs prepare first
+    // 6c0. A small packaged texture (up to PKG_HASH_MAX, 4 KiB; 16x8 RGBA8 = 512 bytes) is checked by its content once per submission instead of by
+    //      write-protecting its pages (pkg_hashed): a CPU write takes no page fault, and the next submission sees the new content
+    {
+        static uint8_t sb_[64 << 10] __attribute__((aligned(16384)));
+        NVNmemoryPoolBuilder spb; NVNmemoryPool sp; P(nvnMemoryPoolBuilderSetDefaults)(&spb); P(nvnMemoryPoolBuilderSetStorage)(&spb, sb_, sizeof sb_);
+        P(nvnMemoryPoolInitialize)(&sp, &spb);
+        NVNtextureBuilder b; NVNtexture ts; NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}};
+        P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b); P(nvnTextureBuilderSetWidth)(&b, 16); P(nvnTextureBuilderSetHeight)(&b, 8);
+        P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8); P(nvnTextureBuilderSetPackagedTextureLayout)(&b, &lay);
+        P(nvnTextureBuilderSetStorage)(&b, &sp, 0x4000); P(nvnTextureInitialize)(&ts, &b);
+        nvn_texdesc dd = ((tex_t *)&ts)->d;
+        uint8_t lin[16 * 8 * 4], *store = sb_ + 0x4000, *outb = sb_ + 0x8000;
+        #define FILLS(k) for (int y = 0; y < 8; y++) for (int x = 0; x < 16; x++) for (int c = 0; c < 4; c++) lin[(y * 16 + x) * 4 + c] = (uint8_t)(x * 16 + y + (k) * 5 + c * 37)
+        FILLS(0); nvn_swizzle(&dd, 0, 0, lin, 64, store);
+        NVNcopyRegion all = {0, 0, 0, 16, 8, 1};
+        #define GPU_READ_S(k, name) do { P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferSetCopyRowStride)(&cb, 0); \
+            P(nvnCommandBufferCopyTextureToBuffer)(&cb, &ts, NULL, &all, (NVNbufferAddress)outb, 0); NVNcommandHandle hh = P(nvnCommandBufferEndRecording)(&cb); \
+            P(nvnQueueSubmitCommands)(&q, 1, &hh); P(nvnQueueFinish)(&q); FILLS(k); EXPECT(name, 0, memcmp(outb, lin, sizeof lin)); } while (0)
+        uint64_t up0, re0, fa0, pr0, up, re, fa, pr; mtl_pkg_stats(&up0, &re0);
+        GPU_READ_S(0, "small texture: first upload = version 0");
+        nvn_dirty_stats(&fa0, &pr0);
+        FILLS(1); nvn_swizzle(&dd, 0, 0, lin, 64, store);
+        nvn_dirty_stats(&fa, &pr); EXPECT("small texture: a CPU write takes no page fault (not write-protected)", 0, fa - fa0);
+        GPU_READ_S(1, "small texture: the next submission reads version 1 (content hash)");
+        mtl_pkg_stats(&up, &re); EXPECT("small texture: one re-upload", 1, re - re0);
+        GPU_READ_S(1, "small texture: unchanged, still version 1");
+        mtl_pkg_stats(&up, &re); EXPECT("small texture: unchanged content, no re-upload", 1, re - re0);
+        P(nvnMemoryPoolFinalize)(&sp);
+        #undef FILLS
+        #undef GPU_READ_S
+    }
+
+    // 6c. Write-protected dirty pages (a texture above PKG_HASH_MAX, 4 KiB: 64x32 RGBA8): after a packaged texture is uploaded its pool pages are read-only; game write → page fault → mark dirty → re-upload on next use; a direct host read() write needs prepare first
     {
         static uint8_t wb_[256 << 10] __attribute__((aligned(16384)));
         NVNmemoryPoolBuilder wpb; NVNmemoryPool wp; P(nvnMemoryPoolBuilderSetDefaults)(&wpb); P(nvnMemoryPoolBuilderSetStorage)(&wpb, wb_, sizeof wb_);
         P(nvnMemoryPoolInitialize)(&wp, &wpb);
         NVNtextureBuilder b; NVNtexture tw; NVNpackagedTextureLayout lay = {{1, 0, 0, 0, 7, 0, 1, 0}};
-        P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b); P(nvnTextureBuilderSetWidth)(&b, 16); P(nvnTextureBuilderSetHeight)(&b, 8);
+        P(nvnTextureBuilderSetDevice)(&b, &dev); P(nvnTextureBuilderSetDefaults)(&b); P(nvnTextureBuilderSetWidth)(&b, 64); P(nvnTextureBuilderSetHeight)(&b, 32);
         P(nvnTextureBuilderSetFormat)(&b, NVN_FORMAT_RGBA8); P(nvnTextureBuilderSetPackagedTextureLayout)(&b, &lay);
         P(nvnTextureBuilderSetStorage)(&b, &wp, 0x10000); P(nvnTextureInitialize)(&tw, &b);
         nvn_texdesc dd = ((tex_t *)&tw)->d;
-        uint8_t lin[16 * 8 * 4], *store = wb_ + 0x10000, *outb = wb_ + 0x20000;
-        #define FILLPAT(k) for (int y = 0; y < 8; y++) for (int x = 0; x < 16; x++) for (int c = 0; c < 4; c++) lin[(y * 16 + x) * 4 + c] = (uint8_t)(x * 16 + y + (k) * 3 + c * 41)
-        FILLPAT(0); nvn_swizzle(&dd, 0, 0, lin, 64, store);
-        NVNcopyRegion all = {0, 0, 0, 16, 8, 1};
+        uint8_t lin[64 * 32 * 4], *store = wb_ + 0x10000, *outb = wb_ + 0x20000;
+        #define FILLPAT(k) for (int y = 0; y < 32; y++) for (int x = 0; x < 64; x++) for (int c = 0; c < 4; c++) lin[(y * 64 + x) * 4 + c] = (uint8_t)(x * 16 + y + (k) * 3 + c * 41)
+        FILLPAT(0); nvn_swizzle(&dd, 0, 0, lin, 256, store);
+        NVNcopyRegion all = {0, 0, 0, 64, 32, 1};
         // Check the actual GPU-side contents with a GPU copy-back (CopyTextureToBuffer reading the MTLTexture): expected = pattern version k
         #define GPU_READ_EQ(k, name) do { P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferSetCopyRowStride)(&cb, 0); \
             P(nvnCommandBufferCopyTextureToBuffer)(&cb, &tw, NULL, &all, (NVNbufferAddress)outb, 0); NVNcommandHandle hh = P(nvnCommandBufferEndRecording)(&cb); \
@@ -446,7 +478,7 @@ int main(void) {
         uint64_t up0, re0, fa0, pr0, up, re, fa, pr; mtl_pkg_stats(&up0, &re0); nvn_dirty_stats(&fa0, &pr0);
         GPU_READ_EQ(0, "first upload: GPU-side contents = version 0");
         mtl_pkg_stats(&up, &re); EXPECT("first upload count +1", 1, up - up0);
-        FILLPAT(1); nvn_swizzle(&dd, 0, 0, lin, 64, store);          // game-style CPU write: protected page → page fault → hook marks it dirty
+        FILLPAT(1); nvn_swizzle(&dd, 0, 0, lin, 256, store);          // game-style CPU write: protected page → page fault → hook marks it dirty
         nvn_dirty_stats(&fa, &pr); EXPECT("game write triggers ≥ 1 page fault (caught by the hook, no crash)", 1, fa - fa0 >= 1);
         GPU_READ_EQ(1, "after re-upload GPU-side contents = version 1");
         mtl_pkg_stats(&up, &re); EXPECT("pool contents changed: re-upload +1", 1, re - re0);
@@ -456,7 +488,7 @@ int main(void) {
         char path[1024]; snprintf(path, sizeof path, "%s/t_nvn_rd_XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "."); int fd = mkstemp(path);   // per-user temp directory, do not write to /tmp
         FILLPAT(2); uint8_t tmpst[sizeof lin * 4]; memset(tmpst, 0, sizeof tmpst);
         static uint8_t full[0x10000]; memcpy(full, store, sizeof full);   // existing storage contents (block-linear); write version 2 into a copy and then save it to a file
-        nvn_swizzle(&dd, 0, 0, lin, 64, full); if (write(fd, full, ((tex_t *)&tw)->size) < 0) g_fail++;
+        nvn_swizzle(&dd, 0, 0, lin, 256, full); if (write(fd, full, ((tex_t *)&tw)->size) < 0) g_fail++;
         ssize_t r0 = pread(fd, store, ((tex_t *)&tw)->size, 0); int e0 = errno;
         EXPECT("without prepare: read() into protected pages returns -1 and EFAULT", 1, r0 == -1 && e0 == EFAULT);
         dm_guest_write_prepare(store, ((tex_t *)&tw)->size);
@@ -582,6 +614,21 @@ int main(void) {
             badz += z[i] != (in ? 0.25f : 1.0f); }
         EXPECT("scissored colour clear: green only in the top left 4x2; blue-channel clear: B = 255 everywhere, R / G kept", 0, badc);
         EXPECT("scissored depth clear: 0.25 only in the top left 4x2, 1.0 elsewhere; the stencil-only clear left depth alone", 0, badz);
+        // The same texture at two colour slots is attached once (rt_dup_slot): a scissored clear of the slot left out reaches the texture through the
+        // slot kept (seedds/nxnative 7dde056, MIT; it was dropped with red line 75)
+        const NVNtexture *rt2[2] = {&tc, &tc};
+        P(nvnCommandBufferBeginRecording)(&cb);
+        P(nvnCommandBufferSetRenderTargets)(&cb, 2, rt2, NULL, NULL, NULL);
+        P(nvnCommandBufferSetScissor)(&cb, 0, 0, 8, 4);
+        P(nvnCommandBufferClearColor)(&cb, 0, red, NVN_CLEAR_COLOR_MASK_RGBA);
+        P(nvnCommandBufferSetScissor)(&cb, 4, 2, 4, 2);
+        P(nvnCommandBufferClearColor)(&cb, 1, blue, NVN_CLEAR_COLOR_MASK_RGBA);                   // through slot 1, bottom right 4x2 only
+        NVNcommandHandle hd = P(nvnCommandBufferEndRecording)(&cb);
+        P(nvnQueueSubmitCommands)(&q, 1, &hd); P(nvnQueueFinish)(&q);
+        P(nvnTextureReadTexels)(&tc, NULL, &all, g);
+        int badd = 0;
+        for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) { int i = y * 8 + x, in = x >= 4 && y >= 2; badd += g[i * 4] != (in ? 0 : 255) || g[i * 4 + 2] != (in ? 255 : 0); }
+        EXPECT("texture at two slots: the scissored clear of slot 1 lands in the bottom right 4x2", 0, badd);
         P(nvnTextureFinalize)(&tc); P(nvnTextureFinalize)(&tz); P(nvnMemoryPoolFinalize)(&qp);
     }
 
@@ -671,6 +718,11 @@ int main(void) {
         }
         P(nvnWindowAcquireTexture)(&w3, NULL, &ix);
         EXPECT("acquire gets texture 0", 0, ix);
+        // nvnQueueFinish waits for the submitted GPU work, not for queued presents to be shown (seedds/nxnative 3b72aea, MIT: Fire Emblem: Three
+        // Houses calls it after every resource upload, and its first load took 78 s on an iPhone): with presents still queued behind the stall
+        P(nvnQueuePresentTexture)(&q, &w3, ix);
+        uint64_t f0 = now_ns(); P(nvnQueueFinish)(&q); double fin_ms = (now_ns() - f0) / 1e6;
+        EXPECT("QueueFinish with presents queued returns without waiting for them (< 100 ms)", 1, fin_ms < 100);
         mtl_present_test_stall(0); mtl_present_flush();
     }
 

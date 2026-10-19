@@ -95,7 +95,10 @@ void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
         return;
     }
     unsigned tileH = 0, tileD = 0;
-    if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = d->pkg_block_h ? (unsigned)d->pkg_block_h - 1 : pick_tile((ah + ah / 2 + 7) / 8); }
+    // NVN truncates the height in blocks × 1.5 to whole GOB rows before it picks the power of two (deko3d rounds up): the original SDK's sizes and block
+    // heights for 40 boundary cases, as MacNativeGames recorded them (cd85f5b, MIT), differ in 16 with rounding up, among them Tears of the Kingdom's
+    // 160×160 BC3 shrine warp pad, half of which read padding (t_tex_auto)
+    if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = d->pkg_block_h ? (unsigned)d->pkg_block_h - 1 : pick_tile((ah + ah / 2) / 8); }
     else if (dpl == 3) tileD = pick_tile(z + z / 2);
     o->tileH = tileH; o->tileD = tileD;
     unsigned levels = d->levels ? d->levels : 1;

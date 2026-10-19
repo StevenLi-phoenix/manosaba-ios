@@ -2,7 +2,8 @@
 // 2,000 pools that do not overlap, in random order, entries larger than the two range words (the stride is used); 200,000 random lookups
 // (inside a pool, across its end, in a gap, beyond all pools) and every pool's first and last byte must give the full scan's answer; the same after pools are removed the way
 // mtl_pool_del does (the last entry moves into the hole) and added; overlapping pools: every answer must contain the range; and the answer
-// stays right when the cached last hit no longer contains the next range.
+// stays right when the cached last hit no longer contains the next range. Lookups that alternate between a few pools (a draw's vertex, index and
+// uniform buffers) are answered by the address cache (hc), never with a pool that does not hold the range.
 #include "../nvn/nvn_pool_find.h"
 #include <stdio.h>
 
@@ -36,6 +37,16 @@ int main(void) {
     t("a range across that pool's end: -1 (no pool holds it whole)", pool_find(&f, P, sizeof P[0], n, P[i0].hi - 8, 16) == scan(P[i0].hi - 8, 16));
     t("below every pool: -1", pool_find(&f, P, sizeof P[0], n, 0x1000, 16) == -1);
     t("the next lookup after a miss in another pool is right (cached hit not reused)", pool_find(&f, P, sizeof P[0], n, P[i0 + 1].lo, 8) == i0 + 1);
+    {   // four pools in turn (their cache slots differ), 1,000 rounds: after the first round the address cache answers, and every answer is the pool
+        int pk[4], np = 0; for (int i = 0; i < n && np < 4; i++) { int dup = 0; for (int k = 0; k < np; k++) dup |= pool_find_hslot_(P[i].lo + 0x100) == pool_find_hslot_(P[pk[k]].lo + 0x100); if (!dup) pk[np++] = i; }
+        int right = 1; uint64_t c0 = f.cached;
+        for (int r = 0; r < 1000; r++) for (int k = 0; k < 4; k++) right &= pool_find(&f, P, sizeof P[0], n, P[pk[k]].lo + 0x100 + (uint64_t)(r % 8) * 0x10, 0x40) == pk[k];
+        t("four pools looked up in turn: every answer right", right);
+        t("  ... answered by the address cache after the first round (at least 3,990 of 4,000)", f.cached - c0 >= 3990);
+        int ca = -1, cb = -1; for (int i = 0; i < n && cb < 0; i++) for (int j = i + 1; j < n; j++) if (pool_find_hslot_(P[i].lo + 0x100) == pool_find_hslot_(P[j].lo + 0x100)) { ca = i; cb = j; break; }
+        right = ca >= 0; for (int r = 0; r < 100 && right; r++) right &= pool_find(&f, P, sizeof P[0], n, P[ca].lo + 0x100, 0x40) == ca && pool_find(&f, P, sizeof P[0], n, P[cb].lo + 0x100, 0x40) == cb;
+        t("two pools sharing a cache slot, in turn: every answer right", right);
+    }
     // Remove 500 pools as mtl_pool_del does (the last entry moves into the hole), add 300 new ones past the end; reset after each change
     for (int k = 0; k < 500; k++) { int i = (int)(rnd() % (uint64_t)n); P[i] = P[--n]; pool_find_reset(&f); }
     for (int k = 0; k < 300; k++) { uintptr_t sz = 0x1000 * (4 + rnd() % 61); P[n++] = (ent){at, at + sz}; at += sz + 0x2000; pool_find_reset(&f); }
@@ -51,6 +62,6 @@ int main(void) {
     }
     t("overlapping pools: found exactly when the full scan finds one, and the pool holds the range", ok);
     printf("== %d checks, %d failed ==\n", total, fail);
-    free(f.idx);
+    free(f.idx); free(f.slo);
     return fail != 0;
 }
