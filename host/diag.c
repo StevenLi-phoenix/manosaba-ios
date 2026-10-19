@@ -60,12 +60,13 @@ static void probe_dump_once(void) {
 // word before and after, and a backtrace; the watchpoint is armed again at that breakpoint. A failed exclusive store (status != 0) leaves the thread
 // unarmed until the next scan: taking the exception clears the exclusive monitor, so a watchpoint armed again at once would fail every retry.
 // Up to DM_WATCHPOINT_MAX hits (default 400) are printed, plus the first 3 of each new pc after that. Kernel writes (read() into guest memory) are not seen.
+// DM_WATCHPOINT_LOAD=1 watches loads instead of stores (who reads a value; a load continues at pc+4 as well).
 // Bit layout of DBGWCR / DBGBCR and what a user process may set: XNU osfmk/arm64/status.c (ARM_DEBUG_STATE64) and osfmk/arm64/proc_reg.h.
 const char *thr_cur_name(char *nb, size_t n);
 void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n);
 #define WP_SLOTS 1024
 static struct { _Atomic mach_port_t port; _Atomic int state; int seen; uint64_t pc, far, before; } g_wpt[WP_SLOTS];   // state: 1 armed, 2 stepping, 3 rearm at the next scan
-static uint64_t g_wp_addr, g_wp_wcr, g_wp_lo, g_wp_hi; static int g_wp_on, g_wp_max = 400;
+static uint64_t g_wp_addr, g_wp_wcr, g_wp_lo, g_wp_hi; static int g_wp_on, g_wp_max = 400, g_wp_load;
 static _Atomic unsigned g_wp_hits, g_wp_rearm;
 static struct { _Atomic uint64_t pc; _Atomic unsigned n; } g_wp_pcs[256];
 static int wp_set(thread_t th, uint64_t bp) {   // bp = 0: the watchpoint; else a breakpoint at bp instead
@@ -105,7 +106,7 @@ static int wp_trap(ucontext_t *uc) {
         if (show) {
             char nb[64]; const char *tn = thr_cur_name(nb, sizeof nb);
             uint64_t far = g_wpt[s].far; module_t *m = module_of((void *)g_wpt[s].pc); Dl_info di;
-            fprintf(stderr, "[dm] WATCH #%u [%.4fs] thread %s%s%s port %#x store ", n, (now_ns() - g_t0_ns) / 1e9, tn ? "\"" : "", tn ? tn : "host", tn ? "\"" : "", me);
+            fprintf(stderr, "[dm] WATCH #%u [%.4fs] thread %s%s%s port %#x %s ", n, (now_ns() - g_t0_ns) / 1e9, tn ? "\"" : "", tn ? tn : "host", tn ? "\"" : "", me, g_wp_load ? "load" : "store");
             if (m) fprintf(stderr, "%s+%#llx", m->name, g_wpt[s].pc - (uint64_t)m->base);
             else if (dladdr((void *)g_wpt[s].pc, &di) && di.dli_sname) fprintf(stderr, "%s+%#lx", di.dli_sname, (unsigned long)(g_wpt[s].pc - (uint64_t)di.dli_saddr));
             else fprintf(stderr, "%#llx", g_wpt[s].pc);
@@ -151,9 +152,9 @@ static int wp_parse(void) {   // 0 = the guest heap is not reserved yet
     if (len >= 1 && len <= 8 && (addr & 7) + len <= 8) g_wp_wcr = (((1ull << len) - 1) << (addr & 7)) << 5, g_wp_addr = addr & ~7ull;
     else if (len >= 16 && !(len & (len - 1)) && !(addr & (len - 1)) && len <= 0x80000000ull) g_wp_wcr = ((uint64_t)__builtin_ctzll(len) << 24) | (0xFFull << 5), g_wp_addr = addr;
     else die("DM_WATCHPOINT: len must be 1..8 bytes inside one 8-byte word, or a power of two >= 16 with the address aligned to it");
-    g_wp_wcr |= (2u << 3) | (2u << 1) | 1;   // stores, EL0, enabled
+    g_wp_wcr |= ((g_wp_load ? 1u : 2u) << 3) | (2u << 1) | 1;   // LSC: loads or stores; EL0, enabled
     g_wp_lo = addr; g_wp_hi = addr + len;
-    LOG("watchpoint: stores to %#llx..%#llx (DBGWVR %#llx DBGWCR %#llx), all threads", g_wp_lo, g_wp_hi, g_wp_addr, g_wp_wcr);
+    LOG("watchpoint: %s %#llx..%#llx (DBGWVR %#llx DBGWCR %#llx), all threads", g_wp_load ? "loads from" : "stores to", g_wp_lo, g_wp_hi, g_wp_addr, g_wp_wcr);
     return 1;
 }
 static void *wp_start(void *arg) {   // a heap-relative address waits for the guest heap (reserved at the first memory system call)
@@ -161,9 +162,16 @@ static void *wp_start(void *arg) {   // a heap-relative address waits for the gu
     g_wp_on = 1;
     return wp_scan(arg);
 }
+// Arm a load watchpoint from code at run time (DM_NVN_COUNTS_WATCH, nvn_mtl.m: who reads a counter report); once per process
+void dm_watch_load(uint64_t addr, uint64_t len) {
+    static int done; if (done++ || g_wp_spec) return;
+    static char spec[64]; snprintf(spec, sizeof spec, "%#llx:%llu", (unsigned long long)addr, (unsigned long long)len); g_wp_spec = spec; g_wp_load = 1;
+    pthread_t pt; pthread_create(&pt, NULL, wp_start, NULL); pthread_detach(pt);
+}
 static void wp_install(void) {
     if (!(g_wp_spec = getenv("DM_WATCHPOINT"))) return;
     const char *mx = getenv("DM_WATCHPOINT_MAX"); if (mx) g_wp_max = atoi(mx);
+    const char *ld = getenv("DM_WATCHPOINT_LOAD"); g_wp_load = ld && strcmp(ld, "0");
     pthread_t pt; pthread_create(&pt, NULL, wp_start, NULL); pthread_detach(pt);
 }
 static int probe_hit(ucontext_t *uc) {   // SIGTRAP hook of crash.c

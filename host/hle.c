@@ -3,6 +3,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include <dlfcn.h>
+#include <stdatomic.h>
 #include <time.h>
 
 typedef struct { const char *name; void *fn; int direct; } hle_ent;   // = hle.h
@@ -73,9 +74,16 @@ void gate_register(uint64_t ret_abs, const char *kind, int arg, uint64_t orig) {
 
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr);   // hle_svc.c
 
+// Gate entries by kind when DM_NVN_COUNTS is set (plan item 45: how often the guest reads the system counter), for the power summary (hle_nvn.c)
+static int g_gate_count_on = -1; static _Atomic uint64_t g_gate_n[4];
+void dm_gate_counts(uint64_t out[4]) { for (int k = 0; k < 4; k++) out[k] = atomic_load_explicit(&g_gate_n[k], memory_order_relaxed); }
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
     for (unsigned i = gate_h(ret_addr);; i = (i + 1) & ((1u << GATE_BITS) - 1)) {
         const gate_t *g = &g_gate[i];
+        if (g->ret == ret_addr && g_gate_count_on) {
+            if (g_gate_count_on < 0) g_gate_count_on = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0");
+            if (g_gate_count_on) atomic_fetch_add_explicit(&g_gate_n[g->kind & 3], 1, memory_order_relaxed);
+        }
         if (g->ret == ret_addr) switch (g->kind) {
             case G_CNTPCT: case G_CNTVCT: {
                 uint64_t t = guest_ns() * 12 / 625;    // 19.2 MHz system counter; original instruction mrs xN, cntpct_el0, arg = N

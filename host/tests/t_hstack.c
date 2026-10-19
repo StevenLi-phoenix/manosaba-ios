@@ -13,7 +13,7 @@
 //   6  the least free guest stack at svc entries, and the line below 1 KiB;
 //   7  the libc functions hle_table.c calls direct, each run on a painted stack with ordinary and slow-path arguments: at most 1 KiB each, and
 //      the list measured is the table's;
-//   8  the cost of a wrapped call (printed).
+//   8  the cost of a wrapped call and of a gate round trip (printed).
 // Negative controls (host/tests/Makefile): `DM_HSTACK=0 t_hstack deep` faults on the page below the guest stack (1 on the guest stack);
 // t_hstack_old (-DDM_TEST_HSTACK_OLD_CONTEXT: the context as before) fails 5. `DM_HSTACK=0 t_hstack` runs 1-5 without the 64 KiB, the exact
 // entry checks and 6 (the old path, kept).
@@ -36,7 +36,7 @@
 
 typedef struct { uint64_t fn, sp, ret, kept, ra, fp, x1, x2, x3, lr; } tg_t;   // t_hstack_guest.S
 void tg_call(tg_t *t); void tg_svc(tg_t *t); void tg_svc_at(tg_t *t, uint64_t sp); void tg_entry(uint64_t arg);
-uint64_t tg_on_stack(uint64_t (*fn)(void *), void *arg, uint64_t top);
+uint64_t tg_on_stack(uint64_t (*fn)(void *), void *arg, uint64_t top); void tg_gate_loop(uint64_t n);
 extern char tg_code_begin[], tg_code_end[];
 extern uint64_t unimpl_stubs[];
 extern uint64_t dm_hstk_off;
@@ -137,6 +137,7 @@ uint64_t unimpl_c(unsigned idx, uint64_t *regs) { g_uidx = idx; g_usp = cur_sp()
 static uint64_t g_gsp; static int g_gregs;
 uint64_t gate_dispatch(uint64_t ret, uint64_t *regs) {
     int num = (int)regs[16];
+    if (num == 0x83) return regs[0];   // the gate round trip alone (8)
     if (num < 0x80 || num > 0x82) { if (!svc_thread(num, regs)) die("unexpected SVC %#x", num); return regs[0]; }
     thr_svc_enter(regs, ret);
     if (num != 0x82) {
@@ -156,7 +157,7 @@ uint64_t gate_dispatch(uint64_t ret, uint64_t *regs) {
 // ---------- The guest thread ----------
 static tg_t g_t1, g_t2, g_t3, g_t3b, g_t4, g_td, g_te, g_tf, g_t6;
 static uint64_t g_slot_after, g_top_seen;
-static uint64_t g_bench_wrapped, g_bench_direct;
+static uint64_t g_bench_wrapped, g_bench_direct, g_bench_gate;
 static void *g_w_args, *g_w_outer, *g_w_block, *g_w_nest, *g_w_nop;
 void tg_main(uint64_t arg) {
     (void)arg;
@@ -176,6 +177,7 @@ void tg_main(uint64_t arg) {
     uint64_t t0 = now_ns(); for (int i = 0; i < 1000000; i++) s += w((uint64_t)i);
     uint64_t t1 = now_ns(); for (int i = 0; i < 1000000; i++) s += d((uint64_t)i);
     uint64_t t2 = now_ns(); g_bench_wrapped = t1 - t0; g_bench_direct = t2 - t1; if (s == 1) g_bench_direct++;
+    tg_gate_loop(1000000); g_bench_gate = now_ns() - t2;
 }
 
 // The context checks of 5: at = the guest call whose entry is reported, hcall = it was a host call (else an svc)
@@ -326,8 +328,8 @@ int main(int argc, char **argv) {
             uint64_t top, low, bot; int said; thr_stack_info(h, &top, &low, &bot, &said);
             CHECK(bot == (uint64_t)g_glo && low == g_t6.sp && said, "6: least free guest stack: %llu bytes at the deepest svc (the low-stack line logged: %d)",
                   (unsigned long long)(low - bot), said);
-            printf("     a wrapped call costs %.1f ns more than a direct one (%.1f against %.1f ns)\n", (g_bench_wrapped - (double)g_bench_direct) / 1e6,
-                   g_bench_wrapped / 1e6, g_bench_direct / 1e6);
+            printf("     a wrapped call costs %.1f ns more than a direct one (%.1f against %.1f ns); a gate round trip (svc / cntpct entry) %.1f ns\n",
+                   (g_bench_wrapped - (double)g_bench_direct) / 1e6, g_bench_wrapped / 1e6, g_bench_direct / 1e6, g_bench_gate / 1e6);
         }
         libc_direct();
     }

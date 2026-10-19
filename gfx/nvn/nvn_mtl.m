@@ -527,6 +527,15 @@ static vis_slot *g_vs; static int g_nvs, g_vscap;      // Slots since the last r
 static uint64_t g_vis_base;                              // Samples of slots since the last reset whose buffer was used again (see above)
 static uint64_t g_vis_folded;                            // Slots added into g_vis_base (diagnostics, the unit test)
 static uint64_t g_cnt_report[32], g_cnt_reset[32];       // Report / reset counts per counter type (diagnostics)
+// DM_NVN_COUNTS=1 counters (see count_self_sample)
+static int g_cnt_on = -1;
+static uint64_t g_cnt_self, g_cnt_self_ov, g_cnt_self_dep, g_cnt_ts, g_cnt_ts_multi, g_cnt_cleartex, g_cnt_nodraw, g_cnt_pass_d0, g_cnt_bar_at, g_cnt_first_ts; static int g_cnt_sub_ts;
+__attribute__((weak)) void dm_watch_load(uint64_t addr, uint64_t len) { (void)addr; (void)len; }   // host/diag.c (Mac)
+__attribute__((weak)) void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n) {   // host/hle_svc.c
+    *alias = *stack = *heap = NULL; *alias_n = *stack_n = *heap_n = 0; }
+static char g_cnt_why[200];   // the first overlap of the draw being counted
+static int counts_on(void) { if (g_cnt_on < 0) g_cnt_on = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0"); return g_cnt_on; }
+void mtl_counts(uint64_t out[7]) { uint64_t v[7] = {g_cnt_self, g_cnt_self_ov, g_cnt_self_dep, g_cnt_ts, g_cnt_ts_multi, g_cnt_cleartex, g_cnt_nodraw}; memcpy(out, v, sizeof v); }
 static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; g_vis_base = 0; }
 #ifndef DM_TEST_VIS_NO_FOLD   // negative control of t_visibility only: the slots stay listed and read the reused buffer
 static void vis_recycle(id<MTLBuffer> b) {   // b's last submission has completed and b is about to be used again
@@ -839,6 +848,7 @@ void mtl_sub_begin(void) {
 #endif
     g_commit_blocks = [NSMutableArray array];
     id<MTLBuffer> vis_prev = g_vis;   // the previous submission's: an overflow buffer is retired below
+    g_cnt_sub_ts = 0;
     g_npost = 0; g_vis = nil; g_vis_n = 0; g_vis_cur = -1; pend_begin(mtl_done_fence());
     zskip_clear(); g_zskip_count = 0; chunk_reset();
     int pick = -1;
@@ -1359,7 +1369,7 @@ void mtl_drain(void) { @autoreleasepool { present_drop_for_suspend(); mtl_presen
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[96];
+static int g_red_once[104];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("[red] " __VA_ARGS__); } while (0)
 
 // ---------- Texture → MTLTexture ----------
@@ -2605,7 +2615,10 @@ static void defer_fallback(void);
 static int g_el_w, g_el_h, g_el_draws; static char g_el_key[12];
 static int g_nblk_wb; static void blk_writeback(void);
 static int enc_label_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_ENC_LABEL"); v = e && atoi(e); } return v; }
-static void rp_end(void) { if (g_enc) {
+static int g_fbx_nact; static inline void args_dirty_all(void);
+static void rp_end(void) { if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }   // the attachment copies of a draw stand in only for it (fbx_prepare)
+    if (g_enc) {
+    if (g_cnt_on > 0 && g_stat_draw == g_cnt_pass_d0) g_cnt_nodraw++;
     if (enc_label_on()) { static uint64_t lf = ~0ull, base; uint64_t f = atomic_load(&g_cur_frame); if (f != lf) { lf = f; base = g_stat_pass - 1; }   // Intra-frame serial: the same pass has the same name every frame, so the table can aggregate by name
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
     sd_finish(); enc_r_end(g_enc); zskip_commit_clears(); g_enc = nil; g_rt_merged = 0; g_lay.active = 0; g_rt_range_active = g_rt_range_pending = 0; ts_after(); if (g_lp.count) lp_finish(); fz_end();
@@ -2910,7 +2923,7 @@ static RENC rp_begin_ex(int clear_only) {
     chunk_maybe_split();
     g_enc = enc_r_begin(pd);
     args_dirty_all();
-    g_stat_pass++;
+    g_stat_pass++; g_cnt_pass_d0 = g_stat_draw;
     if (enc_label_on()) { id<MTLTexture> lt = pd.colorAttachments[0].texture ?: pd.depthAttachment.texture ?: pd.stencilAttachment.texture; g_el_w = (int)lt.width; g_el_h = (int)lt.height; g_el_draws = 0; g_el_key[0] = 0; }
     return g_enc;
 }
@@ -4290,6 +4303,41 @@ static void ren_report(uint64_t f) {   // every 300 frames
          (unsigned long long)(c[5] - p[5]), (unsigned long long)(c[6] - p[6]));
     memcpy(p, c, sizeof p);
 }
+// ---------- Draws that sample what their own pass draws (plan item 42; after tomodachi-native's attachment copies 4dbd30f / da08d11, MIT) ----------
+// Tears of the Kingdom samples the level and layer a pass draws into in about 59 draws a frame in the prologue (full-screen passes at 1600x896,
+// 800x448 and 400x224; DM_NVN_COUNTS). In a Metal render pass that is undefined; on the M5 such a draw reads the attachment as it was in memory
+// before the pass: without the earlier draws of the pass (still in tile memory) and without a clear still pending when the pass opened. NVN defines
+// only the case with a texture-invalidating barrier between the earlier draws and the read, which makes their results visible; without one, what
+// the console shows is what the M5 reads: copying for every such draw (results of earlier draws and clears visible, tomodachi-native's choice for
+// its game) put the prologue's shots outside the console's brightness range in two shots out of the video of the opening (s1300 / s1800: left
+// third 39.0 against 44.2-54.5), the M5's own reads and the copies after a barrier inside it. So by default only a draw after such a barrier samples
+// a copy: the pass ends there (the earlier draws stored), the whole texture is copied, the pass opens again loading it. DM_NVN_FBX=all copies for
+// every such draw (a copy serves until a draw writes the attachment, a pending clear is applied first), DM_NVN_FBX=0 never. Every encoder starts
+// with a full barrier, so one copy texture per shape is reused within a submission. Levels and layers the pass does not draw are not copied for
+// (a downsample chain reading level k-1)
+typedef struct { __strong id<MTLTexture> copy, src; uint64_t draw, sub; __strong id<MTLTexture> vsrc[4], view[4]; int nv; } fbx_ent;
+static fbx_ent g_fbx[16]; static int g_nfbx;
+static int g_fbx_act[9];   // this draw's: indices into g_fbx (g_fbx_nact of them, declared at rp_end), set when its pass is open (fbx_activate)
+static int g_fbx_pend[9], g_fbx_npend;   // fbx_prepare's picks for the draw being prepared
+static int g_fbx_on = -1;   // 0 off, 1 after a texture barrier (default), 2 all
+static uint64_t g_fbx_bar_at;   // g_stat_draw at the last barrier that invalidates textures (NVN_BARRIER_INVALIDATE_TEXTURE_BIT)
+static uint64_t g_fbx_copies, g_fbx_draws, g_fbx_refused;
+void mtl_fbx_stats(uint64_t out[3]) { out[0] = g_fbx_draws; out[1] = g_fbx_copies; out[2] = g_fbx_refused; }
+// The bound texture t, or the same view of it, on the copy of the attachment it is (nil: not this draw's attachment)
+static id<MTLTexture> fbx_sub(id<MTLTexture> t, uint64_t *rid) {
+    for (int a = 0; a < g_fbx_nact; a++) { fbx_ent *e = &g_fbx[g_fbx_act[a]];
+        if (t == e->src) { *rid = e->copy.gpuResourceID._impl; return e->copy; }
+        if (t.parentTexture != e->src) continue;
+        for (int i = 0; i < e->nv; i++) if (e->vsrc[i] == t) { *rid = e->view[i].gpuResourceID._impl; return e->view[i]; }
+        NSUInteger sl = t.textureType == MTLTextureTypeCube || t.textureType == MTLTextureTypeCubeArray ? t.arrayLength * 6 : t.textureType == MTLTextureType3D ? 1 : t.arrayLength;
+        id<MTLTexture> v = [e->copy newTextureViewWithPixelFormat:t.pixelFormat textureType:t.textureType levels:NSMakeRange(t.parentRelativeLevel, t.mipmapLevelCount)
+                                                           slices:NSMakeRange(t.textureType == MTLTextureType3D ? 0 : t.parentRelativeSlice, sl) swizzle:t.swizzle];
+        if (!v) { RED_ONCE(96, "attachment copy: no view of the copy like the bound one (format %lu type %lu); the draw samples the attachment", (unsigned long)t.pixelFormat, (unsigned long)t.textureType); return nil; }
+        int k = e->nv < 4 ? e->nv++ : 3; if (e->view[k]) defer_obj_unref(e->view[k]);
+        e->vsrc[k] = t; e->view[k] = v; *rid = v.gpuResourceID._impl; return v;
+    }
+    return nil;
+}
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
     if (!sh->ae) return 1;
     uint64_t slots[NVN_REFL_MAXB] = {0};
@@ -4369,6 +4417,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                 }
             }
             if (t && t.textureType != (MTLTextureType)b->decl_tt) { uint64_t r2 = 0; id<MTLTexture> fv = tex_fit(tid, t, (MTLTextureType)b->decl_tt, &r2); if (fv) { t = fv; trid = r2; } }
+            if (t && g_fbx_nact) { uint64_t r2 = 0; id<MTLTexture> c = fbx_sub(t, &r2); if (c) { t = c; trid = r2; } }   // the draw samples its own attachment: the copy
             if (!t) { t = dummy_tex(b->dtt, b->dpf); trid = g_dummy_tex_rid[b->dtt & 7][b->dpf & 3]; }
             slots[aid] = trid;
             USE(t, MTLResourceUsageRead);
@@ -4862,6 +4911,113 @@ static int draw_samples_rt(NvProg *pr) {   // Sampled attachments keep the origi
             pthread_mutex_lock(&g_rmu); uint64_t ser = tid < g_ntreg && g_treg[tid].ok ? g_treg[tid].t.serial : 0; pthread_mutex_unlock(&g_rmu);
             for (int j = 0; j < nr; j++) if (ser && ser == rs[j]) return 1; } }
     return 0;
+}
+// DM_NVN_COUNTS=1 (diagnostics, measured for plan items 42-44 before any change): per frame, draws that sample the levels and layers their own pass
+// draws into, those of them after other draws of the same Metal pass (they read what the pass started with: the earlier draws' results are still in
+// tile memory), and those with an NVN barrier after such a draw (on the console the barrier makes those results visible; the replay keeps the pass);
+// timestamp reports and the submissions with two or more of them, ClearTexture calls, and render passes that end without a draw. Printed with the
+// power summary (hle_nvn.c); cntpct reads are hle.c's
+// [lo, hi) of levels and layers a view covers: a sampled view, or the one level an attachment renders (all layers when the view sets none)
+static void view_span(const view_t *v, int has_v, const tex_t *t, int attach, int *l0, int *l1, int *y0, int *y1) {
+    int levels = t->d.levels ? t->d.levels : 1;
+    *l0 = has_v && v->set_levels ? v->base_level : 0;
+    *l1 = attach ? *l0 + 1 : has_v && v->set_levels && v->nlevels ? *l0 + v->nlevels : levels;
+    if (has_v && v->set_layers) { *y0 = v->min_layer; *y1 = v->min_layer + (v->nlayers ? v->nlayers : 1); } else { *y0 = 0; *y1 = 1 << 16; }
+}
+static void count_self_sample(NvProg *pr) {
+    if (!pr || (!R.rt.n && !R.rt.depth)) return;
+    int hit = 0, ov = 0, dep = 0; g_cnt_why[0] = 0;
+    for (int st = 0; st < 5; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh) continue;
+        for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i]; uint64_t h;
+            if (b->kind == NVN_RB_IMG) h = b->reg < 32 && sh->stage < 6 ? S.img[sh->stage][b->reg] : 0; else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TBUF) h = b->reg < 128 && sh->stage < 6 ? S.tex[sh->stage][b->reg] : 0; else continue;
+            int tid = (int)(h & 0xfffff); if (!tid) continue;
+            treg_t r; int ok = 0; pthread_mutex_lock(&g_rmu); if (tid < g_ntreg && g_treg[tid].ok) { r = g_treg[tid]; ok = 1; } pthread_mutex_unlock(&g_rmu);
+            if (!ok) continue;
+            int l0, l1, y0, y1; view_span(&r.v, r.has_v, &r.t, 0, &l0, &l1, &y0, &y1);
+            for (int k = 0; k <= 8; k++) {
+                const tex_t *a = k < 8 ? (k < R.rt.n ? R.rt.color[k] : NULL) : R.rt.depth; if (!a || a->serial != r.t.serial) continue;
+                hit = 1; if (k == 8) dep = 1;
+                int m0, m1, z0, z1; view_span(k < 8 ? &R.rt.cview[k] : &R.rt.dview, k < 8 ? R.rt.has_cview[k] : R.rt.has_dview, a, 1, &m0, &m1, &z0, &z1);
+                if (l0 < m1 && m0 < l1 && y0 < z1 && z0 < y1) { ov = 1;
+                    if (!g_cnt_why[0]) snprintf(g_cnt_why, sizeof g_cnt_why, "texture %ux%u, %d levels, %d layers; samples levels %d-%d layers %d-%d, draws level %d layers %d-%d%s",
+                        r.t.d.width, r.t.d.height, r.t.d.levels, r.t.d.depth, l0, l1 - 1, y0, y1 > 65535 ? -1 : y1 - 1, m0, z0, z1 > 65535 ? -1 : z1 - 1, k == 8 ? " (depth)" : ""); }
+            } } }
+    (void)hit; (void)dep;
+    if (ov) { g_cnt_self++; if (g_stat_draw > g_cnt_pass_d0) { g_cnt_self_ov++; if (g_cnt_bar_at > g_cnt_pass_d0) g_cnt_self_dep++; }
+        static char seen[16][9]; static int nseen;   // the first 16 fragment shaders seen doing it, with the pass
+        if (nseen < 16 && pr->sh[1]) { int k = 0; while (k < nseen && memcmp(seen[k], pr->sh[1]->key, 8)) k++;
+            if (k == nseen) { memcpy(seen[nseen++], pr->sh[1]->key, 8);
+                MLOG("counts: fragment shader %.8s samples what its pass draws (pass %llu, %u x %u, %d colour targets, draw %llu of the pass, barrier since %d): %s", pr->sh[1]->key,
+                     (unsigned long long)g_stat_pass, (unsigned)g_pass.tw, (unsigned)g_pass.th, R.rt.n, (unsigned long long)(g_stat_draw - g_cnt_pass_d0), g_cnt_bar_at > g_cnt_pass_d0, g_cnt_why); } } }
+}
+// Before a draw (see fbx_sub): the attachments it samples where it draws, copied unless a copy is still current; the copies stand in for them
+static void fbx_prepare(NvProg *pr) {
+    g_fbx_npend = 0;
+    if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }
+    if (g_fbx_on < 0) { const char *e = getenv("DM_NVN_FBX"); g_fbx_on = !e ? 1 : !strcmp(e, "0") ? 0 : !strcmp(e, "all") ? 2 : 1; }
+    if (!g_fbx_on || !pr || (!R.rt.n && !R.rt.depth)) return;
+    if (g_fbx_on == 1 && !(g_enc && g_stat_draw > g_cnt_pass_d0 && g_fbx_bar_at > g_cnt_pass_d0)) return;   // no barrier after draws of this pass: read as the console does
+    uint64_t rs[9]; int nr = 0;
+    for (int k = 0; k < 9; k++) { const tex_t *a = k < 8 ? (k < R.rt.n ? R.rt.color[k] : NULL) : R.rt.depth; rs[k] = a ? a->serial : 0; nr += a != NULL; }
+    if (!nr) return;
+    unsigned need = 0;
+    for (int st = 0; st < 5; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh) continue;
+        for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i];
+            if (b->kind != NVN_RB_TEX || b->reg >= 128 || sh->stage >= 6) continue;
+            int tid = (int)(S.tex[sh->stage][b->reg] & 0xfffff); if (!tid) continue;
+            uint64_t ser = atomic_load_explicit(&g_tser[tid], memory_order_relaxed); if (!ser) continue;   // lock-free first look
+            int any = 0; for (int k = 0; k < 9; k++) any |= rs[k] == ser; if (!any) continue;
+            treg_t r; int ok = 0; pthread_mutex_lock(&g_rmu); if (tid < g_ntreg && g_treg[tid].ok) { r = g_treg[tid]; ok = 1; } pthread_mutex_unlock(&g_rmu);
+            if (!ok) continue;
+            int l0, l1, y0, y1; view_span(&r.v, r.has_v, &r.t, 0, &l0, &l1, &y0, &y1);
+            for (int k = 0; k < 9; k++) {
+                const tex_t *a = k < 8 ? (k < R.rt.n ? R.rt.color[k] : NULL) : R.rt.depth; if (!a || a->serial != r.t.serial) continue;
+                int m0, m1, z0, z1; view_span(k < 8 ? &R.rt.cview[k] : &R.rt.dview, k < 8 ? R.rt.has_cview[k] : R.rt.has_dview, a, 1, &m0, &m1, &z0, &z1);
+                if (l0 < m1 && m0 < l1 && y0 < z1 && z0 < y1) need |= 1u << k;
+            } } }
+    if (!need) return;
+    if (g_fz.active || g_lay.active || g_rt_range_active) { g_fbx_refused++; RED_ONCE(97, "a draw samples what its pass draws inside a merged, layered or range pass: not copied (first case pass %llu)", g_stat_pass); return; }
+    g_fbx_draws++;
+    id<MTLTexture> src[9]; int ns = 0, stale = 0;
+    for (int k = 0; k < 9; k++) if (need >> k & 1) { id<MTLTexture> t = tex_mtl(k < 8 ? R.rt.color[k] : R.rt.depth); if (!t) continue;
+        int dup = 0; for (int j = 0; j < ns; j++) dup |= src[j] == t; if (dup) continue;
+        src[ns++] = t; }
+    int pick[9];
+    for (int j = 0; j < ns; j++) {   // a current copy of it, else a copy texture of its shape this draw does not use yet
+        pick[j] = -1;
+        for (int i = 0; i < g_nfbx; i++) if (g_fbx[i].src == src[j] && g_fbx[i].draw == g_stat_draw && g_fbx[i].sub == g_fence + 1) { pick[j] = i; break; }
+        if (pick[j] >= 0) continue;
+        stale = 1; id<MTLTexture> t = src[j];
+        for (int i = 0; i < g_nfbx && pick[j] < 0; i++) { id<MTLTexture> c = g_fbx[i].copy; int used = 0; for (int q = 0; q < j; q++) used |= pick[q] == i;
+            if (!used && c.textureType == t.textureType && c.pixelFormat == t.pixelFormat && c.width == t.width && c.height == t.height && c.depth == t.depth &&
+                c.mipmapLevelCount == t.mipmapLevelCount && c.arrayLength == t.arrayLength && c.sampleCount == t.sampleCount) pick[j] = i; }
+        if (pick[j] < 0) {
+            int i = g_nfbx < 16 ? g_nfbx++ : 15;
+            if (g_fbx[i].copy) { defer_obj_release(g_fbx[i].copy); for (int q = 0; q < g_fbx[i].nv; q++) defer_obj_unref(g_fbx[i].view[q]); }
+            MTLTextureDescriptor *d = [MTLTextureDescriptor new];
+            d.textureType = t.textureType; d.pixelFormat = t.pixelFormat; d.width = t.width; d.height = t.height; d.depth = t.depth;
+            d.mipmapLevelCount = t.mipmapLevelCount; d.arrayLength = t.arrayLength; d.sampleCount = t.sampleCount;
+            d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
+            id<MTLTexture> c = [g_dev newTextureWithDescriptor:d];
+            if (!c) { RED_ONCE(96, "attachment copy: cannot make a %lux%lu copy texture; the draw samples the attachment", (unsigned long)t.width, (unsigned long)t.height); g_fbx[i] = (fbx_ent){0}; if (i == g_nfbx - 1) g_nfbx--; return; }
+            res_add(c); g_fbx[i] = (fbx_ent){.copy = c}; pick[j] = i;
+        }
+    }
+    if (stale) {
+        if (!g_enc && (R.clear_d || R.clear_s || memchr(R.clear_c, 1, sizeof R.clear_c))) rp_begin();   // clears still pending: the copy must hold them
+        rp_end();
+        for (int j = 0; j < ns; j++) { fbx_ent *e = &g_fbx[pick[j]];
+            if (e->src == src[j] && e->draw == g_stat_draw && e->sub == g_fence + 1) continue;
+            [(id)blit() copyFromTexture:src[j] toTexture:e->copy];
+            if (e->src != src[j]) { for (int q = 0; q < e->nv; q++) defer_obj_unref(e->view[q]); memset(e->vsrc, 0, sizeof e->vsrc); memset(e->view, 0, sizeof e->view); e->nv = 0; }
+            e->src = src[j]; e->draw = g_stat_draw; e->sub = g_fence + 1; g_fbx_copies++; }
+    }
+    for (int j = 0; j < ns; j++) g_fbx_pend[g_fbx_npend++] = pick[j];
+}
+// The draw's pass is open: its copies stand in from here (passes run in between, as the TBDR path's hoisted clears, ended without them)
+static void fbx_activate(void) {
+    if (!g_fbx_npend) return;
+    memcpy(g_fbx_act, g_fbx_pend, sizeof g_fbx_act); g_fbx_nact = g_fbx_npend; g_fbx_npend = 0; args_dirty_all();
 }
 // The whole render pass's need for depth / stencil (bits: 1 depth 2 stencil; 3 = both needed or cannot be proven). Starting from the draw that opens the render pass, scan in real replay order to the end of the render pass:
 // the attached clears and this draw's state are counted first; later draws accumulate by their depth-stencil state; anything unprovable such as a mid-pass clear or nesting too deep is treated as both needed
@@ -5868,6 +6024,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (g_fz.active && g_enc && g_fz.phase == 2 && !fz_p2_draw(pr, dw, di, g_fz.lmap2, &fz_fn)) {   // Cannot be proven: end the merged render pass (the earlier pass's result is stored as usual) and reopen with the later pass's original targets
         static int once3; if (!once3++) MLOG("readable tile pass merge: a draw in the later pass is not provable, falling back to separate passes (first case pass %llu)", g_stat_pass);
         g_fz_fallback++; rp_end(); }
+    if (!g_defer_replaying) fbx_prepare(pr); else if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }   // a replayed deferred draw: not copied for, and it keeps the draw that replays it's picks
     if (R.has_sc && !g_enc) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
@@ -5886,6 +6043,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_fd_dw = NULL; g_fd_di = NULL;
     if (!en) return;
     if (defer_q_draw) defer_replay();
+    fbx_activate();
     if (skip_d) { g_stat_ds_omit++; if (mode == 3) g_stat_s_only++; else if (mode == 4) g_stat_d_only++; }
     // The pipeline depends only on (program, render pass targets, blend / color / write mask / multisample state, vertex layout): if these did not change, reuse the previous one
     static id<MTLRenderPipelineState> cur_ps; static NvProg *cur_pr; static uint64_t cur_ps_pass;
@@ -5952,6 +6110,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
             if (g_vis_cur >= 0 && g_enc_vis != g_vis_cur + 1) { enc_r_visibility(en, MTLVisibilityResultModeCounting, (NSUInteger)g_vis_cur * 8); g_enc_vis = g_vis_cur + 1; }
         }
     }
+    if (g_cnt_on > 0 || (g_cnt_on < 0 && counts_on())) count_self_sample(pr);   // after the splits above: the pass this draw lands in
     g_stat_draw++;
     if (enc_label_on() && !g_el_draws++ && pr->sh[1]) { memcpy(g_el_key, pr->sh[1]->key, 8); g_el_key[8] = 0; }
     if (passdump()) {   // Characteristics of a render pass's first draw (to judge whether the load can be omitted: full screen, no blending, writes all channels, does not depend on depth); with DM_NVN_PASSDUMP_ALL every draw is recorded
@@ -6346,6 +6505,7 @@ static void copy_t2t(const p_copy_t2t *c) {
 // Whole level and whole face, all four channels written -> open one clear-only render pass per layer / depth slice (the hardware converts the clear value by the texture format, including integer and depth);
 // view with changed format: clear on a view of that format; partial region, partial channels, compressed / packaged textures (no render target usage): report a failure, to be implemented
 static void clear_tex(const p_clear_tex *c) {
+    if (counts_on()) g_cnt_cleartex++;
     if (c->tex) zskip_del(c->tex->serial);
     tex_gpu_write(c->tex);
     id<MTLTexture> t = tex_mtl(c->tex);
@@ -6442,6 +6602,17 @@ void mtl_exec(const uint8_t *p) {
                          // rendering at replay compares it); the timestamp half only when the GPU has run the submission. Written at replay as well, it told the game
                          // the GPU had passed that point while the work was still queued: Tears of the Kingdom's frames alternated between two poses / object sets
                          // (Zelda's cloak, the cave walls), and waiting for the GPU after every submission made it go away
+                    if ((t == NVN_COUNTER_TYPE_TIMESTAMP || t == NVN_COUNTER_TYPE_TIMESTAMP_TOP) && counts_on()) { g_cnt_ts++; if (++g_cnt_sub_ts == 2) g_cnt_ts_multi++;
+                        // The reports of one submission that has several, once, after frame 900: their guest heap offsets for DM_WATCHPOINT (who reads them)
+                        static uint64_t logged_sub; static int nlog; uint64_t f = atomic_load(&g_cur_frame);
+                        if (f >= 900 && g_cnt_sub_ts >= 2 && nlog < 12 && (!logged_sub || logged_sub == g_fence + 1)) {
+                            uint8_t *al, *st, *hp; size_t aln, stn, hpn; svc_guest_layout(&al, &aln, &st, &stn, &hp, &hpn);
+                            if (!logged_sub) MLOG("counts: the timestamp reports of submission %llu (frame %llu), the first one being %#llx (heap+%#llx)", (unsigned long long)(g_fence + 1),
+                                                  (unsigned long long)f, (unsigned long long)g_cnt_first_ts, (unsigned long long)(g_cnt_first_ts - (uint64_t)hp));
+                            logged_sub = g_fence + 1; nlog++;
+                            MLOG("counts:   report %d type %llu at %#llx (heap+%#llx)", g_cnt_sub_ts, (unsigned long long)t, (unsigned long long)ad, (unsigned long long)(ad - (uint64_t)hp));
+                            const char *w = getenv("DM_NVN_COUNTS_WATCH"); if (w && atoi(w) == g_cnt_sub_ts) { MLOG("counts: watching loads of report %d's timestamp", g_cnt_sub_ts); dm_watch_load(ad + 8, 8); } }
+                        if (g_cnt_sub_ts == 1) g_cnt_first_ts = ad; }
                     if (ad) { uint64_t z = 0; memcpy((void *)(uintptr_t)ad, &z, sizeof z); }
                     mtl_sub_counter(ad, (uint32_t)t); }
                 break; }
@@ -6516,7 +6687,8 @@ void mtl_exec(const uint8_t *p) {
             case OP_COPY_T2T: copy_t2t(a); break;
             case OP_CLEAR_TEX: clear_tex(a); break;
             case OP_DISPATCH: dispatch(a); break;
-            case OP_BARRIER: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: break;
+            case OP_BARRIER: { int32_t bits; memcpy(&bits, a, 4); if (g_cnt_on > 0) g_cnt_bar_at = g_stat_draw; if (bits & NVN_BARRIER_INVALIDATE_TEXTURE_BIT) g_fbx_bar_at = g_stat_draw; break; }
+            case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: break;
             default: break;
         }
         p += h.size;

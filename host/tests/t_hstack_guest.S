@@ -258,6 +258,24 @@ _tg_on_stack:
     ldp x29, x30, [sp], #16
     ret
 
+// tg_gate_loop(n): n gate round trips with svc 0x83 (the test's gate returns at once), as many rewritten svc / cntpct reads
+    .globl _tg_gate_loop
+    .p2align 2
+_tg_gate_loop:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    mov x19, x0
+1:  mov x16, #0x83
+    stp x29, x30, [sp, #-16]!
+    bl _dm_gate
+    ldp x29, x30, [sp], #16
+    subs x19, x19, #1
+    b.ne 1b
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
 // Thread entry: x0 = argument for tg_main (t_hstack.c), then ExitThread through the gate
     .globl _tg_entry
     .p2align 2

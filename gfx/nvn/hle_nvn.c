@@ -1369,8 +1369,12 @@ static int dcmp(const void *a, const void *b) { double x = *(const double *)a, y
 // reset) and those folded when their visibility buffer was used again (nvn_mtl.m vis_recycle)
 void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]);
 void mtl_vis_state(int *open, uint64_t *folded);
+void mtl_counts(uint64_t out[7]);
+void mtl_fbx_stats(uint64_t out[3]);
+__attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle.c; the graphics unit tests link without it
 static void power_line(uint64_t frame) {
-    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[7], pg[4], pfx[3]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static int counts = -1; if (counts < 0) counts = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0");
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
     uint64_t t = now_ns(), cpu = (pw.cpu_energy.total_user + pw.cpu_energy.total_system) * tb.numer / tb.denom, p = pw.task_ptime * tb.numer / tb.denom;
@@ -1387,10 +1391,20 @@ static void power_line(uint64_t frame) {
         uint64_t rep[32], rst[32], fold; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &fold);
         if (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prep || rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prst)
             LOG("[nvn] occlusion up to frame %llu: %.1f reports / %.1f resets a frame, %d slots in the open count, %.1f folded a frame", frame,
-                (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prep) / nf, (rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prst) / nf, open, (fold - pfold) / nf); }
+                (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prep) / nf, (rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prst) / nf, open, (fold - pfold) / nf);
+        { uint64_t fx[3]; mtl_fbx_stats(fx);
+          if (fx[0] > pfx[0] || fx[2] > pfx[2]) LOG("[nvn] attachment copies up to frame %llu: %.1f draws a frame sample what their pass draws, %.1f copies, %.1f not copied (merged, layered or range pass)",
+                                                   frame, (fx[0] - pfx[0]) / nf, (fx[1] - pfx[1]) / nf, (fx[2] - pfx[2]) / nf); }
+        if (counts) { uint64_t c[7], g[4]; mtl_counts(c); dm_gate_counts(g);   // DM_NVN_COUNTS (plan items 42-45)
+            LOG("[nvn] counts up to frame %llu, a frame: %.1f draws sample the levels and layers their own pass draws (%.1f after other draws of the Metal pass, %.1f of them after a barrier); "
+                "%.1f timestamp reports, %.2f submissions with two or more; %.1f ClearTexture; %.1f render passes without a draw; a second: %.0f counter reads, %.0f svcs",
+                frame, (c[0] - pc[0]) / nf, (c[1] - pc[1]) / nf, (c[2] - pc[2]) / nf, (c[3] - pc[3]) / nf, (c[4] - pc[4]) / nf, (c[5] - pc[5]) / nf, (c[6] - pc[6]) / nf,
+                (g[1] + g[2] - pg[1] - pg[2]) / s, (g[0] - pg[0]) / s); } }
     else { char tc[400]; dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
     pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; pf = frame; mtl_bw(&pld, &pst, &pfu); pudc = mtl_udc_saved_bytes();
     { uint64_t rep[32], rst[32]; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &pfold); prep = rep[NVN_COUNTER_TYPE_SAMPLES_PASSED]; prst = rst[NVN_COUNTER_TYPE_SAMPLES_PASSED]; }
+    if (counts) { mtl_counts(pc); dm_gate_counts(pg); }
+    mtl_fbx_stats(pfx);
 }
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;

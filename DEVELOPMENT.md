@@ -893,10 +893,26 @@ Tier 3, medium:
   differ between the builds; no console capture to say which is right). manosaba makes no occlusion queries. Found on the way: the overflow buffer
   of a submission with more than 8,192 counting passes was never retired (the check read `g_vis` after it was cleared; the test fails on the old
   line). The power summary has an occlusion line (reports, resets, open slots, folded slots a frame)
-- [ ] 42 draws that sample their own attachment (count first)
-- [ ] 43 counter timestamps where the report sits (check first)
-- [ ] 44 clears kept on the texture, ClearTexture included (count first)
-- [ ] 45 `cntpct_el0` read inline (count first)
+- [x] batch 8 · 42 draws that sample what their own pass draws (`DM_NVN_COUNTS=1` counts them): Tears of the Kingdom about 59 a frame in the
+  prologue, full-screen passes at 1600x896 / 800x448 / 400x224 sampling the one level and layer they draw (most the first draw of their pass, 6 a
+  frame after a texture-invalidating barrier that follows draws of the pass); manosaba none. On the M5 such a draw reads the attachment as it was
+  before the Metal pass (the earlier draws are in tile memory, a pending clear is not in memory); measured in `gfx/tests/t_fbx.m`. Copying the
+  attachment for every such draw (after tomodachi-native 4dbd30f / da08d11, MIT: earlier draws and clears visible) put two prologue shots outside
+  the console's brightness ranges taken from the video of the opening the user found (youtu.be/IyCrvjFhkRE, the shots' frames matched by structure:
+  s1800 left third 39.0 against 44.2-54.5, s1300 right 65.9 against 68.2-84.2; GPU p50 +2.4 ms, 112 copies a frame), while the M5's own reads and
+  copies only after such a barrier stay inside them in every third. So the replay copies only where NVN defines the read (a draw after a texture
+  barrier that follows draws of its pass: the pass ends, the whole texture is copied, the copy is bound in its place, `fbx_prepare` / `fbx_sub`): 2
+  draws and 6 copies a frame, within run-to-run timing. `DM_NVN_FBX=all` copies for every such draw, `=0` never. `t_fbx`: 10 checks in each mode on
+  the GPU with API validation; with `=0` the barrier cases fail
+- [-] batch 8 · 43 checked: Tears of the Kingdom writes 43-80 timestamp reports a frame, one submission a frame holds two or more (a dozen
+  TIMESTAMP_TOP to a pool); a load watchpoint on four of them (`DM_NVN_COUNTS_WATCH=<n>`, `DM_WATCHPOINT_LOAD=1`, new) saw no read in 15-30 s, while
+  the type 0 report of that submission is read every frame by `nvnDeviceGetTimestampInNanoseconds` (main+0x76920, the frame-rate controller, which
+  compares it with the CPU's frame start tick). No two reports of one submission are subtracted: the command buffer is not split at reports
+- [-] batch 8 · 44 counted: no ClearTexture in Tears of the Kingdom's prologue or manosaba, and 4 render passes a frame end without a draw in the
+  prologue (0 in manosaba): keeping clears on the texture would save at most those
+- [-] batch 8 · 45 counted: about 31,000-34,000 system counter reads a second in Tears of the Kingdom (manosaba 4,500-9,800); a gate round trip
+  costs 13-25 ns on the M5 (`t_hstack` prints it), so about 1.5 ms of CPU a second in all with the lookup and the clock: not worth an inline read
+  that would have to keep the background freeze and `DM_DETCLOCK`
 - [ ] 46 render area limited to the drawn part (only if a game draws sub-rects)
 - [ ] 47 a live command channel
 - [ ] 48 sead heap walk and list watch at a crash
