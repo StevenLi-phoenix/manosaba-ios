@@ -936,7 +936,16 @@ Tier 3, medium:
   has whole ones (counted naively, 6,127 of 6,450 looked broken). An address in the Actor heap: RootHeap → sead::TaskMgr → ModuleSystem → Actor
   and its block. `host/tests/t_sead.c`: 19 checks on heaps built by hand (a child heap, a class without a use list, three kinds of break, a list
   watch); taking a heap without checking it reaches the address fails 2; `t_crash_stderr`: DM_CRASH_HEAP gets the register's value at a crash
-- [ ] 49 per-pass GPU time with MTL4CounterHeap
+- [x] batch 12 · 49 per-pass GPU time, `DM_NVN_PASSGPU=<tsv>` (after upstream 44a6770, MIT): Metal 4 writes timestamps into an
+  MTL4CounterHeap around each render encoder and each dispatch (precise: dispatches share the copy encoder), Metal 3 samples at stage boundaries;
+  a heap per submission in a ring of 8, invalidated before reuse (upstream's is not: a slot left unwritten would read an older submission's
+  time). One row per pass; every 300 frames a line with the GPU time a frame and the five kinds of pass (size, formats, loads) that took the
+  most. Tears of the Kingdom's prologue: 139-147 passes and dispatches a frame, 5.9-6.3 ms of increments against a GPU p50 of 6.8 ms (the union
+  of the command buffers, copies included); most: 1600x896 with five colour attachments and depth 0.78 ms (5 a frame), 800x448 with eight 0.72
+  ms (2), 1600x896 format 92 0.43 ms (1), 1920x1080 format 92 0.43 ms (2). Summed by a pass's index in the frame, as upstream logs it, the same
+  run came to 13 ms (an index is no identity when frames have 100-260 passes). Passes overlap: on Metal 3 a light pass after a heavy one spans 13
+  ms (its vertex stage starts during the heavy one's fragments) and adds 0. `gfx/tests/t_passgpu.m`: 8 checks on the GPU with API validation,
+  Metal 4 and Metal 3; without the end timestamps no row comes out (both fail)
 - [ ] 50 soak and fixed-camera measurement
 - [ ] 51 lifecycle and swipe-away tests back
 - [ ] 52 scene render resolution on 1.4.3 (`HOSTREFS`, a Unicorn check)

@@ -95,6 +95,8 @@ t_fbx: t_fbx.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fbx.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_extent: t_extent.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_extent.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_passgpu: t_passgpu.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_passgpu.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_visibility: t_visibility.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_visibility.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
@@ -145,6 +147,7 @@ run: \
 	t_mip_extent \
 	t_nvn \
 	t_pace \
+	t_passgpu \
 	t_pend \
 	t_pfv \
 	t_pool_find \
@@ -207,6 +210,7 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_fbx
 	DM_NVN_FBX=all MTL_DEBUG_LAYER=1 ./t_fbx
 	MTL_DEBUG_LAYER=1 ./t_extent
+	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_passgpu
 	python3 -I t_alpha_src.py 1 > t_alpha_1.metal && python3 -I t_alpha_src.py 0 > t_alpha_0.metal && ./t_alpha t_alpha_1.metal t_alpha_0.metal
 	DM_ROOT=$${DM_ROOT:-$(HOME)/dm-work} python3 -I t_xlate_ops.py
 	MTL_DEBUG_LAYER=1 ./t_vfmt

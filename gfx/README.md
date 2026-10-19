@@ -132,6 +132,10 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_REUPLOG=<n>` | Log the first n re-uploads of memory-backed textures (which textures does the CPU keep rewriting?) |
 | `DM_NVN_PASSDUMP=<frame>` or `<a>-<b>` | Log each render pass (attachments, loads / stores, samples) for those frames to stderr; `DM_NVN_PASSDUMP_ALL=1` adds every draw |
 | `DM_NVN_PROF=1` | Time every implemented NVN function |
+| `DM_NVN_PASSGPU=<file>` | GPU time of each render pass and dispatch as TSV (timestamps: an `MTL4CounterHeap` on Metal 4, stage-boundary samples on Metal 3); every 300 frames a line with the GPU time a frame and the kinds of pass that took the most |
+| `DM_NVN_COUNTS=1` | Counters in the power summary: draws sampling their own attachment, timestamp reports, ClearTexture, passes without a draw, passes drawing only a top-left part, counter reads and svcs a second |
+| `DM_NVN_TS_LATE_US=<µs>` | Report counter timestamps that much later (the game sees a slower GPU) |
+| `DM_NVN_FBX=all` or `0` | Copy the attachment for every draw that samples it (default: only after a texture barrier), or never |
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |
 | `DM_NVN_TBDR=0` | Turn off all pass optimizations (attach, load and store everything), for equivalence comparisons |
 | `DM_NVN_NOCULL=1` | Draw with face culling off (does a missing draw come back?) |
