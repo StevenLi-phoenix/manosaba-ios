@@ -100,13 +100,19 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   whose system modules are the ones nxnative brought up for Breath of the Wild 1.9.0: the explicit jump-table rewrite (`site_br_tab`), the
   in-process audio renderer, host guest threads, amiibo, play report, oe / hid / fs additions, NVN 55 functions, deferred texture binds,
   growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool
-  buffer, the inline-uniform ring and per-stage vertex shader padding, credited in the code.
+  buffer, the inline-uniform ring and per-stage vertex shader padding; later the autorelease pool for retired objects, the driver segment for
+  vertex and compute shaders, clears on a left-out attachment slot, the growable dirty-range table, QueueFinish without present waits, two
+  translator fixes, vertex output defaults, invariance and the Metal compile cache, credited in the code.
 - **tomodachi-native** (kuosuko, MIT), a fork of nxnative: the variant of the duplicated colour slot handling that keeps the slot the pass writes.
 - **MacNativeGames** (ly05010419, MIT), a Tears of the Kingdom port on the same lineage: which RomFS files hold the shaders, virtual cores, clears
-  drawn as quads, BC render targets through an auxiliary texture, storage buffers addressed from uniform buffers, stale texture views, and the
-  behaviour and pacing of the VP9 movie decoder, ported by hand and credited in the code.
+  drawn as quads, BC render targets through an auxiliary texture, storage buffers addressed from uniform buffers, stale texture views, the
+  behaviour and pacing of the VP9 movie decoder, the 60 fps controller words and the real-time frame step, uniform snapshots, and from its
+  graphics layer the pending-write table, keep-alive, chunked commits, render-state filter, upload staging pool, storage-followed and
+  storage-shared textures, GPU write-back, uniform renaming, small-texture hashing and once-per-submission checks, layered passes, the encode
+  stage, driver segment fills, block height and D16 clear fixes, the GPU memory budget and pool range checks, and the RomFS overlay findings
+  for 60 fps, ported by hand and credited in the code.
 - **LASRecomp** (hjqcan, MIT): its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled
-  textures of Tears of the Kingdom.
+  textures of Tears of the Kingdom, and the order of WaitSynchronization's checks.
 - **LibHac** (Alex Barney, MIT): reads NSP, XCI and NCA containers in `tools/game_extract`.
 - **Ryujinx** (MIT): the shader translator in `third_party/ryujinx`.
 - **deko3d** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c`.

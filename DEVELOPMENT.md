@@ -308,6 +308,12 @@ in our rules and host:
   computes 60 / 30 and ignores it); `tests/t_frame_step.c` (the mean, the clamps, the page layout). `verify/regress.sh` OK (main cuts 16).
 - The product with these rules is `work/build/totk/product60` (`host/dmhost work/build/totk/product60`); the default product was left at 30 fps
   while the blood moon crash below is open. A 75 s prologue run: interval 1, frame time p50 16.8 ms.
+- RomFS overlay for 60 fps and up (601258f): `work/build/cache/dm/venv/bin/python -I games/totk/romfs_overlay.py work/data/switch/totk-1.4.3/RomFS
+  work/build/totk/romfs_overlay` builds it from the game's own RomFS (the quick menus' background was black at 60 fps; the game over menu would
+  wait forever on a one-frame wait with the real-time step); the host serves it first when it exists (`games/totk/defaults.c` sets
+  `DM_ROMFS_OVERLAY`; empty `DM_ROMFS_OVERLAY=` turns it off). Test: `games/totk/tests/t_romfs_overlay.py <RomFS>`.
+- On the Mac Tears of the Kingdom runs with the TBDR rewrites off (`games/totk/defaults.c`, `DM_NVN_TBDR=1` turns them on): on the M5 the dive
+  measured GPU p50 8-10 % lower without them at the same submission time, and mid-submission commits and layered passes need them off.
 
 **Flicker in the dive from the Great Sky Island (2026-10-19):** many objects flickered while falling from the first cliff, and some frames were
 wrong over the whole screen (rock walls in front of the camera, a flat ground). Repro: a manual save at the cliff edge, the dive scripted with
@@ -346,10 +352,11 @@ resource at +0x28 of a binder of type 0xe (+0xc) after waiting for it (`WaitLigh
 Also seen: `nn::os::WaitForAddress(long const*, long)` (sdk 0x146fb0) uses arbitration type 3 (64-bit wait if equal), which svc 0x34 treats
 as type 0; main and subsdk0 do not import it. The vertex shader `1eee2726aae7493e` (SPIRV-Cross "nullptr") is now drawn with.
 
-Known gaps: two 4x4 textures are re-uploaded every frame (the CPU rewrites their pages; MacNativeGames hashes small textures instead); alpha
+Known gaps: alpha
 test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn (red line); GPUs without BC
 (iOS) do not get the BC render target path; iOS needs `DM_CACHE` and the
-large heap; hid six-axis is a stub. Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
+large heap; hid six-axis and vibration are stubs; no 2K canvas (both in the 2026-10-19 review, not done yet). The two 4x4 textures that were re-uploaded every frame are
+checked by content now (small-texture hashing, 06c80bd). Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
 `DM_NVN_TEXSNAP` (ordered on the replay's encoder, `@WxH` and ranges), `DM_NVN_TEXNZ`, `DM_NVN_TEXCLASS`, `DM_NVN_REUPLOG`; the pass dump prints
 cull / depth range / index type, the inline uniform data, the first vertices and the counters seen by conditional rendering. Run after
 `make -C host GAME=totk`:
@@ -360,12 +367,12 @@ Upstream PR #55 (x18 scan prefilter, n3crosis) is in `tools/patch_nso.py` (76 s 
 
 ## Upstream and other ports to draw from
 
-Reviewed 2026-10-17. Fetch them into a scratch repository, read only, never run their code; port by hand with a test per item, check our
+Reviewed 2026-10-17 and again 2026-10-19 (candidates in "Review of 2026-10-19" below). Fetch them into a scratch repository, read only, never run their code; port by hand with a test per item, check our
 code first (several fixes are already here in another form), and credit the source in the commit and the README.
 
 ### Upstream: [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)
 
-Reviewed through 21cf97b91823111ead237858ea79929afacf71a5 (2026-10-17).
+Reviewed through 21cf97b91823111ead237858ea79929afacf71a5 (2026-10-17), then through 9393b00 (2026-10-19).
 
 - Ported 2026-10-17: buffer ↔ texture copies honour `nvnCommandBufferSetCopyImageStride` (86b1315a84cec67cfef0b3eab125dbc3c4489cc4, SepheTT;
   `gfx/nvn/nvn_copy_pitch.h`, `t_copy_pitch`; manosaba never calls it; d21348c); `UILaunchScreen: {}` instead of an empty `UILaunchStoryboardName`
@@ -379,7 +386,7 @@ Reviewed through 21cf97b91823111ead237858ea79929afacf71a5 (2026-10-17).
 
 All MIT and keep jhaizhou's LICENSE; they use the old `dm/` layout.
 
-- [seedds/nxnative](https://github.com/seedds/nxnative) (main, reviewed through 20cba12c4299d77f05b6bbfd3dfa42d6c6035da4): NSP → IPA; its
+- [seedds/nxnative](https://github.com/seedds/nxnative) (main, reviewed through 20cba12c4299d77f05b6bbfd3dfa42d6c6035da4, then through 64b79de on 2026-10-19; seedds/smbw-mobile points at the same commits): NSP → IPA; its
   README at that commit lists Super Mario Bros. Wonder, Fire Emblem Engage, Metroid Dread, 13 Sentinels, Super Mario 3D World + Bowser's
   Fury and Breath of the Wild 1.9.0 as tested on an iPhone and playable (iOS 26); the BotW profile's own header still says "in bring-up".
 - [Johnoooob/nx-port](https://github.com/Johnoooob/nx-port) (main, single commit 3e6366b86a510361d451618ffd7c45dea5549492, unchanged).
@@ -391,11 +398,11 @@ All MIT and keep jhaizhou's LICENSE; they use the old `dm/` layout.
 - TommyLau/botw-mobile: gone from GitHub (404 on 2026-10-17). Its commits listed below can no longer be fetched from there; nxnative now
   carries Breath of the Wild.
 - [ly05010419/MacNativeGames](https://github.com/ly05010419/MacNativeGames) (main, reviewed at 41e1e0caf43d58c4af3c478ca2d1bafd9dba7093,
-  2026-10-18): Tears of the Kingdom 1.0.0 / 1.1.2 / 1.4.3 on the Mac, its NVN layer from d2r-mobile's (`games/totk/third_party/d2r_gfx`).
+  2026-10-18, and in full at 70729e9 on 2026-10-19): Tears of the Kingdom 1.0.0 / 1.1.2 / 1.4.3 on the Mac, its NVN layer from d2r-mobile's (`games/totk/third_party/d2r_gfx`).
   Ported (see the TotK section): offline BNSH shaders, stale texture views, quad clears, BC render targets, storage buffers addressed from uniform
-  buffers, the storage buffer write flag. Not yet: the real-time frame step and the 60 fps controller patch (`game_patches_v143.c`), the 2K canvas
-  and MetalFX, uniform rename (inline updates without ending the pass), submission split every 60 / 75 draws, the acquire sync not fenced to the
-  newest submission, GPU keep-alive, small-texture hashing, the state filter. With those its 1.4.3 notes give 83.9-110.2 fps averaged over 15
+  buffers, the storage buffer write flag; then the real-time frame step and the 60 fps controller words (dba469f), uniform snapshots (146354a),
+  and the 2026-10-19 review items ("Ported 2026-10-19" below). Not yet: the 2K canvas and MetalFX scene / output upscaling, frame interpolation,
+  gyro and rumble, BC → ASTC transcoding. With those its 1.4.3 notes give 83.9-110.2 fps averaged over 15
   fixed-camera points on an M4 (docs/v1.4.3-port.md), and about 27-30 fps with the game's own controller.
 
 ### Independent: [c22dev/mush8](https://github.com/c22dev/mush8)
@@ -431,12 +438,11 @@ RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) an
 
 - **AudioRenderer** (first-party games): nxnative `dm/host/hle_audren.c` (50a9c65b5f402b796cc7e7f0b011e11b2015f30f, the SDK renderer
   in-process; SDK 20 rendering through the locked path ff74840187d5ca4dda914bb80ffbd86cb0cce96b); nx-port's own PCM16 / DSP-ADPCM mixer
-  (3e6366b…); mush8 (ideas only). Ours has AudioOut only.
+  (3e6366b…); mush8 (ideas only). Ported for Tears of the Kingdom in a267ec1 (`host/hle_audren.c`, the SDK renderer in-process).
 - **Deferred texture binds** read when the command executes, not when it is recorded (`nvnCommandBufferBindTexturesDeferred`): nxnative
-  d6cd8a812a1047dff8f660f604d0a46033752242. Not ported yet: every reader of a bind record in `nvn_mtl.m` (about eight places: replay, lookahead,
-  deferral, merging) must refresh the handles first, and manosaba, which looks the name up and gets NULL, would get a function and might take
-  another path; wants a game that uses it to check against.
-- **Graphics**, nxnative: a texture attached at two colour slots is attached once, cube textures as 6-layer 2D arrays for cube-array views,
+  d6cd8a812a1047dff8f660f604d0a46033752242. Ported for Tears of the Kingdom in a267ec1 (the readers refresh the handles, `bh_fresh` in
+  `nvn_mtl.m`).
+- **Graphics**, nxnative: a texture attached at two colour slots is attached once (ported through tomodachi-native's variant, `rt_dup_slot`), cube textures as 6-layer 2D arrays for cube-array views,
   compressed render targets skipped with a red line instead of a Metal abort (d6cd8a812a1047dff8f660f604d0a46033752242; the first touches the
   attachment setup and the pipeline key in several places); a snapshot of
   the attachment for shaders that sample what they write in the same pass, per shader by a profile key, with the device self-check
@@ -450,8 +456,9 @@ RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) an
   (734a286328d18404fd5a67785a1e05d2149c5986).
 - **nn::ro .nro modules**: nx-port `dm/host/hle_ro.c` and loader changes (3e6366b…).
 - **VP9 movies** with libvpx: nxnative a9e4f18ed17b17bb5cd8eef422464e94a017654b (decoder hooks), 5e84062fad1f07e95f59c1cc6a94918c463d077e
-  (libvpx).
-- **Shaders** from Nintendo's containers: nxnative `dm/gfx/tools/shader_split.py` (Yaz0 SARCs, BNSH, BAHS in 42a50ef…); older Unity bundles:
+  (libvpx). Done our own way in a8c3ff1 (`host/movie_webm.c`, libvpx, MacNativeGames' semantics).
+- **Shaders** from Nintendo's containers: nxnative `dm/gfx/tools/shader_split.py` (Yaz0 SARCs, BNSH, BAHS in 42a50ef…; ours:
+  `engines/bnsh/shader_extract.py`, 70cb843 and 17766ae); older Unity bundles:
   `dm/gfx/tools/unityfs.py` (e3cd2ff8ff0eb84a62280ef70e90c60753e546e6).
 - **Tools**: nso_syms.py (aa8cc5c0cd8bd5d09bcacb019f7832df3a164452); nso_fnmap.py, which carries cuts to a new build
   of `main` (b5507f2aac7e1d1f5512de750f5810a550162b04, also for a manosaba update); build_ipa_from_nsp.py
@@ -471,6 +478,97 @@ RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) an
 - **iOS 17 devices**: 4ppp44/d2r-mobile-ios17 (above).
 - Small: an ad-hoc signature for LiveContainer (Kamisorara 95d6caa903bc19e602493bb5a5568650d39f52cf), gamepad face buttons by printed glyph
   (8429dc1727cbca079c60427e3b59258683f1c924).
+
+### Review of 2026-10-19
+
+All references fetched again (blobless, read only). New since the last review: upstream 1 commit, nxnative 33 (9579030..64b79de), MacNativeGames
+3 plus a full pass over its TotK code, 4ppp44 1, LASRecomp `main` 17 (README) and its `beta_5` / `multi` branches (300-500 commits: other
+games, Vulkan, randomizer), SkyRecomp 9 (PC / Vulkan: NIS scaling, LayeredFS mod manager), mush8 / tomodachi-native / Kamisorara only
+small or merges; d2r-mobile/d2r-mobile is a rewritten copy of upstream's history up to 21cf97b with no code of its own. Checked against our
+code; "seen" = the symptom is in our logs or shader cache.
+
+Correctness, small (in this order):
+- Retired textures and buffers kept alive by autorelease: `mtl_sub_begin` runs `defer_drain` / `fin_drain` / `warm_claim` before it pushes the
+  submission's pool, on a guest thread without one (nxnative 0fc0ce4, Metroid Dread's GPU memory grew by gigabytes).
+- Driver segment c0 for vertex and compute shaders (nxnative 9579030, MacNativeGames `drv_fillable` / `driver_bank_fill`): `dmsh_build.py`
+  `drv_reads` matches `fp_c0` only, so 229 vertex and 146 compute shaders of the TotK library read an all-zero c0 (seen: storage buffer table
+  `cp_c0[53]`, dispatch size `c0[32]`, point size limit `c0[97]`). Fill 0x200 (thread groups), 0x210 + 16 r (compute uniform table), 0x610
+  (2047.9375) too.
+- Automatic block height `(ah + ah / 2) / 8`, ours `+ 7` (`nvn_tex.c`; MacNativeGames cd85f5b, 16 of 40 boundary cases wrong against the SDK;
+  check manosaba's screenshots). D16 load clears quantised like fragment depth (MacNativeGames 3d90e41).
+- iOS audio session `AVAudioSessionCategoryOptionMixWithOthers` (upstream 9393b00): other apps' sound keeps playing.
+- The two shaders that fail to translate (nxnative 771f62f: register texel offsets, four-offset gathers; subgroup ballot lowered as
+  MacNativeGames does); seen: `1eee2726aae7493e` fails to load in play.
+- `nvnTextureBuilderSetPackagedTextureData`, `nvnCommandBufferSetPrimitiveRestart` (both have them; seen: TotK calls both).
+
+Correctness, medium:
+- A registration whose serial was finalized redirected to the texture living at that storage now (MacNativeGames `live_put` /
+  `nvn_tex_live_at`); seen: 56 "created again" red lines in play logs.
+- Clears on a left-out duplicate attachment slot (nxnative 7dde056 `clear_color_tri`); seen once (red line 75). A growable dirty-range table
+  (same commit; TotK peaks at 3067 of 4096).
+- One shader rebuild for: `-fpreserve-invariance` (nxnative f1cc6be: depth pre-pass vs G-buffer blocks), vertex outputs starting at (0,0,0,1)
+  (e81d66f), precise math for the integer-division idiom MacNativeGames found broken (`MTLMathModeSafe`; costs speed, measure).
+- 8-bit indices: restart 0xFF → 0xFFFF, and widening on the GPU when a GPU write earlier in the submission made them.
+- GPU results written back to CPU-visible pools on `InvalidateMappedRange` (MacNativeGames: black terrain blocks after travel).
+- Textures sharing one storage (MacNativeGames `stor_*`: black geometry, full-frame flashes from NaN depth); large.
+- WaitSynchronization order as Horizon (signaled, timeout 0, then cancelled; LASRecomp 1144aea checked against Atmosphère); do not take its
+  `value - 2` for SignalToAddress mode 2.
+- `nvnQueueFinish` without waiting for queued presents (nxnative 3b72aea, a 78 s → 6 s load on iPhone); recheck our stall note first.
+
+Performance (TotK at 60 fps; MacNativeGames' numbers): acquire sync not fenced to the newest submission, which needs the pending-write table
+kept across submissions (theirs 16384 entries, ours 256 reset per submission); GPU keep-alive (GPU p50 12.1 → 9.1 ms, costs power); commits
+every 60 / 75 draws (11.66 ms vs 12.50), at odds with our TBDR passes; dirty-tracking cost (pool scan ~14 % and checks 4.5 % of the replay,
+small-texture hashes); a render-state filter (~30,000 redundant encoder calls a frame); uniform rename (~80 copy encoders, ~23 split passes a
+frame); one compute encoder for consecutive dispatches; an upload staging pool; identical texture registrations skipped; an encoding thread
+(replay −18 %); layered / cube-face passes.
+
+Features: the 2K canvas and MetalFX, RomFS overlays for 60 fps (black quick-menu backgrounds), gyro and rumble, BC → ASTC for iOS, a GPU
+memory budget and pool range checks (MacNativeGames added them after four macOS kernel panics).
+
+Not to do: a Metal binary archive on macOS 26 without guarding `serializeToURL` (LASRecomp turned it off after crashes).
+
+### Ported 2026-10-19
+
+Every item above but three features (below), each ported by hand with a unit test and a broken version that fails it; gfx tests (Metal 4 and Metal 3) and host
+tests pass at the end; Tears of the Kingdom's dive (`fl/trial.sh`, frames 1500-2400) shows no wrong frame; manosaba's four screenshots stay within
+run-to-run variance (s600 / s2400 differ about 0.15 % between two runs of the same build, s1500 / s3300 identical). Numbers are from that dive on an
+M5 (16 GB, macOS 26), 30 fps product, two runs where stated.
+
+- Shader chain 1e41705de87b (686b81e): driver segment reads per stage, two translator fixes (shader `1eee2726aae7493e` builds), vertex outputs
+  start at (0,0,0,1), `-fpreserve-invariance`, `-fmetal-math-mode=safe`, a Metal compile cache (`gfx/tools/dmsh_mtlcache.py`).
+- Correctness (06c80bd): autorelease pool (`t_retire`), c0 fills (`t_drvseg`), block height and D16 clears (`t_tex_auto`, `t_d16clear`),
+  SetPackagedTextureData / SetPrimitiveRestart and GPU widening of 8-bit indices (`t_restart`), storage follow (`t_live`), duplicate-slot
+  clears and the growable dirty table, write-back on invalidate (`t_wb`), QueueFinish (`t_nvn`). WaitSynchronization order in
+  4dd984d (`host/tests/t_waitsync.c`). MixWithOthers in 46b63f4 (not yet run on a device). Invariance, vertex output defaults and safe math are part of the chain.
+- Textures sharing a storage (06c80bd, `t_stor`): measured first, 139 reads of an aliased texture after its partner was rendered (564x81 R8,
+  25x25 pairs, CPU_NO_ACCESS pool). With one MTLTexture per (storage, layout, format) the transient render targets re-initialized every frame
+  keep their texture: submission time p50 3.41 / 7.96 / 4.30 / 6.65 → 2.41 / 6.49 / 3.38 / 5.38 ms (frames 1500 / 1800 / 2100 / 2400), GPU
+  allocated 2989 → 2300 MB, RSS 4615 → 3921 MB at frame 1500.
+- The "created again" red lines: the loading screen samples two finalized BC4 textures (IDs 13963 / 13973) through their descriptors; making them
+  again from their storage is what the console reads, so it is an info line now unless the content is lost, and the texture stays 600
+  submissions (it was made again every 16).
+- Pending writes across submissions + acquire sync (`t_pend`), keep-alive (`t_keepalive`), chunked commits (`t_chunk`) and a cheaper
+  uniform snapshot (radix sort, repeated bindings once, copies in parts; 0.34-0.76 → 0.23-0.43 ms a submission; `t_ussort`), render-state
+  filter (`t_esfilter`), one compute encoder (`t_drvseg`), upload staging pool (`t_uppool`), identical registrations (`t_live`).
+- Dirty-tracking cost (`t_texcheck`, `t_pool_find`): check once per submission, content hash for textures up to 4 KiB, views kept across
+  serial-table steps for other serials and (GPU textures) across guest writes, contiguous pool index + address cache. Submission time p50 −12..14 %;
+  the title's re-uploads 1605 → 11 and write-protect faults 967 → 2 by frame 900; `DM_NVN_DIRTYCHECK=1` finds no missed change.
+- Uniform rename (`t_ubren`): about 100 inline updates a frame no longer end their render pass; GPU p50 7.97 → 6.78 ms, p95 11.31 → 7.92 ms.
+  The first version dropped the snapshot when it wrote the updates, after which every update of the range was written before its draw again; the
+  private copy is now the snapshot with every update of the submission.
+- `fin_drain` 0.69 → 0.04 ms a submission (released copies in due order, released views in one walk; `t_snapreap`, `t_findrain`).
+- Encode stage (`gfx/nvn/nvn_render_stream.h`, `t_rstream`): implemented and off (`DM_NVN_RENDER_STREAM=1`): two runs each, submission time
+  p50 lower in light stretches (3.1 against 3.4 ms) and 0.3-0.5 ms higher at frames 1800 / 2400 (the replay thread waits for the encode thread before every copy and dispatch).
+- Layered passes (`t_layer`): the cube filter's per-layer passes merged through the vertex amplification view mapping (no shader patching;
+  a GPU probe showed the offset works without a layer output and without a topology class, which would refuse vertex shaders writing point
+  size); about ten merges a frame in the title and menus (GPU p50 −13 % there), none in the dive. MacNativeGames' six-attachment cube groups:
+  none in our scenes.
+- Found on the way: `pso_predict_rest` restored only the draw state, so the draw that asked for the prediction took the last scissor walked over
+  (first draw of new pipelines; `t_ubren` case 0).
+- RomFS overlay (601258f), GPU memory budget and pool range checks (06c80bd, `t_poolcheck`; no pool refused in Tears of the Kingdom or
+  manosaba).
+- Not done: 2K canvas and MetalFX (code patches with a veneer, which the rewriter cannot place yet, plus a HeapDef overlay and a larger
+  application pool), gyro and rumble (needs a controller to check), BC → ASTC for iOS (Tears of the Kingdom does not run on iOS yet).
 
 Not worth porting: nxnative's prebuilt .NET DLLs, Android/Vulkan and MoltenVK runtimes (dodola, imink/hades-ios), the upstream D2R-only
 parts. Forks of d2r-mobile with their own pushes are mostly branches for pull requests that upstream has merged; on 2026-10-17 the renamed
