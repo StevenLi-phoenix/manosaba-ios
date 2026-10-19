@@ -35,8 +35,9 @@ int main(void) {
     r = scene_size("", 0, sz); expect("unset, handheld: 1280 ...", 1280, sz[0], 0); expect("... x 720, its own (0)", 720 * 10 + 0, sz[1] * 10 + r, 0);
     r = scene_size("0", 1, sz); expect("DM_RENDER_RES=0: the game's own (0)", 1600 * 10 + 0, sz[0] * 10 + r, 0);
     r = scene_size("960x540", 1, sz); expect("960x540: width", 960, sz[0], 0); expect("... height, from the variable (1)", 540 * 10 + 1, sz[1] * 10 + r, 0);
-    const char *bad[] = {"960x", "32x32", "5000x100", "960x540x", "abc"};
-    for (int i = 0; i < 5; i++) { char what[64]; r = scene_size(bad[i], 0, sz); snprintf(what, sizeof what, "%s: refused (-1), the game's own 1280", bad[i]);
+    r = scene_size("1920x1080", 0, sz); expect("1920x1080, the largest: from the variable (1)", 1080 * 10 + 1, sz[1] * 10 + r, 0);
+    const char *bad[] = {"960x", "32x32", "5000x100", "960x540x", "abc", "2560x1440", "1921x1080", "1920x1081"};
+    for (int i = 0; i < 8; i++) { char what[64]; r = scene_size(bad[i], 0, sz); snprintf(what, sizeof what, "%s: refused (-1), the game's own 1280", bad[i]);
         expect(what, 1280 * 10 - 1, sz[0] * 10 + r, 0); }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;

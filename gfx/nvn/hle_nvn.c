@@ -1144,7 +1144,13 @@ void dm_gfx_suspend(int on) {
     pthread_mutex_unlock(&g_susp_mu);
     if (on) { mtl_drain(); LOG("[nvn] graphics suspended: in-flight GPU work drained"); } else LOG("[nvn] graphics resumed");
 }
+// DM_TEST_WORK_MS=<ms> (a test of the pacing, plan item 53): the frame's first submission waits until <ms> after the previous present, as a game whose
+// own work takes that long; Tears of the Kingdom's frame-rate controller counts it (a wait in the present would not be: it measures to before it)
+static void sleep_until_ns(uint64_t dl);
+static _Atomic uint64_t g_test_work_from;   // the last present's time; taken by the frame's first submission
+static int test_work_ms(void) { static int ms = -1; if (ms < 0) { const char *e = getenv("DM_TEST_WORK_MS"); ms = e ? atoi(e) : 0; if (ms > 0) LOG("[nvn] DM_TEST_WORK_MS=%d: each frame's work made to take that long (a test)", ms); } return ms; }
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
+    if (test_work_ms() > 0) { uint64_t from = atomic_exchange(&g_test_work_from, 0); if (from) sleep_until_ns(from + (uint64_t)test_work_ms() * 1000000ull); }
     NVN_BLOCKING();
     gfx_enter(); gfx_mt_enter("SubmitCommands");
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
@@ -1265,6 +1271,7 @@ static uint64_t g_acq_wait_ns, g_pq_wait_ns;   // Accumulated display-link wait 
 uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
 static int g_display_mode;   // present_cfg (tentative definition: the variable is defined with the present rate further down)
+static int g_uncapped;       // present_cfg: our own clock paces the game (nvn_uncapped_hz), not the display link
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     NVN_BLOCKING();
     win_t *o = (win_t *)w;
@@ -1276,7 +1283,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
         static uint64_t rt_period; uint64_t period = present_period(o);
         if (period && rt_period != period) { rt_period = period; set_time_constraint(period); }
         rt_comp_tick(period);
-        if (mtl_link_active()) { void mtl_link_set_interval(int n); mtl_link_set_interval(g_display_mode ? 1 : o->interval);   // game interval mode: as many ticks as the interval (it waited one: 60 fps at interval 2, the game ran twice as fast)
+        if (mtl_link_active() && !g_uncapped) { void mtl_link_set_interval(int n); mtl_link_set_interval(g_display_mode ? 1 : o->interval);   // game interval mode: as many ticks as the interval (it waited one: 60 fps at interval 2, the game ran twice as fast)
             if (!mtl_link_wait_tick(period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the next display-link tick when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
     } else {   // DM_DETCLOCK_PACE=1 (used by the screenshot gate): while the guest clock advances per frame, each frame's wall clock is no shorter than one step -- frame count and in-game time are deterministic, and the background loading thread has at least one step of wall clock available per frame;
@@ -1525,6 +1532,10 @@ static void present_cfg(const win_t *o) {
     const char *e = getenv("DM_PRESENT_HZ"); g_hz = e ? atoi(e) : 60;
     if (g_hz > 0 && (g_hz < 30 || g_hz > 120)) { LOG("[nvn] [red] DM_PRESENT_HZ=%d outside 30..120: 60", g_hz); g_hz = 60; }
     if (g_hz > 0) { void mtl_link_set_rate(int hz); mtl_link_set_rate(g_hz); }
+    { int uc = nvn_uncapped_hz(dm_game_realtime_step(), e, getenv("DM_UNCAPPED"), getenv("DM_UNCAPPED_HZ"), scr);
+      if (uc) { g_uncapped = 1; g_hz = uc; void mtl_link_set_rate(int hz); mtl_link_set_rate(scr > 0 ? scr : 60);
+          LOG("[nvn] uncapped pacing (DM_UNCAPPED=0 turns it off): the game does not wait for the display, our clock paces it at up to %d fps (DM_UNCAPPED_HZ); "
+              "the display (%d Hz) shows the newest finished frame at each refresh", uc, scr); } }
     if (!g_hz) LOG("[nvn] [warning] DM_PRESENT_HZ=0: uncapped frame rate, frame pacing differs from a real device and UI logic may diverge (for performance profiling only; not valid for criteria / cross-checks)");
     // Cut (intentional deviation from the original game's behavior): with DM_PRESENT_INTERVAL=display the present interval set by the game is not followed and one frame is presented per display-link tick,
     // with a fixed hard floor of 60 fps; the logic stays at 25 ticks, and the client's frame-counted UI logic is unaffected -
@@ -1544,6 +1555,7 @@ static uint64_t present_period(const win_t *o) {
 int (*g_nvn_loadscreen_up)(void);   // optional game hook: is a loading screen up right now (waits for the pipeline warm-up there; marks long frames hidden behind it)
 __attribute__((weak)) void dm_movie_tick(void) {}   // host hle_movie.c: hands paced movie frames over, one per game frame; none in the graphics unit tests
 __attribute__((weak)) void dm_game_present(void) {}   // game hook (host/game.h): every present, on the game's thread; none in the graphics unit tests
+__attribute__((weak)) int dm_game_realtime_step(void) { return 0; }   // game hook (host/game.h): the game's step follows the measured frame time
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     dm_game_present();
     dm_movie_tick();   // before the core is given away: it signals the game's movie events (guest code)
@@ -1643,6 +1655,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     mtl_set_frame(g_frame);
     // Real-device semantics: present only enqueues and returns immediately; this frame's display time is scheduled by the pacer, and the texture can be acquired again only at "display time + one period" (blocking in AcquireTexture)
     uint64_t period = present_period(o), now = dm_detclock_enabled() ? guest_ns() : now_ns();
+    if (test_work_ms() > 0) atomic_store(&g_test_work_from, now_ns());
     nvn_pacer pc = {o->pace};
     uint64_t slot = now + nvn_pace(&pc, now, period);
     o->pace = pc.target;

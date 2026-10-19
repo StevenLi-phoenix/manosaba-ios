@@ -143,6 +143,8 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_UNWRITTEN_DC=0` | Store attachments even when the pass did not write them |
 | `DM_NVN_FUSE_CHECK=1` | Same-frame check of pass merging |
 | `DM_TEST_NO_BC=1` | Take the "GPU without BC textures" decompression path on any machine |
+| `DM_UNCAPPED=0`, `DM_UNCAPPED_HZ=<30..120>` or `display` | For a game whose step follows the measured frame time (Tears of the Kingdom's rules product): by default the game does not wait for the display, our clock paces it at up to 120 fps and the display shows the newest finished frame; `=0` paces by the display at the game's interval as before |
+| `DM_TEST_WORK_MS=<ms>` | Each frame's first submission waits until that long after the previous present (a game whose work takes that long; pacing tests) |
 | `DM_FPS=30` | Present at 30 Hz (default 60) |
 | `DM_PRESENT_HZ=0` | No frame limit (profiling only: some game logic counts frames) |
 

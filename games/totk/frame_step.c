@@ -8,8 +8,9 @@
 // Host page: +0 ratio = seconds × 30, +4 ticks = seconds × 60, written with one 64-bit store so the game never reads the two from different frames.
 // DM_FRAME_STEP_MS=<ms> pins the step (diagnostics: a pinned 16.667 at 90 fps makes the game run 1.5 times too fast).
 // +16 / +20: the scene render size as floats (rules.py, plan item 52: main 0x585e48-0x585e60 store it to the renderer instead of the graphics
-// parameter's): DM_RENDER_RES=<w>x<h> (64-4096 each), else the parameter's own size for the operation mode, which a probe at main 0x585e4c read
-// once at boot (docked 1600x900, handheld 1280x720), so the game looks as before unless asked.
+// parameter's): DM_RENDER_RES=<w>x<h> (64 up to 1920x1080, the output size: 2560x1440 and 3200x1800 crashed the game at main+0x1c2f20 in its first
+// seconds; larger needs item 63's heap), else the parameter's own size for the operation mode, which a probe at main 0x585e4c read once at boot
+// (docked 1600x900, handheld 1280x720), so the game looks as before unless asked.
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +35,7 @@ static int scene_size(const char *env, int opmode, float out[2]) {
     out[0] = opmode ? 1600 : 1280; out[1] = opmode ? 900 : 720;
     if (!env || !*env || !strcmp(env, "0")) return 0;
     unsigned w, h; char extra;
-    if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 64 || h < 64 || w > 4096 || h > 4096) return -1;
+    if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 64 || h < 64 || w > 1920 || h > 1080) return -1;
     out[0] = (float)w; out[1] = (float)h; return 1;
 }
 static void frame_step_store(_Atomic uint64_t *page, double seconds) {
@@ -52,11 +53,12 @@ void dm_game_boot(void) {
     const char *e = getenv("DM_FRAME_STEP_MS"); g_pin = e ? atof(e) / 1000 : 0;
     frame_step_store(g_page, g_pin > 0 ? g_pin : 1.0 / 30);   // the controller starts at interval 2
     float sz[2]; int from = scene_size(getenv("DM_RENDER_RES"), dm_opmode(), sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
-    if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, 64-4096 each; the game's own size", getenv("DM_RENDER_RES"));
+    if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, from 64x64 up to 1920x1080; the game's own size", getenv("DM_RENDER_RES"));
     LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? "DM_RENDER_RES" : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
     if (g_pin > 0) LOG("[frame step] pinned at %.3f ms (DM_FRAME_STEP_MS, diagnostics)", g_pin * 1000);
     else LOG("[frame step] real time: the mean of the last five present intervals (1/120 .. 1/15 s each)");
 }
+int dm_game_realtime_step(void) { return g_page && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
 void dm_game_present(void) {
     if (!g_page || g_pin > 0) return;
     double s = frame_mean_add(&g_mean, guest_ns());

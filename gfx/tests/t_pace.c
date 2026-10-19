@@ -23,6 +23,26 @@ int main(void) {
         printf("%-52s expected wait %8.3f ms → got %8.3f ms %s\n", c[i].why, c[i].want / 1e6, got / 1e6, ok ? "✓" : "✗");
         fail += !ok;
     }
+    // Uncapped pacing (nvn_uncapped_hz, plan item 53): when our own clock paces the game, and at what rate
+    struct { int rt; const char *phz, *unc, *cap; int disp, want; const char *why; } u[] = {
+        {1, NULL, NULL, NULL, 0, 120, "a real-time step, no window: uncapped at 120"},
+        {1, NULL, NULL, NULL, 60, 120, "... on a 60 Hz display: 120 (the display shows the newest frame)"},
+        {1, NULL, NULL, NULL, 100, 120, "... on a 100 Hz display: 120"},
+        {1, NULL, NULL, NULL, 120, 0, "... on a 120 Hz display: the usual pacing (nothing to gain)"},
+        {0, NULL, NULL, NULL, 60, 0, "a step per frame (30 fps product, manosaba): the usual pacing"},
+        {1, "90", NULL, NULL, 60, 0, "DM_PRESENT_HZ asked for: the usual pacing at that rate"},
+        {1, NULL, "0", NULL, 60, 0, "DM_UNCAPPED=0: off"},
+        {1, NULL, "1", NULL, 60, 120, "DM_UNCAPPED=1: on"},
+        {1, NULL, NULL, "display", 60, 60, "DM_UNCAPPED_HZ=display on 60 Hz: 60"},
+        {1, NULL, NULL, "display", 0, 60, "DM_UNCAPPED_HZ=display without one: 60"},
+        {1, NULL, NULL, "90", 60, 90, "DM_UNCAPPED_HZ=90"},
+        {1, NULL, NULL, "10", 60, 30, "DM_UNCAPPED_HZ=10: 30 at least"},
+        {1, NULL, NULL, "240", 60, 120, "DM_UNCAPPED_HZ=240: 120 at most (the step's 1/120 s floor)"},
+    };
+    for (int i = 0; i < (int)(sizeof u / sizeof *u); i++) {
+        int got = nvn_uncapped_hz(u[i].rt, u[i].phz, u[i].unc, u[i].cap, u[i].disp), ok = got == u[i].want; n++;
+        printf("%-72s expected %3d → got %3d %s\n", u[i].why, u[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

@@ -980,7 +980,20 @@ Tier 3, medium:
   overwritten (2 fail). `t_frame_step`: 22 checks with the size choice. `work/build/totk/product60` rebuilt with these rules (main cuts 20,
   sdk and subsdk0 byte for byte the same; the previous one is `product60.prev`); `verify/regress.sh` OK for it and for manosaba, after its
   gate bench got the host stack sources it needs since item 40 (it did not build since batch 6)
-- [ ] 53 frame pacing between 30 and 60 fps, the 30 fps constants checked
+- [x] batch 15 · 53 frame pacing between 30 and 60 fps (after MacNativeGames' TOTK_UNCAPPED, MIT; the user pointed out MacNativeGames already has
+  the 60 / 90 unlock, which product60 has since dba469f, and its uncapped pacing is the rest of this item): for a game whose step follows the
+  measured frame time (`dm_game_realtime_step`, Tears of the Kingdom's rules product), the game no longer waits for the display: our clock paces
+  it at up to 120 fps (its present interval × 1/120 s a frame) and the display link shows the newest finished frame at each refresh, which ours
+  already did. `gfx/nvn/nvn_pace.h` `nvn_uncapped_hz`: off with `DM_UNCAPPED=0`, with `DM_PRESENT_HZ` and on a display of 120 Hz or more;
+  `DM_UNCAPPED_HZ=30..120` or `display` (MacNativeGames' iPhone default, for heat). With the frame's own work made to take 14 ms
+  (`DM_TEST_WORK_MS=14`, a new test switch at the frame's first submission, which the controller counts): before, frame time p50 32.7 ms and 64 %
+  of the frames at 30-36 ms (the controller flapping between intervals 1 and 2, 543 changes in 120 s); now 17.8 ms, 66 % under 18 ms, 33.5 % at
+  18-30, 0.6 % at 30-36, and 6,300 frames in 120 s against 4,200; a shot 75 s after start shows the same game moment in both (the step keeps the
+  speed). Unhindered, the prologue runs at about 115 fps. `gfx/tests/t_pace.c`: 13 more checks; uncapping a game that steps per frame
+  (`-DDM_TEST_UNCAPPED_ANY_STEP`) fails one. Found on the way: `DM_RENDER_RES` above the output size crashes the game (2560x1440 and 3200x1800,
+  main+0x1c2f20, in its first seconds): now refused above 1920x1080 (`t_frame_step`: 26 checks). The 30 fps constants and the cutscenes that
+  crash above 30 fps (BotWRecomp's list for BotW: stamina, arrows, shield surfing, Rito bridge...) need play: 71c. A window run (the display
+  link path) is part of 71b
 - [ ] 54 user mod folders (Atmosphère layout)
 - [ ] 55 CoreAudio opened off the calling thread (measure first)
 - [ ] 56 cold CPU textures dropped under memory pressure
@@ -1004,7 +1017,10 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51)
 - [ ] 71 an iOS 17 device test (which device: to ask)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
-  (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups
+  (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups; uncapped pacing of 53 in a window (product60, `DM_WINDOW=1`)
+- [ ] 71c in play with product60: the systems BotW had on 30 fps constants (stamina regeneration and drain, arrow speed, shield surfing, rune
+  aiming, flurry rush) at 30 and at 60 fps, and cutscenes there (none listed for Tears of the Kingdom by MacNativeGames; BotWRecomp's BotW list
+  as the guide)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip
