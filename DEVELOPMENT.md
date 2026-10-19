@@ -579,7 +579,8 @@ ones (jeoichu-rgb/switch-mobile, Kelvin-Link/ns-mobile, wysl/-game-d2r-mobile) h
 Eight reviewers in parallel, one group of references each, read only (nothing of theirs built or run): new commits on every branch, all pull
 requests and issues, forks with commits of their own (forks pushed after creation, compared with their parent through the API), and the code as
 it stands against ours. Reviewed through: upstream 9393b00 (39 PRs, 47 issues; 1086 forks, 19 ahead, 157 branches compared), nxnative 2b31dbd (4
-PRs, 5 issues, 4 forks ahead), MacNativeGames f5cc151 (13 PRs, 7 issues, 2 forks ahead), LASRecomp main d23597d, beta_5 7597ec3 and 15 other
+PRs, 5 issues, 4 forks ahead; then through 19d7a70 the same afternoon, items 73-77), MacNativeGames f5cc151 (13 PRs, 7 issues, 2 forks
+ahead), LASRecomp main d23597d, beta_5 7597ec3 and 15 other
 branches (131 PRs, 63 issues, 6 forks ahead; hjqcan's fork carries a `multi` branch 205 commits past beta_5), mush8 975040b (GPL-3.0, ideas only;
 3 PRs, 2 forks ahead), tomodachi-native 5587d1b, nx-port 3e6366b, Kamisorara 1539d80, 4ppp44 2a7b1c6, SkyRecomp d876287, BotWRecomp 2b84b82, and
 25 projects found by search. "Checked here" = the gap was confirmed in our code when the reports were merged; the rest is the reviewer's reading,
@@ -824,8 +825,25 @@ Tier 1, tooling and diagnostics:
   the seen table find no place is collected again at each later binding, as the code says, and the merge drops the repeats; the test now allows
   that (and still fails when nothing is deduplicated). The host build has 34 compiler warnings, the same before batch 1
 
+Tier 1, nxnative after 2b31dbd (reviewed through 19d7a70 on 2026-10-19 afternoon; MIT; batch 5, before Tier 2):
+- [ ] 73 the host races of nxnative 8530042, all four present here (the code is theirs before the fix): the mapped-range registry locked over
+  MapMemory's and UnmapMemory's whole lookup and change and over QueryMemory (two threads unmapping at once delete through a stale index); a
+  SystemEvent's binding ends with its write handle, signals look up and signal under one hold; audio output Start / Stop and the background
+  suspend change the backend under one lock (a suspend between them gave one output two silent sinks); CloseAudioRenderer joins the render thread
+  (`dm_guest_thread_join` is here) instead of sleeping 20 ms and the thread closes its output
+- [ ] 74 the yield back-off starting after 2 ms of yields, `DM_YIELD_BACKOFF=<cap µs>[:<start µs>]` (nxnative b703be2): the 200 µs start caught Tears
+  of the Kingdom's main thread waiting for its ModuleSystem workers, the cause of the frame drops measured for 13. Measure Tears of the Kingdom
+  (drops, energy) and manosaba (its 25,000 wakeups a second) before deciding whether it is on by default
+- [ ] 75 the c1 guard by interval arithmetic over the whole index expression, compute shaders included (nxnative 7205d7e; our
+  `gfx/tools/c1_guard.py` is their version before it): regenerate the Tears of the Kingdom and manosaba lists and compare
+- [ ] 76 the power line's guest CPU by Switch priority band and busiest threads, render-target traffic per frame (nxnative 451e118; its
+  `DM_QOS_MAP` not taken: they measured little to move; their TBDR numbers agree with TBDR off on the Mac)
+- [ ] 77 the opening cave's stone blocks beside the torch: black on the Mac and the iPhone in nxnative (19d7a70, lit on the Switch); check here
+  (the block height truncation and BC render targets they point to are already here)
+
 Tier 2, small code, one shader chain rebuild for all four:
-- [ ] 36 the 1,568 BAHS shaders in the offline extraction
+- [ ] 36 the 1,568 BAHS shaders in the offline extraction; with the rebuild, check that the per-shader cache key covers `shader_pairs.tsv` and the profile rows the
+  translation reads (nxnative 8530042 records that gap in theirs; ours already keys the vertex shader padding and C2 / depth)
 - [ ] 37 FMZ in the translator
 - [ ] 38 SHF with a clamped or zero shift, I2I.SAT across signedness (LASRecomp's vectors first)
 - [ ] 39 alpha test
