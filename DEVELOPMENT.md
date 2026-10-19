@@ -1419,11 +1419,50 @@ Tier 3c, larger:
 - [ ] 140 FIFO frame consumption for games that step per frame (manosaba)
 - [ ] 141 IL2CPP class names in crash reports and memory snapshots (manosaba)
 
+Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):
+- [ ] 142 the swapchain acquire against the frame's GPU work: count acquires that return before that image's frame is done, then wait (blade2)
+- [ ] 143 svc details: SetHeapSize's 2 MiB granularity, a regrow reading zeros, 0xd401 over mapped sources; GetInfo's priority mask, fixed random
+  entropy, non-system totals and the NPDM's system resource size (totk-mobile's vectors)
+- [ ] 144 RELR entries validated (targets, alignment, stride)
+- [ ] 145 small diagnostics: a size cap on the frame log, a same-frame present brightness check, the HID receipt deduplicated per controller style
+- [ ] 146 NCZ (solid zstd) input in the game extraction, restored to NCA with its hash checked
+- [ ] 147 tests that run the game's own SDK code against the host (time, vibration, fonts; needs the game, not CI)
+- [ ] 148 an in-game settings panel and a control layout editor for the touch controls (BotWRecomp menu, lordran)
+
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)
+  - [ ] 61a LASRecomp's render-queue cases as a test first (nested lists kept, a fence in a nested list published, two waiters, the four wait
+    results, a fence whose ring slot was reused)
+  - [ ] 61b deferred bindings frozen at submit; binds of more than 32 handles split, not dropped
+  - [ ] 61c a per-frame critical-path trace (submit, commit, GPU, waits, acquire, present)
+  - [ ] 61d the translation thread's time-constraint policy (re-declared at most every 200 ms) against none, on the iPhone
+  - [ ] 61e full-screen single-draw passes as compute, measured; idle gaps between encoders from a Metal System Trace
 - [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
+  - [ ] 62a guest memory: reserved in `main()` before UIKit and Metal, a gap log on failure, the base checked against 2^39, `guest_heap_mb` at least
+    2,176 and no pool add on iOS
+  - [ ] 62b VP9 on iOS: libvpx cross-built with a pinned hash, or VideoToolbox's VP9 decoder (iOS 26.2+) with libvpx as fallback
+  - [ ] 62c BC → ASTC on the GPU (MacNativeGames `nvn_bc1astc.c`, `nvn_bctc.metal`)
+  - [ ] 62d handheld mode by default on iOS (1280x720)
+  - [ ] 62e RomFS as one image or 1 GiB parts with an index; a ready marker instead of the tree walk at every launch
+  - [ ] 62f `maxBufferLength` and the reservation base logged at boot; a cooldown between A/B runs on the phone
 - [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
+  - [ ] 63a MetalFX's docked guard against the scene's content size, not the allocated texture (MacNativeGames ff092e3)
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN (the list of 2026-10-20 too)
+  - [ ] 64a the 47 NVN functions bayonetta3-mobile has and we lack (deferred binds, ClearBuffer, indirect draws, getters, ZCull, subtiles)
+  - [ ] 64b CopyCommands as a copy made at the call, a command-handle registry, CALL recursion bounded (dr3's 64 checks)
+  - [ ] 64c depth bounds through `setDepthTestMinBound:maxBound:` (bayonetta3's 24-pixel vectors)
+  - [ ] 64d rasterizer discard (vertex variants that return void), two queues, `SetScissors` / `SetDepthRanges` batches
+  - [ ] 64e several texture and sampler pools (bayonetta3's descriptors, lordran's 58 checks)
+  - [ ] 64f tessellation through a Metal 3 command buffer between Metal 4 submissions
+  - [ ] 64g HSETP2 `.H_AND` as LASRecomp and yuzu (5 vectors); translator call arguments kept local
+  - [ ] 64h symbol resolution as Horizon's rtld; a SystemEvent kept while its detached read end waits
+  - [ ] 64i `getentropy` as HLE_FORCE, `nn::pl::GetSharedFont`, IL2CPP's `stat` / `lstat` by name, the crypto RNG
+  - [ ] 64j AudioOut volume and counters; AVC / AAC from the bytes the game sends; FlushTexels as a CPU write
+  - [ ] 64k named time-zone rules, `IsSaveDataExisting` from the directory, OpenPreselectedUser, the NPDM's system resource size,
+    RegisterClientEvents keeping its pointer, ShowControllerSupport's result, `\` and `/rom:` paths, Unity shader layouts before Unity 6
+  - [ ] 64l the control section length by GPU code version (0x838-0x880; acnh-mobile 0x848)
+  - [ ] 64m guards against Metal aborts: a non-depth format on the depth attachment, a cube view whose slices are not a multiple of 6
+  - [ ] 64n LDN as dr3 (Bonjour, an HMAC-signed control protocol, a two-process test); provisional profiles from the game files
 - [ ] 112 conditional rendering on the GPU (a kernel writing indirect draw arguments)
 - [ ] 113 framebuffer fetch for in-pass reads of the current pixel (after 42)
 - [ ] 114 an iOS Simulator build for the touch controls, safe areas and lifecycle
@@ -1432,15 +1471,29 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 65 increased-memory-limit with a free account (one signing attempt)
 - [ ] 66 a Switch Pro controller check of 2
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
+  - [ ] 67a vibration handles per style, only the connected style forwarded, bool arguments masked (handles 3 / 0x10003; totk-mobile's TotK
+    landing pulse, dr3's envelopes, acnh-mobile's bursts as tests)
+  - [ ] 67b the Pro Controller's IMU and HD rumble over IOHID on the Mac (atone), the fallback when GameController reports zero motion
+  - [ ] 67c CoreHaptics with plain players (macOS 26); phone haptics rate-limited and off at a serious thermal state
+  - [ ] 67d gyro fusion with the rest bias learned (BotWRecomp's idea)
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
 - [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
 - [-] 71 not done: iOS 17 is not supported (59)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups; uncapped pacing of 53 in a window (product60, `DM_WINDOW=1`)
+- [ ] 71d displays above 120 Hz: macOS rounds a 60 Hz request to 72 on a 144 Hz panel (tvc97); needs such a display
 - [ ] 71c in play with product60: the systems BotW had on 30 fps constants (stamina regeneration and drain, arrow speed, shield surfing, rune
   aiming, flurry rush) at 30 and at 60 fps, and cutscenes there (none listed for Tears of the Kingdom by MacNativeGames; BotWRecomp's BotW list
   as the guide)
+
+Tier 6, optional (seen, not planned before; listed at the user's request 2026-10-20):
+- [ ] 149 face buttons by position for PlayStation and Xbox controllers, as a switch (MacNativeGames 31052d6)
+- [ ] 150 pchtxt patches at load and a cheat VM, refusing rewritten sites (MacNativeGames 1b33531, PR #22)
+- [ ] 151 the save-loading crash workaround at 1.4.3 main+0x1bd01c4 (MacNativeGames dd0e893), if it is ever seen
+- [ ] 152 frame interpolation by replaying the frame (LASRecomp `frame-interp-rt`)
+- [ ] 153 frame latency 2 at 30 Hz, measured
+- [ ] 154 the ultrawide aspect patch on the Mac (MacNativeGames `aspect_patch.h`)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; the cutscene cap of 130 first
