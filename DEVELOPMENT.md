@@ -801,14 +801,28 @@ Tier 1, iOS and Mac:
   run with the display on: during the 2026-10-19 run the display went to sleep (11:25), the display link stopped and no occlusion change came
 
 Tier 1, tooling and diagnostics:
-- [ ] 28 one game at a time on the Mac (flock with a queue)
-- [ ] 29 a stamp of the rewriter's sources in the product
-- [ ] 30 the rewriter refuses system registers it does not know
-- [ ] 31 the SDK's abort text in the log
-- [ ] 32 a kernel operation ring, a delay injected into condvar waits
-- [ ] 33 upstream's `t_loader_weak`
-- [ ] 34 `DM_MEMSNAP`
-- [ ] 35 GitHub Actions: build the host, run the tests that need no GPU
+- [x] batch 4 · 28 one game at a time on the Mac (`host/game_slot.c`: a flock(2) held for the life of the host and a holder file; a run for the
+  player, the .app or `DM_SLOT_OWNER=user`, stops an agent's run with SIGTERM, any other run waits; `DM_SLOT=0` off, `DM_SLOT_DIR`; `t_gameslot`)
+- [x] batch 4 · 29 a stamp of the rewriter's sources in the product (`# REWRITER` in each fixups header: `tools/rewriter_stamp.py`, patch_nso.py and
+  the game's rules.py; the host is compiled with the same value and the loader says when a product differs; `tools/tests/t_rewriter_stamp.py`).
+  It found the manosaba product made by an older rewriter (rebuilt: modules identical, stamps added), and it shows that the Tears of the Kingdom
+  default product is the 30 fps one kept on purpose since dba469f (its "frame step: main has no host page" red line is expected; `product60`,
+  the 60 fps one, now carries the stamp)
+- [x] batch 4 · 30 the rewriter stops on a system register outside NZCV, FPCR, FPSR and DCZID_EL0 (`tools/sysreg.py`, `tools/tests/t_sysreg.py`); neither
+  game has one
+- [x] batch 4 · 31 the SDK's abort text in the log: the last 8 OutputDebugString lines and AbortImpl's return address printed at a Break
+  (`t_guest_mem` 9)
+- [x] batch 4 · 32 the last 256 lock / condition variable calls in thread dumps, timed waits left out (`DM_KTRACE=0` off); `DM_DEBUG_CV_LATE_WAIT=<µs>`
+  starts every condition variable wait that late (`t_ktrace`)
+- [x] batch 4 · 33 upstream's `t_loader_weak` (`host/tests/t_loader_weak.c`: absent weak imports stay 0, our loader already did)
+- [x] batch 4 · 34 `DM_MEMSNAP=frame[,frame...]:prefix` (`host/memsnap.c`: resident readable pages of the guest block and the modules' data;
+  `t_memsnap`) and `tools/memsnap.py` summary / diff / refs (`tools/tests/t_memsnap.py`)
+- [x] batch 4 · 35 GitHub Actions (`.github/workflows/ci.yml`, macos-26): the hosts of every game (Metal 4 and Metal 3), the host tests and the tool
+  tests. Its steps ran here on a clean copy (all pass; on a copy with a build error, a failing host test and a failing tool test each step
+  failed); the first run on GitHub comes with the next push
+- Found while checking batch 4: `gfx/tests/t_ussort` failed about one run in ten (600 bindings counted as 607 or 614): a block whose four probes in
+  the seen table find no place is collected again at each later binding, as the code says, and the merge drops the repeats; the test now allows
+  that (and still fails when nothing is deduplicated). The host build has 34 compiler warnings, the same before batch 1
 
 Tier 2, small code, one shader chain rebuild for all four:
 - [ ] 36 the 1,568 BAHS shaders in the offline extraction

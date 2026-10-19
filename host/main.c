@@ -94,6 +94,7 @@ static void host_preload(int argc, char **argv) {
     load_modules(dir, names, n);
     probe_install();   // DM_PROBE probes (diagnostics)
     hid_keys_init();   // DM_KEYS scripted input
+    { void dm_memsnap_init(void); dm_memsnap_init(); }   // DM_MEMSNAP memory snapshots (memsnap.c)
     stubs_report();
     dm_prof_mark("1 host loading (read NSO / relocate / take over imports)");
     { void loader_hash_log(void); loader_hash_log(); }   // DM_LOADHASH=1: address-independent hash of the load result (loader.c)
@@ -120,6 +121,7 @@ int dm_app_bootstrap(int *argc, char ***argv);   // app_mac.m: as a double-click
 int main(int argc, char **argv) {
 #if TARGET_OS_OSX   // the iOS app compiles this file too (its shell calls the entry); there is no app_mac.m there
     if (dm_app_bootstrap(&argc, &argv)) dm_cloud_boot();   // .app: one iCloud sync before the save is mounted (as in the iOS shell)
+    dm_game_slot_acquire(dm_game.id);   // one game at a time on this Mac (game_slot.c)
 #endif
     if (getenv("DM_PRELOAD")) dm_host_preload_start(argc, argv);   // exercise the early-start path on the Mac (on iOS the app's main() calls it)
     if (atomic_load(&g_pre.started)) {

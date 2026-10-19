@@ -16,6 +16,8 @@
 //   are refused with Horizon's results; read-write and read are accepted.
 // rodata (rodata_seal.h, the loader after relocation): (8) only the 16 KB pages wholly inside [RO_OFF, DATA_OFF) become read-only, a page shared
 //   with data stays writable, a rodata smaller than a page seals nothing.
+// Break context (svc OutputDebugString / Break): (9) the last 8 debug output lines are printed in order before the abort, the older ones not, and
+//   the address the SDK's AbortImpl was called from.
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -30,7 +32,8 @@ uint64_t now_ns(void) { return 0; }
 uint64_t guest_ns(void) { return 0; }
 int svc_thread(int num, uint64_t *regs) { (void)num; (void)regs; return 0; }
 module_t *module_of(const void *a) { (void)a; return NULL; }
-void *module_sym(module_t *m, const char *n) { (void)m; (void)n; return NULL; }
+static uint64_t g_fake_ra;   // the SDK's g_AbortImplReturnAddress for section 9
+void *module_sym(module_t *m, const char *n) { (void)m; return g_fake_ra && !strcmp(n, "_ZN2nn4diag6detail24g_AbortImplReturnAddressE") ? &g_fake_ra : NULL; }
 void dm_backtrace(uint64_t fp) { (void)fp; }
 void hlecount_svc(int n) { (void)n; }
 uint64_t dm_entropy64(void) { return 0; }
@@ -186,6 +189,18 @@ int main(void) {
       CHECK(dm_rodata_seal(c, 0x5000, 0x5000, 0x7000, 0x1C000, &lo, &hi) == 0 && lo == hi && writable(c + 0x5000), "rodata within one page: nothing sealed");
       CHECK(dm_rodata_seal(c, 0x5000, 0x5000, 0x19000, 0x10000, &lo, &hi) == 0 && hi == 0x10000 && writable(c + 0x10000), "the key page bounds the sealed range");
       munmap(b, 0x20000); munmap(c, 0x20000); }
+
+    printf("9 Break context\n");
+    { char s[32];
+      for (int i = 0; i < 10; i++) { snprintf(s, sizeof s, "line %d\n", i); svc(0x27, (uint64_t)s, strlen(s), 0); }
+      g_nmod = 1; g_fake_ra = 0x1234567;
+      const char *td = getenv("TMPDIR"); char pth[1024]; snprintf(pth, sizeof pth, "%s/t_guest_mem_brk.XXXXXX", td ? td : "/private/tmp");
+      int fd = mkstemp(pth), save = dup(2); fflush(stderr); dup2(fd, 2); abort_context(); fflush(stderr); dup2(save, 2); close(save);
+      char out[4096] = {0}; lseek(fd, 0, SEEK_SET); read(fd, out, sizeof out - 1); close(fd); unlink(pth);
+      const char *a = strstr(out, "[guest] line 2"), *b = strstr(out, "[guest] line 9");
+      CHECK(a && b && a < b && !strstr(out, "[guest] line 1\n"), "the last 8 debug lines (2..9) in order, the older ones not");
+      CHECK(strstr(out, "AbortImpl was called from ?+0x1234567") != NULL, "the AbortImpl caller from g_AbortImplReturnAddress");
+      g_nmod = 0; g_fake_ra = 0; }
 
     printf("t_guest_mem: %d checks, %d failed\n", checks, fails);
     return fails != 0;

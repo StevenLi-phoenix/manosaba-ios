@@ -399,6 +399,33 @@ static void census_start(void) {
     pthread_t t; if (!pthread_create(&t, NULL, census_main, (void *)e)) pthread_detach(t);
 }
 
+// An SDK abort (svc Break) tells more with what came before it: the last OutputDebugString texts, kept silently (a release build may pass the abort
+// message there; mush8 hooks the AbortImpl overloads instead, idea only, but their message forms are variadic, and Horizon passes variadic
+// arguments in registers where Apple's ABI expects them on the stack, so they are not taken over from the host), and the address
+// nn::diag::detail::AbortImpl was called from (the SDK stores it in g_AbortImplReturnAddress before it breaks)
+enum { DBGN = 8, DBGLEN = 512 };
+static char g_dbg[DBGN][DBGLEN]; static unsigned g_dbg_n; static pthread_mutex_t g_dbg_mu = PTHREAD_MUTEX_INITIALIZER;
+static void dbg_keep(const char *s, uint64_t n) {
+    if (!s) return;
+    size_t k = n < DBGLEN - 1 ? (size_t)n : DBGLEN - 1;
+    pthread_mutex_lock(&g_dbg_mu); char *d = g_dbg[g_dbg_n++ % DBGN]; memcpy(d, s, k); d[k] = 0;
+    while (k && (d[k - 1] == '\n' || d[k - 1] == '\r')) d[--k] = 0;
+    pthread_mutex_unlock(&g_dbg_mu);
+}
+static void abort_context(void) {
+    pthread_mutex_lock(&g_dbg_mu);
+    unsigned n = g_dbg_n < DBGN ? g_dbg_n : DBGN;
+    if (n) LOG("Break: the last %u debug output line(s) before it:", n);
+    for (unsigned i = g_dbg_n - n; i != g_dbg_n; i++) LOG("  [guest] %s", g_dbg[i % DBGN]);
+    pthread_mutex_unlock(&g_dbg_mu);
+    for (int i = 0; i < g_nmod; i++) {
+        const uint64_t *ra = module_sym(&g_mod[i], "_ZN2nn4diag6detail24g_AbortImplReturnAddressE");
+        if (!ra || !*ra) continue;
+        module_t *m = module_of((void *)(uintptr_t)*ra);
+        LOG("Break: nn::diag::detail::AbortImpl was called from %s+%#llx", m ? m->name : "?", m ? (unsigned long long)(*ra - (uint64_t)m->base) : (unsigned long long)*ra);
+        break;
+    }
+}
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT: svc counts by number
     mem_init(); census_start();
@@ -507,13 +534,15 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         module_t *mm = module_of((void *)regs[30]);
         static int nb;
         LOG("Break#%d reason=%#llx Result=%#x, svc at %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
+        abort_context();
         dm_backtrace(regs[29]);
         if (regs[0] & 0x80000000ull) return 0;   // notification only, can continue
         _exit(42);
     }
     case 0x1E: regs[0] = 0; regs[1] = guest_ns() * 12 / 625; return 0;   // GetSystemTick
-    case 0x27: {  // OutputDebugString(str, len)
+    case 0x27: {  // OutputDebugString(str, len): printed with the debug flag, and the last few kept for a Break (abort_context)
         if (g_flag.dbg) fprintf(stderr, "[guest] %.*s\n", (int)regs[1], (char *)regs[0]);
+        dbg_keep((const char *)regs[0], regs[1]);
         regs[0] = 0; return 0;
     }
     case 0x29: {  // GetInfo(out*, id, handle, subid) → x1 = value

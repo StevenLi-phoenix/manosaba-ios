@@ -172,6 +172,7 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "TEXT_END")) m->text_end = v;
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
+        else if (!strcmp(key, "REWRITER")) m->rewriter = v;
         else for (int k = 0; k < 8; k++) {
             size_t n = strlen(kn[k]);
             if (!strncmp(key, "KEY_", 4) && !strncmp(key + 4, kn[k], n) && !strcmp(key + 4 + n, "_IDX")) {
@@ -180,6 +181,13 @@ static void read_layout(module_t *m, const char *dir) {
         }
     }
     fclose(f);
+#ifdef DM_REWRITER_STAMP
+    // A product from another rewriter or other rules than this host was built with (host/Makefile). Not refused: a product may be kept on purpose (Tears
+    // of the Kingdom's default product predates its 60 fps rules), but a stale one is the first thing to rule out when something looks wrong
+    if (m->rewriter != (uint64_t)DM_REWRITER_STAMP)
+        LOG("%s: %s (this host expects %#llx): rebuild it with tools/build_product.sh unless it is kept on purpose", m->name,
+            m->rewriter ? "the product was made by another rewriter or other rules" : "the product has no rewriter stamp (made before 2026-10-19)", (unsigned long long)DM_REWRITER_STAMP);
+#endif
     if (!m->patch_off || m->key_page_off % 0x4000 || m->key_page_size != 0x4000 || seen != 0xff)
         die("%s: product from an old rewriter; rebuild it with the current one (PRODUCT)", path);
     if (m->host_page_off && (m->host_page_off % 0x4000 || m->host_page_off < m->key_page_off + m->key_page_size || m->host_page_off + 0x4000 > m->patch_off))

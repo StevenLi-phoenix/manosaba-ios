@@ -39,7 +39,11 @@ int main(void) { @autoreleasepool {
     mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; uint64_t r0 = g_us_ranges;
     uint64_t par0 = g_us_par_n;
     mtl_sub_snapshot(&hh, 1);
-    EXPECT("4,800 bindings of 600 blocks: 600 collected", 600, (long long)(g_us_ranges - r0));
+    // A block whose four probes in the seen table find no place (it depends on the addresses: about one run in ten here) is collected again at each
+    // of its 7 later bindings, and the merge drops the repeats: 600 plus 7 per such block, a few at most
+    long long got = (long long)(g_us_ranges - r0);
+    printf("    (%lld collected)\n", got);
+    EXPECT("4,800 bindings of 600 blocks: 600 collected, plus 7 for each block the seen table had no place for (at most 8)", 1, got >= 600 && got <= 600 + 7 * 8 && (got - 600) % 7 == 0);
     EXPECT("600 copies (6 KiB apart: not merged)", 600, g_us_n);
     int bad = 0; for (int b = 0; b < 600; b++) { const us_ent *u = us_find((uint64_t)(uintptr_t)(mem + (size_t)b * 6144), 1024); bad += !u || memcmp(u->cpu, mem + (size_t)b * 6144, 1024); }
     EXPECT("every copy holds its block's bytes", 0, bad);

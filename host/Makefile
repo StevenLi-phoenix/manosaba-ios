@@ -12,6 +12,9 @@ endif
 # number through print-macos-min for Info.plist.
 MACOS_MIN ?= 26.0
 CFLAGS = -O1 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
+# The rewriter stamp this host expects of a product (tools/rewriter_stamp.py: patch_nso.py + the game's rules.py; loader.c compares)
+REWRITER_STAMP := $(shell python3 ../tools/rewriter_stamp.py $(wildcard $(GAMEDIR)/rules.py))
+CFLAGS += -DDM_REWRITER_STAMP=0x$(REWRITER_STAMP)ull
 # Host sources, one per line in alphabetical order; the hle_*.c service files are taken by wildcard
 SRC = \
 	app_mac.m \
@@ -22,11 +25,13 @@ SRC = \
 	entry.S \
 	front_mac.m \
 	game.c \
+	game_slot.c \
 	gamepad.m \
 	$(PROFILE) \
 	hle.c \
 	loader.c \
 	main.c \
+	memsnap.c \
 	memstat.m \
 	movie_av.m \
 	movie_webm.c \
@@ -58,13 +63,13 @@ gen/last_game: FORCE
 FORCE:
 .PHONY: FORCE profile
 
-dmhost: $(SRC) $(GFX) $(HDR) gen/last_game
+dmhost: $(SRC) $(GFX) $(HDR) gen/last_game ../tools/patch_nso.py $(wildcard $(GAMEDIR)/rules.py)
 	clang $(CFLAGS) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS) $(VPX_FLAGS)
 
 # Older-API host (graphics backend without Metal 4, macOS 15; see DM_NVN_M3 in gfx/nvn/nvn_mtl.m): same sources, one more switch. make dmhost_m3
 MACOS_MIN_M3 ?= 15.0
 CFLAGS_M3 = $(subst -mmacosx-version-min=$(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN_M3),$(CFLAGS)) -DDM_NVN_M3=1
-dmhost_m3: $(SRC) $(GFX) $(HDR) gen/last_game
+dmhost_m3: $(SRC) $(GFX) $(HDR) gen/last_game ../tools/patch_nso.py $(wildcard $(GAMEDIR)/rules.py)
 	clang $(CFLAGS_M3) $(INCLUDES) -fobjc-arc -o $@ $(SRC) $(GFX) $(FRAMEWORKS) $(VPX_FLAGS)
 
 print-macos-min:

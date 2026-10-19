@@ -42,9 +42,12 @@ IMG.extend(bytes(0x4000))
 #            ('ldr_s', t, n, byte offset) = ldr st, [xn, #byte offset]. They become cuts (asserted, listed in cuts.tsv, checked as cuts); a module with
 #            HOSTREFS gets the page and HOST_PAGE_OFF in its fixups header, the others keep their layout
 # A module whose build ID has no entry gets the generic rewrite only.
-def load_rules():
+def rules_path():
     path = os.environ.get('DM_RULES')
     if '--rules' in sys.argv: path = sys.argv[sys.argv.index('--rules') + 1]
+    return path
+def load_rules():
+    path = rules_path()
     if not path: return {}, {}, {}, {}
     import importlib.util
     sys.dont_write_bytecode = True   # no __pycache__ next to the game's rules
@@ -507,6 +510,7 @@ for _ in range(nfde):
 starts = sorted(x for x in starts if x < TEXT_END)
 
 # ---- Linear scan to find all rewrite points (not relying on register read/write reports) ----
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import sysreg
 kinds = {}
 for o in range(0, TEXT_END, 4):
     w = struct.unpack_from('<I', IMG, o)[0]
@@ -519,6 +523,11 @@ for o in range(0, TEXT_END, 4):
     # mrs xN, ctr_el0 (cache type): SIGILL in user mode on Apple systems; SDK 20's nn::os::FlushDataCache reads it for the data cache line size (TotK sdk
     # 0x13bbb4, from AddI3dl2Reverb). After nxnative (seedds, MIT)
     if w & 0xFFFFFFE0 == 0xD53B0020: kinds[o] = ('ctr', w & 31); continue
+    # any other system register: only those user mode reads alike on the Switch and here pass (tools/sysreg.py); the rest stops the rewrite
+    if sysreg.is_sysreg_access(w):
+        bad = sysreg.refused(w, md, o)
+        assert not bad, f'{NAME} {o:#x}: {bad}: a system register the rewriter does not handle (SIGILL or another value on this host)'
+        continue
     # x18 / w18 can only sit in a register field (Rd/Rt, Rn, Ra/Rt2, Rm/Rs); a word with 18 in none of them needs no disassembly
     # (upstream PR #55, n3crosis)
     if not any((w >> p) & 31 == 18 for p in (0, 5, 10, 16)): continue
@@ -794,6 +803,8 @@ with open(P('fixups.tsv'), 'w') as f:
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
     if HOST_PAGE_OFF: f.write(f'# HOST_PAGE_OFF\t{HOST_PAGE_OFF:#x}\n')
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import rewriter_stamp   # this rewriter + the rules: the host compares it (loader.c)
+    f.write(f'# REWRITER\t0x{rewriter_stamp.stamp(rules_path())}\n')
 with open(P('gates.tsv'), 'w') as f:
     for ret, k, arg, orig in gates: f.write(f'{ret:#x}\t{k}\t{arg}\t{orig:#x}\n')
 with open(P('sites.tsv'), 'w') as f:

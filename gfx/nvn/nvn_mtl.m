@@ -3013,7 +3013,7 @@ static void clear_ds_quad(const p_clear_ds *c) {
 // ================= Shaders / descriptor pool / pipelines / draws =================
 static pthread_mutex_t g_rmu = PTHREAD_MUTEX_INITIALIZER;
 // ---------- Shader mapping table: Switch shader key (control section + code area, hle_nvn.c shader_key) → PC metallib ----------
-static NSMutableDictionary<NSString *, NSArray *> *g_shmap;
+static NSMutableDictionary<NSString *, NSString *> *g_shmap;
 static NSString *g_shmap_path, *g_msl_dir;
 // Shader stage map (gfx/tools/shmap_from_capture.py): Switch shader key → stage; the shaders themselves are translations of the game's own
 // Switch shaders built offline by gfx/tools/dmsh_build.py (<key>_b.metallib + reflection JSON)

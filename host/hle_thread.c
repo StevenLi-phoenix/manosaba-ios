@@ -343,6 +343,7 @@ static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads cha
 static const char *thr_name(thr_t *t, char *buf, size_t n);
 __attribute__((weak)) void wp_thread_start(void) {}   // diag.c (DM_WATCHPOINT, Mac) provides the real one; iOS and the unit tests link without it
 static void wake_sync_waiters(void *obj);
+static void kt_dump(int last);   // the lock / condition variable trace (below svc_thread)
 // Publish the exit: record the time, mark exited and wake synchronization waiters. Once G is released a waiter may close the handle and free t,
 // and the guest may unmap the guest stack, so the caller must neither touch t nor run on the guest stack afterwards
 static void thread_publish_exit(thr_t *t) {
@@ -569,6 +570,7 @@ void svc_thread_dump(void) {
                         fprintf(stderr, "[dm]   %#x 64 bytes at the awaited object %#llx: %s\n", t->handle, t->waddr & ~0xfull, hx); }
         thr_bt(t);
     }
+    kt_dump(64);
     // Threads created by the host itself (prefetch, Granny background, graphics present, audio, etc.): not in the guest thread table, enumerated as mach threads, the first 12 frames symbolized with dladdr
     thread_act_array_t ths; mach_msg_type_number_t nth = 0;
     if (task_threads(mach_task_self(), &ths, &nth) == KERN_SUCCESS) {
@@ -633,6 +635,35 @@ static void sleep_precise(uint64_t deadline) {
         uint64_t rem = deadline - now, s = rem < 100000 ? rem : rem - rem / 4;
         struct timespec ts = {(time_t)(s / 1000000000u), (long)(s % 1000000000u)}; nanosleep(&ts, 0);
     }
+}
+// The last kernel calls on locks and condition variables, lock-free, for the thread dump (LASRecomp's ktrace, MIT): which thread did what with
+// which lock word or condition key, and the words then. Waits with a timeout are left out with their keys (a 1 ms poller would fill the ring within a
+// second). DM_KTRACE=0 turns it off. DM_DEBUG_CV_LATE_WAIT=<µs> starts every condition variable wait that late: it forces signal-before-wait
+// races in the game's code (LASRecomp reproduced a 1-in-6 boot hang 3 times of 3 that way)
+enum { KT_LOCK, KT_LOCK_END, KT_UNLOCK, KT_WAIT, KT_WAIT_END, KT_SIGNAL, KTN = 256 };
+typedef struct { uint64_t ns, addr, addr2; uint32_t thread, w0, w1, arg, kind; } ktrace_t;
+static ktrace_t g_kt[KTN]; static _Atomic uint64_t g_kt_n; static int g_kt_on = -1;
+static uint64_t g_kt_timed[16];   // keys seen with a timed wait (holding G)
+static int kt_timed_key(uint64_t key, int add) {
+    for (int i = 0; i < 16; i++) { if (g_kt_timed[i] == key) return 1; if (!g_kt_timed[i] && add) { g_kt_timed[i] = key; return 1; } }
+    return 0;
+}
+static void kt(uint32_t kind, uint64_t addr, uint64_t addr2, uint32_t w0, uint32_t w1, uint32_t arg) {
+    if (g_kt_on < 0) { const char *e = getenv("DM_KTRACE"); g_kt_on = !(e && !strcmp(e, "0")); }
+    if (!g_kt_on) return;
+    thr_t *me = pthread_getspecific(g_keythr);
+    ktrace_t *e = &g_kt[atomic_fetch_add_explicit(&g_kt_n, 1, memory_order_relaxed) % KTN];
+    *e = (ktrace_t){now_ns(), addr, addr2, me ? me->handle : 0, w0, w1, arg, kind};
+}
+static void kt_dump(int last) {
+    static const char *const nm[] = {"lock", "lock got", "unlock", "cv wait", "cv woke", "cv signal"};
+    uint64_t n = atomic_load(&g_kt_n), k = n < (uint64_t)last ? n : (uint64_t)last, t1 = now_ns();
+    if (!k) return;
+    fprintf(stderr, "[dm] the last %llu lock / condition variable calls (oldest first; DM_KTRACE=0 off):\n", (unsigned long long)k);
+    for (uint64_t i = n - k; i < n; i++) { const ktrace_t *e = &g_kt[i % KTN]; char lk[40] = "";
+        if (e->addr2) snprintf(lk, sizeof lk, " (lock %#llx)", (unsigned long long)e->addr2);
+        fprintf(stderr, "[dm]   %8.3f s ago  %#x %-9s %#llx%s words %#x -> %#x arg %#x\n", (t1 - e->ns) / 1e9, e->thread, nm[e->kind < 6 ? e->kind : 0],
+                (unsigned long long)e->addr, lk, e->w0, e->w1, e->arg); }
 }
 int svc_thread(int num, uint64_t *regs) {
     { thr_t *me = pthread_getspecific(g_keythr); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->nsvc++; core_checkpoint(me); } }
@@ -723,15 +754,18 @@ int svc_thread(int num, uint64_t *regs) {
     case 0x1A: {  // ArbitrateLock(w0 owner handle, x1 address, w2 this thread's tag)
         thr_t *t = cur(); uint64_t addr = regs[1];
         pthread_mutex_lock(&G);
-        int64_t r = 0;
-        if (ld32(addr) == ((uint32_t)regs[0] | WAITERS_BIT)) { t->waddr = addr; t->wtag = (uint32_t)regs[2]; r = block(t, 1, -1); }
+        int64_t r = 0; uint32_t v = ld32(addr);
+        kt(KT_LOCK, addr, 0, v, 0, (uint32_t)regs[0]);
+        if (v == ((uint32_t)regs[0] | WAITERS_BIT)) { t->waddr = addr; t->wtag = (uint32_t)regs[2]; r = block(t, 1, -1); kt(KT_LOCK_END, addr, 0, ld32(addr), 0, (uint32_t)r); }
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
-    case 0x1B: pthread_mutex_lock(&G); lock_handoff(regs[0]); pthread_mutex_unlock(&G); regs[0] = 0; return 1;
+    case 0x1B: { pthread_mutex_lock(&G); uint32_t b = ld32(regs[0]); lock_handoff(regs[0]); kt(KT_UNLOCK, regs[0], 0, b, ld32(regs[0]), 0); pthread_mutex_unlock(&G); regs[0] = 0; return 1; }
     case 0x1C: {  // WaitProcessWideKeyAtomic(x0 lock address, x1 condition key, w2 tag, x3 timeout)
         thr_t *t = cur(); uint64_t addr = regs[0], key = regs[1];
+        { static long late = -1; if (late < 0) { const char *e = getenv("DM_DEBUG_CV_LATE_WAIT"); late = e ? atol(e) : 0; } if (late > 0) usleep((useconds_t)late); }
         pthread_mutex_lock(&G);
+        int traced = !kt_timed_key(key, (int64_t)regs[3] >= 0); uint32_t kb = ld32(key), mb = ld32(addr);
         // The order matters: first set the condition key = 1, then release the mutex. The SDK's InternalConditionVariable::Signal first reads the condition key in user mode, and does not issue svc 0x1D if it is 0;
         // grabbing the mutex in user mode does not go through G either. It used to do lock_handoff first and set the key after: after the release and before the key was set, another thread could grab the lock in user mode, change the condition, read key 0 and not wake anyone,
         // and this thread would then link itself in and wait forever (under parallel load the resource table read-write lock main+0x320e5e0 deadlocked: reader count 0, lock free, writer condition key 1, writer still waiting).
@@ -750,7 +784,9 @@ int svc_thread(int num, uint64_t *regs) {
         st32(key, 1);
         t->wkey = key; t->waddr = addr; t->wtag = (uint32_t)regs[2];
 #endif
+        if (traced) kt(KT_WAIT, key, addr, kb, mb, ld32(addr));
         int64_t r = block(t, 2, (int64_t)regs[3]);   // Timeout: the lock is not re-acquired (user mode takes it itself)
+        if (traced) kt(KT_WAIT_END, key, addr, ld32(key), ld32(addr), (uint32_t)r);
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
@@ -760,6 +796,7 @@ int svc_thread(int num, uint64_t *regs) {
         for (thr_t *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) lock_acquire_for(w, w->waddr, w->wtag);   // In kernel order; once turned into a lock wait or woken it is no longer kind 2
         int left = 0; for (thr_t *w = g_wait; w; w = w->next) if (w->wkind == 2 && w->wkey == key) { left = 1; break; }
         if (!left) st32(key, 0);
+        if (!kt_timed_key(key, 0)) kt(KT_SIGNAL, key, 0, (uint32_t)n, (uint32_t)left, (uint32_t)cnt);
         pthread_mutex_unlock(&G);
         regs[0] = 0; return 1;
     }

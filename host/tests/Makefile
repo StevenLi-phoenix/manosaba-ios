@@ -17,9 +17,13 @@ run: \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
+	$(B)/t_gameslot \
 	$(B)/t_guest_mem \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_script \
+	$(B)/t_ktrace \
+	$(B)/t_loader_weak \
+	$(B)/t_memsnap \
 	$(B)/t_movie \
 	$(B)/t_oe \
 	$(B)/t_padmap \
@@ -43,9 +47,13 @@ run: \
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_gameslot 2>/dev/null
 	$(B)/t_guest_mem 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
 	$(B)/t_hid_script 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_ktrace 2>/dev/null
+	$(B)/t_loader_weak 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_memsnap 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_padmap
@@ -83,6 +91,14 @@ $(B)/t_sleep: t_sleep.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_sleep.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_envfile: t_envfile.c ../envfile.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_envfile.c
+$(B)/t_gameslot: t_gameslot.c ../game_slot.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_gameslot.c ../game_slot.c
+$(B)/t_ktrace: t_ktrace.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_ktrace.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+$(B)/t_memsnap: t_memsnap.c ../memsnap.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_memsnap.c ../memsnap.c
 $(B)/t_waitsync: t_waitsync.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_waitsync.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)

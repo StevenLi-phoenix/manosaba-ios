@@ -104,7 +104,7 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
 - **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** ([jhaizhou](https://github.com/jhaizhou-ops), MIT): the architecture and most of
   the host, graphics layer and verification tools; later the controller mapping, silent no-ops reported, the per-program reflection summary, the
   Metal 4 launch check, the audio notifier's priority and dropped presents for a covered window.
-- **d2r-mobile contributors** [SepheTT](https://github.com/SepheTT) (buffer ↔ texture copy strides) and
+- **d2r-mobile contributors** [SepheTT](https://github.com/SepheTT) (buffer ↔ texture copy strides, the weak import test) and
   [BossaMelon](https://github.com/BossaMelon) (the declared launch screen).
 - **[nxnative](https://github.com/seedds/nxnative)** ([seedds](https://github.com/seedds), MIT) and **botw-mobile**
   ([Tommy Lau](https://github.com/TommyLau), MIT; the repository is no longer on GitHub), community ports built on d2r-mobile: the crash-report,
@@ -119,7 +119,7 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   yield back-off (opt-in), targeted wakes, waits on upload completion and buffer releases, a per-thread pool cache, the dirty range kept per
   texture, residency no-op skips, page runs, a spare texture for re-uploads and VP9 row multithreading, credited in the code.
 - **[tomodachi-native](https://github.com/kuosuko/tomodachi-native)** ([kuosuko](https://github.com/kuosuko), MIT), a fork of nxnative: the
-  variant of the duplicated colour slot handling that keeps the slot the pass writes.
+  variant of the duplicated colour slot handling that keeps the slot the pass writes, and the memory snapshots (`DM_MEMSNAP`).
 - **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** ([ly05010419](https://github.com/ly05010419), MIT), a Tears of the Kingdom
   port on the same lineage: which RomFS files hold the shaders, virtual cores, clears drawn as quads, BC render targets through an auxiliary
   texture, storage buffers addressed from uniform buffers, stale texture views, the behaviour and pacing of the VP9 movie decoder, the 60 fps
@@ -127,16 +127,20 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   commits, render-state filter, upload staging pool, storage-followed and storage-shared textures, GPU write-back, uniform renaming,
   small-texture hashing and once-per-submission checks, layered passes, the encode stage, driver segment fills, block height and D16 clear fixes,
   the GPU memory budget and pool range checks, and the RomFS overlay findings for 60 fps; then the fault guard around snapshot copies, read-only
-  rodata and waiting for a save at quit, ported by hand and credited in the code.
+  rodata, waiting for a save at quit and one game at a time on the Mac, ported by hand and credited in the code.
 - **[LASRecomp](https://github.com/peiikai/LASRecomp)** ([Peiikai](https://github.com/peiikai), MIT), a static recompilation of Link's Awakening:
   its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled textures of Tears of the Kingdom,
-  and the order of WaitSynchronization's checks; GPU time as the union of command buffers.
+  and the order of WaitSynchronization's checks; GPU time as the union of command buffers; the ring of lock / condition variable calls, the late
+  condition variable wait and the layout of its CI checks.
 - **Single fixes from other ports**, credited in the code: [Kamisorara/d2r-mobile](https://github.com/Kamisorara/d2r-mobile) (controller face
   buttons by the printed letter, also upstream's), [jiangjifeng/nxnative](https://github.com/jiangjifeng/nxnative) (scaled vertex formats),
   [GirlNet/d2r-mobile](https://github.com/GirlNet/d2r-mobile) and [lordran-native](https://github.com/Nishikori-Yui/lordran-native) (sampler LOD
   bias and reduction), [SkyRecomp](https://github.com/Apolinario-coder/SkyRecomp) (the handles of a WaitSynchronization in thread dumps),
   [BotWRecomp](https://github.com/IshaanKalra2103/BotWRecomp) (game data out of backups, GCSupportsGameMode),
-  [4ppp44/d2r-mobile-ios17](https://github.com/4ppp44/d2r-mobile-ios17) (what an iOS 17 build needs).
+  [4ppp44/d2r-mobile-ios17](https://github.com/4ppp44/d2r-mobile-ios17) (what an iOS 17 build needs), [GirlNet/nxnative](https://github.com/GirlNet/nxnative)
+  (the host built for every game on a CI runner).
+- **[mush8](https://github.com/c22dev/mush8)** ([c22dev](https://github.com/c22dev), GPL-3.0; ideas only, no code taken): a stamp of the
+  rewriter in the product, the rewriter refusing system registers it does not know, the SDK's abort text at a Break.
 - **[LibHac](https://www.nuget.org/packages/LibHac/0.19.0)** ([Alex Barney](https://github.com/Thealexbarney), MIT; the NuGet package, as its
   GitHub repository is no longer reachable): reads NSP, XCI and NCA containers in `tools/game_extract`.
 - **[Ryujinx](https://ryujinx.app)** (MIT; source on the project's own Forgejo instance): the shader translator in `third_party/ryujinx`.

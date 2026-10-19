@@ -27,6 +27,7 @@ typedef struct {
     uint8_t *base;             // Start address of the image (including the patch area) in the host address space
     size_t size;
     uint64_t text_end, ro_off, data_off, patch_off, key_page_off, key_page_size;   // From the rewriter fixups header
+    uint64_t rewriter;         // the rewriter stamp in the fixups header (tools/rewriter_stamp.py), 0 for products made before it
     uint64_t host_page_off;    // 16 KiB writable page the host fills for the game's HOSTREFS rules (fixups HOST_PAGE_OFF), 0 = none
     unsigned key_idx[8];
     const Elf64_Dyn *dyn;
@@ -89,7 +90,8 @@ void hle_signal_system_event(void *g);   // hle_thread.c: signal a service-layer
 void hle_bind_system_event(void *g, int autoclear);   // On a guest thread, bind a guest SystemEvent to a kernel event
 // Page fault hook / hook before the host writes guest memory (crash.c; used for write-protect dirty page tracking)
 void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc));
-void dm_yield_top(char *out, size_t n);   // hle_thread.c: the two threads that yielded most since the last call
+void dm_yield_top(char *out, size_t n);
+int dm_game_slot_acquire(const char *what);   // game_slot.c: one game at a time on the Mac (waits, or stops an agent's run for the player)   // hle_thread.c: the two threads that yielded most since the last call
 void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len));
 void dm_res_report_register(void (*fn)(uint32_t tick, const char *why));   // Resource count callback (registered by the graphics layer): called every 250 ticks, when the loading screen has been dismissed, and on exit when the record is full
 void (*dm_res_report_cb(void))(uint32_t tick, const char *why);   // Get the registered resource count callback (null if not registered)
