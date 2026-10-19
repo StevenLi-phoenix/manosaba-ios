@@ -1,5 +1,6 @@
 // Multi-module loading (playing the role of Horizon's rtld): mapping, claiming thread slots, gate registration, cross-module relocation, take-over by name, segment permissions.
 // The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data: on iOS these two blocks must be embedded as is as signed code segments.
+#include "rodata_seal.h"
 #include "dm.h"
 #include <TargetConditionals.h>
 #include <fcntl.h>
@@ -386,6 +387,10 @@ void load_modules(const char *dir, const char **names, int n) {
     force_init();
     t = now_ns(); for (int i = 0; i < g_nmod; i++) relocate(&g_mod[i]); tr = now_ns() - t;
     force_check();
+    // rodata read-only now that relocation is done (rodata_seal.h); DM_RODATA_RW=1 leaves it writable
+    if (!getenv("DM_RODATA_RW")) for (int i = 0; i < g_nmod; i++) { module_t *m = &g_mod[i]; uint64_t lo, hi;
+        if (dm_rodata_seal(m->base, m->text_end, m->ro_off, m->data_off, m->key_page_off, &lo, &hi)) die("%s: rodata mprotect failed", m->name);
+        if (g_flag.bootprof) LOG("%s: rodata read-only +%#llx..+%#llx", m->name, (unsigned long long)lo, (unsigned long long)hi); }
     { void hlecount_seal(void); hlecount_seal(); }   // DM_HLECOUNT: relocation done, seal the counting stub pages as read-only executable
     if (getenv("DM_SYMCHECK")) LOG("DM_SYMCHECK: %lu symbol lookups checked at load, %lu hash / linear mismatches", g_symchk_n, g_symchk_bad);
     if (g_flag.bootprof) LOG("host loading: map (read + copy + seal) %.1f ms, dynamic sections %.1f ms, gates %.1f ms, relocation + forced takeover %.1f ms, total %.1f ms",

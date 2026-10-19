@@ -516,14 +516,21 @@ HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → 
 }
 
 // ---------- Directories ----------
-typedef struct { DIR *d; char path[1024]; DIR *od; char opath[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode; } dirh_t;
+// An overlaid directory is listed once, at open: every root's names merged (the first root to name an entry wins), kept compact (the names in one
+// buffer, an offset, type and size per entry; DirectoryEntry is 784 bytes and Tears of the Kingdom has directories of 75,940 entries) and handed out
+// as DirectoryEntry when read. The listing used to stop at 2048 names without a word, with a quadratic duplicate check
+typedef struct { uint32_t name; int8_t type; int64_t size; } dsnap_t;
+typedef struct { DIR *d; char path[1024]; DIR *od; char opath[1024]; dsnap_t *snap; char *snames; int64_t nsnap, psnap; int mode; } dirh_t;
+static uint32_t name_hash(const char *s) { uint32_t h = 2166136261u; while (*s) h = (h ^ (uint8_t)*s++) * 16777619u; return h; }
 static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
     char *roots = strdup(m->overlay);
-    char (*names)[0x301] = calloc(2048, sizeof *names);
     const char **all = calloc(65, sizeof *all);
     char *parent = malloc(1024), *guest = malloc(0x301), *rel = malloc(2048), *resolved = malloc(1024);
-    if (!roots || !names || !all || !parent || !guest || !rel || !resolved) die("rom overlay: directory snapshot allocation failed");
-    int nn = 0, nr = 0;
+    size_t ncap = 1024, buf_cap = 1 << 16, buf_n = 0, hcap = 2048; int64_t nn = 0;
+    dsnap_t *ent = malloc(ncap * sizeof *ent); char *buf = malloc(buf_cap); int64_t *set = malloc(hcap * sizeof *set);
+    if (!roots || !all || !parent || !guest || !rel || !resolved || !ent || !buf || !set) die("rom overlay: directory snapshot allocation failed");
+    for (size_t i = 0; i < hcap; i++) set[i] = -1;
+    int nr = 0;
     all[nr++] = m->dir;
     char *save = NULL;
     for (char *root = strtok_r(roots, ":", &save); root && nr < 65; root = strtok_r(NULL, ":", &save)) all[nr++] = root;
@@ -534,21 +541,29 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
         while ((e = readdir(x))) {
             if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
             if (!guest_name(parent, e->d_name, guest, 0x301)) continue;
-            int dup = 0; for (int j = 0; j < nn; j++) if (!strcmp(names[j], guest)) { dup = 1; break; }
-            if (!dup && nn < 2048) strlcpy(names[nn++], guest, sizeof names[0]);
+            size_t k = name_hash(guest) & (hcap - 1); int dup = 0;
+            for (; set[k] >= 0; k = (k + 1) & (hcap - 1)) if (!strcmp(buf + ent[set[k]].name, guest)) { dup = 1; break; }
+            if (dup) continue;
+            size_t len = strlen(guest) + 1;
+            if (buf_n + len > buf_cap) { while (buf_n + len > buf_cap) buf_cap *= 2; if (!(buf = realloc(buf, buf_cap))) die("rom overlay: directory snapshot allocation failed"); }
+            if ((size_t)nn == ncap) { ncap *= 2; if (!(ent = realloc(ent, ncap * sizeof *ent))) die("rom overlay: directory snapshot allocation failed"); }
+            memcpy(buf + buf_n, guest, len); ent[nn] = (dsnap_t){.name = (uint32_t)buf_n}; buf_n += len; set[k] = nn++;
+            if ((size_t)nn * 2 > hcap) {   // keep the set at most half full
+                free(set); hcap *= 2; if (!(set = malloc(hcap * sizeof *set))) die("rom overlay: directory snapshot allocation failed");
+                for (size_t i = 0; i < hcap; i++) set[i] = -1;
+                for (int64_t j = 0; j < nn; j++) { size_t q = name_hash(buf + ent[j].name) & (hcap - 1); while (set[q] >= 0) q = (q + 1) & (hcap - 1); set[q] = j; }
+            }
         }
         closedir(x);
     }
-    h->snap = calloc(nn, sizeof *h->snap); h->nsnap = nn;
-    if (nn && !h->snap) die("rom overlay: directory snapshot allocation failed");
-    for (int j = 0; j < nn; j++) {
-        strlcpy(h->snap[j].name, names[j], sizeof h->snap[j].name);
-        snprintf(rel, 2048, "%s/%s", rest, names[j]);
+    for (int64_t j = 0; j < nn; j++) {
+        snprintf(rel, 2048, "%s/%s", rest, buf + ent[j].name);
         if (!rom_overlay_path(m, rel, resolved, 1024)) continue;
         struct stat st;
-        if (!stat(resolved, &st)) { h->snap[j].type = S_ISDIR(st.st_mode) ? ENT_DIR : ENT_FILE; h->snap[j].size = S_ISDIR(st.st_mode) ? 0 : st.st_size; }
+        if (!stat(resolved, &st)) { ent[j].type = S_ISDIR(st.st_mode) ? ENT_DIR : ENT_FILE; ent[j].size = S_ISDIR(st.st_mode) ? 0 : st.st_size; }
     }
-    free(resolved); free(rel); free(guest); free(parent); free(all); free(names); free(roots);
+    h->snap = ent; h->snames = buf; h->nsnap = nn;
+    free(set); free(resolved); free(rel); free(guest); free(parent); free(all); free(roots);
 }
 HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → opendir(3)", Result, h_fs_OpenDirectory, uint64_t *out, const char *path, int mode) {
     HP(path); DIR *d = opendir(hp);
@@ -563,7 +578,8 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
 HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", "fsp-srv → readdir(3)", Result, h_fs_ReadDirectory, int64_t *count, DirectoryEntry *ents, uint64_t hh, int64_t max) {
     if (!hh) { *count = 0; return RES_FAIL; }
     PATH_LOCK(); dirh_t *h = (dirh_t *)hh; int64_t n = 0; struct dirent *e;
-    if (h->snap) { while (n < max && h->psnap < h->nsnap) { DirectoryEntry *src = &h->snap[h->psnap++]; if (!(h->mode & (src->type == ENT_DIR ? DIRMODE_DIR : DIRMODE_FILE))) continue; ents[n++] = *src; } *count = n; return RES_OK; }
+    if (h->snap) { while (n < max && h->psnap < h->nsnap) { const dsnap_t *src = &h->snap[h->psnap++]; if (!(h->mode & (src->type == ENT_DIR ? DIRMODE_DIR : DIRMODE_FILE))) continue;
+        memset(&ents[n], 0, sizeof ents[n]); strlcpy(ents[n].name, h->snames + src->name, sizeof ents[n].name); ents[n].type = src->type; ents[n].size = src->size; n++; } *count = n; return RES_OK; }
     int dfd = dirfd(h->d);
     while (n < max && (e = readdir(h->d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
@@ -581,7 +597,7 @@ HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandl
 }
 HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → closedir(3)", void, h_fs_CloseDirectory, uint64_t hh) {
     if (!hh) return;   // the game also closes after a failed open (handle 0)
-    dirh_t *h = (dirh_t *)hh; closedir(h->d); if (h->od) closedir(h->od); free(h->snap); free(h);
+    dirh_t *h = (dirh_t *)hh; closedir(h->d); if (h->od) closedir(h->od); free(h->snap); free(h->snames); free(h);
 }
 
 // ---------- APIs other games use (Unity: RAM disk, read-without-count, directory counts, add-on content probing ...) ----------

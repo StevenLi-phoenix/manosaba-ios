@@ -349,8 +349,8 @@ its resource control thread (0x1006, loop main+0x154bd0, which names `ClearCache
 resource at +0x28 of a binder of type 0xe (+0xc) after waiting for it (`WaitLightEvent` at 0xa2ee2c) and +0x28 is null; registers name
 `Obj_TreeWhiteBirch…`. The SDK's `WaitLightEvent` trusts a 0 result of `WaitForAddress`, and our address arbiter only returns 0 from
 `SignalToAddress`. Not reproduced yet. The thread dump now marks the thread that writes it, and `DM_CRASH_MEM` takes `*xN` (one dereference).
-Also seen: `nn::os::WaitForAddress(long const*, long)` (sdk 0x146fb0) uses arbitration type 3 (64-bit wait if equal), which svc 0x34 treats
-as type 0; main and subsdk0 do not import it. The vertex shader `1eee2726aae7493e` (SPIRV-Cross "nullptr") is now drawn with.
+Also seen: `nn::os::WaitForAddress(long const*, long)` (sdk 0x146fb0) uses arbitration type 3 (64-bit wait if equal), which svc 0x34 treated
+as type 0 (fixed in plan batch 1, item 1); main and subsdk0 do not import it. The vertex shader `1eee2726aae7493e` (SPIRV-Cross "nullptr") is now drawn with.
 
 Known gaps: alpha test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn (red line); GPUs
 without BC (iOS) do not get the BC render target path; iOS needs `DM_CACHE` and the large heap; hid six-axis and vibration are stubs; no 2K
@@ -748,23 +748,29 @@ renderer is closer), saves (ours are transactional), the condvar and WaitSynchro
 
 ### Plan: all of the wider review, simple to complex (2026-10-19)
 
-Everything above is to be done, in this order. `[ ]` open, `[x] <commit>` done, `[-]` measured and not needed (with the number). Each item gets a
+Everything above is to be done, in this order. `[ ]` open, `[x] batch N` done in the commit whose subject starts with "Plan batch N", `[-]` measured and not needed (with the number). Each item gets a
 unit test and a broken version that must fail it; each batch ends with the gfx tests (Metal 4 and Metal 3), the host tests, a manosaba and a Tears
 of the Kingdom smoke run, then one commit. Sources and evidence per item are in "Wider review of 2026-10-19" above.
 
 Tier 1, small and local. Correctness:
-- [ ] 1 svc 0x34 type 3 (64-bit wait if equal), unknown types refused by 0x34 / 0x35, an arbiter race test
-- [ ] 2 controller face buttons by the printed letter on Nintendo controllers, a pure mapping function and an 18-case table test
-- [ ] 3 the BindProgram stage mask at the three scans (`defer_try` Q scan, `fuse_try` steps four and five)
-- [ ] 4 sampler LOD bias (and reduction where the GPU has it)
-- [ ] 5 GPU time per frame as the union of command-buffer spans
-- [ ] 6 a fault guard around uniform snapshot copies
-- [ ] 7 overlay directory listings without the 2048-name cap, duplicates found by hash
-- [ ] 8 the silent NVN no-ops red on first call
-- [ ] 9 precise SleepThread
-- [ ] 10 rodata read-only, svc 0x02
-- [ ] 11 RG8_UI2F / UI2F / I2F vertex formats
-- [ ] 12 thread dumps list the handles of a WaitSynchronization
+- [x] batch 1 · 1 svc 0x34 type 3 (64-bit wait if equal), unknown types refused by 0x34 / 0x35, an arbiter race test (`host/tests/t_arbiter.c`; the
+  race also with kernel increments needing 177,412 retries against 200,000 user-space adds)
+- [x] batch 1 · 2 controller face buttons by the printed letter on Nintendo controllers, a pure mapping function and an 18-case table test
+  (`host/gamepad_map.h`, `host/tests/t_padmap.c`; the device check is 66)
+- [x] batch 1 · 3 the BindProgram stage mask at the three scans (`defer_try` Q scan, `fuse_try` steps four and five; `t_defer_chain` mode 6 covers the
+  first: the old code deferred and read stale pixels; no test reaches `fuse_try`, whose two sites take the same call)
+- [x] batch 1 · 4 sampler LOD bias and min / max reduction (`gfx/tests/t_samp.m`, on the GPU; macOS / iOS 26, reported once before that)
+- [x] batch 1 · 5 GPU time per frame as the union of command-buffer spans (`t_gputime`); `@gpu_ms` is the union from batch 1 on, `@gpu_sum_ms` the old
+  sum, so GPU numbers above this plan are sums
+- [x] batch 1 · 6 a fault guard around uniform snapshot copies (`t_usnap` section 5, on this thread and on the workers; without it SIGBUS)
+- [x] batch 1 · 7 overlay directory listings without the 2048-name cap, duplicates found by hash, kept compact (`t_fs`: 3005 names)
+- [x] batch 1 · 8 the silent NVN no-ops red on first call; SetDepthBounds reported when enabled (`t_nvn` 7b)
+- [x] batch 1 · 9 precise SleepThread (`host/tests/t_sleep.c`: mean oversleep 0.004 ms, one nanosleep 1.19 / 4.12 ms on 5 / 33.3 ms)
+- [x] batch 1 · 10 rodata read-only after relocation (`host/rodata_seal.h`, `DM_RODATA_RW=1` leaves it), svc 0x02 with Horizon's checks; read / none
+  reported, not applied: Tears of the Kingdom only asks for read-write (`t_guest_mem` 7, 8)
+- [x] batch 1 · 11 the 8 / 16-bit UI2F / I2F vertex formats (`gfx/tests/t_vfmt.m`); Metal converts 8 / 16-bit integers to their value for a float input
+  and refuses 32-bit ones (measured), so the 32-bit and 10:10:10:2 kinds stay unmapped
+- [x] batch 1 · 12 thread dumps list the handles of a WaitSynchronization with each one's state (`t_waitsync`)
 
 Tier 1, performance:
 - [ ] 13 busy-yield back-off releasing the virtual core, a power line every 300 frames

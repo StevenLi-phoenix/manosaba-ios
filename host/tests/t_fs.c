@@ -49,6 +49,10 @@ int main(void) {
     snprintf(rom, sizeof rom, "%s/rom", root); snprintf(overlay, sizeof overlay, "%s/overlay", root); snprintf(rdata, sizeof rdata, "%s/data", rom); snprintf(odata, sizeof odata, "%s/data", overlay);
     mkdir(rom, 0755); mkdir(overlay, 0755); mkdir(rdata, 0755); mkdir(odata, 0755);
     snprintf(fn, sizeof fn, "%s/same", rdata); put(fn, "base"); snprintf(fn, sizeof fn, "%s/same", odata); put(fn, "overlay"); snprintf(fn, sizeof fn, "%s/base", rdata); put(fn, "only-base"); snprintf(fn, sizeof fn, "%s/over", odata); put(fn, "only-overlay");
+    {   // a directory with more names than the old listing cap (2048), made before the mount builds the RomFS name index (used below)
+        char big[1300], obig[1300]; snprintf(big, sizeof big, "%s/big", rom); snprintf(obig, sizeof obig, "%s/big", overlay); mkdir(big, 0755); mkdir(obig, 0755);
+        for (int i = 0; i < 3000; i++) { snprintf(fn, sizeof fn, "%s/f%04d", big, i); put(fn, "b"); }
+        for (int i = 2995; i < 3005; i++) { snprintf(fn, sizeof fn, "%s/f%04d", obig, i); put(fn, "ov"); } }
     setenv("DM_ROMFS", rom, 1); setenv("DM_ROMFS_OVERLAY", overlay, 1); CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount the RomFS with an overlay");
     CHECK(read_fs("rom:/data/same", got, sizeof got) && !strcmp(got, "overlay"), "the overlay file wins"); CHECK(read_fs("rom:/data/base", got, sizeof got) && !strcmp(got, "only-base"), "falls back to the base without an overlay file");
     uint64_t rh; CHECK(h_fs_OpenFile(&rh, "rom:/data/same", MODE_WRITE) == RES_FAIL, "both layers refuse writes");
@@ -61,6 +65,19 @@ int main(void) {
         CHECK(dm_overlay_file("none", p, sizeof p) == 0 && !p[0], "in no layer: 0, output cleared");
         setenv("DM_ROMFS_OVERLAY", overlay, 1); snprintf(want, sizeof want, "%s/mark", overlay); CHECK(dm_overlay_file("mark", p, sizeof p) == 1 && !strcmp(p, want), "a single layer works the same");
         unsetenv("DM_ROMFS_OVERLAY"); CHECK(dm_overlay_file("mark", p, sizeof p) == 0, "no overlay set: 0"); setenv("DM_ROMFS_OVERLAY", overlay, 1); }
+    {   // An overlaid directory with more names than the old cap of 2048: 3000 in the base, 10 in the overlay of which 5 are also in the base: 3005,
+        // each once, the overlay's 10 with the overlay's size (2 bytes against the base's 1)
+        uint64_t dh; int64_t cnt = -1, total = 0, n = 0; static DirectoryEntry de[512]; static unsigned char seen[3005]; int dups = 0, bad = 0, ovsize = 0;
+        Result ro = h_fs_OpenDirectory(&dh, "rom:/big", DIRMODE_FILE); CHECK(ro == RES_OK, "open an overlaid directory of 3005 names");
+        if (ro == RES_OK) {
+        CHECK(h_fs_DirCount(&cnt, dh) == RES_OK && cnt == 3005, "entry count 3005 (got %lld)", (long long)cnt);
+        do { n = 0; if (h_fs_ReadDirectory(&n, de, dh, 512)) break;
+             for (int64_t i = 0; i < n; i++) { int k = atoi(de[i].name + 1); if (de[i].name[0] != 'f' || k < 0 || k >= 3005) { bad++; continue; } dups += seen[k]++ > 0; if (k >= 2995 && de[i].size == 2) ovsize++; }
+             total += n; } while (n);
+        CHECK(total == 3005 && !dups && !bad, "ReadDirectory hands out all 3005, each once (got %lld, %d twice, %d unknown)", (long long)total, dups, bad);
+        CHECK(ovsize == 10, "the overlay's 10 carry the overlay's size (got %d)", ovsize);
+        h_fs_CloseDirectory(dh); }
+    }
     g_nmnt = 0;
     snprintf(save, sizeof save, "%s/save", root); snprintf(work, sizeof work, "%s.work", save);
     mkdir(save, 0755); snprintf(p, sizeof p, "%s/a", save); put(p, "old");

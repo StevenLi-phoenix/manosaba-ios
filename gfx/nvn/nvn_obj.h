@@ -64,7 +64,7 @@ _Static_assert(sizeof(view_t) == 10, "view_t must stay 10 bytes (see above)");
 FITS(view_t, NVNtextureView);
 
 // Sampler parameters (one copy shared by builder and object)
-typedef struct { uint8_t minf, magf, ws, wt, wr, cmp_mode, cmp_func; float lod_min, lod_max, lod_bias, aniso, border[4]; } samp_par;   // Enum values are all < 256
+typedef struct { uint8_t minf, magf, ws, wt, wr, cmp_mode, cmp_func, reduction; float lod_min, lod_max, lod_bias, aniso, border[4]; } samp_par;   // Enum values are all < 256
 typedef struct { NVNdevice *dev; samp_par p; } samp_builder_t;                                FITS(samp_builder_t, NVNsamplerBuilder);
 typedef struct { uint32_t magic; samp_par p; } samp_t;                                        FITS(samp_t, NVNsampler);
 
@@ -166,7 +166,8 @@ void mtl_set_tex_pool_n(int n);                            // Texture descriptor
 // Timing instrumentation (shared by Mac / iOS): submissions are tagged with the frame number; GPU time = sum of GPUEnd−GPUStart over all of that frame's command buffers, readable only after all complete (otherwise −1)
 void mtl_set_frame(uint64_t f);
 void mtl_ub_present(double iv_ms);   // Same-process alternating measurement (DM_NVN_UB): the present thread reports the actual present interval every frame
-double mtl_gpu_ms(uint64_t f);
+double mtl_gpu_ms(uint64_t f);       // the union of the frame's command-buffer spans
+double mtl_gpu_sum_ms(uint64_t f);   // their plain sum (the GPU time reported before 2026-10-19)
 void mtl_sub_index(const uint64_t *h, int n);   // Start of submission: build the store lookahead index in replay order (nvn_mtl.m)
 void mtl_sub_snapshot(const uint64_t *h, int n);   // Start of submission: copy the uniform ranges it binds as they are now (nvn_mtl.m, DM_NVN_UBO_SNAPSHOT)
 void xv_test_counts(int *dc, int *viol);

@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <setjmp.h>
 #include "nvn_mtl.h"
 // Compile-time switch DM_NVN_M3=1: the graphics backend uses the older API (ordinary command queue / command buffers / render, compute and copy encoders, buffers bound per slot, each resource referenced by an argument block declared individually),
 // target macOS 15 / iOS 18. Default 0 = Metal 4 (macOS 26 / iOS 26). Both branches share the same replay logic, and every divergence is inside #if DM_NVN_M3
@@ -581,7 +582,24 @@ static int us_gw_cmp(const void *x, const void *y) { const us_gw *a = x, *b = y;
 // (one on this thread), each part whole entries
 enum { US_PAR = 4, US_PAR_MIN = 256 << 10 };
 static int g_us_par = -1; static uint64_t g_us_par_n;   // DM_NVN_UBO_SNAPSHOT_PAR=0: one thread; g_us_par_n: snapshots copied in parts
-static void us_copy_range(int a, int b) { for (int i = a; i < b; i++) memcpy(g_us[i].cpu, (const void *)(uintptr_t)g_us[i].lo, (size_t)(g_us[i].hi - g_us[i].lo)); }
+// A source the game made inaccessible after its pool was registered used to end the process (SIGSEGV / SIGBUS, also on the worker threads that
+// copy in parts): each copy runs under a per-thread fault guard and a faulting one is dropped, so its draws read memory as without snapshots
+// (MacNativeGames guards usnap_copy_one the same way after a helper thread died in about one session of twelve; MIT, written anew here)
+static __thread struct { sigjmp_buf jb; uint64_t lo, hi; int armed; } t_usg;
+static _Atomic uint64_t g_us_faults;
+static int us_fault(void *addr, int is_write, void *uc) {   // fault hook: only a fault inside the range this thread is copying
+    (void)is_write; (void)uc; uint64_t a = (uint64_t)(uintptr_t)addr;
+    if (!t_usg.armed || a < t_usg.lo || a >= t_usg.hi) return 0;
+    t_usg.armed = 0; siglongjmp(t_usg.jb, 1);
+}
+static void us_copy_range(int a, int b) {
+    static dispatch_once_t hook; dispatch_once(&hook, ^{ dm_fault_hook_register(us_fault); });
+    for (volatile int i = a; i < b; i++) {
+        t_usg.lo = g_us[i].lo; t_usg.hi = g_us[i].hi;
+        if (!sigsetjmp(t_usg.jb, 1)) { t_usg.armed = 1; memcpy(g_us[i].cpu, (const void *)(uintptr_t)g_us[i].lo, (size_t)(g_us[i].hi - g_us[i].lo)); t_usg.armed = 0; }
+        else { g_us[i].dropped = 1; atomic_fetch_add(&g_us_faults, 1); }
+    }
+}
 static void us_copy_all(void) {
     if (g_us_par < 0) { const char *e = getenv("DM_NVN_UBO_SNAPSHOT_PAR"); g_us_par = !(e && !strcmp(e, "0")); }
     uint64_t total = 0; for (int i = 0; i < g_us_n; i++) total += g_us[i].hi - g_us[i].lo;
@@ -629,7 +647,9 @@ void mtl_sub_snapshot(const uint64_t *h, int n) {   // hle_nvn.c nvnQueueSubmitC
         c->lo = u[i].lo; c->hi = u[i].hi; c->cpu = (uint8_t *)ab.contents + off; c->gpu = ab.gpuAddress + off; c->buf = (__bridge void *)ab; c->dropped = 0;
         g_us_bytes += sz;
     }
+    uint64_t uf0 = atomic_load(&g_us_faults);
     us_copy_all();
+    if (atomic_load(&g_us_faults) != uf0) { static int once; if (once++ < 8) MLOG("[red] uniform snapshot: %llu source range(s) not readable (unmapped after the pool was registered): those copies dropped, their draws read memory", (unsigned long long)(atomic_load(&g_us_faults) - uf0)); }
     g_us_copies += (uint64_t)g_us_n;
     g_us_ns += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
 }
@@ -951,6 +971,33 @@ static uint64_t g_up_total_ns;   // Cumulative upload time (same source as the p
 // ---------- Per-frame GPU time aggregation ----------
 #define GRING 1024
 static struct { _Atomic uint64_t frame, ns, t0, t1; _Atomic int pending; } g_gpu[GRING];   // t0 / t1: the frame's earliest GPUStart / latest GPUEnd (mach absolute time, ns)
+// The frame's GPU time is the union of its command buffers' spans: Apple GPUs start a buffer while the one before it runs, so the plain sum (ns) counted
+// the overlap twice (LASRecomp PR #197: summed 13-17 ms against a union of 6.5-7 ms). The spans of the last GIVR frames are kept (the time is read 8
+// frames late); a full list is merged, and if no two spans overlap the two closest are joined (their gap is counted, the only overestimate)
+#define GIVR 32
+enum { GIV = 128 };
+static struct { uint64_t frame; uint32_t n; uint64_t iv[GIV][2]; os_unfair_lock lk; } g_giv[GIVR];
+static int giv_cmp(const void *a, const void *b) { const uint64_t *x = a, *y = b; return x[0] < y[0] ? -1 : x[0] > y[0]; }
+static uint32_t giv_merge(uint64_t (*iv)[2], uint32_t n) {   // sort by start and join overlapping spans in place; returns the new count
+    if (n < 2) return n;
+    qsort(iv, n, sizeof *iv, giv_cmp);
+    uint32_t m = 0;
+    for (uint32_t i = 1; i < n; i++) { if (iv[i][0] <= iv[m][1]) { if (iv[i][1] > iv[m][1]) iv[m][1] = iv[i][1]; } else { m++; iv[m][0] = iv[i][0]; iv[m][1] = iv[i][1]; } }
+    return m + 1;
+}
+static uint64_t giv_union_ns(uint64_t (*iv)[2], uint32_t *n) { *n = giv_merge(iv, *n); uint64_t s = 0; for (uint32_t i = 0; i < *n; i++) s += iv[i][1] - iv[i][0]; return s; }
+static void giv_add(uint64_t f, uint64_t s0, uint64_t s1) {
+    unsigned k = f % GIVR; os_unfair_lock_lock(&g_giv[k].lk);
+    if (g_giv[k].frame != f) { g_giv[k].frame = f; g_giv[k].n = 0; }
+    if (g_giv[k].n == GIV) g_giv[k].n = giv_merge(g_giv[k].iv, GIV);
+    if (g_giv[k].n == GIV) {   // still full: join the two closest neighbours
+        uint32_t bi = 0; uint64_t bg = UINT64_MAX;
+        for (uint32_t i = 0; i + 1 < GIV; i++) { uint64_t gap = g_giv[k].iv[i + 1][0] - g_giv[k].iv[i][1]; if (gap < bg) { bg = gap; bi = i; } }
+        g_giv[k].iv[bi][1] = g_giv[k].iv[bi + 1][1]; memmove(&g_giv[k].iv[bi + 1], &g_giv[k].iv[bi + 2], (GIV - bi - 2) * sizeof g_giv[k].iv[0]); g_giv[k].n--;
+    }
+    g_giv[k].iv[g_giv[k].n][0] = s0; g_giv[k].iv[g_giv[k].n][1] = s1; g_giv[k].n++;
+    os_unfair_lock_unlock(&g_giv[k].lk);
+}
 static _Atomic uint64_t g_cur_frame;
 // ---------- Same-process alternating measurement (DM_NVN_UB, off by default: without the environment variable the code below only adds one 'is it enabled' check) ----------
 // On a hot real device the system keeps adjusting power / frequency, and segment comparison (segments A and B each run for a minute) cannot resolve differences of <10%; within the same run, toggle by phase in turn and take differences of adjacent phase pairs, so the drift cancels.
@@ -1018,6 +1065,7 @@ static void gpu_tag_done(uint64_t f, double g0, double g1) {
     if (d > 0) {
         atomic_fetch_add(&g_gpu[k].ns, (uint64_t)(d * 1e9));
         uint64_t s0 = (uint64_t)(g0 * 1e9), s1 = (uint64_t)(g1 * 1e9), v;
+        giv_add(f, s0, s1);
         for (v = atomic_load(&g_gpu[k].t0); s0 < v && !atomic_compare_exchange_weak(&g_gpu[k].t0, &v, s0);) {}
         for (v = atomic_load(&g_gpu[k].t1); s1 > v && !atomic_compare_exchange_weak(&g_gpu[k].t1, &v, s1);) {}
     }
@@ -1025,7 +1073,16 @@ static void gpu_tag_done(uint64_t f, double g0, double g1) {
 }
 static void gpu_tag_f(id<MTLCommandBuffer> cb, uint64_t f) { gpu_tag_begin(f); [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { gpu_tag_done(f, c.GPUStartTime, c.GPUEndTime); }]; }
 void gpu_tag(id<MTLCommandBuffer> cb) { gpu_tag_f(cb, atomic_load(&g_cur_frame)); }
-double mtl_gpu_ms(uint64_t f) {
+double mtl_gpu_ms(uint64_t f) {   // the union of the frame's command-buffer spans; -1 while one is still running or the frame is gone
+    unsigned k = f % GRING;
+    if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return -1;
+    if (!atomic_load(&g_gpu[k].ns)) return 0;
+    unsigned j = f % GIVR; os_unfair_lock_lock(&g_giv[j].lk);
+    double ms = g_giv[j].frame == f ? giv_union_ns(g_giv[j].iv, &g_giv[j].n) / 1e6 : -1;
+    os_unfair_lock_unlock(&g_giv[j].lk);
+    return ms;
+}
+double mtl_gpu_sum_ms(uint64_t f) {   // the plain sum of the spans (what mtl_gpu_ms reported before 2026-10-19), for comparison with older numbers
     unsigned k = f % GRING;
     if (atomic_load(&g_gpu[k].frame) != f || atomic_load(&g_gpu[k].pending)) return -1;
     return atomic_load(&g_gpu[k].ns) / 1e6;
@@ -3355,6 +3412,7 @@ static MTLSamplerAddressMode wrapm(int w) {
         case 6: return MTLSamplerAddressModeMirrorRepeat; }
     return MTLSamplerAddressModeRepeat;
 }
+static int g_samp_old_once;
 static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     if (sid < 0 || sid >= g_nsreg || !g_sreg_ok[sid]) { RED_ONCE(12, "sampler ID %d not registered", sid); return nil; }
     if (g_sview[sid]) return (__bridge id<MTLSamplerState>)g_sview[sid];
@@ -3367,6 +3425,10 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.lodMinClamp = p.lod_min < 0 ? 0 : p.lod_min; d.lodMaxClamp = p.lod_max;
     d.maxAnisotropy = p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso;
     if (p.cmp_mode) d.compareFunction = (MTLCompareFunction)(p.cmp_func - 1);
+    // LOD bias and min / max reduction (NVN values 0 average, 1 min, 2 max = MTLSamplerReductionMode's) came with macOS / iOS 26: the bias was stored
+    // and never applied (Tears of the Kingdom sets it on 861 samplers). Metal ignores the reduction with nearest filtering, as NVN does
+    if (@available(macOS 26.0, iOS 26.0, *)) { d.lodBias = p.lod_bias < -16.f ? -16.f : p.lod_bias > 15.999f ? 15.999f : p.lod_bias; d.reductionMode = (MTLSamplerReductionMode)p.reduction; }
+    else if ((p.reduction || p.lod_bias != 0.f) && !g_samp_old_once++) MLOG("[red] sampler LOD bias %g / reduction %d need macOS / iOS 26: ignored", p.lod_bias, (int)p.reduction);
     d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
     d.supportArgumentBuffers = YES;
     id<MTLSamplerState> s = [g_dev newSamplerStateWithDescriptor:d];
@@ -3488,13 +3550,21 @@ static MTLVertexFormat vfmt(int f) {
         case 0x2D: return MTLVertexFormatShort4; case 0x2E: return MTLVertexFormatFloat4; case 0x2F: return MTLVertexFormatUInt4; case 0x30: return MTLVertexFormatInt4;
         case 0x3D: return MTLVertexFormatUInt1010102Normalized; case 0x69: return MTLVertexFormatInt1010102Normalized;   // RGB10A2SN (TotK full-screen quads; nxnative)
         case 0x3F: return MTLVertexFormatFloatRG11B10; case 0x9A: return MTLVertexFormatUChar4Normalized_BGRA;
+        // *_UI2F / *_I2F: the integer converted to its float value (BotW's uking_grass uses RG8_UI2F; jiangjifeng's nxnative fork ae9082d). Metal does
+        // exactly that for an 8 / 16-bit integer format read into a float input (measured on an M5: UChar2 17 / 203 read as 17.0 / 203.0, Short2 -32768 as
+        // -32768.0); it refuses 32-bit integers for a float input, so the 32-bit and 10:10:10:2 kinds stay unmapped (red 15)
+        case 0x51: return MTLVertexFormatUChar; case 0x52: return MTLVertexFormatChar; case 0x53: return MTLVertexFormatUShort; case 0x54: return MTLVertexFormatShort;
+        case 0x57: return MTLVertexFormatUChar2; case 0x58: return MTLVertexFormatChar2; case 0x59: return MTLVertexFormatUShort2; case 0x5A: return MTLVertexFormatShort2;
+        case 0x5D: return MTLVertexFormatUChar3; case 0x5E: return MTLVertexFormatChar3; case 0x5F: return MTLVertexFormatUShort3; case 0x60: return MTLVertexFormatShort3;
+        case 0x63: return MTLVertexFormatUChar4; case 0x64: return MTLVertexFormatChar4; case 0x65: return MTLVertexFormatUShort4; case 0x66: return MTLVertexFormatShort4;
     }
     return MTLVertexFormatInvalid;
 }
+static int vfmt_scaled(int f) { return (f >= 0x51 && f <= 0x54) || (f >= 0x57 && f <= 0x5A) || (f >= 0x5D && f <= 0x60) || (f >= 0x63 && f <= 0x66); }   // the *_UI2F / *_I2F vfmt maps
 // Integer vertex formats meeting a float shader input. Maxwell hands integer attributes to the shader unconverted (the raw 32-bit integers), and the
-// translated shaders keep attributes in float registers and bit-cast where the original used integer instructions. Metal refuses an integer format
-// for a float input ("Cannot convert attribute"), so 32-bit integer formats are fetched as the float format of the same width: the shader sees the same
-// bits. 8 / 16-bit integer formats would need widening that no float vertex format does: they stay as they are (and fail visibly, logged once)
+// translated shaders keep attributes in float registers and bit-cast where the original used integer instructions. Metal refuses a 32-bit integer format
+// for a float input ("cannot be read using MTLAttributeFormatUInt"), so those are fetched as the float format of the same width: the shader sees the same
+// bits. 8 / 16-bit integer formats Metal converts to their float value, not the bits the shader expects: they stay as they are (logged once)
 static MTLVertexFormat vfmt_for_float_input(MTLVertexFormat f) {
     switch (f) {
         case MTLVertexFormatUInt: case MTLVertexFormatInt: return MTLVertexFormatFloat;
@@ -3601,9 +3671,9 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
             continue;
         }
         int st = k->attr[a].stream;
-        if (rf->v[v].ct == NVN_CT_FLOAT && vfmt_is_int(vf)) {
+        if (rf->v[v].ct == NVN_CT_FLOAT && vfmt_is_int(vf) && !vfmt_scaled(k->attr[a].fmt)) {   // (the *_UI2F / *_I2F formats want Metal's conversion)
             // Integer format, float input: the shader's main0_vi variant takes it as uint / int (same bits); without a variant, 32-bit formats are fetched as
-            // float of the same width (same bits as well); anything else cannot be expressed and the pipeline fails (logged once per shader)
+            // float of the same width (same bits as well); 8 / 16-bit ones get Metal's conversion to the value, not the bits (logged once per shader)
             const char *how;
             if (loc < 16 && (vs->vi_mask >> loc & 1)) { if (vfmt_is_signed(vf)) vi_s |= 1u << loc; else vi_u |= 1u << loc; how = "specialized variant main0_vi"; }
             else { MTLVertexFormat ff = vfmt_for_float_input(vf); how = ff == vf ? NULL : "fetched as float of the same width (same bits)"; vf = ff; }
@@ -3612,7 +3682,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
             if (!dup && nseen < 64) strlcpy(seen[nseen++], vs->key, sizeof seen[0]);
             pthread_mutex_unlock(&mu);
             if (!dup) MLOG("%svertex shader %s: NVN attribute %d (format %#x) is integer, the shader input is float: %s", how ? "" : "[red] ", vs->key, a, k->attr[a].fmt,
-                           how ? how : "no variant and no float format of the same width, the pipeline will fail");
+                           how ? how : "no variant: an 8 / 16-bit value reaches the shader converted to float, not as its bits");
         }
         vd.attributes[loc].format = vf; vd.attributes[loc].offset = k->attr[a].offset; vd.attributes[loc].bufferIndex = 16 + st;
         vd.layouts[16 + st].stride = k->stream[st].stride ? k->stream[st].stride : 4;
@@ -5192,7 +5262,7 @@ q_found:
         if (!q_body && h.op == OP_SET_RT && !q_clears) { const p_set_rt *r2 = a; if (!defer_q_superset(r2)) { g_defer.reason = 15; goto fail; } q = r2; qop = p; p += h.size; continue; }
         if (h.op == OP_CLEAR_COLOR || h.op == OP_CLEAR_DS) q_clears = 1;
         if (!q_body && (h.op == OP_END || h.op == OP_SET_RT || h.op == OP_UPDATE_UB || h.op == OP_COPY_B2B || h.op == OP_DISPATCH)) { g_defer.reason = 9; g_defer.reason_op = h.op; goto fail; }
-        if (h.op == OP_BIND_PROGRAM) pg = ((const p_bind_program *)a)->prog; else if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG) { const p_bind_handles *b = a; bh_fresh(b); int lim = h.op == OP_BIND_IMG ? 32 : 128; if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } }
+        if (h.op == OP_BIND_PROGRAM) pg = prog_bind(pg, ((const p_bind_program *)a)->prog, ((const p_bind_program *)a)->stages); else if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG) { const p_bind_handles *b = a; bh_fresh(b); int lim = h.op == OP_BIND_IMG ? 32 : 128; if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (h.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } }
         else if (h.op == OP_CLEAR_COLOR) { const p_clear_color *c = a; if (c->index >= 0 && c->index < q->n && q->color[c->index]) for (int i = 0; i < g_defer.p_rt.n; i++) if (g_defer.p_rt.color[i] && sub_eq(q, c->index, &g_defer.p_rt, i)) { g_defer.reason = 10; goto fail; } }
         p += h.size;
     }
@@ -5299,7 +5369,7 @@ static void fuse_try(void) {
             const uint8_t *q; op_hdr hq; const void *aq;
             if (!fz_next(&cur, &q, &hq, &aq)) return;
             if (q == r2op) goto planned;
-            if (hq.op == OP_BIND_PROGRAM) pg = ((const p_bind_program *)aq)->prog;
+            if (hq.op == OP_BIND_PROGRAM) pg = prog_bind(pg, ((const p_bind_program *)aq)->prog, ((const p_bind_program *)aq)->stages);
             else if (hq.op == OP_BIND_STATE) { const p_bind_state *b = aq; if (b->kind == 5) memcpy(&ds, b->bytes, sizeof ds); }
             else if (hq.op == OP_BIND_TEX || hq.op == OP_BIND_IMG) { const p_bind_handles *b = aq; bh_fresh(b); int lim = hq.op == OP_BIND_IMG ? 32 : 128;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (hq.op == OP_BIND_IMG) img[b->stage][b->first + k] = b->h[k]; else tex[b->stage][b->first + k] = b->h[k]; } }
@@ -5311,7 +5381,7 @@ planned:
         const prog_t *pg2 = S.prog; static uint64_t t2[6][128], i2[6][32]; memcpy(t2, S.tex, sizeof t2); memcpy(i2, S.img, sizeof i2);
         cur = (fz_cursor){.p = g_exec_next};
         for (;;) { const uint8_t *q; op_hdr hq; const void *aq; if (!fz_next(&cur, &q, &hq, &aq)) return; if (q == p) break;
-            if (hq.op == OP_BIND_PROGRAM) pg2 = ((const p_bind_program *)aq)->prog;
+            if (hq.op == OP_BIND_PROGRAM) pg2 = prog_bind(pg2, ((const p_bind_program *)aq)->prog, ((const p_bind_program *)aq)->stages);
             else if (hq.op == OP_BIND_TEX || hq.op == OP_BIND_IMG) { const p_bind_handles *b = aq; bh_fresh(b); int lim = hq.op == OP_BIND_IMG ? 32 : 128;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (hq.op == OP_BIND_IMG) i2[b->stage][b->first + k] = b->h[k]; else t2[b->stage][b->first + k] = b->h[k]; } }
         }

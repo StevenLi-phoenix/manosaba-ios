@@ -99,6 +99,12 @@ t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_skey.m -framework Foundation
 t_refl: t_refl.m ../nvn/nvn_refl.m ../nvn/nvn_refl.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_refl.m ../nvn/nvn_refl.m -framework Metal -framework Foundation
+t_gputime: t_gputime.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_gputime.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_vfmt: t_vfmt.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vfmt.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_samp: t_samp.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_samp.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 run: \
@@ -114,6 +120,7 @@ run: \
 	t_esfilter \
 	t_findrain \
 	t_fuse_check \
+	t_gputime \
 	t_hmap \
 	t_keepalive \
 	t_layer \
@@ -137,6 +144,7 @@ run: \
 	t_rt_range \
 	t_rt_range_shape \
 	t_rt_srgb_view \
+	t_samp \
 	t_snapreap \
 	t_stor \
 	t_tex_auto \
@@ -146,6 +154,7 @@ run: \
 	t_ubren \
 	t_uppool \
 	t_usnap \
+	t_vfmt \
 	t_ussort \
 	t_wb \
 	t_xv \
@@ -163,6 +172,7 @@ run: \
 	./t_tex_auto
 	./t_d16clear
 	./t_fuse_check
+	./t_gputime
 	./t_present_crop
 	MTL_DEBUG_LAYER=1 ./t_present_fx
 	MTL_DEBUG_LAYER=1 ./t_reorder_chain
@@ -172,6 +182,7 @@ run: \
 	./t_ub
 	MTL_DEBUG_LAYER=1 ./t_usnap
 	./t_ussort
+	MTL_DEBUG_LAYER=1 ./t_vfmt
 	DM_NVN_RENDER_STREAM=1 MTL_DEBUG_LAYER=1 ./t_rstream
 	DM_NVN_RENDER_STREAM=0 ./t_rstream --off
 	MTL_DEBUG_LAYER=1 ./t_layer
@@ -203,6 +214,7 @@ run: \
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --small-depth
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
 	./t_pso_skey
+	MTL_DEBUG_LAYER=1 ./t_samp
 	./t_refl
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view

@@ -527,9 +527,11 @@ NVN(nvnSamplerBuilderSetLodClamp, void, NVNsamplerBuilder *b, float lo, float hi
 NVN(nvnSamplerBuilderSetLodBias, void, NVNsamplerBuilder *b, float v) { SB(b)->lod_bias = v; }
 NVN(nvnSamplerBuilderSetCompare, void, NVNsamplerBuilder *b, NVNcompareMode m, NVNcompareFunc f) { SB(b)->cmp_mode = m; SB(b)->cmp_func = f; }
 NVN(nvnSamplerBuilderSetBorderColor, void, NVNsamplerBuilder *b, const float *c) { memcpy(SB(b)->border, c, 16); }
-// Min / max reduction does not exist on Metal samplers: averaging, reported once (nxnative)
+// Min / max reduction: MTLSamplerDescriptor.reductionMode from macOS / iOS 26 (samp_by_id; GirlNet's Persona 5 Royal branch 0293081, lordran-native
+// 0a35532). Before that it averages, reported once there
 NVN(nvnSamplerBuilderSetReductionFilter, void, NVNsamplerBuilder *b, NVNsamplerReduction r) {
-    (void)b; if (r) { static int once; if (!once++) LOG("[red] SamplerBuilderSetReductionFilter %d: min / max reduction not supported, averaging", (int)r); }
+    if ((unsigned)r > NVN_SAMPLER_REDUCTION_MAX) { LOG("[red] SamplerBuilderSetReductionFilter %d: not a reduction, averaging", (int)r); r = NVN_SAMPLER_REDUCTION_AVERAGE; }
+    SB(b)->reduction = (uint8_t)r;
 }
 NVN(nvnSamplerBuilderSetMaxAnisotropy, void, NVNsamplerBuilder *b, float v) { SB(b)->aniso = v; }
 NVN(nvnSamplerBuilderSetLodSnap, void, NVNsamplerBuilder *b, float v) { (void)b; (void)v; }   // No Metal equivalent, ignored
@@ -1163,13 +1165,15 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
 
 // Commands that only affect GPU state / only execute on the GPU: the null device only counts them (the thunk has already counted)
 static void nvn_nop(void) {}
+// Depth bounds are not modelled: disabling them is fine, enabling them is reported once (the draws are not rejected by the bounds)
+static int g_depth_bounds_red;
+NVN(nvnCommandBufferSetDepthBounds, void, NVNcommandBuffer *cb, uint32_t enable, float n, float f) {
+    (void)cb; if (enable && !g_depth_bounds_red++) LOG("[red] CommandBufferSetDepthBounds enabled (%g..%g): depth bounds are not modelled, ignored", n, f);
+}
+// SetPatchSize, MultiDrawArrays / ElementsIndirectCount, DispatchComputeIndirect and DownsampleTextureView used to be listed here, so a game calling
+// them lost draws, dispatches or a downsample without a line: they go to the red-reporting stub now (upstream d2r-mobile 44a6770; nxnative has
+// DispatchComputeIndirect / DrawElementsIndirect and Downsample as a resolve, for when a game calls them). SetDepthBounds is below
 static const char *const g_nops[] = {
-    "nvnCommandBufferSetPatchSize",
-    "nvnCommandBufferMultiDrawArraysIndirectCount",
-    "nvnCommandBufferMultiDrawElementsIndirectCount",
-    "nvnCommandBufferDispatchComputeIndirect",
-    "nvnCommandBufferSetDepthBounds",
-    "nvnCommandBufferDownsampleTextureView",
     "nvnCommandBufferWaitSync",    // A GPU-side wait on a sync object (CPU waits go through nvnSyncWait, which really waits on the fence). Sync objects come only
                                    // from QueueFenceSync and WindowAcquireTexture, whose fence value is "the highest already submitted when recorded", and the
                                    // command buffer holding WaitSync is submitted after it to the same queue. There is one Metal command stream queue
@@ -1568,7 +1572,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         trow(f, "@sub_wall_ms", atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
-    if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
+    if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); trow(f - 8, "@gpu_sum_ms", mtl_gpu_sum_ms(f - 8)); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN];   // long-frame log (on by default, DM_LONGFRAME=0 turns it off): a line is printed only when the whole frame > 20 ms or GPU > 16.7 ms, and it is clearly above recent conditions
           static int on = -1; if (on < 0) { const char *e = getenv("DM_LONGFRAME"); on = !(e && !strcmp(e, "0")); }
           // "Long" is relative to recent conditions: when running steadily at 30 fps (menus / windowless host) or under sustained overload, every frame is > 20 ms; those are not long frames and must not flood the log - a frame has to be 40% above the sliding mean of the last 16 frames to count

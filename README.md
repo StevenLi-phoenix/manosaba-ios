@@ -114,7 +114,7 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool buffer,
   the inline-uniform ring and per-stage vertex shader padding; later the autorelease pool for retired objects, the driver segment for vertex and
   compute shaders, clears on a left-out attachment slot, the growable dirty-range table, QueueFinish without present waits, two translator fixes,
-  vertex output defaults, invariance and the Metal compile cache, credited in the code.
+  vertex output defaults, invariance and the Metal compile cache; then precise SleepThread, credited in the code.
 - **[tomodachi-native](https://github.com/kuosuko/tomodachi-native)** ([kuosuko](https://github.com/kuosuko), MIT), a fork of nxnative: the
   variant of the duplicated colour slot handling that keeps the slot the pass writes.
 - **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** ([ly05010419](https://github.com/ly05010419), MIT), a Tears of the Kingdom
@@ -123,10 +123,15 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   controller words and the real-time frame step, uniform snapshots, and from its graphics layer the pending-write table, keep-alive, chunked
   commits, render-state filter, upload staging pool, storage-followed and storage-shared textures, GPU write-back, uniform renaming,
   small-texture hashing and once-per-submission checks, layered passes, the encode stage, driver segment fills, block height and D16 clear fixes,
-  the GPU memory budget and pool range checks, and the RomFS overlay findings for 60 fps, ported by hand and credited in the code.
+  the GPU memory budget and pool range checks, and the RomFS overlay findings for 60 fps; then the fault guard around snapshot copies and
+  read-only rodata, ported by hand and credited in the code.
 - **[LASRecomp](https://github.com/peiikai/LASRecomp)** ([Peiikai](https://github.com/peiikai), MIT), a static recompilation of Link's Awakening:
   its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled textures of Tears of the Kingdom,
-  and the order of WaitSynchronization's checks.
+  and the order of WaitSynchronization's checks; GPU time as the union of command buffers.
+- **Single fixes from other ports**, credited in the code: [Kamisorara/d2r-mobile](https://github.com/Kamisorara/d2r-mobile) (controller face
+  buttons by the printed letter, also upstream's), [jiangjifeng/nxnative](https://github.com/jiangjifeng/nxnative) (scaled vertex formats),
+  [GirlNet/d2r-mobile](https://github.com/GirlNet/d2r-mobile) and [lordran-native](https://github.com/Nishikori-Yui/lordran-native) (sampler LOD
+  bias and reduction), [SkyRecomp](https://github.com/Apolinario-coder/SkyRecomp) (the handles of a WaitSynchronization in thread dumps).
 - **[LibHac](https://www.nuget.org/packages/LibHac/0.19.0)** ([Alex Barney](https://github.com/Thealexbarney), MIT; the NuGet package, as its
   GitHub repository is no longer reachable): reads NSP, XCI and NCA containers in `tools/game_extract`.
 - **[Ryujinx](https://ryujinx.app)** (MIT; source on the project's own Forgejo instance): the shader translator in `third_party/ryujinx`.

@@ -1,16 +1,13 @@
 // Game controllers (GameController framework, shared by the Mac and iOS front ends) → the Switch controller input (dm_pad_set, dm_input.h).
-// Face buttons follow the letter printed on the button, so a game's button prompts match the controller in hand:
-//   Nintendo controllers (Switch Pro, Joy-Con): right A, bottom B, top X, left Y — the Switch layout as is.
-//   Everything else (Xbox, PlayStation, unknown): bottom A, right B, left X, top Y; controllers without letters get the Xbox positions.
-//   GameController reports face buttons by position, not by the printed letter (GCExtendedGamepad.h: buttonA bottom, buttonB right, buttonX left,
-//   buttonY top); a remapping the player made in system settings is already applied. That Nintendo controllers are reported by position too comes
-//   from the header's convention only, not from a test with a real controller.
+// Face buttons: the system's buttonA / B / X / Y go to A / B / X / Y as they are (gamepad_map.h has why: the system reports controllers with
+// printed letters by the letter, so on a Switch Pro or Joy-Con pair right A, bottom B, top X, left Y as on the Switch).
 // L/R shoulders, ZL/ZR triggers, stick clicks, D-pad; menu button → +, options button → − (controllers without one have no −; the Home button is not
 // used: the system may take it first). Sticks are scaled to ±32767, up positive on both sides; the game applies its own dead zone.
 // Several controllers: each keeps its own state; buttons are ORed, each stick comes from the controller that pushes it furthest. Disconnecting one
 // drops only its share. Focus loss (dm_gamepad_reset): all state is cleared, since a button released in the background never reports its release.
 #import <GameController/GameController.h>
 #include "dm_input.h"
+#include "gamepad_map.h"
 #include "hle.h"
 
 enum { NSLOT = 6 };   // slots 0 and 1 are the virtual controllers of dm_gamepad_inject, the rest are real controllers
@@ -24,12 +21,6 @@ static int slot_of(const void *who, int make) {
     return -1;
 }
 
-static int has_word(const char *s, const char *w) { size_t n = strlen(w); for (; s && *s; s++) if (!strncasecmp(s, w, n)) return 1; return 0; }
-static int is_nintendo(GCController *c) {
-    static const char *const k[] = { "switch", "nintendo", "joy-con" };
-    for (unsigned i = 0; i < sizeof k / sizeof *k; i++) if (has_word(c.productCategory.UTF8String, k[i]) || has_word(c.vendorName.UTF8String, k[i])) return 1;
-    return 0;
-}
 static int32_t axis(float v) { if (v > 1) v = 1; if (v < -1) v = -1; return (int32_t)lroundf(v * DM_STICK_MAX); }
 
 // Merge every controller and hand the result to the host; recomputed whenever one changes
@@ -63,9 +54,7 @@ void dm_gamepad_inject(int n, uint64_t b, int32_t lx, int32_t ly, int32_t rx, in
 void dm_gamepad_unplug(int n) { LOG("gamepad: virtual controller %d unplugged", n == 2 ? 2 : 1); drop((const void *)(intptr_t)(n == 2 ? 2 : 1)); }
 
 static void publish(GCController *c, GCExtendedGamepad *g) {
-    int s = g.buttonA.pressed, e = g.buttonB.pressed, w = g.buttonX.pressed, n = g.buttonY.pressed;   // bottom / right / left / top
-    uint64_t b = is_nintendo(c) ? (e ? DM_BTN_A : 0) | (s ? DM_BTN_B : 0) | (n ? DM_BTN_X : 0) | (w ? DM_BTN_Y : 0)
-                                : (s ? DM_BTN_A : 0) | (e ? DM_BTN_B : 0) | (w ? DM_BTN_X : 0) | (n ? DM_BTN_Y : 0);
+    uint64_t b = dm_gamepad_face(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed);
     if (g.leftShoulder.pressed) b |= DM_BTN_L; if (g.rightShoulder.pressed) b |= DM_BTN_R;
     if (g.leftTrigger.pressed) b |= DM_BTN_ZL; if (g.rightTrigger.pressed) b |= DM_BTN_ZR;
     if (g.leftThumbstickButton.pressed) b |= DM_BTN_LS; if (g.rightThumbstickButton.pressed) b |= DM_BTN_RS;
@@ -78,8 +67,7 @@ static void publish(GCController *c, GCExtendedGamepad *g) {
 static void attach(GCController *c) {
     GCExtendedGamepad *g = c.extendedGamepad;
     if (!g) { LOG("gamepad: %s has no extended gamepad profile, ignored", c.vendorName.UTF8String ?: "?"); return; }
-    LOG("gamepad: connected %s (category %s), face buttons in %s layout", c.vendorName.UTF8String ?: "?", c.productCategory.UTF8String ?: "?",
-        is_nintendo(c) ? "Nintendo (right A, bottom B, top X, left Y)" : "Xbox (bottom A, right B, left X, top Y)");
+    LOG("gamepad: connected %s (category %s), face buttons by the system's buttonA / B / X / Y", c.vendorName.UTF8String ?: "?", c.productCategory.UTF8String ?: "?");
     __weak GCController *wc = c;
     g.valueChangedHandler = ^(GCExtendedGamepad *gp, GCControllerElement *el) { (void)el; GCController *sc = wc; if (sc) publish(sc, gp); };
 }

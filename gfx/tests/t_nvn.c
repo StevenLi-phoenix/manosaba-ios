@@ -757,6 +757,14 @@ int main(void) {
     EXPECT("unimplemented function recorded as reported red after being called", 1, g_unimpl_seen[ui] > 0);
     EXPECT("unimplemented function count 2", 2, nvn_slot[ui].cnt);
 
+    // 7b. Functions that used to be silent no-ops report on first call now; depth bounds report only when enabled
+    { static const char *const red[] = {"nvnCommandBufferSetPatchSize", "nvnCommandBufferMultiDrawArraysIndirectCount", "nvnCommandBufferMultiDrawElementsIndirectCount",
+                                        "nvnCommandBufferDispatchComputeIndirect", "nvnCommandBufferDownsampleTextureView"};
+      int wired = 0; for (unsigned k = 0; k < sizeof red / sizeof *red; k++) { unsigned i = 0; while (i < NVN_NFUNC && strcmp(nvn_names[i], red[k])) i++; wired += i < NVN_NFUNC && nvn_slot[i].fn == (void *)nvn_unimpl_entry; }
+      EXPECT("7b. the five former silent no-ops go to the red-reporting stub", 5, wired);
+      P(nvnCommandBufferSetDepthBounds)(NULL, 0, 0.f, 1.f); EXPECT("7b. depth bounds disabled: no report", 0, g_depth_bounds_red);
+      P(nvnCommandBufferSetDepthBounds)(NULL, 1, 0.25f, 0.75f); EXPECT("7b. depth bounds enabled: reported", 1, g_depth_bounds_red > 0); }
+
     printf("== %d checks, %d failed ==\n", g_n, g_fail);
     return g_fail != 0;
 }

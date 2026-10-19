@@ -12,6 +12,10 @@
 // Physical memory limit (svc MapPhysicalMemory, as mesosphere KPageTableBase::MapPhysicalMemory): with an application pool of 285 MB
 //   (6) mapping up to the pool succeeds; one page more is LimitReached (0x10801) and maps nothing; pages already mapped do not count again;
 //       after an unmap the freed amount can be mapped again.
+// svc SetMemoryPermission (Horizon's checks, Atmosphère): (7) unaligned address / size, size 0 and other permissions than none / read / read-write
+//   are refused with Horizon's results; read-write and read are accepted.
+// rodata (rodata_seal.h, the loader after relocation): (8) only the 16 KB pages wholly inside [RO_OFF, DATA_OFF) become read-only, a page shared
+//   with data stays writable, a rodata smaller than a page seals nothing.
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -19,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../hle_svc.c"
+#include "../rodata_seal.h"
 
 struct dm_flags g_flag; uint64_t g_t0_ns; module_t g_mod[MAX_MOD]; int g_nmod;
 uint64_t now_ns(void) { return 0; }
@@ -39,6 +44,11 @@ static void on_fault(int s) { (void)s; if (g_probing) siglongjmp(g_jb, 1); signa
 static int readable(volatile uint8_t *p) {   // 1 = the byte can be read (the host page is open)
     g_probing = 1; int ok = 0;
     if (!sigsetjmp(g_jb, 1)) { (void)*p; ok = 1; }
+    g_probing = 0; return ok;
+}
+static int writable(volatile uint8_t *p) {   // 1 = a byte can be written there
+    g_probing = 1; int ok = 0;
+    if (!sigsetjmp(g_jb, 1)) { *p = *p; ok = 1; }
     g_probing = 0; return ok;
 }
 static void map(size_t page, size_t n) { alias_phys(g_alias + page * 0x1000, n * 0x1000, 1, SIZE_MAX); }
@@ -154,6 +164,28 @@ int main(void) {
     CHECK(svc(0x2D, A, 100ull << 20, 0) == 0 && svc(0x2C, A + (285ull << 20), 100ull << 20, 0) == 0 && g_alias_mapped == (285u << 8), "unmap 100 MB, then 100 MB elsewhere fits again");
     svc(0x2D, A, 400ull << 20, 0);
     CHECK(g_alias_mapped == 0, "everything unmapped");
+
+    printf("7 SetMemoryPermission\n");
+    { uint64_t h = (uint64_t)g_alias;
+      CHECK(svc(0x02, h + 0x800, 0x1000, 3) == 0xCC01, "unaligned address: InvalidAddress");
+      CHECK(svc(0x02, h, 0x800, 3) == 0xCA01, "unaligned size: InvalidSize");
+      CHECK(svc(0x02, h, 0, 3) == 0xCA01, "size 0: InvalidSize");
+      CHECK(svc(0x02, h, 0x1000, 2) == 0xD801, "write without read: InvalidNewMemoryPermission");
+      CHECK(svc(0x02, h, 0x1000, 5) == 0xD801, "read + execute: InvalidNewMemoryPermission");
+      CHECK(svc(0x02, h, 0x1000, 3) == 0, "read-write: accepted");
+      CHECK(svc(0x02, h, 0x1000, 1) == 0, "read: accepted (reported, not applied)"); }
+
+    printf("8 rodata sealed after relocation\n");
+    { uint8_t *b = mmap(NULL, 0x20000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); uint64_t lo, hi;
+      CHECK(dm_rodata_seal(b, 0x5000, 0x5000, 0x19000, 0x1C000, &lo, &hi) == 0 && lo == 0x8000 && hi == 0x18000, "text to 0x5000, data from 0x19000: pages 0x8000..0x18000 sealed (%#llx..%#llx)", (unsigned long long)lo, (unsigned long long)hi);
+      CHECK(!writable(b + 0x8000) && !writable(b + 0x17ff8), "a write into the sealed rodata faults (first and last page)");
+      CHECK(readable(b + 0x8000), "... and it can still be read");
+      CHECK(writable(b + 0x18000) && writable(b + 0x19000), "the page shared with data stays writable");
+      CHECK(writable(b + 0x7ff8), "the page shared with text keeps its own protection (writable in this test)");
+      uint8_t *c = mmap(NULL, 0x20000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+      CHECK(dm_rodata_seal(c, 0x5000, 0x5000, 0x7000, 0x1C000, &lo, &hi) == 0 && lo == hi && writable(c + 0x5000), "rodata within one page: nothing sealed");
+      CHECK(dm_rodata_seal(c, 0x5000, 0x5000, 0x19000, 0x10000, &lo, &hi) == 0 && hi == 0x10000 && writable(c + 0x10000), "the key page bounds the sealed range");
+      munmap(b, 0x20000); munmap(c, 0x20000); }
 
     printf("t_guest_mem: %d checks, %d failed\n", checks, fails);
     return fails != 0;

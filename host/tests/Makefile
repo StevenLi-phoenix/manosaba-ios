@@ -5,6 +5,7 @@ GEN = ../gen/$(GAME)/game_profile.c
 # One per line, alphabetical
 run: \
 	$(B)/t_altstack \
+	$(B)/t_arbiter \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
 	$(B)/t_cloudsync \
@@ -20,13 +21,16 @@ run: \
 	$(B)/t_hid_script \
 	$(B)/t_movie \
 	$(B)/t_oe \
+	$(B)/t_padmap \
 	$(B)/t_romfs_validate \
+	$(B)/t_sleep \
 	$(B)/t_swkbd \
 	$(B)/t_thread_exit \
 	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
 	$(B)/t_touch
 	$(B)/t_altstack
+	$(B)/t_arbiter
 	$(B)/t_audio
 	$(B)/t_audio_spsc
 	TMPDIR="$(abspath $(B))" $(B)/t_cloudsync 2>/dev/null
@@ -42,7 +46,9 @@ run: \
 	$(B)/t_hid_script 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
 	$(B)/t_oe 2>/dev/null
+	$(B)/t_padmap
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
+	$(B)/t_sleep
 	$(B)/t_swkbd
 	$(B)/t_thread_exit
 	@status=0; $(B)/t_thread_exit_old > $(B)/t_thread_exit_old.log 2>&1 || status=$$?; \
@@ -67,6 +73,12 @@ $(B)/t_cloudsync: t_cloudsync.c ../cloudsync.c ../cloud.h ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../cloudsync.c
 $(B)/t_crash_stderr: t_crash_stderr.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../crash.c
+$(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_arbiter.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_padmap.c
+$(B)/t_sleep: t_sleep.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_sleep.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_waitsync: t_waitsync.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_waitsync.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
@@ -79,7 +91,7 @@ $(B)/t_fs_index: t_fs_index.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_index.c ../game.c $(GEN)
 $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../game.c $(GEN)
-$(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+$(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
 $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c

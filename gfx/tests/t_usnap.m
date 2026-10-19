@@ -1,13 +1,15 @@
 // Uniform snapshots at submission start (nvn_mtl.m mtl_sub_snapshot; method from MacNativeGames' usnap): a draw reads a uniform block as it was when
 // the submission started, although the CPU rewrites it during the replay (negative control: g_us_on = 0, the draw reads the rewritten bytes); an
 // inline update within the submission is seen by the draws after it and not by those before; nearby ranges are merged, each copy keeps its offset
-// modulo 256; a range that a GPU write of a submission still running reaches is not copied.
+// modulo 256; a range that a GPU write of a submission still running reaches is not copied; a range made unreadable after its pool was registered
+// drops that copy and the process goes on (on this thread and on the workers that copy in parts; without the fault guard it ends with SIGBUS).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
+void crash_install(void);
 static int fail, count;
 #define EXPECT(name, want, got) do { uint64_t w=(want), g=(got); count++; printf("%-84s expected %-10llu → got %-10llu %s\n", name, (unsigned long long)w, (unsigned long long)g, w==g?"✓":"✗"); fail += w != g; } while (0)
 typedef struct { uint8_t *p; size_t n; } chain;
@@ -41,7 +43,7 @@ static const float RED[4]={1,0,0,1}, GREEN[4]={0,1,0,1}, BLUE[4]={0,0,1,1};
 #define C_RED 0xff0000ffu
 #define C_GREEN 0xff00ff00u
 #define C_BLUE 0xffff0000u
-int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init();
+int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash_install();   // production SIGSEGV / SIGBUS handling, so the fault hooks run
     uint8_t *um; if (posix_memalign((void **)&um,getpagesize(),65536)) abort(); memset(um,0,65536); mtl_pool_add(um,65536);
     uint64_t u=(uint64_t)(uintptr_t)um; static prog_t pg; setup_prog(&pg);
 
@@ -103,5 +105,27 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init();
         EXPECT("4. the other range is copied",1,us_find(u,256)!=NULL);
         EXPECT("4. counted as skipped",1,g_us_skip_gpu-s0);
         mtl_sub_commit(); mtl_finish(); g_us_gwn=0;
+    }
+
+    // 5. A bound range made unreadable after its pool was registered (the game unmapped it): its copy faults, is dropped, the others are kept and
+    //    the submission goes on; once on this thread (small total), once on the workers (five 64 KiB ranges, above US_PAR_MIN)
+    {
+        size_t pg=(size_t)getpagesize(), big=1u<<21; uint8_t *bm; if (posix_memalign((void **)&bm,pg,big)) abort(); memset(bm,0x5a,big); mtl_pool_add(bm,big);
+        uint64_t b=(uint64_t)(uintptr_t)bm;
+        for (int par=0; par<2; par++) {
+            chain c=chain_new(); uint64_t f0=g_us_faults, n0=g_us_par_n;
+            if (!par) { bind_ubo(&c,b,256); bind_ubo(&c,b+0x10000,256); }
+            else for (int i=0;i<5;i++) bind_ubo(&c,b+(uint64_t)i*0x20000,0x10000);
+            emit(&c,OP_END,NULL,0);
+            uint64_t bad=par?b+2*0x20000:b+0x10000;
+            mprotect((void *)(uintptr_t)(bad&~(uint64_t)(pg-1)),pg,PROT_NONE);
+            begin(&c);
+            mprotect((void *)(uintptr_t)(bad&~(uint64_t)(pg-1)),pg,PROT_READ|PROT_WRITE);
+            EXPECT(par?"5. workers: one fault caught":"5. this thread: one fault caught",1,g_us_faults-f0);
+            EXPECT(par?"5. workers: the copies were made in parts":"5. this thread: copied here, not in parts",par?1:0,g_us_par_n-n0);
+            EXPECT("5. the unreadable range's copy is dropped (its draws read memory)",0,us_find(bad,256)!=NULL);
+            EXPECT("5. the readable range's copy is kept",1,us_find(b,256)!=NULL);
+            mtl_sub_commit(); mtl_finish();
+        }
     }
     printf("== %d checks, %d failed ==\n",count,fail); return fail!=0;}}

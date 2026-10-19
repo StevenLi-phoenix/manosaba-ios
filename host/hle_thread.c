@@ -32,6 +32,7 @@
 #define R_BUSY        0xF401u   // 122 Busy
 #define R_BAD_CORE    0xE201u   // 113 InvalidCoreId
 #define R_BAD_COMBO   0xE801u   // 116 InvalidCombination
+#define R_BAD_ADDR    0xCC01u   // 102 InvalidAddress
 #define WAITERS_BIT   0x40000000u
 // The process's ideal core and core mask: NPDM MainThreadCoreNumber and the ThreadInfo kernel capability (core 0, cores 0..2 in both manosaba 2.0.4b's
 // and TotK 1.4.3's main.npdm). The kernel gives the main thread an affinity of just its ideal core (KProcess::Run → InitializeUserThread)
@@ -49,6 +50,7 @@ typedef struct thr {
     pthread_t pt; pthread_cond_t cv;
     // Current wait: kind 0=none 1=lock 2=condition 3=address 4=synchronization object
     int wkind, woke; uint64_t waddr, wkey; uint32_t wtag; int64_t wres;
+    uint32_t whs[8]; int whn;  // WaitSynchronization's handles (the first 8) and their count, for the thread dump (SkyRecomp's kernel dump does the same)
     uint64_t wseq;             // Sequence number of wait registration: at equal priority first come, first woken (same order as the Horizon kernel's KThread wait tree)
     struct thr *next;          // Wait chain
     struct thr *all;           // All-threads chain (for the state dump)
@@ -206,6 +208,7 @@ static int64_t block_inner(thr_t *t, int kind, int64_t ns) {
 
 // ---------- Locks ----------
 static inline uint32_t ld32(uint64_t a) { return __atomic_load_n((uint32_t *)a, __ATOMIC_SEQ_CST); }
+static inline uint64_t ld64(uint64_t a) { return __atomic_load_n((uint64_t *)a, __ATOMIC_SEQ_CST); }
 static inline void st32(uint64_t a, uint32_t v) { __atomic_store_n((uint32_t *)a, v, __ATOMIC_SEQ_CST); }
 static inline int cas32(uint64_t a, uint32_t *exp, uint32_t v) { return __atomic_compare_exchange_n((uint32_t *)a, exp, v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }
 
@@ -545,6 +548,14 @@ void svc_thread_dump(void) {
                 cpu, t->nsvc, t->exited ? " exited" : "", t->started ? "" : " not started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
                 m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr,
                 g_keythr && t == pthread_getspecific(g_keythr) ? " ← the thread writing this dump (after a CRASH line: the one that crashed)" : "");
+        if (t->wkind == 4 && t->whn > 0) {   // which objects a WaitSynchronization waits for, and whether each is signaled now (the address column is not used by it)
+            char hl[400]; int q = 0;
+            for (int i = 0; i < t->whn && i < 8; i++) { uint32_t h = t->whs[i]; unsigned x = h - 0x1000; int ty = x && x < MAX_H ? g_h[x].type : O_FREE;
+                const char *what = h == H_CUR_THREAD ? "current thread" : ty == O_THREAD ? (((thr_t *)g_h[x].obj)->exited ? "thread, exited" : "thread, running") :
+                                   ty == O_EVENT_R ? (((event_t *)g_h[x].obj)->signaled ? "event, signaled" : "event, not signaled") : ty == O_EVENT_W ? "event write end (invalid here)" : "no such handle";
+                q += snprintf(hl + q, sizeof hl - q, "%s%#x (%s)", i ? ", " : "", h, what); if (q >= (int)sizeof hl) break; }
+            fprintf(stderr, "[dm]   %#x waits for %d handle%s: %s%s\n", t->handle, t->whn, t->whn == 1 ? "" : "s", hl, t->whn > 8 ? ", ..." : "");
+        }
         if (have_raw) { char hx[200]; int q = 0; for (int i = 0; i < 64; i += 4) q += snprintf(hx + q, sizeof hx - q, "%08x ", *(uint32_t *)(raw + i));
                         fprintf(stderr, "[dm]   %#x 64 bytes at the awaited object %#llx: %s\n", t->handle, t->waddr & ~0xfull, hx); }
         thr_bt(t);
@@ -578,6 +589,16 @@ void svc_thread_dump(void) {
     }
 }
 
+// SleepThread sleeps to its deadline in steps: macOS timer slack made one nanosleep of 5 ms take 6.17 ms and one of 33.3 ms 37.6 ms on this M5
+// (default QoS, mean of 60 / 20), and a game pacing itself with SleepThread ran slow (nxnative a9c56fd: Metroid Dread's 30 Hz sound thread drives its
+// cutscenes, 27 fps instead of 30). Each step sleeps three quarters of what is left, until within 20 µs: within 0.03 ms here
+static void sleep_precise(uint64_t deadline) {
+    for (int i = 0; i < 16; i++) {
+        uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); if (now + 20000 >= deadline) return;
+        uint64_t rem = deadline - now, s = rem < 100000 ? rem : rem - rem / 4;
+        struct timespec ts = {(time_t)(s / 1000000000u), (long)(s % 1000000000u)}; nanosleep(&ts, 0);
+    }
+}
 int svc_thread(int num, uint64_t *regs) {
     { thr_t *me = pthread_getspecific(g_keythr); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->nsvc++; core_checkpoint(me); } }
     if (g_flag.thr && num != 0x0B) { thr_t *me = pthread_getspecific(g_keythr); LOG("[%#x] svc %#x x0=%#llx x1=%#llx x2=%#llx x3=%#llx", me ? me->handle : 0, num, regs[0], regs[1], regs[2], regs[3]); }
@@ -617,7 +638,7 @@ int svc_thread(int num, uint64_t *regs) {
         if (ns > 0 && dm_detclock_enabled()) {
             uint64_t deadline = guest_ns() + (uint64_t)ns;
             while (guest_ns() < deadline) { struct timespec ts = {0, 1000000}; nanosleep(&ts, 0); }
-        } else if (ns > 0) { struct timespec ts = {ns / 1000000000, ns % 1000000000}; nanosleep(&ts, 0); }
+        } else if (ns > 0) sleep_precise(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + (uint64_t)ns);
         else {   // Yield (0 / -1 / -2). Count and time of the main thread's yields are recorded: the game's render task graph "wait for everything to finish" is pure polling + yield (main+0x15ee898); measure how much of a frame it takes
             thr_t *me = pthread_getspecific(g_keythr); uint64_t y0 = me && me->handle == 0x1001 ? now_ns() : 0;
             int give = 0;   // Horizon yield: the core goes to a waiting thread of equal or higher priority
@@ -699,11 +720,16 @@ int svc_thread(int num, uint64_t *regs) {
         regs[0] = 0; return 1;
     }
 
-    case 0x34: {  // WaitForAddress(x0 address, w1 type, w2 value, x3 timeout): 0 wait if less than, 1 decrement if less than then wait, 2 wait if equal
+    case 0x34: {  // WaitForAddress(x0 address, w1 type, x2 value, x3 timeout): 0 wait if less than, 1 decrement if less than then wait, 2 wait if equal,
+                  // 3 wait if equal on a 64-bit value (nn::os::WaitForAddress(long const*, long) uses it). As Horizon's address arbiter (checked against
+                  // Atmosphère): the address aligned to the value's size (InvalidAddress), then the type (InvalidEnumValue); type 3 used to be taken as
+                  // "less than" on 32 bits
         thr_t *t = cur(); uint64_t addr = regs[0]; int type = (int)regs[1]; int32_t val = (int32_t)regs[2];
+        if (addr & (type == 3 ? 7 : 3)) { regs[0] = R_BAD_ADDR; return 1; }
+        if ((unsigned)type > 3) { regs[0] = R_BAD_ENUM; return 1; }
         pthread_mutex_lock(&G);
         int64_t r; uint32_t v = ld32(addr);
-        int ok = type == 2 ? (int32_t)v == val : (int32_t)v < val;
+        int ok = type == 3 ? ld64(addr) == regs[2] : type == 2 ? (int32_t)v == val : (int32_t)v < val;
         if (ok && type == 1) { while (!cas32(addr, &v, v - 1)) if (!((int32_t)v < val)) { ok = 0; break; } }
         if (!ok) r = R_BAD_STATE;
         else { t->waddr = addr; r = block(t, 3, (int64_t)regs[3]); }
@@ -712,6 +738,8 @@ int svc_thread(int num, uint64_t *regs) {
     }
     case 0x35: {  // SignalToAddress(x0 address, w1 type, w2 value, w3 count): 0 wake, 1 increment if equal and wake, 2 if equal modify the value by waiter count and wake
         uint64_t addr = regs[0]; int type = (int)regs[1]; int32_t val = (int32_t)regs[2]; int cnt = (int)regs[3];
+        if (addr & 3) { regs[0] = R_BAD_ADDR; return 1; }
+        if ((unsigned)type > 2) { regs[0] = R_BAD_ENUM; return 1; }   // it used to take any other type as "increment if equal"
         pthread_mutex_lock(&G);
         int nw = 0; for (thr_t *w = g_wait; w; w = w->next) if (w->wkind == 3 && w->waddr == addr) nw++;
         int64_t r = 0;
@@ -766,6 +794,7 @@ int svc_thread(int num, uint64_t *regs) {
             if (t->cancel) { t->cancel = 0; r = R_CANCELLED; break; }
             int64_t left = ns < 0 ? -1 : deadline - (dm_detclock_enabled() ? (int64_t)guest_ns() : now_mono_ns());
             if (ns > 0 && left <= 0) { r = R_TIMEOUT; break; }
+            t->whn = n; memcpy(t->whs, hs, (size_t)(n < 8 ? (n > 0 ? n : 0) : 8) * sizeof *hs);
             int64_t br = block(t, 4, left);
             if (br == R_TIMEOUT) { r = R_TIMEOUT; break; }
             if (br == R_CANCELLED) { r = R_CANCELLED; break; }   // CancelSynchronization while blocked

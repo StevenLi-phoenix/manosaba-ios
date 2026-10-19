@@ -420,7 +420,14 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         g_heap_cur = size;
         regs[0] = 0; regs[1] = (uint64_t)g_heap; return 0;
     }
-    case 0x02: regs[0] = 0; return 0;   // SetMemoryPermission
+    case 0x02: {  // SetMemoryPermission(x0 address, x1 size, w2 permission), Horizon's checks (Atmosphère's svc): address and size page-aligned, size not 0,
+                  // no wrap, permission none / read / read-write. Read-write is what guest memory already is here; none and read are reported once and
+                  // not applied (Tears of the Kingdom only asks for read-write: 188 calls in the alias region)
+        uint64_t a = regs[0], sz = regs[1]; unsigned perm = (unsigned)regs[2];
+        regs[0] = (a & 0xFFF) ? 0xCC01 : (sz & 0xFFF) || !sz ? 0xCA01 : a + sz <= a ? 0xD401 : (perm != 0 && perm != 1 && perm != 3) ? 0xD801 : 0;
+        if (!regs[0] && perm != 3) { static int once; if (!once++) LOG("[red] SetMemoryPermission %#llx +%#llx permission %u: only read-write is modelled, left as it is", (unsigned long long)a, (unsigned long long)sz, perm); }
+        return 0;
+    }
     case 0x03: regs[0] = 0; return 0;   // SetMemoryAttribute
     case 0x04: {  // MapMemory(dst, src, size): when creating a thread the SDK moves the stack on the heap into the stack region
         uint64_t dst = regs[0], src = regs[1], size = regs[2];
