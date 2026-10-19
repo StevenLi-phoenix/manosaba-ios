@@ -36,6 +36,7 @@ SRC = \
 	main.c \
 	memsnap.c \
 	memstat.m \
+	mods.c \
 	movie_av.m \
 	movie_webm.c \
 	romfs_validate.c \

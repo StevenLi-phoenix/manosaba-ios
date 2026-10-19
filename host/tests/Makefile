@@ -31,6 +31,8 @@ run: \
 	$(B)/t_ktrace \
 	$(B)/t_loader_weak \
 	$(B)/t_memsnap \
+	$(B)/t_mods \
+	$(B)/t_mods_case \
 	$(B)/t_movie \
 	$(B)/t_oe \
 	$(B)/t_padmap \
@@ -88,6 +90,11 @@ run: \
 	TMPDIR="$(abspath $(B))" $(B)/t_ktrace 2>/dev/null
 	$(B)/t_loader_weak 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_memsnap 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_mods 2>/dev/null
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_mods_case > $(B)/t_mods_case.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ 01_one's layer" $(B)/t_mods_case.log; then \
+	   cat $(B)/t_mods_case.log; echo "t_mods_case: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_mods_case: paths built with the program ID as asked break on a file system that tells cases apart, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_padmap
@@ -158,6 +165,10 @@ $(B)/t_ktrace: t_ktrace.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_ktrace.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
+$(B)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_mods.c
+$(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_MODS_CASE -I.. -o $@ t_mods.c
 $(B)/t_memsnap: t_memsnap.c ../memsnap.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_memsnap.c ../memsnap.c
 $(B)/t_sysevent: t_sysevent.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)

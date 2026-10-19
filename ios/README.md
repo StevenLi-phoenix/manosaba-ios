@@ -66,6 +66,8 @@ it signed with every entitlement of its profile (increased memory limit included
 - **Game data**: RomFS in `Library/Application Support/romfs` (`push-data`), `Documents/RomFS` (Files app; file sharing is on) or the app's
   own `RomFS` (`run.sh ipa` with `DM_IPA_DATA=1`), the first complete one in that order; system fonts in `sysfont` in the same three places. The
   RomFS is checked against the profile before the game starts; if something is missing the app shows what and where.
+- **Mods**: `Documents/mods` (Files app), one folder per mod (`<mod>/romfs`, or as shipped for Atmosphère), or an SD card's `atmosphere`
+  folder copied as is; earlier names win, a name starting with `-` turns a mod off; code mods are not applied (`host/mods.c`).
 - **Saves**: `Documents/save` (transactional, committed atomically). With iCloud entitlements the profile's `save_sync` files are synced
   (`host/cloud.m`).
 - **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Settings app → this app → "Show log on

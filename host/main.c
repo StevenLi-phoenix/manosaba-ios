@@ -65,6 +65,7 @@ static void host_preload(int argc, char **argv) {
     flags_init();
     dm_prof_mark("0 process creation -> host main (dyld)");
     dm_game_env_defaults();
+    { void dm_mods_apply(void); dm_mods_apply(); }   // DM_MODS user mod folders in front of the RomFS (mods.c), after the game's own overlay default
     g_argv[0] = (char *)dm_game.id;
     LOG("game %s %s (%s), main build %s", dm_game.id, dm_game.version, dm_game.engine, dm_game.main_build_id);
     // Time zone: the game converts absolute to local time through the host libc (nn::time::ToCalendarTime / ToPosixTime in hle_time.c, and the guest

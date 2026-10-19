@@ -994,7 +994,16 @@ Tier 3, medium:
   main+0x1c2f20, in its first seconds): now refused above 1920x1080 (`t_frame_step`: 26 checks). The 30 fps constants and the cutscenes that
   crash above 30 fps (BotWRecomp's list for BotW: stamina, arrows, shield surfing, Rito bridge...) need play: 71c. A window run (the display
   link path) is part of 71b
-- [ ] 54 user mod folders (Atmosphère layout)
+- [x] batch 16 · 54 user mod folders, `DM_MODS=<dir>` (`host/mods.c`, after SkyRecomp's `runtime/mods.c`, MIT; MacNativeGames and nxnative have
+  none): each entry's RomFS becomes a layer of `DM_ROMFS_OVERLAY` in front of the game's (and of the game's own overlay, as Tears of the
+  Kingdom's 60 fps one): `<entry>/romfs`, `<entry>/contents/<program id>/romfs` (an SD card's `atmosphere` folder copied as is),
+  `<entry>/atmosphere/contents/<program id>/romfs` (a mod as shipped), or loose files; in name order, the first winning; names starting with
+  `.` or `-` off; other games' folders and code (exefs, exefs_patches) left out with a line. The program ID matched without regard to case,
+  and paths built with each folder's own spelling (the Mac's file system ignores case, iOS's does not). The log lists each layer, how many of
+  the game's files it replaces and the files an earlier mod also has. On iOS `Documents/mods` when it exists. In Tears of the Kingdom a mod
+  folder with two of the game's files copied unchanged (one as `01_test/romfs`, one as `atmosphere/contents/0100f2c0115b6000/romfs`): both
+  opened from the mods (`DM_FS=1` now prints the host path too), the 60 fps overlay still after them, the prologue as before.
+  `host/tests/t_mods.c`: 12 checks on every layout; paths built with the program ID as asked fail one
 - [ ] 55 CoreAudio opened off the calling thread (measure first)
 - [ ] 56 cold CPU textures dropped under memory pressure
 - [ ] 57 code patches chosen at launch (one product for 30 and 60 fps)

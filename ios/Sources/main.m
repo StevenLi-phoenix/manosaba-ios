@@ -6,6 +6,7 @@
 //   app bundle's RomFS (ios/run.sh ipa with DM_IPA_DATA=1); the console's shared fonts in sysfont next to it. Checked against the game profile
 //   (romfs_validate.c); when missing, a page says what is missing and where it goes.
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
+//   Mods (host/mods.c): Documents/mods when it exists (Files app; one folder per mod, or an SD card's atmosphere folder).
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #include "envfile.h"
@@ -180,6 +181,8 @@ static void boot_prepare(NSString *romfs) {
     exclude_from_backup(romfs); exclude_from_backup(font);
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
+    { NSString *mods = [doc stringByAppendingPathComponent:@"mods"]; BOOL dir = NO;
+      if ([fm fileExistsAtPath:mods isDirectory:&dir] && dir) setenv("DM_MODS", mods.fileSystemRepresentation, 0); }
     setenv("DM_NVN_SHMAP", [res stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     // Relative paths in DM_* switches (screenshots etc.) land in Documents
