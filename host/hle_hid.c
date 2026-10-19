@@ -62,6 +62,14 @@ static const struct { uint32_t mask; const char *name; } k_stick[] = {{PK_LSL, "
 static struct { uint32_t mask; uint64_t t0, t1; float tx, ty; int frame; } g_keys[KMAX];   // frame: t0 / t1 are frame numbers
 static int g_nkeys;
 static uint64_t g_kbase;
+static _Atomic uint64_t g_cmd_mask;   // keys held through the command channel (cmdchan.c), ORed with the script's
+// The key of a DM_KEYS name (a button or a left stick pseudo-key; 0 for touch items and unknown names), for the command channel
+uint32_t hid_key_mask(const char *name) {
+    for (int i = 0; i < (int)(sizeof k_names / sizeof *k_names); i++) if (!strcmp(name, k_names[i].name)) return k_names[i].mask;
+    for (int i = 0; i < 4; i++) if (!strcmp(name, k_stick[i].name)) return k_stick[i].mask;
+    return 0;
+}
+void hid_cmd_keys(uint64_t down, uint64_t up) { atomic_fetch_or(&g_cmd_mask, down); atomic_fetch_and(&g_cmd_mask, ~up); }
 static void keys_parse(void) {
     g_nkeys = 0; g_kbase = now_ns();
     const char *e = getenv("DM_KEYS"); if (!e) e = "";
@@ -97,6 +105,7 @@ static uint64_t keys_now(void) {
         if (!(g_keys[i].mask & PK_TOUCH)) { m |= g_keys[i].mask; continue; }
         if (na < 16) { act[na] = (dm_touch){(uint32_t)na, g_keys[i].tx, g_keys[i].ty}; on |= 1u << i % 32; na++; }
     }
+    m |= atomic_load(&g_cmd_mask);
     static _Atomic uint32_t touch_on; static _Atomic int touch_n;
     int changed = atomic_exchange(&touch_on, on) != on; changed |= atomic_exchange(&touch_n, na) != na;   // both exchanges always run
     if (changed) dm_touch_set(act, na);

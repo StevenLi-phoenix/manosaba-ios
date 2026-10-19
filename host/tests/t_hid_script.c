@@ -57,6 +57,11 @@ int main(void) {
     dm_pad_set(DM_BTN_Y, 5000, 6000, 0, 0); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_Y && s.lx == 5000 && s.ly == 6000, "game controller buttons and stick"); }
     dm_input_set(DM_BTN_A, -7, 8, 0, 0); { NpadState s = rd(); CHECK(s.buttons == (DM_BTN_A | DM_BTN_Y) && s.lx == -7 && s.ly == 8, "buttons ORed, the front end's stick wins when not at rest"); }
     dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0); rd();
+    CHECK(hid_key_mask("A") == DM_BTN_A && hid_key_mask("MINUS") == DM_BTN_MINUS && hid_key_mask("LSL") == PK_LSL && !hid_key_mask("Q") && !hid_key_mask("T0.5:0.5"),
+          "command channel key names: buttons and left stick keys, not touch items or unknown names");
+    hid_cmd_keys(DM_BTN_ZR | PK_LSR, 0); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_ZR && s.lx == 32767, "command channel keys held (cmdchan.c down)"); }
+    hid_cmd_keys(0, DM_BTN_ZR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 32767, "... ZR released, the stick still held"); }
+    hid_cmd_keys(0, PK_LSR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 0, "... all released"); }
 
     opmode = 0; { NpadState s; uint32_t id = 0x20; dm_input_set(DM_BTN_L, 0, 0, 0, 0); h_hid_GetHandheld(&s, &id);
                   CHECK(s.attributes == 1 && s.buttons == DM_BTN_L, "handheld mode: handheld controller connected"); }

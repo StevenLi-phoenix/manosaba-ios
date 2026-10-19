@@ -920,7 +920,13 @@ Tier 3, medium:
   slower GPU) changed the game's present interval between 2 and 3 (3, 5 and 16 times in 120 s against once) and still no pass drew a part.
   `gfx/tests/t_extent.m`: 12 checks on the GPU with API validation (after LASRecomp 59a7507's render area); with the viewport and clear quads
   left out 3 fail
-- [ ] 47 a live command channel
+- [x] batch 10 · 47 a live command channel, `DM_CMD=<file>` (`host/cmdchan.c`, after MacNativeGames' `TOTK_INPUT_FILE`): lines appended to
+  the file run while the game runs: `key` / `down` / `up` with the DM_KEYS names, `wait <frames>`, `sleep <ms>`, `shot <png>`, `passdump
+  <frames>` (now settable while running), `threads`, `memsnap <path>`, `hlecount`, `quit` (the orderly exit, code 0). A line runs once its
+  newline is written (a reader stopping at the end of the file, as fgets does, would run half a line). `host/tests/t_cmdchan.c`: 24 checks (a
+  table of good and malformed lines; a file a writer appends to); run as far as written, the line written in two parts fails it (4 fail);
+  `t_hid_script`: the keys reach GetNpadState (2 fail without them). In Tears of the Kingdom: wait 300, shot, passdump 1 (frame 301 only),
+  threads, key A (read by the game at 11.2 s), an unknown line skipped in red, quit: exit 0
 - [ ] 48 sead heap walk and list watch at a crash
 - [ ] 49 per-pass GPU time with MTL4CounterHeap
 - [ ] 50 soak and fixed-camera measurement

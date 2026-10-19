@@ -20,6 +20,7 @@ SRC = \
 	app_mac.m \
 	cloud.m \
 	cloudsync.c \
+	cmdchan.c \
 	crash.c \
 	diag.c \
 	entry.S \

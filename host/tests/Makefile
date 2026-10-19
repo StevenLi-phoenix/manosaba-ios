@@ -10,6 +10,8 @@ run: \
 	$(B)/t_audio_spsc \
 	$(B)/t_audren \
 	$(B)/t_cloudsync \
+	$(B)/t_cmdchan \
+	$(B)/t_cmdchan_partial \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
 	$(B)/t_waitsync \
@@ -45,6 +47,11 @@ run: \
 	$(B)/t_audio_spsc
 	$(B)/t_audren 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_cloudsync 2>/dev/null
+	TMPDIR="$(abspath $(B))" $(B)/t_cmdchan 2>/dev/null
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_cmdchan_partial > $(B)/t_cmdchan_partial.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ ... and runs once, whole" $(B)/t_cmdchan_partial.log; then \
+	   cat $(B)/t_cmdchan_partial.log; echo "t_cmdchan_partial: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_cmdchan_partial: running a line as far as it was written misses the line written in two parts, as expected"
 	$(B)/t_condvar
 	$(B)/t_condvar_old
 	$(B)/t_waitsync
@@ -102,6 +109,10 @@ $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -g -fsanitize=thread -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_cloudsync: t_cloudsync.c ../cloudsync.c ../cloud.h ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../cloudsync.c
+$(B)/t_cmdchan: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_cmdchan.c
+$(B)/t_cmdchan_partial: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_CMD_PARTIAL -I.. -o $@ t_cmdchan.c
 $(B)/t_crash_stderr: t_crash_stderr.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../crash.c
 $(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
