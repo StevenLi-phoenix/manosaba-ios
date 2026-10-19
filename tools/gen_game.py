@@ -18,6 +18,7 @@ def load(path):
         sys.exit(f'{path}: nvn_c2 must be {{"tex": ["0x..", slots], "samp": ["0x..", slots], "img": ["0x..", slots]}}')
     if max(int(v[0], 16) + 8 * v[1] for v in c2.values()) > 0xA00: sys.exit(f'{path}: nvn_c2 tables must end within 0xA00 (the replay layer fills a 0xA00-byte bank)')
     if g.get('depth_mode') not in ('near_is_minus_w', 'near_is_zero'): sys.exit(f'{path}: depth_mode must be "near_is_minus_w" or "near_is_zero"')
+    if g.get('alpha_test', 'off') not in ('on', 'off'): sys.exit(f'{path}: alpha_test must be "on" or "off" (omitted: off)')
     if g.get('present_interval', 'display') not in ('display', 'game'): sys.exit(f'{path}: present_interval must be "display" or "game"')
     if g.get('window_unfocused', 'out_of_focus') not in ('out_of_focus', 'in_focus'): sys.exit(f'{path}: window_unfocused must be "out_of_focus" or "in_focus"')
     if not isinstance(g.get('virtual_cores', False), bool): sys.exit(f'{path}: virtual_cores must be true or false')

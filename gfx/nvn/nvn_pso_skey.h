@@ -7,6 +7,7 @@ typedef struct {
     const void *vs, *fs; uint32_t cfmt[8], dfmt, sfmt, samples, blend_en, chmask, a2c; blend_st blend[8];
     va_st attr[16]; vs_st stream[16];
     uint8_t lmap[8]; const void *fsfn;
+    uint32_t alpha_func, alpha_ref;   // alpha test (0 = off): NVN comparison and the reference's float bits (nvn_mtl.m alpha_fn)
 } pso_key;
 
 typedef struct {

@@ -73,6 +73,8 @@ t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ubren: t_ubren.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ubren.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_alpha: t_alpha.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_alpha.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ussort: t_ussort.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ussort.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_rstream: t_rstream.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -112,6 +114,7 @@ t_samp: t_samp.m ../../host/crash.c $(GFX) $(GFX_H)
 t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 run: \
+	t_alpha \
 	t_chunk \
 	t_copy_pitch \
 	t_cover \
@@ -189,6 +192,8 @@ run: \
 	./t_ub
 	MTL_DEBUG_LAYER=1 ./t_usnap
 	./t_ussort
+	python3 -I t_alpha_src.py 1 > t_alpha_1.metal && python3 -I t_alpha_src.py 0 > t_alpha_0.metal && ./t_alpha t_alpha_1.metal t_alpha_0.metal
+	DM_ROOT=$${DM_ROOT:-$(HOME)/dm-work} python3 -I t_xlate_ops.py
 	MTL_DEBUG_LAYER=1 ./t_vfmt
 	DM_NVN_RENDER_STREAM=1 MTL_DEBUG_LAYER=1 ./t_rstream
 	DM_NVN_RENDER_STREAM=0 ./t_rstream --off
@@ -230,5 +235,5 @@ run: \
 .PHONY: run
 # The older-API build (DM_NVN_M3=1, macOS 15.0): the same tests built and run in a sibling tests_m3 directory
 run-m3:
-	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m ../tests_m3/
+	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py ../tests_m3/
 	$(MAKE) -C ../tests_m3 run CFLAGS="$(CFLAGS) -DDM_NVN_M3=1 -mmacosx-version-min=15.0"

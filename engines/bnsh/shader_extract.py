@@ -9,11 +9,13 @@
 # (a SARC of dictionaries, itself without one). SARCs are walked recursively; a BFSHA (FSHA) holds complete BNSH files, each addressed from its own
 # start, found by their 8-byte magic "BNSH\0\0\0\0"; an effect set is a BYML whose VFXB carries two (GRSN graphics, GRSC compute).
 # The agl / gsys / Terrain / application shader archives (*.sharcb inside those SARCs, magic BAHS, version 9) keep their control sections in front and
-# every code area in one pool: u32 @0x1c is the pool's offset, and the 0x60 bytes before each control section begin with its code area's u64 offset
-# from the pool, the control section's u32 size and u32 0x60 (the distance to the control section). Control sections are found by their magic below
-# the pool and taken only where that record matches (the layout was read off agl_common.sharcb; 141 shaders that had come only from run-time
-# captures are found here, all byte-identical); which program pairs which shaders is not read, so these add no pairs. Not covered: shaders built into main (32 control sections,
-# code elsewhere), which come from run-time captures.
+# every code area in one pool (u32 @0x1c its offset, u32 @0x18 its length). In front of the pool, a 16-byte binary entry per shader: the code area's u64
+# offset from the pool (0x100-aligned), the control section's u32 size and the i32 distance from the entry to its control section. Programs share
+# control sections but point at different code (Tears of the Kingdom's agl_technique_pfx, agl_technique_shdw, agl_common, agl_technique_lght, ...),
+# so every entry is read: entries are found anywhere below the pool and taken only where the control magic, the sizes and the code area's stage
+# agree (after seedds/nxnative's shader_split.py bahs_shaders, MIT; reading only the entry right before each control section, 0x60 bytes back,
+# missed the shaders sharing it). Which program pairs which shaders is not read, so these add no pairs. Not covered: shaders built into main (32
+# control sections, code elsewhere), which come from run-time captures.
 # BNSH (little-endian, offsets from the BNSH's start): "BNSH" @0, byte order mark ff fe @12, size u32 @28, "grsc" @96, variation count u32 @124,
 #   variation table u64 @128 (64-byte records; program record u64 at +16). Program record (56 bytes): stage records u64 at +8 vertex, +40 pixel,
 #   +48 compute (0 = none; the other slots are not read). Stage record: control section u64 @+8, code area u64 @+16, code size u32 @+24, control size
@@ -29,7 +31,7 @@
 # Usage: shader_extract.py <RomFS dir> <output dir>
 import collections, compression.zstd as zstd, hashlib, os, struct, sys
 
-romfs, out = sys.argv[1:3]
+romfs = out = None   # main(): the command line
 CTL_MAGIC, CODE_MAGIC = bytes.fromhex('34127698'), bytes.fromhex('78563412')
 recs = {}                                   # key → (stage, control, code)
 src = collections.defaultdict(list)         # key → [source]
@@ -69,19 +71,19 @@ def add(st, ctl, code, where):
     return key
 
 def sharcb(d, where):
-    ver, pool = struct.unpack_from('<II', rng(d, 4, 4, where) + rng(d, 0x1c, 4, where))
-    if ver != 9 or not 0x20 <= pool <= len(d): skipped[f'sharcb version {ver} (pool {pool:#x}) in {where}'] += 1; return
-    p = 0
-    while (p := d.find(CTL_MAGIC, p, pool)) >= 0:
-        off, cn, dist = struct.unpack_from('<QII', d, p - 0x60) if p >= 0x60 else (0, 0, 0)
-        if dist != 0x60 or cn not in (0x880, 0x88c): skipped[f'control magic without a record in {where}'] += 1; p += 4; continue
-        ctl = rng(d, p, 0x880, where)   # a 0x88c record is the 0x880 bytes plus a 12-byte tail, as in BNSH
+    ver, rsz, pool = struct.unpack_from('<I', rng(d, 4, 4, where))[0], *struct.unpack_from('<II', rng(d, 0x18, 8, where))
+    if ver != 9 or not 0x20 <= pool <= len(d) or pool + rsz > len(d): skipped[f'sharcb version {ver} (pool {pool:#x} +{rsz:#x}) in {where}'] += 1; return
+    for a in range(0, pool - 16, 4):
+        off, cn, rel = struct.unpack_from('<QIi', d, a)
+        if cn not in (0x880, 0x88c) or off % 0x100 or off >= rsz: continue
+        c = a + rel
+        if c < 0 or c + cn > pool or d[c:c + 4] != CTL_MAGIC: continue
+        ctl = d[c:c + 0x880]   # a 0x88c record is the 0x880 bytes plus a 12-byte tail, as in BNSH
         c1, ln = struct.unpack_from('<II', ctl, 0x700); nvn = struct.unpack_from('<I', ctl, 0x714)[0]; st = {0: 'vs', 1: 'ps', 5: 'cs'}.get(nvn)
-        if not st or not 0 <= c1 <= ln or not 0 < ln < 1 << 24: sys.exit(f'[red] {where}@{p:#x}: bad control section (stage {nvn}, {c1:#x} / {ln:#x})')
-        code = rng(d, pool + off, ln, f'{where}@{p:#x}')
-        if stage_of(code) != st: sys.exit(f'[red] {where}@{p:#x}: control section says {st}, the code area {stage_of(code)}')
+        if not st or not 0 <= c1 <= ln or not 0 < ln < 1 << 24 or off + ln > rsz: skipped[f'entry-like words with a bad control section in {where}'] += 1; continue
+        code = d[pool + off:pool + off + ln]
+        if stage_of(code) != st: skipped[f'entry-like words whose code area says another stage in {where}'] += 1; continue
         add(st, ctl, code, where)
-        p += 4
 
 def bnsh(d, where):
     if d[:4] != b'BNSH' or rng(d, 12, 2, where) != b'\xff\xfe' or rng(d, 96, 4, where) != b'grsc': sys.exit(f'[red] {where}: unsupported BNSH header')
@@ -117,48 +119,55 @@ def visit(d, where):
 
 def read(rel):
     with open(os.path.join(romfs, rel), 'rb') as f: return f.read()
-dicts = {}
-for raw in sarc(zstd.decompress(read('Pack/ZsDic.pack.zs')), 'Pack/ZsDic.pack.zs').values():
-    zd = zstd.ZstdDict(raw); dicts[zd.dict_id] = zd
+dicts = {}   # zstd dictionaries of Pack/ZsDic.pack.zs (main)
 def unzs(raw, where):
     fi = zstd.get_frame_info(raw)
     if fi.decompressed_size is None or fi.decompressed_size > 512 << 20: sys.exit(f'[red] {where}: zstd frame without a size or over 512 MB')
     if fi.dictionary_id and fi.dictionary_id not in dicts: sys.exit(f'[red] {where}: dictionary {fi.dictionary_id:#x} is not in Pack/ZsDic.pack.zs')
     return zstd.decompress(raw, zstd_dict=dicts[fi.dictionary_id] if fi.dictionary_id else None)
 
-names = ['Pack/Bootup.Nin_NX_NVN.pack.zs']
-for dp, _, fns in os.walk(os.path.join(romfs, 'Lib')):
-    names += [os.path.relpath(os.path.join(dp, fn), romfs) for fn in fns if fn.endswith(('.zs', '.bnsh'))]
-for dp, _, fns in os.walk(os.path.join(romfs, 'Shader')):
-    names += [os.path.relpath(os.path.join(dp, fn), romfs) for fn in fns if fn.endswith('.zs')]
-for dp, _, fns in os.walk(os.path.join(romfs, 'Effect')):
-    names += [os.path.relpath(os.path.join(dp, fn), romfs) for fn in fns if fn.endswith('.esetb.byml.zs')]
-for rel in sorted(set(names)):
-    if not os.path.exists(os.path.join(romfs, rel)): sys.exit(f'[red] {rel} is not in {romfs}')
-    raw = read(rel); visit(unzs(raw, rel) if rel.endswith('.zs') else raw, rel)
-    if not rel.startswith('Effect/'): print(f'{len(recs)} shaders after {rel}', flush=True)
 
-os.makedirs(out, exist_ok=True)
-new = 0
-for key, (st, ctl, code) in recs.items():
-    pc, pd = os.path.join(out, key + '.ctl'), os.path.join(out, key + '.data')
-    if os.path.exists(pc):
-        with open(pc, 'rb') as f: c0 = f.read()
-        with open(pd, 'rb') as f: d0 = f.read(len(code))
-        if c0 != ctl or d0 != code: sys.exit(f'[red] {key}: {out} already has a different control section or code area')
-        continue
-    with open(pc, 'wb') as f: f.write(ctl)
-    with open(pd, 'wb') as f: f.write(code)
-    new += 1
-with open(os.path.join(out, 'bnsh_index.tsv'), 'w') as f:
-    f.write('# key\tstage\tsource (engines/bnsh/shader_extract.py)\n')
-    for key in sorted(recs): f.writelines(f'{key}\t{recs[key][0]}\t{s}\n' for s in src[key])
-pp = os.path.join(out, 'pairs.tsv'); have = set()
-if os.path.exists(pp): have = {tuple(ln.split()[:2]) for ln in open(pp) if ln.strip() and not ln.startswith('#')}
-add = sorted(pairs - have)
-with open(pp, 'a') as f:
-    if not have: f.write('# vertex key\tpixel key of each BNSH program record (engines/bnsh/shader_extract.py)\n')
-    f.writelines(f'{v}\t{p}\n' for v, p in add)
-c = collections.Counter(st for st, _, _ in recs.values())
-print(f'{len(recs)} shaders ({", ".join(f"{k} {c[k]}" for k in ("vs", "ps", "cs"))}), {new} new in {out}; {len(pairs)} vertex / pixel pairs, {len(add)} new')
-for k, v in sorted(skipped.items()): print(f'  skipped: {k} × {v}')
+def main():
+    global romfs, out
+    romfs, out = sys.argv[1:3]
+    for raw in sarc(zstd.decompress(read('Pack/ZsDic.pack.zs')), 'Pack/ZsDic.pack.zs').values():
+        zd = zstd.ZstdDict(raw); dicts[zd.dict_id] = zd
+    names = ['Pack/Bootup.Nin_NX_NVN.pack.zs']
+    for dp, _, fns in os.walk(os.path.join(romfs, 'Lib')):
+        names += [os.path.relpath(os.path.join(dp, fn), romfs) for fn in fns if fn.endswith(('.zs', '.bnsh'))]
+    for dp, _, fns in os.walk(os.path.join(romfs, 'Shader')):
+        names += [os.path.relpath(os.path.join(dp, fn), romfs) for fn in fns if fn.endswith('.zs')]
+    for dp, _, fns in os.walk(os.path.join(romfs, 'Effect')):
+        names += [os.path.relpath(os.path.join(dp, fn), romfs) for fn in fns if fn.endswith('.esetb.byml.zs')]
+    for rel in sorted(set(names)):
+        if not os.path.exists(os.path.join(romfs, rel)): sys.exit(f'[red] {rel} is not in {romfs}')
+        raw = read(rel); visit(unzs(raw, rel) if rel.endswith('.zs') else raw, rel)
+        if not rel.startswith('Effect/'): print(f'{len(recs)} shaders after {rel}', flush=True)
+
+    os.makedirs(out, exist_ok=True)
+    new = 0
+    for key, (st, ctl, code) in recs.items():
+        pc, pd = os.path.join(out, key + '.ctl'), os.path.join(out, key + '.data')
+        if os.path.exists(pc):
+            with open(pc, 'rb') as f: c0 = f.read()
+            with open(pd, 'rb') as f: d0 = f.read(len(code))
+            if c0 != ctl or d0 != code: sys.exit(f'[red] {key}: {out} already has a different control section or code area')
+            continue
+        with open(pc, 'wb') as f: f.write(ctl)
+        with open(pd, 'wb') as f: f.write(code)
+        new += 1
+    with open(os.path.join(out, 'bnsh_index.tsv'), 'w') as f:
+        f.write('# key\tstage\tsource (engines/bnsh/shader_extract.py)\n')
+        for key in sorted(recs): f.writelines(f'{key}\t{recs[key][0]}\t{s}\n' for s in src[key])
+    pp = os.path.join(out, 'pairs.tsv'); have = set()
+    if os.path.exists(pp): have = {tuple(ln.split()[:2]) for ln in open(pp) if ln.strip() and not ln.startswith('#')}
+    newpairs = sorted(pairs - have)
+    with open(pp, 'a') as f:
+        if not have: f.write('# vertex key\tpixel key of each BNSH program record (engines/bnsh/shader_extract.py)\n')
+        f.writelines(f'{v}\t{p}\n' for v, p in newpairs)
+    c = collections.Counter(st for st, _, _ in recs.values())
+    print(f'{len(recs)} shaders ({", ".join(f"{k} {c[k]}" for k in ("vs", "ps", "cs"))}), {new} new in {out}; {len(pairs)} vertex / pixel pairs, {len(newpairs)} new')
+    for k, v in sorted(skipped.items()): print(f'  skipped: {k} × {v}')
+
+if __name__ == '__main__':
+    main()

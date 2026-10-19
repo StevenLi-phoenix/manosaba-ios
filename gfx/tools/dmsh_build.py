@@ -51,6 +51,7 @@ if 'nvn_c2' not in _gj: sys.exit(f'[red] games/{GAME_ID}/game.json has no nvn_c2
 C2 = {k: [int(v[0], 16), int(v[1])] for k, v in _gj['nvn_c2'].items()}
 # Depth convention the game sets with nvnDeviceSetDepthMode (game.json depth_mode): near_is_minus_w makes the translator remap z in every vertex shader
 DEPTH = _gj.get('depth_mode') or sys.exit(f'[red] games/{GAME_ID}/game.json has no depth_mode')
+ALPHA = _gj.get('alpha_test', 'off') == 'on'   # game.json alpha_test: fragment shaders carry the NVN alpha test (alpha_test; off: none of our games calls ColorStateSetAlphaTest)
 TEX_BASE, TEX_END = C2['tex'][0], C2['tex'][0] + 8 * C2['tex'][1]
 SAMP_BASE, SAMP_END = C2['samp'][0], C2['samp'][0] + 8 * C2['samp'][1]
 IMG_BASE, IMG_END = C2['img'][0], C2['img'][0] + 8 * C2['img'][1]
@@ -83,7 +84,7 @@ def tool_fingerprint():
             '\0xc\0' + repr(XC) + '\0mac\0' + MAC_RECORD + '\0ios\0' + (ios_metal.RECORD if IOSOUT else ''))
 
 def shader_key(key, name, rec):
-    payload = (b'record\0' + rec + b'\0tools\0' + TOOL_FP + b'\0code\0' + CODE_FP.encode() + b'\0rule\0' + shader_rule_source(name) + b'\0c2\0' + json.dumps(C2, sort_keys=True).encode() + b'\0depth\0' + DEPTH.encode())
+    payload = (b'record\0' + rec + b'\0tools\0' + TOOL_FP + b'\0code\0' + CODE_FP.encode() + b'\0rule\0' + shader_rule_source(name) + b'\0c2\0' + json.dumps(C2, sort_keys=True).encode() + b'\0depth\0' + DEPTH.encode() + b'\0alpha\0' + str(ALPHA).encode())
     return hashlib.sha256(payload).hexdigest()
 
 def cache_meta_path(key): return os.path.join(CAS, 'index', key + '.json')
@@ -245,6 +246,7 @@ def job_for(key, rec, w):
     # Compute thread group size: control section +0x748 / +0x74c / +0x750 (u32 x / y / z; matches Unity's threadGroupSize metadata for every kernel checked)
     local = list(struct.unpack_from('<3I', rec, ci + 0x748)) if stage == 'cs' else None
     if local is not None: j['local'] = local
+    if stage == 'ps': j['alpha_output'] = bool(struct.unpack_from('<I', code, 18 * 4)[0] & 8)   # SPH word 18 (OmapTargets) bit 3: colour 0's alpha is exported
     j['pc_missing'] = True   # texture / attribute / output type queries are answered with the translator's defaults
     return j, c1
 
@@ -492,6 +494,36 @@ def vs_pad(src, want):
     k = src.find('main0_out out = {};') + len('main0_out out = {};')
     return src[:k] + ''.join(f'\n    out.dm_pad{l} = float4(0.0, 0.0, 0.0, 1.0);' for l in miss) + src[k:], miss
 
+ALPHA_DECL = ('constant uint dm_alpha_func_c [[function_constant(160)]];\n'
+              'constant float dm_alpha_ref_c [[function_constant(161)]];\n'
+              'constant uint dm_alpha_func = is_function_constant_defined(dm_alpha_func_c) ? dm_alpha_func_c : 8u;\n'
+              'constant float dm_alpha_ref = is_function_constant_defined(dm_alpha_ref_c) ? dm_alpha_ref_c : 0.0f;\n\n')
+def alpha_test(src, output_alpha):
+    """The NVN alpha test (Metal has none), after lordran-native's dmsh_build.py alpha_test (a63dd76, MIT): before each return of the fragment entry,
+    colour 0's alpha is compared with the reference under the NVN comparison (1 never, 2 less, 3 equal, 4 lequal, 5 greater, 6 notequal, 7 gequal,
+    8 always), function constants 160 and 161: the host specializes every such shader with ALWAYS at load (Metal refuses an unspecialized function
+    for a pipeline), which folds the comparison and its discard away (a fragment function that may discard loses hidden surface removal on Apple
+    GPUs, so the values are not read from a buffer), and a draw with an alpha test gets its own specialization (nvn_mtl.m alpha_fn). The first
+    specialization of a shader costs 2-18 ms on an M5 (the system's shader cache keeps it), so the game profile opts in (game.json alpha_test "on";
+    neither of our games calls ColorStateSetAlphaTest). A shader that exports no colour 0 alpha (SPH word 18 bit 3 clear, or no float colour 0) is
+    discarded only by NEVER. Each block replaces the return with a braced statement, so it stays inside an unbraced if. Checked by
+    gfx/tests/t_alpha.m"""
+    entry = re.search(r'\bfragment\s+\w+\s+\w+\s*\(', src)
+    if not entry: raise ValueError('alpha test: no fragment entry')
+    member = re.search(r'\bfloat4\s+(\w+)\s*\[\[color\(0\)\]\]', src)
+    keep = 'dm_alpha_func != 1u'
+    if output_alpha and member:
+        a = f'float(out.{member[1]}.w)'
+        keep = (f'dm_alpha_func == 2u ? {a} < dm_alpha_ref : dm_alpha_func == 3u ? {a} == dm_alpha_ref : dm_alpha_func == 4u ? {a} <= dm_alpha_ref : '
+                f'dm_alpha_func == 5u ? {a} > dm_alpha_ref : dm_alpha_func == 6u ? {a} != dm_alpha_ref : dm_alpha_func == 7u ? {a} >= dm_alpha_ref : {keep}')
+    test = f'if (dm_alpha_func != 8u && !({keep})) discard_fragment(); '
+    head, body = src[:entry.start()], src[entry.start():]
+    if re.search(r'\breturn\s+out\s*;', body): body = re.sub(r'\breturn\s+out\s*;', lambda _: '{ ' + test + 'return out; }', body)
+    else:
+        body = re.sub(r'\breturn\s*;', lambda _: '{ ' + test + 'return; }', body)
+        end = body.rfind('}'); body = body[:end] + '    ' + test + '\n' + body[end:]
+    return head + ALPHA_DECL + body
+
 def finish(key, w, j, c1):
     res = json.load(open(os.path.join(w, key + '.res.json')))
     msl = os.path.join(w, key + '.metal'); air = msl[:-6] + '.air'; lib = os.path.join(out, key + '_b.metallib')
@@ -509,6 +541,8 @@ def finish(key, w, j, c1):
     if j['stage'] == 'vs':   # the variant goes into the compiled source only; everything below analyzes the original (src)
         vsrc, vi_locs = vi_variant(src)
         if vi_locs: open(msl, 'w').write(vsrc); res['notes'].append('integer vertex input variant main0_vi: locations ' + ' '.join(map(str, vi_locs)))
+    if j['stage'] == 'ps' and ALPHA:   # the alpha test goes into the compiled source only (alpha_test; nvn_mtl.m alpha_fn)
+        open(msl, 'w').write(alpha_test(src, j.get('alpha_output', True)))
     try: MTL.compile('mac', msl, lib)   # an MSL compiled before takes that library (dmsh_mtlcache.py)
     except subprocess.CalledProcessError as e:
         return 'metal failed', str(e)[:160], None
@@ -523,7 +557,7 @@ def finish(key, w, j, c1):
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'c2': C2, 'depth_mode': DEPTH, 'notes': res['notes'], 'drv_reads': dr, 'drv_unfillable': unfillable(dr, j['stage']),
             'bindings': reflect(key, j['stage'], src, res),
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
-            'raster': raster_facts(j['stage'], src), 'vs_pad': pad}
+            'raster': raster_facts(j['stage'], src), 'vs_pad': pad, 'alpha_test': j['stage'] == 'ps' and ALPHA}
     if vi_locs: refl['vi_entry'] = 'main0_vi'; refl['vi_int'] = vi_locs
     write_refl(key, refl)
     fetch_finish(key, src, refl)

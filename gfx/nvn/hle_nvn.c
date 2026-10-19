@@ -937,6 +937,7 @@ NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p,
 static void bind_state(NVNcommandBuffer *c, int kind, const void *st, size_t n) { p_bind_state *r = REC(c, OP_BIND_STATE, p_bind_state); r->kind = kind; memcpy(r->bytes, st, n); }
 NVN(nvnCommandBufferBindBlendState, void, NVNcommandBuffer *c, const NVNblendState *st) { bind_state(c, 0, st, sizeof(blend_st)); }
 NVN(nvnCommandBufferBindColorState, void, NVNcommandBuffer *c, const NVNcolorState *st) { bind_state(c, 1, st, sizeof(color_st)); }
+NVN(nvnCommandBufferSetAlphaRef, void, NVNcommandBuffer *c, float ref) { bind_state(c, 6, &ref, sizeof ref); }   // the alpha test's reference (nvn_mtl.m alpha_fn)
 NVN(nvnCommandBufferBindChannelMaskState, void, NVNcommandBuffer *c, const NVNchannelMaskState *st) { bind_state(c, 2, st, sizeof(chmask_st)); }
 NVN(nvnCommandBufferBindMultisampleState, void, NVNcommandBuffer *c, const NVNmultisampleState *st) { bind_state(c, 3, st, sizeof(ms_st)); }
 NVN(nvnCommandBufferBindPolygonState, void, NVNcommandBuffer *c, const NVNpolygonState *st) { bind_state(c, 4, st, sizeof(poly_st)); }
@@ -1061,9 +1062,9 @@ NVN(nvnColorStateSetLogicOp, void, NVNcolorState *s, NVNlogicOp op) {
     ST(color_st, s)->logic_op = op;
     static int red; if (op != NVN_LOGIC_OP_COPY && !red++) LOG("[red] ColorStateSetLogicOp %d: Metal has no logic ops, not implemented in replay", (int)op);
 }
-NVN(nvnColorStateSetAlphaTest, void, NVNcolorState *s, NVNalphaFunc f) {
+NVN(nvnColorStateSetAlphaTest, void, NVNcolorState *s, NVNalphaFunc f) {   // Metal has no alpha test: fragment shaders carry it (dmsh_build.py alpha_test, nvn_mtl.m alpha_fn)
     ST(color_st, s)->alpha_func = f;
-    static int red; if (f != NVN_ALPHA_FUNC_ALWAYS && !red++) LOG("[red] ColorStateSetAlphaTest %d: Metal has no alpha test, not implemented in replay", (int)f);
+    static int once; if (f != NVN_ALPHA_FUNC_ALWAYS && !once++) LOG("ColorStateSetAlphaTest %d: the first alpha test (fragment shaders are specialized per comparison and reference)", (int)f);
 }
 NVN(nvnColorStateSetBlendEnable, void, NVNcolorState *s, int i, uint32_t en) {
     color_st *o = ST(color_st, s); if (i < 0 || i > 7) return;

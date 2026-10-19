@@ -592,8 +592,8 @@ Carried over from "Review of 2026-10-19" (not done there):
 - Gyro and rumble: needs a controller to check; the references below.
 - BC → ASTC for iOS: waits until Tears of the Kingdom runs on iOS (iOS items below).
 - Checks not run yet: MixWithOthers on a device (46b63f4); the game over flow with the overlay in play (checked by bytes only,
-  `games/totk/tests/t_romfs_overlay.py`); manosaba's iOS app rebuilt with chain 1e41705de87b and run on the devices (its metallibs are built in
-  `work/build/ios/dmsh_b/b-1e41705de87b`; the last device builds recorded are from 2026-10-16).
+  `games/totk/tests/t_romfs_overlay.py`); manosaba's iOS app rebuilt with chain bab8d4746968 (Tier 2; before it 1e41705de87b) and run on the
+  devices (its metallibs are built in `work/build/ios/dmsh_b/b-bab8d4746968`; the last device builds recorded are from 2026-10-16).
 - Open: the blood moon crash ("Open (2026-10-19)" above); svc 0x34 type 3 and the host stack item below bear on it.
 - The encode stage stays off (`DM_NVN_RENDER_STREAM=1`); the translation thread below takes its place as the plan.
 
@@ -846,11 +846,30 @@ Tier 1, nxnative after 2b31dbd (reviewed through 19d7a70 on 2026-10-19 afternoon
   product); not this port's bug
 
 Tier 2, small code, one shader chain rebuild for all four:
-- [ ] 36 the 1,568 BAHS shaders in the offline extraction; with the rebuild, check that the per-shader cache key covers `shader_pairs.tsv` and the profile rows the
-  translation reads (nxnative 8530042 records that gap in theirs; ours already keys the vertex shader padding and C2 / depth)
-- [ ] 37 FMZ in the translator
-- [ ] 38 SHF with a clamped or zero shift, I2I.SAT across signedness (LASRecomp's vectors first)
-- [ ] 39 alpha test
+- [x] Tier 2 · 36 the BAHS shaders: `engines/bnsh/shader_extract.py` reads every binary entry of a `.sharcb` (after nxnative's `bahs_shaders`),
+  not only the one 0x60 bytes before each control section: 28,474 shaders offline instead of 26,849 (`tools/tests/t_shader_extract.py`; the
+  old reader finds 1 of its 2), 1,551 of them new to the Tears of the Kingdom capture, which now has 28,652 (all build); 74 that only run-time
+  captures had are now found offline, 178 are still capture-only (shaders built into main). Not read yet: the two 0x7d1-byte control sections
+  of `Lib/NintendoSDK/TextureShader.bnsh` and the Title layout's `bgsh` (nxnative's extraction has 17 more keys). The per-shader cache key has
+  no gap of the kind 8530042 records: the pairs reach it through the vertex shader padding, the profile rows the build reads (`nvn_c2`,
+  `depth_mode`, now `alpha_test`) are in it, and the Ryujinx libraries are in the lock file. Checked on the way: compute code areas with the
+  0x12345679 header (241) are translated from +0 although their instructions start at +0x100 (nxnative skips to it); harmless here, the header
+  is zero past the magic in all of them and their one indirect jump is relative; to skip when a game's header carries data
+- [x] Tier 2 · 37 FFMA / FMUL `.FMZ` (a zero factor gives 0, also against infinity and NaN; after tomodachi-native a0aa6c2). Neither game uses it:
+  every FFMA / FMUL of both is `.FTZ`
+- [x] Tier 2 · 38 SHF wraps or clamps to the width, and a shift of 0 no longer ORs both words (on the GPU it gave 0xffffffff for 0x89abcdef :
+  0x76543210); I2I `.SAT` compares in the source's signedness, narrowing keeps the low bits. `gfx/tests/t_xlate_ops.py` runs 47 cases through the
+  translator, SPIRV-Cross and the GPU (inputs from a constant bank so nothing folds them; LASRecomp d4c2ff6's vectors plus shifts of 0 and 32):
+  23 fail on the old translator, 0 now. manosaba has 18 shaders with a register SHF, Tears of the Kingdom 35; the I2I forms occur in neither
+- [x] Tier 2 · 39 the alpha test, as a game profile option (`alpha_test` in game.json; after lordran-native a63dd76): fragment shaders end with the
+  comparison under function constants, specialized with ALWAYS at load and per comparison and reference for draws that need it
+  (`gfx/tests/t_alpha.m`: 8 comparisons x 3 alphas, the early return, reference changes, a shader without alpha; broken host key, unbraced
+  blocks or no rewrite fail it). Off for both games, which never call ColorStateSetAlphaTest: Metal builds no pipeline from an unspecialized
+  function, the first specialization costs 2-18 ms per shader on the M5, and reading the values from a buffer would leave a discard in every
+  fragment shader (no hidden surface removal)
+- Chain 1e41705de87b → bab8d4746968 for 36-39 (lock: the patched translator). Both games build every shader; the c1 list is the same 49;
+  Tears of the Kingdom's prologue and manosaba's shots are within run-to-run variance (the prologue's s1300 differs 22-28 % between two runs of
+  one build, from the cutscene's timing); both IPAs carry the new libraries
 
 Tier 3, medium:
 - [ ] 40 host calls and svcs on a per-thread host stack, backtraces kept (manosaba's stop-the-world needs the saved guest sp)
@@ -887,7 +906,7 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
-- [ ] 70 manosaba's iOS app with chain 1e41705de87b on the devices
+- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b)
 - [ ] 71 an iOS 17 device test (which device: to ask)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups

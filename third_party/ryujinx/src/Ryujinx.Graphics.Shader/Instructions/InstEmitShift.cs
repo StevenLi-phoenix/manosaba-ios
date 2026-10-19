@@ -119,52 +119,42 @@ namespace Ryujinx.Graphics.Shader.Instructions
             bool signedShift = maxShift == MaxShift.S64;
             int maxShiftConst = isLongShift ? 64 : 32;
 
-            if (mask)
-            {
-                srcB = context.BitwiseAnd(srcB, Const(maxShiftConst - 1));
-            }
+            // dm patch (instruction vectors of LASRecomp d4c2ff6, MIT; gfx/tests/t_xlate_ops.py): SHF is a funnel shift of C:A (C high), the result
+            // the low word of a right shift or the high word of a left shift. .W wraps the shift to the width, otherwise it is clamped to the width
+            // (32, or 64 for .U64 / .S64): upstream gave 0 for a clamped shift (a 32-bit SHF.R by 32 or more gives C, SHF.L gives A, SHF.R.S64 by 64
+            // gives C's sign) and for a shift of 0 shifted the other word by 32, which SPIR-V and Metal leave undefined (here A | C). Every shift
+            // count below is in 0..31
+            Operand shift = mask ? context.BitwiseAnd(srcB, Const(maxShiftConst - 1)) : context.IMinimumU32(srcB, Const(maxShiftConst));
+            Operand s31 = context.BitwiseAnd(shift, Const(31));
+            Operand rest = context.BitwiseAnd(context.ISubtract(Const(32), s31), Const(31));   // 32 - s31 when s31 != 0
+            Operand isZero = context.ICompareEqual(s31, Const(0));
+            Operand beyondWord = context.ICompareGreaterOrEqualUnsigned(shift, Const(32));
 
             Operand res;
 
             if (left)
             {
-                // res = (C << B) | (A >> (32 - B))
-                res = context.ShiftLeft(srcC, srcB);
-                res = context.BitwiseOr(res, context.ShiftRightU32(srcA, context.ISubtract(Const(32), srcB)));
+                // shift < 32: (C << s) | (A >> (32 - s)), C itself for 0; 32 <= shift < 64: A << (shift - 32); 64: 0
+                Operand within = context.ConditionalSelect(isZero, srcC, context.BitwiseOr(context.ShiftLeft(srcC, s31), context.ShiftRightU32(srcA, rest)));
+                res = context.ConditionalSelect(beyondWord, context.ShiftLeft(srcA, s31), within);
 
                 if (isLongShift)
                 {
-                    // res = B >= 32 ? A << (B - 32) : res
-                    Operand lowerShift = context.ShiftLeft(srcA, context.ISubtract(srcB, Const(32)));
-
-                    Operand shiftGreaterThan31 = context.ICompareGreaterOrEqualUnsigned(srcB, Const(32));
-                    res = context.ConditionalSelect(shiftGreaterThan31, lowerShift, res);
+                    res = context.ConditionalSelect(context.ICompareGreaterOrEqualUnsigned(shift, Const(64)), Const(0), res);
                 }
             }
             else
             {
-                // res = (A >> B) | (C << (32 - B))
-                res = context.ShiftRightU32(srcA, srcB);
-                res = context.BitwiseOr(res, context.ShiftLeft(srcC, context.ISubtract(Const(32), srcB)));
+                // shift < 32: (A >> s) | (C << (32 - s)), A itself for 0; 32 <= shift < 64: C >> (shift - 32); 64: 0, or C's sign for .S64
+                Operand within = context.ConditionalSelect(isZero, srcA, context.BitwiseOr(context.ShiftRightU32(srcA, s31), context.ShiftLeft(srcC, rest)));
+                Operand upper = signedShift ? context.ShiftRightS32(srcC, s31) : context.ShiftRightU32(srcC, s31);
+                res = context.ConditionalSelect(beyondWord, upper, within);
 
                 if (isLongShift)
                 {
-                    // res = B >= 32 ? C >> (B - 32) : res
-                    Operand upperShift = signedShift
-                        ? context.ShiftRightS32(srcC, context.ISubtract(srcB, Const(32)))
-                        : context.ShiftRightU32(srcC, context.ISubtract(srcB, Const(32)));
-
-                    Operand shiftGreaterThan31 = context.ICompareGreaterOrEqualUnsigned(srcB, Const(32));
-                    res = context.ConditionalSelect(shiftGreaterThan31, upperShift, res);
+                    Operand full = signedShift ? context.ShiftRightS32(srcC, Const(31)) : Const(0);
+                    res = context.ConditionalSelect(context.ICompareGreaterOrEqualUnsigned(shift, Const(64)), full, res);
                 }
-            }
-
-            if (!mask)
-            {
-                // Clamped shift value.
-                Operand isLessThanMax = context.ICompareLessUnsigned(srcB, Const(maxShiftConst));
-
-                res = context.ConditionalSelect(isLessThanMax, res, Const(0));
             }
 
             context.Copy(GetDest(rd), res);

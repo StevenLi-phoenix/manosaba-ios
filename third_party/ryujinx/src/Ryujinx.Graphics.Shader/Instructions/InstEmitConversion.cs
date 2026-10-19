@@ -326,14 +326,30 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
             src = context.IAbsNeg(src, absolute, negate);
 
+            // dm patch (instruction vectors of LASRecomp d4c2ff6, MIT; gfx/tests/t_xlate_ops.py): .SAT compares in the source's signedness, upstream
+            // in the destination's (U32 0x80000000 to S16 gave 0xffff8000, S32 -1 to U32 0xffffffff, U32 0x80000000 to S32 0x80000000); without .SAT
+            // a narrower destination keeps the low bits zero-extended (upstream kept all 32)
             if (saturate)
             {
-                int min = (int)GetIntMin(dstType);
                 int max = (int)GetIntMax(dstType);
 
-                src = dstIsSignedInt
-                    ? context.IClampS32(src, Const(min), Const(max))
-                    : context.IClampU32(src, Const(min), Const(max));
+                if (dstIsSignedInt && srcIsSignedInt)
+                {
+                    src = context.IClampS32(src, Const((int)GetIntMin(dstType)), Const(max));
+                }
+                else
+                {
+                    if (srcIsSignedInt)
+                    {
+                        src = context.IMaximumS32(src, Const(0));   // a negative source saturates to 0 in an unsigned destination
+                    }
+
+                    src = context.IClampU32(src, Const(0), Const(max));   // an unsigned source compares as unsigned
+                }
+            }
+            else if ((dstType & ~ISrcDstFmt.S8) != ISrcDstFmt.U32)
+            {
+                src = context.BitfieldExtractU32(src, Const(0), Const((dstType & ~ISrcDstFmt.S8) == ISrcDstFmt.U16 ? 16 : 8));
             }
 
             context.Copy(GetDest(rd), src);

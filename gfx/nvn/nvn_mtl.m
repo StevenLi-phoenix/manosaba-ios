@@ -3053,7 +3053,8 @@ static void shmap_load(void) {
     id<MTLLibrary> vi_lib; NSString *vi_entry; uint32_t vi_mask; NSMutableDictionary<NSNumber *, id<MTLFunction>> *vi_fns;   // integer vertex input variant (dmsh_build.py vi_variant): locations that can be specialized
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
-    id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn; } @end   // bflib: readable-tile version <key>_bf (merge B step 2)
+    id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
+    id<MTLLibrary> alib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *afn; } @end   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
 @implementation NvShader @end
 #include "nvn_pso_skey.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; int sum_ok, sum_img, sum_imgw; uint32_t sum_cmask; } @end   // sum_*: udc_note_draw's per-program summary
@@ -3118,6 +3119,7 @@ static _Atomic int g_warm_running;   // Background warm-up has not finished yet 
 static uint64_t g_warm_shaders, g_warm_rps, g_warm_cps, g_warm_skip_fz;
 static uint64_t g_warm_claim_shaders, g_warm_claim_rps, g_warm_claim_cps;
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap);
+static id<MTLFunction> alpha_plain(id<MTLLibrary> lib, NSString *entry);
 static int rt_range_bindings_ro(NSDictionary *j);
 static FILE *g_pso_record; static int g_pso_record_checked;
 static FILE *pso_record_file(void) {
@@ -3186,6 +3188,8 @@ static NvShader *shader_load(NSString *pc, int stage) {
     if (nvn_refl_from_json(j, &o->rf, err, sizeof err)) { MLOG("[red] shader %s reflection conversion failed: %s", pc.UTF8String, err); return nil; }
     if (rt_range_on()) o->range_ro=rt_range_bindings_ro(j);
     o->fn = [lib newFunctionWithName:j[@"entry"]]; o->stage = stage; strlcpy(o->key, pc.UTF8String, sizeof o->key);
+    if (stage == 1 && [j[@"alpha_test"] boolValue]) { o->alib = lib; o->fn = alpha_plain(lib, j[@"entry"]); }   // the alpha test epilogue: specialized with ALWAYS (alpha_fn)
+    if (!o->fn) { MLOG("[red] shader %s: no function %s", pc.UTF8String, [[j[@"entry"] description] UTF8String]); return nil; }
     if ([j[@"vi_entry"] isKindOfClass:NSString.class]) { o->vi_lib = lib; o->vi_entry = j[@"vi_entry"]; for (NSNumber *l in j[@"vi_int"]) if (l.intValue >= 0 && l.intValue < 16) o->vi_mask |= 1u << l.intValue; }
     if (o->rf.nb) {
         o->ae = [o->fn newArgumentEncoderWithBufferIndex:o->rf.abi];
@@ -3535,7 +3539,7 @@ static struct {
     uint32_t st_vmask[2], st_wmask[2], st_ref[2];
     p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp; int depth_clamp;
     int restart_set, restart_en; uint32_t restart_idx;   // SetPrimitiveRestart (restart_set: the game has set it; its default is not documented)
-    float blend_color[4]; int64_t copy_stride, copy_image_stride;
+    float blend_color[4], alpha_ref; int64_t copy_stride, copy_image_stride;
 } S;
 static uint32_t cur_chmask(void) { return S.chmask.mask; }
 // BindProgram attaches a program per stage bit (NVN semantics: only the stages in stages are replaced, the others keep their binding; a program without a shader for that stage = that stage is unbound).
@@ -3683,9 +3687,42 @@ static id<MTLFunction> vi_function(NvShader *vs, uint32_t u, uint32_t sg) {
         vs->vi_fns[key] = f; return f;
     }
 }
+// The alpha test (NVN ColorStateSetAlphaTest + CommandBufferSetAlphaRef; Metal has none), after lordran-native a63dd76 (MIT): when the game profile
+// asks for it (game.json alpha_test), every fragment shader ends with a comparison of colour 0's alpha under function constants 160 (the NVN
+// comparison) and 161 (the reference) (dmsh_build.py alpha_test). Metal builds no pipeline from an unspecialized function, so such a shader is
+// specialized with ALWAYS at load (the comparison and its discard fold away) and a draw with another comparison uses a specialization cached per
+// shader, comparison and reference. A shader built without it draws without the test (red once). Checked by gfx/tests/t_alpha.m
+static int alpha_on(void) { return S.color.alpha_func && S.color.alpha_func != NVN_ALPHA_FUNC_ALWAYS; }
+static id<MTLFunction> alpha_spec(id<MTLLibrary> lib, NSString *entry, uint32_t func, uint32_t refbits, NSError **e) {
+    MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new]; float ref; memcpy(&ref, &refbits, sizeof ref);
+    [cv setConstantValue:&func type:MTLDataTypeUInt atIndex:160]; [cv setConstantValue:&ref type:MTLDataTypeFloat atIndex:161];
+    return [lib newFunctionWithName:entry constantValues:cv error:e];
+}
+static id<MTLFunction> alpha_plain(id<MTLLibrary> lib, NSString *entry) {   // shader_load: the function as drawn without an alpha test
+    NSError *e = nil; id<MTLFunction> fn = alpha_spec(lib, entry, NVN_ALPHA_FUNC_ALWAYS, 0, &e);
+    if (!fn) MLOG("[red] fragment function %s: specialization without an alpha test failed: %s", entry.UTF8String, e.localizedDescription.UTF8String);
+    return fn;
+}
+static id<MTLFunction> alpha_fn(const pso_key *k, NvShader *fs) {
+    if (!fs) return nil;
+    if (!k->alpha_func) return fs->fn;
+    if (!fs->alib) { RED_ONCE(95, "alpha test %u on fragment shader %s, built without it (game.json alpha_test is off): drawn without the test", k->alpha_func, fs->key); return fs->fn; }
+    uint64_t bits = (uint64_t)k->alpha_func << 32 | k->alpha_ref;
+    @synchronized (fs) {
+        if (!fs->afn) fs->afn = [NSMutableDictionary dictionary];
+        id<MTLFunction> fn = fs->afn[@(bits)];
+        if (fn) return fn;
+        uint32_t func = k->alpha_func; float ref; memcpy(&ref, &k->alpha_ref, sizeof ref);
+        NSError *e = nil; fn = alpha_spec(fs->alib, fs->fn.name, func, k->alpha_ref, &e);
+        if (!fn) { MLOG("[red] alpha test specialization of %s failed: %s", fs->key, e.localizedDescription.UTF8String); return fs->fn; }
+        fs->afn[@(bits)] = fn;
+        static _Atomic unsigned nspec; unsigned c = atomic_fetch_add(&nspec, 1) + 1; if (c == 1 || !(c & (c - 1))) MLOG("alpha test: %u fragment shader specializations so far (latest %s, comparison %u, reference %g)", c, fs->key, func, ref);
+        return fn;
+    }
+}
 static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvShader *fs, id<MTLFunction> fsfn, int merged) {
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-    d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : fs ? fs->fn : nil;
+    d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : alpha_fn(k, fs);
     // Diagnostic DM_NVN_HILITE=fragment shader key,...: these draws use a solid-color fragment instead (keys 1–6 in order magenta / green / cyan / yellow / blue / white), to see where the geometry lands
     if (fs) { static char keys[6][24]; static int nk = -1; static id<MTLLibrary> hl;
         if (nk < 0) { nk = 0; const char *e = getenv("DM_NVN_HILITE");
@@ -3764,6 +3801,7 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     k->vs = (__bridge void *)vs; k->fs = (__bridge void *)fs;
     memcpy(k->cfmt, cfmt, sizeof k->cfmt); k->dfmt = dfmt; k->sfmt = sfmt; k->samples = samples;
     k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c | (g_lay.active ? PSO_LAYERED : 0);
+    if (alpha_on()) { k->alpha_func = S.color.alpha_func; memcpy(&k->alpha_ref, &S.alpha_ref, sizeof k->alpha_ref); }
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
     const nvn_refl *rf = &vs->rf;
     for (int v = 0; v < rf->nv; v++) { int a = rf->v[v].nvn; if (a < 16 && a < S.nattr) { k->attr[a] = S.attr[a]; int st = S.attr[a].stream; if (st < 16) k->stream[st] = S.stream[st]; } }
@@ -4564,7 +4602,7 @@ static int first_draw_covers(int i, id<MTLTexture> t, NSUInteger level) {
     int n = dw ? dw->count : di->count, prim = dw ? dw->prim : di->prim;
     __unsafe_unretained NvProg *pr = S.prog ? prog_get(S.prog) : nil; if (!pr) return g_fd_why = 1, 0;
     NvShader *vs = pr->sh[0], *fs = pr->sh[1];
-    if (!vs || !fs || vs->rf.pos_attr < 0 || fs->rf.may_discard || fs->rf.writes_smask || !(fs->rf.color_mask >> i & 1)) return g_fd_why = 2, 0;
+    if (!vs || !fs || vs->rf.pos_attr < 0 || fs->rf.may_discard || alpha_on() || fs->rf.writes_smask || !(fs->rf.color_mask >> i & 1)) return g_fd_why = 2, 0;
     if (!t || t.sampleCount != 1 || t.textureType == MTLTextureType3D) return g_fd_why = 3, 0;
     if ((S.color.blend_en >> i & 1) || ((S.chmask.mask >> (4 * i)) & 0xf) != 0xf || S.ms.a2c || S.poly.mode != NVN_POLYGON_MODE_FILL) return g_fd_why = 4, 0;
     if (R.rt.depth && ((S.ds.dt && S.ds.df != NVN_DEPTH_FUNC_ALWAYS) || S.ds.st)) return g_fd_why = 5, 0;
@@ -4596,6 +4634,7 @@ static int state_op(uint32_t op, const void *a) {
                 case 3: dst = &S.ms; n = sizeof S.ms; break;
                 case 4: dst = &S.poly; n = sizeof S.poly; break;
                 case 5: dst = &S.ds; n = sizeof S.ds; break;
+                case 6: dst = &S.alpha_ref; n = sizeof S.alpha_ref; break;
             }
             if (dst && memcmp(dst, b->bytes, n)) { memcpy(dst, b->bytes, n); if (b->kind == 5) g_dss_dirty = 1; else g_pso_dirty = 1; }
             break;
@@ -5588,6 +5627,7 @@ static int uv_proof(NvShader *vs, int locn, const p_draw *dw, const p_draw_idx *
 static int fz_p2_draw(NvProg *pr, const p_draw *dw, const p_draw_idx *di, uint8_t lmap[8], __strong id<MTLFunction> *fn) {
     NvShader *vs = pr->sh[0], *fs = pr->sh[1]; *fn = nil;
     if (!vs || !fs) { PD("F %llu not provable: no vertex / fragment shader", g_stat_pass); return 0; }
+    if (alpha_on()) { PD("F %llu not provable: the draw has an alpha test (the readable-tile version is not specialized for it)", g_stat_pass); return 0; }
     if (!g_fz.rt2.depth && R.rt.depth && (S.ds.dt || S.ds.dw || S.ds.st)) { PD("F %llu not provable: depth comes from the previous pass and this draw enables depth / stencil testing", g_stat_pass); return 0; }
     int fx[32]; for (int i = 0; i < 32; i++) fx[i] = -1; uint8_t fbmask = 0;
     for (int st = 0; st < 5; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh || sh->stage >= 6) continue;
