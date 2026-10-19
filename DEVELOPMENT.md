@@ -1046,7 +1046,12 @@ Tier 3, medium:
   that takes the button it slides onto (`-DDM_TEST_TP_REHIT`) fails 1. `t_hid_script`: 6 more (the merge, the last state read). How it feels on a
   phone needs Tears of the Kingdom on iOS (62), or manosaba with `DM_TOUCH=pad` on a device (70)
 - [-] 59 not done: iOS 17 is not supported (the user's decision, 2026-10-20); the apps stay at iOS 26 (Metal 4) and iOS 18 (Metal 3)
-- [ ] 60 indirect draws and dispatches (when a game calls them)
+- [-] batch 21 · 60 measured: no game calls an indirect draw or dispatch yet. The red-reporting stub logs every unimplemented NVN function on its
+  first call (it is why `SetPrimitiveRestart` shows in 42 logs); in the 396 logs of Tears of the Kingdom and manosaba here, play up to frame
+  27,000 among them (the prologue, the Great Sky Island, the dive), not one of DrawArraysIndirect, DrawElementsIndirect, MultiDraw*IndirectCount
+  or DispatchComputeIndirect. Implemented when a game calls them (nxnative has DispatchComputeIndirect and DrawElementsIndirect; item 64).
+  `t_nvn` 7b now holds all of them to the stub, the two plain indirect draws too (the check was on five functions; one added to the silent
+  no-ops fails it)
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it)
