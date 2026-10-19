@@ -131,7 +131,10 @@ enum { I_CoreMask=0, I_PriorityMask=1, I_AliasAddr=2, I_AliasSize=3, I_HeapAddr=
 
 static uint8_t g_seen[256];
 
-// Registry of mapped ranges (MapMemory stacks, MapPhysicalMemory alias pages), QueryMemory reports from it; the SDK relies on it to find free space
+// Registry of mapped ranges (MapMemory stacks, MapPhysicalMemory alias pages), QueryMemory reports from it; the SDK relies on it to find free space.
+// Changes happen under g_mapmem_mu (MapMemory / UnmapMemory as a whole) and g_map_lock (the change itself); QueryMemory reads under g_map_lock: an unmap
+// moves the last entry into the freed slot, and a scan without the lock missed a moving entry (a mapped stack reported free) or read another one in
+// its slot (nxnative 8530042, MIT; t_guest_mem 10)
 #define MAX_MAP 4096
 static struct { uint64_t base, size, src; uint32_t state; } g_map[MAX_MAP];
 static int g_nmap;
@@ -492,6 +495,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         uint8_t *a = (uint8_t *)addr;
         uint64_t base, size, state, perm;
         int k;
+        pthread_mutex_lock(&g_map_lock);   // over the whole chain: the registry branches read g_map, the others are cheap
         if (a >= g_heap && a < g_heap + g_heap_cur) { base=(uint64_t)g_heap; size=g_heap_cur; state=5/*Heap*/; perm=3; }
         else if ((k = map_find(addr, 1))) { base=g_map[k-1].base; size=g_map[k-1].size; state=g_map[k-1].state; perm=3; }
         else if (a >= g_as && a < g_as + RESERVE) {   // free: up to the adjacent mapping/heap boundary
@@ -512,6 +516,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
             uint64_t top = (uint64_t)pthread_get_stackaddr_np(pthread_self()), ssz = pthread_get_stacksize_np(pthread_self());
             if (addr < top && addr >= top - ssz) { base = top - ssz; size = ssz; state = 0xB/*Stack*/; perm = 3; }
             else { base=addr & ~0xFFFull; size=0x1000; state=3/*Code*/; perm=5; } }
+        pthread_mutex_unlock(&g_map_lock);
         if (mi) { uint64_t *m=(uint64_t*)mi; m[0]=base; m[1]=size; ((uint32_t*)mi)[4]=(uint32_t)state; ((uint32_t*)mi)[5]=0; ((uint32_t*)mi)[6]=(uint32_t)perm; ((uint32_t*)mi)[7]=0; ((uint32_t*)mi)[8]=0; }
         regs[0] = 0; regs[1] = 0; return 0;
     }

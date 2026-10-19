@@ -1338,6 +1338,7 @@ static double g_tw[6][TWIN]; static unsigned g_tn[6];
 static double g_pres_iv[TWIN]; static unsigned g_presn;   // Present interval (ms; -1 = dropped by the system, 0 = no reading)
 __attribute__((weak)) double dm_brightness_now(void) { return -1; }
 __attribute__((weak)) void dm_yield_top(char *out, size_t n) { if (n) snprintf(out, n, "none"); }   // hle_thread.c's when linked (not in the graphics unit tests)
+__attribute__((weak)) void dm_thread_cpu(char *out, size_t n, double secs) { (void)secs; if (n) snprintf(out, n, "-"); }   // hle_thread.c: guest-thread CPU by Switch priority; none in graphics unit tests
 __attribute__((weak)) void dm_perf_present(double iv_ms) { (void)iv_ms; }   // Default (unit tests); strong definition in the host's diag.c: always-on performance record perf.txt
 uint64_t dm_nvn_sub_cpu_ns(void) { return atomic_load(&g_cum_sub_cpu_ns); }   // Cumulative CPU nanoseconds of submit (excluding present)
 __attribute__((weak)) int dm_thermal_now(void) { return -1; }   // Default (Mac); overridden by iOS front_ios.m   // default (Mac); the strong definition in the iOS front end front_ios.m overrides it
@@ -1361,9 +1362,11 @@ void nvn_gpu_recent(double *avg, double *p95, unsigned *n) {
 }
 static int dcmp(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
 // Power over the window since the last summary, for the whole process (nxnative's power line, MIT): CPU energy (task_energy, nJ on Apple silicon)
-// in watts and per frame, CPU time (100 = one core) and its share on performance cores, wakeups per second, and the guest threads that yielded most
+// in watts and per frame, CPU time (100 = one core) and its share on performance cores, wakeups per second, and the guest threads that yielded most;
+// then render-target traffic per frame (attachment bytes loaded and stored, passes loading and storing everything, stores DM_NVN_UNWRITTEN_DC saved)
+// and guest-thread CPU by Switch priority (nxnative 451e118)
 static void power_line(uint64_t frame) {
-    static uint64_t pt, pe, pcpu, pp, piw, pf; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
     uint64_t t = now_ns(), cpu = (pw.cpu_energy.total_user + pw.cpu_energy.total_system) * tb.numer / tb.denom, p = pw.task_ptime * tb.numer / tb.denom;
@@ -1371,8 +1374,14 @@ static void power_line(uint64_t frame) {
     char yt[192]; dm_yield_top(yt, sizeof yt);
     if (pt && t > pt) { double s = (t - pt) / 1e9, nf = frame > pf ? (double)(frame - pf) : 1;
         LOG("[nvn] power up to frame %llu: CPU energy %.2f W, %.1f mJ a frame (%.1f frames/s); CPU %.0f%% (100 = one core), %.0f%% of it on performance cores; %.0f wakeups/s; most yields: %s",
-            frame, (e - pe) / 1e9 / s, (e - pe) / 1e6 / nf, nf / s, (cpu - pcpu) / 1e7 / s, cpu > pcpu ? 100.0 * (double)(p - pp) / (double)(cpu - pcpu) : 0, (iw - piw) / s, yt); }
-    pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; pf = frame;
+            frame, (e - pe) / 1e9 / s, (e - pe) / 1e6 / nf, nf / s, (cpu - pcpu) / 1e7 / s, cpu > pcpu ? 100.0 * (double)(p - pp) / (double)(cpu - pcpu) : 0, (iw - piw) / s, yt);
+        uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
+        LOG("[nvn] render targets up to frame %llu: %.1f MB loaded / %.1f MB stored a frame, %.1f passes a frame load and store everything, %.1f MB a frame of stores saved (DM_NVN_UNWRITTEN_DC)",
+            frame, (ld - pld) / 1048576.0 / nf, (st - pst) / 1048576.0 / nf, (fu - pfu) / nf, (udc - pudc) / 1048576.0 / nf);
+        char tc[400]; dm_thread_cpu(tc, sizeof tc, s);
+        LOG("[nvn] threads up to frame %llu: guest CPU %s", frame, tc); }
+    else { char tc[400]; dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
+    pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; pf = frame; mtl_bw(&pld, &pst, &pfu); pudc = mtl_udc_saved_bytes();
 }
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;

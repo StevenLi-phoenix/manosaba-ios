@@ -2,7 +2,12 @@
 // Expected values are computed directly from the sample rate and block length: 4800 frames / 48 kHz = 100 ms.
 // Host PCM output (the audio renderer's): dm_pcmout_wait returns when the first 100 ms block is released (90-115 ms after start), not a poll
 // interval later, and times out with 0 when nothing is playing.
+// Backend changes (nxnative 8530042): three real outputs, two threads starting and stopping them at random while a third suspends and resumes (as going
+// to the background does): never a second consumer on one output (two silent sinks, or a sink beside the AudioUnit), no hang, all stopped at the end.
+// Start used to pick its backend outside the lock the suspend holds. Without an output device (a CI runner) only the silent sink path runs.
 #include "../hle_audio.c"
+#include <fcntl.h>
+#include <signal.h>
 #include <time.h>
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
 static struct { const void *k; void *v; } om[8];
@@ -12,6 +17,18 @@ void *objmap_del(const void *k) { for (int i = 0; i < 8; i++) if (om[i].k == k) 
 static _Atomic int g_sig;
 void hle_signal_system_event(void *g) { (void)g; atomic_fetch_add_explicit(&g_sig, 1, memory_order_seq_cst); }
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }   // the real implementation needs a guest thread + SDK kernel event; the unit test only counts triggers
+static char g_o4[3][64];
+static void *toggler(void *arg) {   // scenario 4: Start / Stop at random on the three outputs
+    unsigned r = (unsigned)(uintptr_t)arg;
+    for (int i = 0; i < 100; i++) { r = r * 1103515245u + 12345u; void *o = g_o4[(r >> 8) % 3]; if ((r >> 4) & 1) h_au_Start(o); else h_au_Stop(o); usleep((r >> 12) % 400); }
+    return NULL;
+}
+static void *suspender(void *arg) {   // scenario 4: background and back
+    unsigned r = (unsigned)(uintptr_t)arg;
+    for (int i = 0; i < 40; i++) { r = r * 1103515245u + 12345u; dm_audio_suspend(1); usleep((r >> 8) % 700); dm_audio_suspend(0); usleep((r >> 16) % 700); }
+    return NULL;
+}
+static void on_alarm(int s) { (void)s; static const char m[] = "FAIL scenario 4 hung (30 s)\n"; write(1, m, sizeof m - 1); _exit(1); }
 int main(void) {
     {   // 5.1 downmix (expected values worked out by hand from the Q15 coefficients: 0.707*0.707 = 16384/32768 = 0.5, 0.707 = 23170/32768): order front left, front right, centre, LFE, rear left, rear right
         static const struct { int16_t in[6]; int16_t l, r; const char *what; } c[] = {
@@ -81,5 +98,25 @@ int main(void) {
     while (dm_pcmout_wait(po, 300000000)) if (dm_pcmout_released(po) == &b3[1]) break;   // the second block
     int w4 = dm_pcmout_wait(po, 20000000);
     printf("pcmout wait with nothing playing: %d after the 20 ms timeout (want 0) %s\n", w4, w4 == 0 ? "ok" : "FAIL");
-    return !ok2 || !ok3 || w4 != 0;
+    int open3 = 0, left3 = 0; for (int i = 0; i < AOMAX; i++) open3 += g_aos[i] != NULL;
+    dm_pcmout_close(po); for (int i = 0; i < AOMAX; i++) left3 += g_aos[i] != NULL;
+    int okc = left3 == open3 - 1;
+    printf("pcmout close: open outputs %d → %d (its AudioOut slot freed) %s\n", open3, left3, okc ? "ok" : "FAIL");
+
+    // Scenario 4: backend changes from three threads
+    setenv("DM_AUDIO", "1", 1);
+    for (int i = 0; i < 3; i++) if (h_au_Open(g_o4[i], NULL, NULL, prm)) return 1;
+    int real4 = ao(g_o4[0])->au != NULL; unsigned d0 = atomic_load(&g_consumer_dupes);
+    signal(SIGALRM, on_alarm); alarm(30);
+    int save = dup(2), nul = open("/dev/null", O_WRONLY); fflush(stderr); dup2(nul, 2);   // each suspend logs a line
+    pthread_t t4[3]; pthread_create(&t4[0], NULL, toggler, (void *)1u); pthread_create(&t4[1], NULL, toggler, (void *)7u); pthread_create(&t4[2], NULL, suspender, (void *)3u);
+    for (int i = 0; i < 3; i++) pthread_join(t4[i], NULL);
+    int clean = 1; for (int i = 0; i < 3; i++) { h_au_Stop(g_o4[i]); aout *a = ao(g_o4[i]); clean &= a->backend == BK_NONE && atomic_load(&a->sinks) == 0; }
+    fflush(stderr); dup2(save, 2); close(save); close(nul); alarm(0);
+    unsigned dupes = atomic_load(&g_consumer_dupes) - d0;
+    for (int i = 0; i < 3; i++) h_au_Close(g_o4[i]);
+    int ok4 = dupes == 0 && clean;
+    printf("backend changes from three threads (%s): a second consumer on one output %u times (want 0), all stopped at the end %d %s\n",
+           real4 ? "AudioUnits" : "no output device: silent sinks only", dupes, clean, ok4 ? "ok" : "FAIL");
+    return !ok2 || !ok3 || w4 != 0 || !okc || !ok4;
 }

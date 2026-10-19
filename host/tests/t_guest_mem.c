@@ -18,6 +18,9 @@
 //   with data stays writable, a rodata smaller than a page seals nothing.
 // Break context (svc OutputDebugString / Break): (9) the last 8 debug output lines are printed in order before the abort, the older ones not, and
 //   the address the SDK's AbortImpl was called from.
+// QueryMemory beside MapMemory / UnmapMemory (nxnative 8530042): (10) with 512 other mappings in the registry, four threads query their own mapped
+//   stacks while two others unmap and map again those 512: every query reports the querying thread's own range as a stack. Reads without the registry lock
+//   saw entries move under them (an unmap moves the last entry into the freed slot): another mapping, or the stack reported free.
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -70,6 +73,28 @@ static void *mapper(void *arg) {   // thread 0: 0x40000..0x45000 (host pages 0x4
         if (svc(0x05, (uint64_t)d, (uint64_t)s, n)) g_mt_bad++;
     }
     free(s); return NULL;
+}
+static _Atomic int g_q_bad, g_q_done; static _Atomic long g_q_n;
+static void *querier(void *arg) {   // section 10: its own stack at 0x4000000 + 0x10000 * i, 0x4000 bytes, queried 50 times a round
+    int me = (int)(intptr_t)arg; uint8_t *d = g_stack + 0x4000000 + 0x10000 * (size_t)me; uint8_t *s = aligned_alloc(16384, 0x4000);
+    for (int it = 0; it < 15000; it++) {
+        if (svc(0x04, (uint64_t)d, (uint64_t)s, 0x4000)) { g_q_bad++; continue; }
+        for (int q = 0; q < 50; q++) {
+            uint64_t mi[5] = {0}; svc(0x06, (uint64_t)mi, 0, (uint64_t)(d + 0x2000)); g_q_n++;
+            if (mi[0] != (uint64_t)d || mi[1] != 0x4000 || (uint32_t)mi[2] != 0x0B) g_q_bad++;
+        }
+        if (svc(0x05, (uint64_t)d, (uint64_t)s, 0x4000)) g_q_bad++;
+    }
+    free(s); g_q_done++; return NULL;
+}
+static uint8_t g_q_src[0x4000];
+static void *churner(void *arg) {   // section 10: unmaps and maps again its half of the 512 mappings until the four queriers are done: an unmap moves the
+    int me = (int)(intptr_t)arg;    // registry's last entry (often a querier's stack) into a slot near the front, which a query's scan may have passed
+    for (unsigned j = 0; g_q_done < 4; j++) {
+        uint8_t *d = g_stack + 0x1000000 + 0x4000 * (size_t)(me * 256 + (j % 256));
+        if (svc(0x05, (uint64_t)d, (uint64_t)g_q_src, 0x4000) || svc(0x04, (uint64_t)d, (uint64_t)g_q_src, 0x4000)) g_q_bad++;
+    }
+    return NULL;
 }
 enum { NP = 4096 };   // pages of the alias region the random test uses (16 MB)
 static uint8_t ref[NP];
@@ -201,6 +226,17 @@ int main(void) {
       CHECK(a && b && a < b && !strstr(out, "[guest] line 1\n"), "the last 8 debug lines (2..9) in order, the older ones not");
       CHECK(strstr(out, "AbortImpl was called from ?+0x1234567") != NULL, "the AbortImpl caller from g_AbortImplReturnAddress");
       g_nmod = 0; g_fake_ra = 0; }
+
+    printf("10 QueryMemory while other threads map and unmap\n");
+    { int ok = 1;
+      for (int i = 0; i < 512 && ok; i++) ok = svc(0x04, (uint64_t)(g_stack + 0x1000000 + 0x4000 * (size_t)i), (uint64_t)g_q_src, 0x4000) == 0;
+      pthread_t q[4], c[2];
+      for (int i = 0; i < 4; i++) pthread_create(&q[i], NULL, querier, (void *)(intptr_t)i);
+      for (int i = 0; i < 2; i++) pthread_create(&c[i], NULL, churner, (void *)(intptr_t)i);
+      for (int i = 0; i < 4; i++) pthread_join(q[i], NULL);
+      for (int i = 0; i < 2; i++) pthread_join(c[i], NULL);
+      CHECK(ok && !g_q_bad, "%ld queries of a thread's own stack among 512 mappings, two threads unmapping and mapping them again: %d wrong", (long)g_q_n, (int)g_q_bad);
+      for (int i = 0; i < 512; i++) svc(0x05, (uint64_t)(g_stack + 0x1000000 + 0x4000 * (size_t)i), (uint64_t)g_q_src, 0x4000); }
 
     printf("t_guest_mem: %d checks, %d failed\n", checks, fails);
     return fails != 0;

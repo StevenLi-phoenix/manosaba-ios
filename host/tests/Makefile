@@ -8,6 +8,7 @@ run: \
 	$(B)/t_arbiter \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
+	$(B)/t_audren \
 	$(B)/t_cloudsync \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
@@ -30,6 +31,8 @@ run: \
 	$(B)/t_romfs_validate \
 	$(B)/t_sleep \
 	$(B)/t_swkbd \
+	$(B)/t_sysevent \
+	$(B)/t_threadcpu \
 	$(B)/t_thread_exit \
 	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
@@ -38,6 +41,7 @@ run: \
 	$(B)/t_arbiter
 	$(B)/t_audio
 	$(B)/t_audio_spsc
+	$(B)/t_audren 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_cloudsync 2>/dev/null
 	$(B)/t_condvar
 	$(B)/t_condvar_old
@@ -60,6 +64,8 @@ run: \
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
 	$(B)/t_sleep
 	$(B)/t_swkbd
+	$(B)/t_sysevent 2>/dev/null
+	$(B)/t_threadcpu 2>/dev/null
 	$(B)/t_thread_exit
 	@status=0; $(B)/t_thread_exit_old > $(B)/t_thread_exit_old.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "touched the retired guest stack" $(B)/t_thread_exit_old.log; then \
@@ -75,6 +81,8 @@ $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../crash.c
 $(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
+$(B)/t_audren: t_audren.c ../hle_audren.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_audren.c
 $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
@@ -99,6 +107,10 @@ $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../dm.h ../hle.h ../rod
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c
 $(B)/t_memsnap: t_memsnap.c ../memsnap.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_memsnap.c ../memsnap.c
+$(B)/t_sysevent: t_sysevent.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DT_OWN_GUEST_SYM -I.. -o $@ t_sysevent.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_threadcpu: t_threadcpu.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threadcpu.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_waitsync: t_waitsync.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_waitsync.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)

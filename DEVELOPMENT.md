@@ -826,20 +826,24 @@ Tier 1, tooling and diagnostics:
   that (and still fails when nothing is deduplicated). The host build has 34 compiler warnings, the same before batch 1
 
 Tier 1, nxnative after 2b31dbd (reviewed through 19d7a70 on 2026-10-19 afternoon; MIT; batch 5, before Tier 2):
-- [ ] 73 the host races of nxnative 8530042, all four present here (the code is theirs before the fix): the mapped-range registry locked over
-  MapMemory's and UnmapMemory's whole lookup and change and over QueryMemory (two threads unmapping at once delete through a stale index); a
-  SystemEvent's binding ends with its write handle, signals look up and signal under one hold; audio output Start / Stop and the background
-  suspend change the backend under one lock (a suspend between them gave one output two silent sinks); CloseAudioRenderer joins the render thread
-  (`dm_guest_thread_join` is here) instead of sleeping 20 ms and the thread closes its output
-- [ ] 74 the yield back-off starting after 2 ms of yields, `DM_YIELD_BACKOFF=<cap µs>[:<start µs>]` (nxnative b703be2): the 200 µs start caught Tears
-  of the Kingdom's main thread waiting for its ModuleSystem workers, the cause of the frame drops measured for 13. Measure Tears of the Kingdom
-  (drops, energy) and manosaba (its 25,000 wakeups a second) before deciding whether it is on by default
-- [ ] 75 the c1 guard by interval arithmetic over the whole index expression, compute shaders included (nxnative 7205d7e; our
-  `gfx/tools/c1_guard.py` is their version before it): regenerate the Tears of the Kingdom and manosaba lists and compare
-- [ ] 76 the power line's guest CPU by Switch priority band and busiest threads, render-target traffic per frame (nxnative 451e118; its
-  `DM_QOS_MAP` not taken: they measured little to move; their TBDR numbers agree with TBDR off on the Mac)
-- [ ] 77 the opening cave's stone blocks beside the torch: black on the Mac and the iPhone in nxnative (19d7a70, lit on the Switch); check here
-  (the block height truncation and BC render targets they point to are already here)
+- [x] batch 5 · 73 the host races of nxnative 8530042. MapMemory / UnmapMemory were already serialized here (`g_mapmem_mu`), so of the map fix only
+  QueryMemory's unlocked reads were missing: now under the registry lock (`t_guest_mem` 10: 3,000,000 queries of a thread's own stack while two
+  threads unmap and map 512 others; unlocked, 32-123 of them wrong in every run). A SystemEvent's binding ends with its write handle, the signal
+  looks up and signals under one hold of G (`t_sysevent`: before, the signal went to a decoy on the freed numbers). Audio output backends change
+  under one lock with the backend recorded, a second consumer on one output is counted and reported red (`t_audio` scenario 4: before, 14-58
+  second consumers or a hang in every run). CloseAudioRenderer joins the render thread, which closes its output (`t_audren`; `dm_pcmout_close`
+  frees the AudioOut slot, `t_audio`)
+- [x] batch 5 · 74 the yield back-off start, `DM_YIELD_BACKOFF=<cap µs>[:<start µs>]`, default 2 ms (`t_sleep`: a 1.5 ms run does not back off; the old
+  200 µs start fails it). Still off by default: in Tears of the Kingdom's prologue (30 fps product, two runs each, 120 s) 0.206-0.209 W with it
+  against 0.204-0.212 W without, wakeups 588-603 against 581-583, the same frame times; it barely fires there now (one window of 284 sleeps).
+  manosaba's guest threads never yield, so it does nothing there. `DM_YIELD_BACKOFF=250` no longer costs frames in Tears of the Kingdom
+- [x] batch 5 · 75 the c1 guard by interval arithmetic over the whole index, every stage (`gfx/tools/c1_guard.py`, `tools/tests/t_c1_guard.py`: the old
+  decision fails 9 of 15, both ways: it passed a literal past the data and compute reads, and it listed `_5 & 3u`). Over chain b-1e41705de87b it
+  lists the same 49 shaders as the old one (all 277 compute c1 reads proven), so nothing changes at run time
+- [x] batch 5 · 76 two more power lines: render-target traffic a frame and guest CPU by Switch priority with the busiest threads (`t_threadcpu`). manosaba's
+  guest threads use 53-103 ms/s in all: its 25,000 wakeups a second and full performance-core share come from host threads
+- [x] batch 5 · 77 checked: the opening cave's stone blocks and steps beside the torch are lit warm here (prologue frames 1500, 1600 and 2100, 30 fps
+  product); not this port's bug
 
 Tier 2, small code, one shader chain rebuild for all four:
 - [ ] 36 the 1,568 BAHS shaders in the offline extraction; with the rebuild, check that the per-shader cache key covers `shader_pairs.tsv` and the profile rows the

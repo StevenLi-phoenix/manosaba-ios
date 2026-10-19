@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 enum { FMT_PCM16 = 2, STATE_STARTED = 0, STATE_STOPPED = 1, RATE = 48000 };
+enum { BK_NONE, BK_AU, BK_NULL };   // what consumes an output's queue right now (aout.backend)
 
 typedef struct { void *ptr; uint64_t cap, size; } gbuf;     // The first 24 bytes written into the guest AudioOutBuffer
 #define QMAX 64
@@ -28,16 +29,22 @@ typedef struct {
     int mix;                           // 1 = the game gives 5.1 (6 channels), downmixed to stereo by us before handing to CoreAudio (au_render)
     int16_t *mixbuf;                   // 6-channel staging for the downmix (MIXMAX frames)
     pthread_t null_th; _Atomic int null_run;
+    int backend;                       // BK_*: the running consumer; Start, Stop and the background suspend change it only under g_aos_lock and act on it
+    _Atomic int sinks;                 // silent sinks running on this output (more than one, or one beside the AudioUnit, is the race g_aos_lock prevents)
     dispatch_semaphore_t notify_sem;
     dispatch_semaphore_t rel_sem;      // signaled with every release batch: what dm_pcmout_wait blocks on (the audio renderer used to poll every millisecond)
     pthread_t notify_th; _Atomic int notify_run, notify_pending, notify_armed;
 } aout;
 
-// Registry of open outputs: suspended / resumed all at once by the front-end lifecycle (going to background)
+// Registry of open outputs: suspended / resumed all at once by the front-end lifecycle (going to background). g_aos_lock also serializes every backend
+// change (Start / Stop / suspend / resume): Start used to mark the output started and pick its backend outside it, so a suspend between them started a
+// silent sink and Start a second one over the same single-consumer queues (or the AudioUnit beside it), and a Stop racing a suspend joined a sink that
+// never existed (nxnative 8530042, MIT; t_audio scenario 4)
 #define AOMAX 8
 static aout *g_aos[AOMAX];
 static pthread_mutex_t g_aos_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_suspended;
+static _Atomic unsigned g_consumer_dupes;   // a second consumer on one output's queues (two silent sinks, or a sink beside the AudioUnit): reported red at the next backend stop
 static aout *ao(const void *g) { aout *a = objmap_get(g); if (!a) die("AudioOut %p was not created by the host", g); return a; }
 
 static void notify_release(aout *a) {
@@ -103,6 +110,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
     (void)f; (void)ts; (void)bus; (void)frames;
     aout *a = ctx;
     atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed);
+    if (atomic_load_explicit(&a->sinks, memory_order_relaxed)) atomic_fetch_add_explicit(&g_consumer_dupes, 1, memory_order_relaxed);   // counted only: no logging on the audio thread
     if (!a->mix) pull(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
     else { int16_t *o = bl->mBuffers[0].mData; unsigned left = bl->mBuffers[0].mDataByteSize / 4;   // stereo 16-bit: 4 bytes per frame
         while (left) { unsigned k = left < MIXMAX ? left : MIXMAX; pull(a, (uint8_t *)a->mixbuf, (uint64_t)k * 12); downmix51(a->mixbuf, o, k); o += 2 * k; left -= k; } }
@@ -152,11 +160,22 @@ static int au_open(aout *a) {   // 0 = the sound card is open; -1 = it cannot be
 static void *null_sink(void *p) {
     aout *a = p; uint8_t scratch[RATE / 200 * 2 * 8];
     uint64_t bytes = (uint64_t)RATE / 200 * 2 * a->ch, t = now_ns();
+    if (atomic_fetch_add_explicit(&a->sinks, 1, memory_order_acq_rel)) atomic_fetch_add_explicit(&g_consumer_dupes, 1, memory_order_relaxed);
     while (atomic_load_explicit(&a->null_run, memory_order_acquire)) {
         t += 5000000; uint64_t now = now_ns(); if (t > now) usleep((useconds_t)((t - now) / 1000));
         pull(a, scratch, bytes);
     }
+    atomic_fetch_sub_explicit(&a->sinks, 1, memory_order_acq_rel);
     return NULL;
+}
+// Backend changes; callers hold g_aos_lock. pull() takes no lock, so stopping the AudioUnit or joining a sink under it cannot deadlock
+static void null_start(aout *a) { atomic_store_explicit(&a->null_run, 1, memory_order_release); pthread_create(&a->null_th, NULL, null_sink, a); a->backend = BK_NULL; }
+static void null_stop(aout *a) { atomic_store_explicit(&a->null_run, 0, memory_order_release); pthread_join(a->null_th, NULL); a->backend = BK_NONE; }
+static void backend_stop(aout *a) {
+    if (a->backend == BK_AU) { AudioOutputUnitStop(a->au); a->backend = BK_NONE; }
+    else if (a->backend == BK_NULL) null_stop(a);
+    static unsigned seen; unsigned d = atomic_load_explicit(&g_consumer_dupes, memory_order_relaxed);
+    if (d != seen) { seen = d; LOG("[red] audio output: a second consumer ran on one output (two silent sinks, or a sink beside the AudioUnit; %u times so far)", d); }
 }
 static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : TARGET_OS_IPHONE; }
 
@@ -202,19 +221,23 @@ HLE_FORCE_OPT("_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutERKNS0_17AudioOut
               Result, h_au_OpenDefNoEv, void *g, const uint8_t *param) { return h_au_Open(g, NULL, NULL, param); }
 HLE_FORCE("_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE", "start playback", Result, h_au_Start, void *g) {
     aout *a = ao(g);
-    pthread_mutex_lock(&a->m); int was = atomic_load_explicit(&a->state, memory_order_relaxed); atomic_store_explicit(&a->state, STATE_STARTED, memory_order_release); pthread_mutex_unlock(&a->m);
-    if (was == STATE_STARTED) return RES_OK;
-    if (a->au && !g_suspended && AudioOutputUnitStart(a->au)) { LOG("[red] AudioUnit start failed: this output uses a silent sink"); AudioUnitUninitialize(a->au); AudioComponentInstanceDispose(a->au); a->au = NULL; }
-    if (!a->au || g_suspended) { atomic_store_explicit(&a->null_run, 1, memory_order_release); pthread_create(&a->null_th, NULL, null_sink, a); }
+    pthread_mutex_lock(&g_aos_lock);
+    if (atomic_exchange_explicit(&a->state, STATE_STARTED, memory_order_acq_rel) != STATE_STARTED) {
+        if (a->au && !g_suspended) {
+            if (AudioOutputUnitStart(a->au)) { LOG("[red] AudioUnit start failed: this output uses a silent sink"); AudioUnitUninitialize(a->au); AudioComponentInstanceDispose(a->au); a->au = NULL; }
+            else a->backend = BK_AU;
+        }
+        if (a->backend == BK_NONE) null_start(a);
+    }
+    pthread_mutex_unlock(&g_aos_lock);
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE", "stop playback", void, h_au_Stop, void *g) {
     aout *a = ao(g);
-    pthread_mutex_lock(&a->m); int was = atomic_load_explicit(&a->state, memory_order_relaxed); atomic_store_explicit(&a->state, STATE_STOPPED, memory_order_release); pthread_mutex_unlock(&a->m);
-    if (was != STATE_STARTED) return;
-    pthread_mutex_lock(&g_aos_lock); int susp = g_suspended; pthread_mutex_unlock(&g_aos_lock);
-    if (a->au && !susp) AudioOutputUnitStop(a->au);
-    else { atomic_store_explicit(&a->null_run, 0, memory_order_release); pthread_join(a->null_th, NULL); }   // Silent sink (including one that took over during suspension)
+    pthread_mutex_lock(&g_aos_lock);
+    atomic_store_explicit(&a->state, STATE_STOPPED, memory_order_release);
+    backend_stop(a);   // the AudioUnit, or the silent sink (including one that took over during suspension)
+    pthread_mutex_unlock(&g_aos_lock);
 }
 HLE_FORCE("_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE", "close the audio output", void, h_au_Close, void *g) {
     h_au_Stop(g);
@@ -271,6 +294,7 @@ void *dm_pcmout_open(int ch) {
     return key;
 }
 void dm_pcmout_start(void *k) { h_au_Start(k); }
+void dm_pcmout_close(void *k) { h_au_Close(k); free(k); }   // stop, leave the registry (frees its AOMAX slot), free it and its key (nxnative 8530042)
 int dm_pcmout_append(void *k, void *b) { return (int)h_au_Append(k, b); }
 void *dm_pcmout_released(void *k) { return h_au_Released(k); }
 // Block until the output releases a buffer or ns pass (nxnative e06a8ec's dm_pcmout_wait, MIT): 1 = something was released (take it with
@@ -285,14 +309,16 @@ void dm_audio_suspend(int on) {
         g_suspended = on; int failed = 0;
         for (int i = 0; i < AOMAX; i++) {
             aout *a = g_aos[i];
-            if (!a || !a->au || atomic_load_explicit(&a->state, memory_order_acquire) != STATE_STARTED) continue;
+            if (!a || !a->au) continue;
             // While suspended the silent sink consumes in real time instead: otherwise buffers are no longer released, the FMOD output thread waits forever and the game's audio pacing stalls (same for an incoming call interruption)
-            if (on) { AudioOutputUnitStop(a->au); atomic_store_explicit(&a->null_run, 1, memory_order_release); pthread_create(&a->null_th, NULL, null_sink, a); }
-            else { atomic_store_explicit(&a->null_run, 0, memory_order_release); pthread_join(a->null_th, NULL);
-                   OSStatus st = AudioOutputUnitStart(a->au);
-                   if (st) {   // The session is still held by someone else (switched back to the game with a call not yet hung up, or the user is still in another app when the interruption ends): not fatal, the silent sink keeps covering, and we retry at the next resume
-                       LOG("[red] AudioUnit resume failed (status %d): silent until the next resume", (int)st);
-                       atomic_store_explicit(&a->null_run, 1, memory_order_release); pthread_create(&a->null_th, NULL, null_sink, a); failed = 1; } }
+            if (on) { if (a->backend == BK_AU) { AudioOutputUnitStop(a->au); null_start(a); } }
+            else if (a->backend == BK_NULL) {
+                null_stop(a);
+                OSStatus st = AudioOutputUnitStart(a->au);
+                if (!st) a->backend = BK_AU;
+                else {   // The session is still held by someone else (switched back to the game with a call not yet hung up, or the user is still in another app when the interruption ends): not fatal, the silent sink keeps covering, and we retry at the next resume
+                    LOG("[red] AudioUnit resume failed (status %d): silent until the next resume", (int)st);
+                    null_start(a); failed = 1; } }
         }
         if (failed) g_suspended = 1;   // Resume did not succeed: the state stays "suspended", and the next call with 0 will retry
         LOG("audio %s", on ? "paused (background / interruption)" : failed ? "resume failed" : "resumed (foreground / interruption ended)");

@@ -117,7 +117,8 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   compute shaders, clears on a left-out attachment slot, the growable dirty-range table, QueueFinish without present waits, two translator fixes,
   vertex output defaults, invariance and the Metal compile cache; then precise SleepThread, env.txt switches, compressed files stored in the IPA,
   yield back-off (opt-in), targeted wakes, waits on upload completion and buffer releases, a per-thread pool cache, the dirty range kept per
-  texture, residency no-op skips, page runs, a spare texture for re-uploads and VP9 row multithreading, credited in the code.
+  texture, residency no-op skips, page runs, a spare texture for re-uploads and VP9 row multithreading; then the host race fixes, the c1 guard
+  by interval arithmetic, the yield back-off start and the guest CPU power line, credited in the code.
 - **[tomodachi-native](https://github.com/kuosuko/tomodachi-native)** ([kuosuko](https://github.com/kuosuko), MIT), a fork of nxnative: the
   variant of the duplicated colour slot handling that keeps the slot the pass writes, and the memory snapshots (`DM_MEMSNAP`).
 - **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** ([ly05010419](https://github.com/ly05010419), MIT), a Tears of the Kingdom
