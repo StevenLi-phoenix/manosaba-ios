@@ -1377,6 +1377,7 @@ static int dcmp(const void *a, const void *b) { double x = *(const double *)a, y
 void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]);
 void mtl_vis_state(int *open, uint64_t *folded);
 void mtl_counts(uint64_t out[13]);
+void mtl_pkg_age(uint64_t out[5]);
 void mtl_fbx_stats(uint64_t out[3]);
 __attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle.c; the graphics unit tests link without it
 static void power_line(uint64_t frame) {
@@ -1409,7 +1410,10 @@ static void power_line(uint64_t frame) {
                 (g[1] + g[2] - pg[1] - pg[2]) / s, (g[0] - pg[0]) / s);
             LOG("[nvn] counts up to frame %llu, a frame: %.1f passes with draws, %.1f of them draw only a top-left part (%.1f more with a clear on load), %.2f%% (%.2f%%) of all their pixels outside it",
                 frame, (c[7] - pc[7]) / nf, (c[8] - pc[8]) / nf, (c[11] - pc[11]) / nf, c[9] > pc[9] ? 100.0 * (double)(c[10] - pc[10]) / (double)(c[9] - pc[9]) : 0,
-                c[9] > pc[9] ? 100.0 * (double)(c[12] - pc[12]) / (double)(c[9] - pc[9]) : 0); } }
+                c[9] > pc[9] ? 100.0 * (double)(c[12] - pc[12]) / (double)(c[9] - pc[9]) : 0);
+            uint64_t ag[5]; mtl_pkg_age(ag);
+            LOG("[nvn] counts up to frame %llu: %llu CPU-filled textures, %.1f MB used in the last 30 submissions, %.1f MB 31-300 ago, %.1f MB 301-1800 ago, %.1f MB longer",
+                frame, (unsigned long long)ag[4], ag[0] / 1048576.0, ag[1] / 1048576.0, ag[2] / 1048576.0, ag[3] / 1048576.0); } }
     else { char tc[400]; dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
     pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; pf = frame; mtl_bw(&pld, &pst, &pfu); pudc = mtl_udc_saved_bytes();
     { uint64_t rep[32], rst[32]; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &pfold); prep = rep[NVN_COUNTER_TYPE_SAMPLES_PASSED]; prst = rst[NVN_COUNTER_TYPE_SAMPLES_PASSED]; }

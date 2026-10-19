@@ -822,6 +822,7 @@ static uint64_t g_sub_serial;   // Submission index (used by the parallel precom
 static void fin_drain(void);
 static void chunk_reset(void);   // mid-submission commits (defined with the render pass state)
 static void pg_sub_begin(uint64_t fence); static void pg_commit(id fb);   // DM_NVN_PASSGPU
+static void pkg_census(void);   // DM_NVN_COUNTS: uploaded textures by last use
 void mtl_sub_begin(void) {
     mtl_init(); g_sub_serial++;
     if (tbdr_on() == 0 && g_ruler_pending) { g_ruler_truth = 0; g_ruler_pending = 0; MLOG("DM_NVN_RULER: switched to the measured mode"); }
@@ -859,6 +860,7 @@ void mtl_sub_begin(void) {
     pg_sub_begin(g_fence + 1);
     id<MTLBuffer> vis_prev = g_vis;   // the previous submission's: an overflow buffer is retired below
     g_cnt_sub_ts = 0;
+    if (g_cnt_on > 0 && g_sub_serial % 300 == 0) pkg_census();
     g_npost = 0; g_vis = nil; g_vis_n = 0; g_vis_cur = -1; pend_begin(mtl_done_fence());
     zskip_clear(); g_zskip_count = 0; chunk_reset();
     int pick = -1;
@@ -1476,6 +1478,16 @@ static void stor_sweep(void) {   // fin_drain: entries nobody has held for STOR_
 - (void)dealloc { res_remove(tex); res_remove(spare); }
 @end
 static uint64_t g_pkg_uploads, g_pkg_reuploads, g_pkg_miss, g_pkg_spare_reuse, g_pkg_spare_drop;   // re-uploads written into the spare; spares dropped unused
+// DM_NVN_COUNTS (plan item 56, measuring what dropping cold CPU-filled textures could free): every 300 submissions, on the submit thread, the bytes of
+// the uploaded textures by how many submissions ago they were last used (csub): [0] 0-30, [1] 31-300, [2] 301-1800, [3] more; [4] how many
+static NSHashTable *g_pkgs; static uint64_t g_pkg_age[5];
+static void pkg_census(void) {
+    uint64_t a[5] = {0};
+    for (NvPkg *pk in g_pkgs) { if (!pk->tex) continue; uint64_t age = g_sub_serial - pk->csub, b = (uint64_t)pk->tex.allocatedSize + (pk->spare ? (uint64_t)pk->spare.allocatedSize : 0);
+        a[age <= 30 ? 0 : age <= 300 ? 1 : age <= 1800 ? 2 : 3] += b; a[4]++; }
+    memcpy(g_pkg_age, a, sizeof a);
+}
+void mtl_pkg_age(uint64_t out[5]) { memcpy(out, g_pkg_age, sizeof g_pkg_age); }
 enum { PKG_SPARE_KEEP = 120 };   // submissions a spare is kept without a re-upload (a texture re-uploaded once would otherwise hold two)
 static uint64_t g_pfv_upgrades;
 // DM_NVN_DIRTYCHECK=1 (diagnostic, compared against ground truth): fully hash the pool content on every use; changed but not detected by dirty-page tracking = a missed detection
@@ -2099,7 +2111,9 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
             // use whenever any game thread had written any page since was 4.5 % of its replay). Elsewhere (ReadTexels, present) every call checks
             int sub = on_sub_thread();
             if (sub && pk->csub == g_sub_serial && pk->tex && check_once()) return pk->tex;
+#ifndef DM_TEST_PKG_AGE_FIRST   // negative control of t_uppool only: a later use not noted (the census would count from the upload)
             if (sub) pk->csub = g_sub_serial;
+#endif
             uint64_t now = nvn_dirty_now(), h = 0; int clean;
             if (pk->hashed) { h = pkg_hash(t->mem, t->size); clean = h == pk->chash; }
             else {   // no guest write anywhere since the last check of a tracked texture: clean without looking its range up (a walk of all pools)
@@ -2127,6 +2141,7 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
             return pk->tex;
         }
         pk = [NvPkg new]; pk->dspan = -1;
+        if (counts_on()) { if (!g_pkgs) g_pkgs = [NSHashTable weakObjectsHashTable]; [g_pkgs addObject:pk]; }
         pk->tex = pkg_upload(t, &pk->stamp, nil);
         if (!pk->tex) return nil;
         pk->seen = nvn_dirty_now(); g_pkg_uploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->size);

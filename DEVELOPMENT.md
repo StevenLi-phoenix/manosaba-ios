@@ -1010,7 +1010,12 @@ Tier 3, medium:
   / suspend / Close are not taken on. The time and the thread are logged now (red above 1 s), so a device run shows the iPhone's (70).
   `DM_AUDIO_MUTE=1`: the sound card opened and fed, silence out (measuring at night); `t_audio` checks the blocks are still taken while muted
   (muting without taking them fails it)
-- [ ] 56 cold CPU textures dropped under memory pressure
+- [-] batch 18 · 56 measured (the low-memory texture trim of justr4mzi's mush8 fork aafef22, ideas only): `DM_NVN_COUNTS=1` now counts the
+  uploaded (CPU-filled) textures by how many submissions ago they were last used, every 300 submissions on the submit thread. Tears of the
+  Kingdom's prologue: 364 of them, about 300 MB used in the last 30 submissions and 64 MB not used for more than 1,800 (of 2.0 GB Metal allocated,
+  footprint 2.6 GB); manosaba has 40 MB of such textures in all. Dropping the cold ones would free about 3 % at the price of a re-upload when they
+  come back: not now; with Tears of the Kingdom on a device (62) the memory-low lines say whether to. `t_uppool`: the census (one texture used
+  again in the first bucket, eleven in 301-1800); with a later use not noted 2 fail
 - [ ] 57 code patches chosen at launch (one product for 30 and 60 fps)
 - [ ] 58 on-screen controls with drag-to-look on iOS
 - [ ] 59 iOS 17: deployment target 17.0, metallibs rebuilt
@@ -1018,7 +1023,7 @@ Tier 3, medium:
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it)
-- [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59)
+- [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit
 - [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52)
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN
 
