@@ -1030,7 +1030,21 @@ Tier 3, medium:
   new rewriter: byte for byte the same images, only the stamp (`.prev57` kept). `host/tests/t_options.c`: 9 checks; written without checking the
   originals, an option is half applied (1 fails). iOS maps the signed executable's code: options there need the changed pages embedded
   (tomodachi-native afd88e9), item 62
-- [ ] 58 on-screen controls with drag-to-look on iOS
+- [x] batch 20 · 58 on-screen controls with a drag-to-look camera (BotWRecomp `runtime/src/host/touch.cpp` at 2b84b82, MIT: its layout, feel
+  constants, finger rules and input checks, in C): `host/touchpad.c` for a game with game.json `touch` "pad" (Tears of the Kingdom; `DM_TOUCH=pad`
+  / `screen` overrides it on iOS): a floating stick on the left half whose base follows a thumb that leaves its ring, the D-pad (sliding changes
+  direction), ABXY, L / R / ZL / ZR, - / +, L3 / R3 and the eye that collapses them; the right half outside the buttons is the camera (the finger's
+  speed smoothed with τ 45 ms, 420 pt/s for full deflection, at least 0.12 once moving, 0 at rest). Each finger owns its control until lifted; one
+  stick and one camera finger at a time; a press shorter than the time between two reads is still seen once; the first read after a pause gives
+  the camera no spike; a layout with the same size and safe area keeps the fingers. `hle_hid.c` ORs it into the controller (its stick after the
+  front end's, before a game controller's). iOS (`front_ios.m` `DmPadView`): over the whole screen, laid out in the safe area, drawn after each
+  touch, off while a controller with an extended profile is connected, the eye's choice in the user defaults (`dm.touch_hidden`).
+  `DM_TEST_TOUCHPAD=check:<s>` (any game, the Mac too) runs BotWRecomp's checks against the controller the game read: Tears of the Kingdom 17 of
+  17 in the prologue and on the Great Sky Island cliff save; `hide` 2 of 2; `look` only drags a camera finger: shots of frames 1432-1462 show the
+  camera turning around Link, who stays where he is, and still from frame 1468 when the finger rests. `t_touchpad`: 33 checks (BotWRecomp's 17
+  on a fake clock at 30 reads a second, then ownership, the short tap, the eye, off, the pause, the relayout, every button's centre); a finger
+  that takes the button it slides onto (`-DDM_TEST_TP_REHIT`) fails 1. `t_hid_script`: 6 more (the merge, the last state read). How it feels on a
+  phone needs Tears of the Kingdom on iOS (62), or manosaba with `DM_TOUCH=pad` on a device (70)
 - [ ] 59 iOS 17: deployment target 17.0, metallibs rebuilt
 - [ ] 60 indirect draws and dispatches (when a game calls them)
 
@@ -1046,7 +1060,7 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
-- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55)
+- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
 - [ ] 71 an iOS 17 device test (which device: to ask)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups; uncapped pacing of 53 in a window (product60, `DM_WINDOW=1`)

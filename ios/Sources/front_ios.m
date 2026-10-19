@@ -1,8 +1,9 @@
-// iOS front end (implements front.h): the Metal view the game presents to, letterboxed to the game picture's aspect ratio; touches → dm_touch_set;
-// game controllers; the software keyboard dialog; scene lifecycle, audio session and thermal logging. main.m builds the window and forwards the
-// scene events to front_ios_focus_event.
+// iOS front end (implements front.h): the Metal view the game presents to, letterboxed to the game picture's aspect ratio; touches → dm_touch_set,
+// or on-screen controls for a game steered with a controller (game.json touch "pad", host/touchpad.c); game controllers; the software keyboard
+// dialog; scene lifecycle, audio session and thermal logging. main.m builds the window and forwards the scene events to front_ios_focus_event.
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <signal.h>
@@ -11,6 +12,7 @@
 #include "front.h"
 #include "game.h"
 #include "hle.h"
+#include "touchpad.h"
 
 int mtl_fps_target(void);   // gfx/nvn/nvn_mtl.m: 60, or 30 in the power-saving mode
 static CAMetalLayer *g_layer;
@@ -85,6 +87,90 @@ static __weak DmMetalView *g_view;
 - (void)layoutSubviews { [super layoutSubviews]; if (self.bounds.size.width > 0 && self.bounds.size.height > 0) self.game.frame = letterbox_rect(self.bounds); }
 @end
 
+// ---------- On-screen controls (host/touchpad.c) ----------
+// Over the whole screen (the letterbox bars too), for a game with game.json touch "pad" (DM_TOUCH=pad / screen overrides it): the controls are laid
+// out inside the safe area, every finger goes to tp_touch, drawn from tp_draw after each touch. Off while a game controller with an extended
+// profile is connected (BotWRecomp's automatic mode): the view is hidden and touches reach the game view. The eye's choice is kept in the user
+// defaults (dm.touch_hidden).
+@interface DmPadView : UIView
+@end
+@implementation DmPadView { int _hidden; NSTimer *_test; }
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    self.multipleTouchEnabled = YES; self.opaque = NO; self.backgroundColor = UIColor.clearColor; self.contentMode = UIViewContentModeRedraw;
+    _hidden = [NSUserDefaults.standardUserDefaults boolForKey:@"dm.touch_hidden"]; tp_set_hidden(_hidden);
+    if (getenv("DM_TEST_TOUCHPAD")) _test = [NSTimer scheduledTimerWithTimeInterval:1 / 15.0 repeats:YES block:^(NSTimer *t) { (void)t; [self setNeedsDisplay]; }];   // the self-test's fingers
+    return self;
+}
+- (void)relayout {
+    UIEdgeInsets in = self.safeAreaInsets; CGSize b = self.bounds.size;
+    tp_layout((float)b.width, (float)b.height, (float)in.left, (float)in.top, (float)in.right, (float)in.bottom);
+    [self setNeedsDisplay];
+}
+- (void)layoutSubviews { [super layoutSubviews]; [self relayout]; }
+- (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self relayout]; }
+- (void)send:(NSSet<UITouch *> *)ts phase:(int)ph {
+    for (UITouch *t in ts) { CGPoint p = [t locationInView:self]; tp_touch((long)(__bridge void *)t, ph, (float)p.x, (float)p.y); }
+    int h = tp_hidden();
+    if (h != _hidden) { _hidden = h; [NSUserDefaults.standardUserDefaults setBool:h forKey:@"dm.touch_hidden"]; }
+    [self setNeedsDisplay];
+}
+- (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self send:ts phase:TP_DOWN]; }
+- (void)touchesMoved:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self send:ts phase:TP_MOVE]; }
+- (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self send:ts phase:TP_UP]; }
+- (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self send:ts phase:TP_UP]; }
+static void pad_label(const char *s, CGFloat x, CGFloat y, CGFloat size, CGFloat alpha) {
+    NSDictionary *a = @{NSFontAttributeName: [UIFont systemFontOfSize:size weight:UIFontWeightSemibold], NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:alpha]};
+    NSString *t = @(s); CGSize z = [t sizeWithAttributes:a];
+    [t drawAtPoint:CGPointMake(x - z.width / 2, y - z.height / 2) withAttributes:a];
+}
+- (void)drawRect:(CGRect)r {
+    (void)r; tp_draw_state d; tp_draw(&d);
+    if (!d.visible) return;
+    UIColor *line = [UIColor colorWithWhite:1 alpha:0.45], *fill = [UIColor colorWithWhite:0 alpha:0.18], *down = [UIColor colorWithWhite:1 alpha:0.35];
+    for (int i = 0; i < d.n; i++) {
+        tp_item *it = &d.items[i]; UIBezierPath *p;
+        if (it->shape == TP_PILL) p = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(it->x - it->r, it->y - it->hh, 2 * it->r, 2 * it->hh) cornerRadius:it->hh];
+        else if (it->shape == TP_DPAD) {   // a cross of three-by-one arms; the held direction filled
+            CGFloat a = it->r / 3;
+            p = [UIBezierPath bezierPathWithRect:CGRectMake(it->x - a / 2 * 1.4, it->y - it->r, a * 1.4, 2 * it->r)];
+            [p appendPath:[UIBezierPath bezierPathWithRect:CGRectMake(it->x - it->r, it->y - a / 2 * 1.4, 2 * it->r, a * 1.4)]];
+        } else p = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(it->x - it->r, it->y - it->r, 2 * it->r, 2 * it->r)];
+        [(it->pressed && it->shape != TP_DPAD ? down : fill) setFill]; [p fill]; [line setStroke]; p.lineWidth = 1.5; [p stroke];
+        if (it->shape == TP_DPAD) {
+            static const struct { uint32_t m; float dx, dy; } arm[] = {{DM_BTN_UP, 0, -1}, {DM_BTN_DOWN, 0, 1}, {DM_BTN_LEFT, -1, 0}, {DM_BTN_RIGHT, 1, 0}};
+            for (int k = 0; k < 4; k++) if (it->dir & arm[k].m) {
+                CGFloat a = it->r / 3 * 1.4;
+                [down setFill]; [[UIBezierPath bezierPathWithRect:CGRectMake(it->x + arm[k].dx * it->r * 0.65 - a / 2, it->y + arm[k].dy * it->r * 0.65 - a / 2, a, a)] fill];
+            }
+        } else if (it->shape == TP_EYE) {   // an eye; struck through while the controls are collapsed
+            UIBezierPath *e = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(it->x - it->r * 0.6, it->y - it->r * 0.32, it->r * 1.2, it->r * 0.64)];
+            [line setStroke]; [e stroke]; [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(it->x - it->r * 0.16, it->y - it->r * 0.16, it->r * 0.32, it->r * 0.32)] fill];
+            if (d.collapsed) { UIBezierPath *s = [UIBezierPath bezierPath]; [s moveToPoint:CGPointMake(it->x - it->r * 0.6, it->y + it->r * 0.6)]; [s addLineToPoint:CGPointMake(it->x + it->r * 0.6, it->y - it->r * 0.6)]; [s stroke]; }
+        } else pad_label(it->label, it->x, it->y, it->shape == TP_PILL ? it->hh * 1.0 : it->r * 0.8, it->pressed ? 1 : 0.8);
+    }
+    if (d.collapsed) return;
+    // the stick: its ring at home while idle, else the base where the thumb is and the knob under it; a small ring under a camera finger
+    CGFloat bx = d.stick ? d.bx : d.home_x, by = d.stick ? d.by : d.home_y, kx = d.stick ? d.kx : bx, ky = d.stick ? d.ky : by, sr = d.stick_r;
+    UIBezierPath *ring = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(bx - sr, by - sr, 2 * sr, 2 * sr)];
+    [fill setFill]; [ring fill]; [line setStroke]; ring.lineWidth = 1.5; [ring stroke];
+    CGFloat kr = sr * 0.42; UIBezierPath *knob = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(kx - kr, ky - kr, 2 * kr, 2 * kr)];
+    [(d.stick ? down : fill) setFill]; [knob fill]; [knob stroke];
+    if (d.look) { CGFloat lr = 22 * d.u; UIBezierPath *l = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(d.look_x - lr, d.look_y - lr, 2 * lr, 2 * lr)]; [line setStroke]; [l stroke]; }
+}
+@end
+static __weak DmPadView *g_pad;
+static int pad_wanted(void) {
+    const char *e = getenv("DM_TOUCH");
+    if (e && !strcmp(e, "pad")) return 1;
+    if (e && !strcmp(e, "screen")) return 0;
+    return dm_game.touch_pad;
+}
+static void pad_follow_controllers(void) {   // main thread: off while a controller with an extended profile is connected
+    int ctl = 0; for (GCController *c in GCController.controllers) ctl |= c.extendedGamepad != nil;
+    tp_enable(!ctl); g_pad.hidden = ctl; [g_pad setNeedsDisplay];
+}
+
 // Frame rate hint for ProMotion screens: 60 Hz, or 30 Hz while the graphics layer is in its power-saving mode
 // System volume changes are logged with the time since the display link's last callback: after a volume button press the display link was seen to
 // stop while active (nvn_mtl.m rescue), and the log otherwise does not show when the button was pressed
@@ -113,6 +199,16 @@ UIView *front_ios_view(CGRect frame, CGFloat scale) {
     box.backgroundColor = UIColor.blackColor;
     DmMetalView *v = [[DmMetalView alloc] initWithFrame:letterbox_rect(frame)];
     box.game = v; [box addSubview:v]; g_view = v;
+    if (pad_wanted()) {
+        DmPadView *pad = [[DmPadView alloc] initWithFrame:box.bounds];
+        pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [box addSubview:pad]; g_pad = pad;
+        NSNotificationCenter *nc = NSNotificationCenter.defaultCenter; NSOperationQueue *mq = NSOperationQueue.mainQueue;
+        for (NSNotificationName n in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
+            [nc addObserverForName:n object:nil queue:mq usingBlock:^(NSNotification *x) { (void)x; pad_follow_controllers(); }];
+        pad_follow_controllers();
+        LOG("front: on-screen controls (touch \"pad\"%s)", getenv("DM_TOUCH") ? ", from DM_TOUCH" : "");
+    }
     g_layer = (CAMetalLayer *)v.layer;
     g_layer.device = MTLCreateSystemDefaultDevice();
     g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -221,7 +317,7 @@ void front_ios_focus_event(int ev) {
     static const char *k[] = {"sceneWillResignActive", "sceneDidEnterBackground", "sceneWillEnterForeground", "sceneDidBecomeActive"};
     LOG("front: %s (guest clock %.3f s, audio callbacks %llu)", k[ev], guest_ns() / 1e9, (unsigned long long)dm_audio_render_calls());
     switch (ev) {
-    case 0: [g_view liftAll]; dm_gamepad_reset(); dm_focus_set(2); break;   // held buttons / touches released in the background never report it
+    case 0: [g_view liftAll]; if (g_pad) pad_follow_controllers(); dm_gamepad_reset(); dm_focus_set(2); break;   // held buttons / touches released in the background never report it
     case 1: dm_focus_set(3); g_audio_bg = 1; audio_apply(); dm_cloud_flush(1); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); break;
     // Back in the foreground any interruption counts as over: the system interrupts the session when the app goes to the background but does not
     // promise an "ended" on return; if the session is really still taken, starting the audio unit fails harmlessly and is retried on activation

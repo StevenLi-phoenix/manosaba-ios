@@ -49,6 +49,8 @@ run: \
 	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
 	$(B)/t_touch \
+	$(B)/t_touchpad \
+	$(B)/t_touchpad_rehit \
 	$(B)/t_watchdog \
 	$(B)/t_watchdog_nobg
 	$(B)/t_altstack
@@ -123,6 +125,11 @@ run: \
 	 fi; echo "t_thread_exit_old: the pre-fix exit faults on the retired guest stack, as expected"
 	$(B)/t_thread_leak
 	$(B)/t_touch
+	$(B)/t_touchpad 2>/dev/null
+	@status=0; $(B)/t_touchpad_rehit > $(B)/t_touchpad_rehit.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ slid off A" $(B)/t_touchpad_rehit.log; then \
+	   cat $(B)/t_touchpad_rehit.log; echo "t_touchpad_rehit: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_touchpad_rehit: a finger that takes the button it slides onto loses A, as expected"
 	$(B)/t_watchdog
 	@status=0; $(B)/t_watchdog_nobg > $(B)/t_watchdog_nobg.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ away" $(B)/t_watchdog_nobg.log; then \
@@ -202,13 +209,17 @@ $(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h .
 	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
 $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
-$(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c
+$(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c ../touchpad.c
 # VP9 movies need libvpx (brew install libvpx), as the host build does (host/Makefile VPX)
 VPX ?= /opt/homebrew/opt/libvpx
 $(B)/t_movie: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -o $@ t_movie.c ../movie_av.m ../movie_webm.c ../hstack.S ../hstack.c $(VPX)/lib/libvpx.a \
 		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
+$(B)/t_touchpad: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad.c
+$(B)/t_touchpad_rehit: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_TP_REHIT -I.. -o $@ t_touchpad.c
 $(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
 $(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)

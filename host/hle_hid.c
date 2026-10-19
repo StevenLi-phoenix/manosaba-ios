@@ -148,7 +148,17 @@ static void receipt(const NpadState *s, uint32_t id, uint32_t style, uint64_t km
     pthread_mutex_unlock(&g_receipt_lock);
 }
 
-// Controller state = front end + script + game controller: buttons ORed, a stick from the front end if non-zero, else from the controller
+// On-screen controls (touchpad.c), for a game with game.json "touch": "pad"; this default when the host is built without them (the tests)
+__attribute__((weak)) int dm_touchpad_read(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) { (void)buttons; (void)lx; (void)ly; (void)rx; (void)ry; return 0; }
+// The controller the game last read (touchpad.c's DM_TEST_TOUCHPAD checks it); 0 before the first read
+static _Atomic uint64_t g_last_btn, g_last_axes; static _Atomic int g_last_have;
+int hle_hid_last(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
+    uint64_t ax = atomic_load(&g_last_axes); *buttons = atomic_load(&g_last_btn);
+    *lx = (int16_t)ax; *ly = (int16_t)(ax >> 16); *rx = (int16_t)(ax >> 32); *ry = (int16_t)(ax >> 48);
+    return atomic_load(&g_last_have);
+}
+// Controller state = front end + on-screen controls + script + game controller: buttons ORed; each stick from the first of the front end, the
+// on-screen controls and the controller that pushes it
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     pthread_once(&g_receipt_once, receipt_init);
     uint64_t read_start_ns = g_receipt_file ? now_ns() : 0;
@@ -158,11 +168,18 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     uint64_t km = keys_now();
     s->buttons = (g_in.buttons | atomic_exchange(&g_press_latch, 0)) | (km & ~(uint64_t)PK_MASK) | atomic_load(&g_pad_btn) | atomic_exchange(&g_pad_latch, 0);
     s->lx = g_in.lx; s->ly = g_in.ly; s->rx = g_in.rx; s->ry = g_in.ry;
+    { uint64_t tb; int32_t t[4];
+      if (dm_touchpad_read(&tb, &t[0], &t[1], &t[2], &t[3])) {
+          s->buttons |= tb;
+          if (!(s->lx || s->ly)) { s->lx = t[0]; s->ly = t[1]; } if (!(s->rx || s->ry)) { s->rx = t[2]; s->ry = t[3]; } } }
     { uint64_t ax = atomic_load(&g_pad_axes); int16_t plx = (int16_t)ax, ply = (int16_t)(ax >> 16), prx = (int16_t)(ax >> 32), pry = (int16_t)(ax >> 48);
       if (!(s->lx || s->ly) && (plx || ply)) { s->lx = plx; s->ly = ply; } if (!(s->rx || s->ry) && (prx || pry)) { s->rx = prx; s->ry = pry; } }
     if (km & PK_LSL) s->lx = -32767; if (km & PK_LSR) s->lx = 32767;   // script stick pseudo-keys (up is positive)
     if (km & PK_LSU) s->ly = 32767;  if (km & PK_LSD) s->ly = -32767;
     s->attributes = ATTR_CONNECTED;
+    atomic_store(&g_last_btn, s->buttons);
+    atomic_store(&g_last_axes, (uint64_t)(uint16_t)s->lx | (uint64_t)(uint16_t)s->ly << 16 | (uint64_t)(uint16_t)s->rx << 32 | (uint64_t)(uint16_t)s->ry << 48);
+    atomic_store(&g_last_have, 1);
     receipt(s, id, style, km, read_start_ns);
 }
 

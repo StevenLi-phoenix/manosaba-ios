@@ -14,6 +14,7 @@
   "present_interval": "game",
   "window_unfocused": "in_focus",
   "virtual_cores": true,
+  "touch": "pad",
   "nvn_c2": {"tex": ["0x20", 32], "samp": ["0x568", 128], "img": ["0x120", 8]},
   "romfs": {
     "files": {

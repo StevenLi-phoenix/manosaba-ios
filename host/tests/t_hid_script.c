@@ -1,4 +1,4 @@
-// hle_hid.c: DM_KEYS timed script, merging with the front end and the game controller, press latches, touch items. A fake clock; the real parser
+// hle_hid.c: DM_KEYS timed script, merging with the front end, the on-screen controls and the game controller, press latches, touch items. A fake clock; the real parser
 // and the real GetNpadState path. Expectations are written by hand from the rules in hle_hid.c.
 #ifndef HLE_HID_SOURCE
 #define HLE_HID_SOURCE "../hle_hid.c"
@@ -7,7 +7,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include HLE_HID_SOURCE
+#include "../touchpad.h"   // touchpad.c is linked in: its dm_touchpad_read replaces hle_hid.c's weak default
 module_t g_mod[MAX_MOD]; int g_nmod;
+uint64_t g_t0_ns;
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 static uint64_t clock_ns = 1000000000ull;
 uint64_t now_ns(void) { return clock_ns; }
@@ -62,6 +64,19 @@ int main(void) {
     hid_cmd_keys(DM_BTN_ZR | PK_LSR, 0); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_ZR && s.lx == 32767, "command channel keys held (cmdchan.c down)"); }
     hid_cmd_keys(0, DM_BTN_ZR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 32767, "... ZR released, the stick still held"); }
     hid_cmd_keys(0, PK_LSR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 0, "... all released"); }
+
+    // On-screen controls (touchpad.c): buttons ORed; their stick after the front end's, before the controller's
+    { NpadState s; uint64_t lb; int32_t la[4];
+      CHECK(hle_hid_last(&lb, &la[0], &la[1], &la[2], &la[3]) && lb == 0 && !la[0], "hle_hid_last: what the game last read (nothing held)");
+      tp_layout(844, 390, 47, 0, 47, 21); float sx, sy, ax, ay, r; tp_find("stick", &sx, &sy, &r); tp_find("A", &ax, &ay, &r);
+      at(20); tp_touch(1, TP_DOWN, ax, ay); s = rd(); CHECK(s.buttons == DM_BTN_A && s.lx == 0, "on-screen A");
+      dm_pad_set(DM_BTN_B, 1000, 0, 0, 0); tp_touch(2, TP_DOWN, sx, sy); tp_touch(2, TP_MOVE, sx, sy - 200); at(20.05); s = rd();
+      CHECK(s.buttons == (DM_BTN_A | DM_BTN_B) && s.lx == 0 && s.ly == 32767, "with a controller: buttons ORed, the on-screen stick before the controller's");
+      CHECK(hle_hid_last(&lb, &la[0], &la[1], &la[2], &la[3]) && lb == (DM_BTN_A | DM_BTN_B) && la[1] == 32767, "hle_hid_last: that state");
+      dm_input_set(0, -5, 6, 0, 0); at(20.1); s = rd(); CHECK(s.lx == -5 && s.ly == 6, "the front end's stick before the on-screen one");
+      dm_input_set(0, 0, 0, 0, 0); tp_touch(1, TP_UP, 0, 0); tp_touch(2, TP_UP, 0, 0); at(20.15); s = rd();
+      CHECK(s.buttons == DM_BTN_B && s.lx == 1000 && s.ly == 0, "fingers lifted: the controller's again");
+      dm_pad_set(0, 0, 0, 0, 0); tp_enable(0); rd(); }
 
     opmode = 0; { NpadState s; uint32_t id = 0x20; dm_input_set(DM_BTN_L, 0, 0, 0, 0); h_hid_GetHandheld(&s, &id);
                   CHECK(s.attributes == 1 && s.buttons == DM_BTN_L, "handheld mode: handheld controller connected"); }

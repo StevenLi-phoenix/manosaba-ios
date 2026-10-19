@@ -68,6 +68,10 @@ it signed with every entitlement of its profile (increased memory limit included
   RomFS is checked against the profile before the game starts; if something is missing the app shows what and where.
 - **Mods**: `Documents/mods` (Files app), one folder per mod (`<mod>/romfs`, or as shipped for Atmosphère), or an SD card's `atmosphere`
   folder copied as is; earlier names win, a name starting with `-` turns a mod off; code mods are not applied (`host/mods.c`).
+- **On-screen controls** (games with game.json `touch` "pad": Tears of the Kingdom; `DM_TOUCH=pad` / `screen` overrides the profile, e.g.
+  to try them with manosaba): BotWRecomp's layout (`host/touchpad.c`): a floating stick on the left half, D-pad, ABXY, L / R / ZL / ZR, - / +,
+  L3 / R3, and the right half outside the buttons turns the camera by the finger's speed. The eye button collapses them to itself (kept across
+  launches); a connected game controller turns them off. `DM_TEST_TOUCHPAD=check:<s>` runs the input checks on the device and logs the result.
 - **Saves**: `Documents/save` (transactional, committed atomically). With iCloud entitlements the profile's `save_sync` files are synced
   (`host/cloud.m`).
 - **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Settings app → this app → "Show log on
@@ -85,7 +89,7 @@ it signed with every entitlement of its profile (increased memory limit included
 | File | What it does |
 |---|---|
 | `Sources/main.m` | App and scene delegates, log, finding the game data, graphics settings, starting the host |
-| `Sources/front_ios.m` | The front end (`host/front.h`): Metal layer, touches, controllers, lifecycle |
+| `Sources/front_ios.m` | The front end (`host/front.h`): Metal layer, touches, on-screen controls (`host/touchpad.c`), controllers, lifecycle |
 | `Sources/log_overlay.m`, `Settings.bundle` | On-screen log; the Settings app page (graphics settings and the log switches) |
 | `project.yml` | xcodegen spec; `tools/project_free.py` / `tools/project_m3.py` derive the free-account and iOS 18 variants |
 | `run.sh`, `tools/local_env.sh` | Build / install / launch; reads `local.env` (or `~/.config/dm-ios/local.env`) |

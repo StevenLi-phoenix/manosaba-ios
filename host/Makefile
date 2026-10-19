@@ -43,6 +43,7 @@ SRC = \
 	romfs_validate.c \
 	sead.c \
 	thread.c \
+	touchpad.c \
 	$(sort $(wildcard hle_*.c)) \
 	$(sort $(wildcard $(GAMEDIR)/*.c $(GAMEDIR)/*.m))
 # NVN → Metal and nn::vi (gfx/): sources under gfx, gfx/nvn and gfx/tex by wildcard (tests/ and metal/ are not part of the host)

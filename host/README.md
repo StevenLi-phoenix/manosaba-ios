@@ -71,6 +71,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `front.h`, `front_mac.m` | Front end interface; the Mac front end (headless, or a window with `DM_WINDOW=1`) |
 | `app_mac.m` | Mac app form: prepares what the command line would set when packaged as an `.app` |
 | `gamepad.m` | Game controllers (GameController framework) → Switch controller input, shared by Mac and iOS |
+| `touchpad.c`, `touchpad.h` | On-screen controls with a drag-to-look camera (after BotWRecomp's `touch.cpp`) for games with game.json `touch` "pad": the layout, finger rules and the controller they make; drawn and fed by the iOS front end, read by `hle_hid.c` |
 | `cloud.m`, `cloud.h`, `cloudsync.c` | iCloud save sync of the profile's `save_sync` files (Mac app and iOS; file-level core in `cloudsync.c`) |
 | `options.c` | Code options (`DM_OPTIONS`, or the product's `options.default`): changes the rewriter lists in `<module>.options.tsv`, applied before the code is sealed (Mac) |
 | `mods.c` | User mod folders (`DM_MODS`): each mod's RomFS (mod folders or the Atmosphère layout) as an overlay layer in front of the game's |
@@ -95,6 +96,8 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_MODS=<dir>` | Mods: each entry's `romfs`, `contents/<program id>/romfs` or `atmosphere/contents/<program id>/romfs` (or loose files) in front of the RomFS, in name order, the first winning; names starting with `.` or `-` are off; code mods are not applied (iOS: `Documents/mods`) |
 | `DM_CRASH_HEAP=<reg>,...`, `DM_LIST_WATCH=[heap+]<addr>,...` | sead games: on a crash, the heaps and block holding each register's address; watch intrusive lists and dump the threads when one gets a null next (`sead.c`) |
 | `DM_TEST_BG=<s>,<len>[;...]` | The iPhone's trip to the background and back at those times (focus, audio, guest clock, graphics), on the Mac too; `tools/lifecycle_check.py` judges the log |
+| `DM_TOUCH=pad` or `screen` | iOS: on-screen controls or the game's touchscreen, whatever the profile's `touch` says |
+| `DM_TEST_TOUCHPAD=<test>[:<s>][,...]` | On-screen controls checked in the running game (the Mac too, on an 844x390 layout): `check` (BotWRecomp's input checks against the controller the game read), `hide` (the eye), `look` (a camera drag only, for shots) |
 | `DM_WATCH=<s>` | Stop after that many seconds (exit 142) |
 | `DM_LANG` | Override the profile's language |
 | `DM_MOVIE=1` (`2` = trace), `DM_TOUCH_LOG=1`, `DM_FS=1`, `DM_THROWLOG=1`, `DM_HLECOUNT=<file>` | Movie, touch, file system, managed exception and HLE call logging |

@@ -20,6 +20,8 @@ typedef struct {
                                               //    which on the console is the HOME menu: Tears of the Kingdom stops there); minimized is Background either way
     int virtual_cores;                        // 1: guest threads hold one of three virtual cores while running guest code (game.json virtual_cores; hle_thread.c): the game
                                               //    keeps per-core data without locks (Tears of the Kingdom)
+    int touch_pad;                            // 1: on iOS the touchscreen is on-screen controls (game.json touch "pad", host/touchpad.c) for a game steered with a
+                                              //    controller; default "screen": touches go to the game's touchscreen
     const dm_game_file *romfs_files; int romfs_nfiles;          // key RomFS files with their exact sizes (also tells the version)
     const char *romfs_tree; int romfs_tree_files; long long romfs_tree_bytes;   // RomFS directory whose file count and byte total must match
     const char *const *save_sync; int save_sync_n;              // save paths (glob, relative to the save root) kept in iCloud sync
