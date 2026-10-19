@@ -39,6 +39,7 @@ SRC = \
 	movie_av.m \
 	movie_webm.c \
 	romfs_validate.c \
+	sead.c \
 	thread.c \
 	$(sort $(wildcard hle_*.c)) \
 	$(sort $(wildcard $(GAMEDIR)/*.c $(GAMEDIR)/*.m))

@@ -95,6 +95,7 @@ static void host_preload(int argc, char **argv) {
     probe_install();   // DM_PROBE probes (diagnostics)
     hid_keys_init();   // DM_KEYS scripted input
     { void dm_cmd_start(void); dm_cmd_start(); }   // DM_CMD live command channel (cmdchan.c)
+    { void sead_list_watch_start(void); sead_list_watch_start(); }   // DM_LIST_WATCH (sead.c)
     { void dm_memsnap_init(void); dm_memsnap_init(); }   // DM_MEMSNAP memory snapshots (memsnap.c)
     stubs_report();
     dm_prof_mark("1 host loading (read NSO / relocate / take over imports)");

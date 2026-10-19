@@ -21,6 +21,8 @@ void svc_thread_dump(void) { g_threads++; }
 long dm_memsnap_write(const char *path, long frame) { (void)path; (void)frame; return 0; }
 void hlecount_flush(void) { g_hlecount++; }
 void dm_host_shutdown(const char *why) { (void)why; g_quit++; }
+void sead_heaps_print(void) {}
+void sead_heap_of(uint64_t addr) { (void)addr; }
 
 static int parse_ok(const char *line, int kind, uint32_t mask, long v, const char *path) {
     dm_cmd c; const char *why; if (cmd_parse(line, &c, &why)) return 0;
@@ -43,6 +45,7 @@ int main(void) {
     CHECK(parse_ok("down ZR", CMD_DOWN, 1u << 9, 0, NULL) && parse_ok("up ZR", CMD_UP, 1u << 9, 0, NULL), "down ZR / up ZR");
     CHECK(parse_ok("wait 30", CMD_WAIT, 0, 30, NULL) && parse_ok("sleep 10", CMD_SLEEP, 0, 10, NULL) && parse_ok("passdump 3", CMD_PASSDUMP, 0, 3, NULL), "wait / sleep / passdump");
     CHECK(parse_ok("shot /tmp/a b.png", CMD_SHOT, 0, 0, "/tmp/a b.png") && parse_ok("memsnap /tmp/s", CMD_MEMSNAP, 0, 0, "/tmp/s"), "shot and memsnap keep a path with a space");
+    CHECK(parse_ok("heaps", CMD_HEAPS, 0, 0, NULL) && parse_ok("heap 0x1234", CMD_HEAP, 0, 0x1234, NULL) && parse_bad("heap", "address") && parse_bad("heap 0x12z", "address"), "heaps / heap <addr>");
     CHECK(parse_ok("threads", CMD_THREADS, 0, 0, NULL) && parse_ok("hlecount", CMD_HLECOUNT, 0, 0, NULL) && parse_ok("quit", CMD_QUIT, 0, 0, NULL), "threads / hlecount / quit");
     CHECK(parse_ok("", CMD_NONE, 0, 0, NULL) && parse_ok("   ", CMD_NONE, 0, 0, NULL) && parse_ok("# key A", CMD_NONE, 0, 0, NULL), "blank lines and comments do nothing");
     CHECK(parse_bad("key Q 10", "unknown key") && parse_bad("down", "key name") && parse_bad("key A 10 x", "key <name>"), "an unknown key, no key, an extra word");

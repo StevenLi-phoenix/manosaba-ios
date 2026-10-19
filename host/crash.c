@@ -146,6 +146,20 @@ static void crash_mem(ucontext_t *uc) {
         }
     }
 }
+// DM_CRASH_HEAP=reg[,reg...] (diagnostics): on a crash, the sead heap holding each register's address (x0..x30 or sp) and its use list (sead.c)
+__attribute__((weak)) void sead_heap_of(uint64_t addr) { fprintf(stderr, "[dm] DM_CRASH_HEAP: %#llx (no sead.c in this build)\n", (unsigned long long)addr); }   // sead.c
+static void crash_heap(ucontext_t *uc) {
+    const char *e = getenv("DM_CRASH_HEAP"); if (!e) return;
+    char spec[256]; strlcpy(spec, e, sizeof spec);
+    for (char *save, *t = strtok_r(spec, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+        char *end; int r;
+        if (!strcmp(t, "sp")) { fprintf(stderr, "[dm] heap of sp:\n"); sead_heap_of(uc->uc_mcontext->__ss.__sp); }
+        else if (t[0] == 'x' && (r = (int)strtol(t + 1, &end, 10)) >= 0 && r <= 30 && end != t + 1 && !*end) {
+            fprintf(stderr, "[dm] heap of %s:\n", t);
+            sead_heap_of(r == 29 ? uc->uc_mcontext->__ss.__fp : r == 30 ? uc->uc_mcontext->__ss.__lr : uc->uc_mcontext->__ss.__x[r]); }
+        else fprintf(stderr, "[dm] DM_CRASH_HEAP: cannot parse \"%s\"\n", t);
+    }
+}
 static void on_crash(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = uc_;
     if (sig == SIGTRAP && g_trap_hook && g_trap_hook(uc)) return;
@@ -174,6 +188,7 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
     crash_mem(uc);
+    crash_heap(uc);
     dm_backtrace(uc->uc_mcontext->__ss.__fp);
     mtl_crash_note();   // the graphics layer's last copy handed to the driver (plain values recorded beforehand; no Objective-C here)
     if (g_dump_hook) g_dump_hook();

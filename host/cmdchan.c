@@ -13,6 +13,8 @@
 //   threads              every guest thread's state now (as on a crash)
 //   memsnap <path>       a memory snapshot now (as DM_MEMSNAP, memsnap.c)
 //   hlecount             the host call counts now (DM_HLECOUNT's file)
+//   heaps                every sead heap in the guest's heap and alias regions (sead.c)
+//   heap <addr>          the sead heaps holding addr (0x...) and the block it is in
 //   quit                 the orderly exit of SIGTERM (hle_lifecycle.c)
 // Blank lines and lines starting with # are skipped; an unknown or malformed line is logged in red and skipped. Each line run is logged
 // ("[cmd] ..."). Checked by host/tests/t_cmdchan.c.
@@ -29,8 +31,10 @@ void svc_thread_dump(void);                             // hle_thread.c
 long dm_memsnap_write(const char *path, long frame);    // memsnap.c
 void hlecount_flush(void);                              // hle_count.c
 void dm_host_shutdown(const char *why);                 // hle_lifecycle.c
+void sead_heaps_print(void);                            // sead.c
+void sead_heap_of(uint64_t addr);
 
-enum { CMD_NONE, CMD_KEY, CMD_DOWN, CMD_UP, CMD_WAIT, CMD_SLEEP, CMD_SHOT, CMD_PASSDUMP, CMD_THREADS, CMD_MEMSNAP, CMD_HLECOUNT, CMD_QUIT };
+enum { CMD_NONE, CMD_KEY, CMD_DOWN, CMD_UP, CMD_WAIT, CMD_SLEEP, CMD_SHOT, CMD_PASSDUMP, CMD_THREADS, CMD_MEMSNAP, CMD_HLECOUNT, CMD_QUIT, CMD_HEAPS, CMD_HEAP };
 #define CMD_LINE 1024
 typedef struct { int kind; uint32_t mask; long n; char path[CMD_LINE]; } dm_cmd;
 
@@ -48,7 +52,7 @@ static int cmd_parse(const char *line, dm_cmd *c, const char **why) {
     memcpy(arg, a, an); arg[an] = 0;
     static const struct { const char *name; int kind; } names[] = {{"key", CMD_KEY}, {"down", CMD_DOWN}, {"up", CMD_UP}, {"wait", CMD_WAIT},
         {"sleep", CMD_SLEEP}, {"shot", CMD_SHOT}, {"passdump", CMD_PASSDUMP}, {"threads", CMD_THREADS}, {"memsnap", CMD_MEMSNAP},
-        {"hlecount", CMD_HLECOUNT}, {"quit", CMD_QUIT}};
+        {"hlecount", CMD_HLECOUNT}, {"quit", CMD_QUIT}, {"heaps", CMD_HEAPS}, {"heap", CMD_HEAP}};
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) if (!strcmp(w, names[i].name)) c->kind = names[i].kind;
     if (!c->kind) { *why = "unknown command"; return -1; }
     switch (c->kind) {
@@ -62,6 +66,10 @@ static int cmd_parse(const char *line, dm_cmd *c, const char **why) {
         long lo = 1, hi = c->kind == CMD_WAIT ? 100000 : c->kind == CMD_SLEEP ? 600000 : 600; char *end;
         errno = 0; c->n = strtol(arg, &end, 10);
         if (end == arg || *end || errno || c->n < lo || c->n > hi) { *why = c->kind == CMD_WAIT ? "wait takes 1-100000 frames" : c->kind == CMD_SLEEP ? "sleep takes 1-600000 ms" : "passdump takes 1-600 frames"; return -1; }
+        return 0; }
+    case CMD_HEAP: {
+        char *end; errno = 0; c->n = (long)strtoull(arg, &end, 0);
+        if (end == arg || *end || errno || !c->n) { *why = "heap takes an address"; return -1; }
         return 0; }
     case CMD_SHOT: case CMD_MEMSNAP:
         if (!*arg) { *why = "expected a path"; return -1; }
@@ -86,6 +94,8 @@ static void cmd_run(const dm_cmd *c) {
         if (n < 0) LOG("[red] command channel: memsnap %s failed", c->path); else LOG("[cmd] memsnap: frame %ld, %ld bytes to %s", f, n, c->path); break; }
     case CMD_HLECOUNT: hlecount_flush(); break;
     case CMD_QUIT: dm_host_shutdown("command channel quit"); break;
+    case CMD_HEAPS: sead_heaps_print(); break;
+    case CMD_HEAP: sead_heap_of((uint64_t)c->n); break;
     }
 }
 

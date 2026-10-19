@@ -927,7 +927,15 @@ Tier 3, medium:
   table of good and malformed lines; a file a writer appends to); run as far as written, the line written in two parts fails it (4 fail);
   `t_hid_script`: the keys reach GetNpadState (2 fail without them). In Tears of the Kingdom: wait 300, shot, passdump 1 (frame 301 only),
   threads, key A (read by the game at 11.2 s), an unknown line skipped in red, quit: exit 0
-- [ ] 48 sead heap walk and list watch at a crash
+- [x] batch 11 · 48 sead heaps and list watch (`host/sead.c`, after MacNativeGames' TOTK_CRASH_HEAPFIND / HEAPWALK / LISTCHECK):
+  `DM_CRASH_HEAP=<reg>,...` on a crash and the channel's `heap <addr>` print the heaps holding an address, outermost first, and the block of the
+  innermost one it is in; `heaps` lists every heap; `DM_LIST_WATCH=[heap+]<addr>,...` dumps the threads once when a watched list gets a null next.
+  MacNativeGames' layout holds in Tears of the Kingdom 1.4.3 (names RootHeap, GraphicsSystem, Resource, Actor read back): at frame 900, 7,508
+  heaps found in 1.3 s, in five classes by vtable (the game has no C++ type names): main+0x3900d18 (266) and main+0x39011d0 (53) all with whole
+  use lists, main+0x3900e40 (7,178), +0x39013f0 (7) and +0x3945240 (4) with none at +0xc8, so a use list counts as broken only in a class that
+  has whole ones (counted naively, 6,127 of 6,450 looked broken). An address in the Actor heap: RootHeap → sead::TaskMgr → ModuleSystem → Actor
+  and its block. `host/tests/t_sead.c`: 19 checks on heaps built by hand (a child heap, a class without a use list, three kinds of break, a list
+  watch); taking a heap without checking it reaches the address fails 2; `t_crash_stderr`: DM_CRASH_HEAP gets the register's value at a crash
 - [ ] 49 per-pass GPU time with MTL4CounterHeap
 - [ ] 50 soak and fixed-camera measurement
 - [ ] 51 lifecycle and swipe-away tests back

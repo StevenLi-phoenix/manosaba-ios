@@ -4,6 +4,8 @@
 //         having written the one-line report through write();
 //   free: nobody holds the lock → the usual full report (registers, backtrace) is printed and the child exits with 128 + signal.
 // Before the fix the "held" child hung forever in fprintf: the parent's 10 s limit catches that.
+//   heap: DM_CRASH_HEAP=x19,x99 with x19 set before the fault → the heap lookup gets x19's value (crash.c's weak stand-in for sead.c prints it),
+//         x99 is reported as not parsed.
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -17,7 +19,11 @@ void crash_install(void);
 static void *hold_stderr(void *a) { flockfile(stderr); *(volatile int *)a = 1; for (;;) pause(); }
 static void child(int hold) {
     crash_install();
-    if (hold) {
+    if (hold == 2) {
+        setenv("DM_CRASH_HEAP", "x19,x99", 1);
+        __asm__ volatile("mov x19, %0\n str wzr, [%1]" :: "r"(0x5ead1234ull), "r"(8ull) : "x19", "memory");   // fault with x19 known
+    }
+    if (hold == 1) {
         volatile int ready = 0; pthread_t t; pthread_create(&t, NULL, hold_stderr, (void *)&ready);
         while (!ready) usleep(1000);
     }
@@ -37,13 +43,16 @@ static void run(int hold) {
     int hung = waited >= 1000;
     if (hung) { kill(pid, SIGKILL); waitpid(pid, &status, 0); }
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    char out[8192] = ""; ssize_t n, k = 0; while (k < (ssize_t)sizeof out - 1 && (n = read(pfd[0], out + k, sizeof out - 1 - k)) > 0) k += n; out[k] = 0; close(pfd[0]);
+    static char out[65536]; out[0] = 0; ssize_t n, k = 0; while (k < (ssize_t)sizeof out - 1 && (n = read(pfd[0], out + k, sizeof out - 1 - k)) > 0) k += n; out[k] = 0; close(pfd[0]);
     double s = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    printf("[%s] exit %d after %.2f s%s; report: %.*s\n", hold ? "held" : "free", code, s, hung ? " (killed after 10 s)" : "", (int)strcspn(out, "\n"), out);
-    EXPECT(hold ? "stderr held: the child exits by itself" : "stderr free: the child exits by itself", !hung);
+    printf("[%s] exit %d after %.2f s%s; report: %.*s\n", hold == 2 ? "heap" : hold ? "held" : "free", code, s, hung ? " (killed after 10 s)" : "", (int)strcspn(out, "\n"), out);
+    EXPECT(hold == 2 ? "DM_CRASH_HEAP: the child exits by itself" : hold ? "stderr held: the child exits by itself" : "stderr free: the child exits by itself", !hung);
     EXPECT("exit status is 128 + SIGSEGV or SIGBUS", code == 128 + SIGSEGV || code == 128 + SIGBUS);
-    if (hold) {
+    if (hold == 2) {
+        EXPECT("DM_CRASH_HEAP: the heap of x19 is looked up with x19's value", strstr(out, "heap of x19:") && strstr(out, "DM_CRASH_HEAP: 0x5ead1234"));
+        EXPECT("DM_CRASH_HEAP: x99 is reported as not parsed", strstr(out, "DM_CRASH_HEAP: cannot parse \"x99\"") != NULL);
+    } else if (hold) {
         EXPECT("stderr held: one-line report written through write()", strstr(out, "stderr held by another thread") != NULL);
         EXPECT("stderr held: gave up after about 1 s (under 5 s)", s < 5);
     } else {
@@ -54,6 +63,7 @@ static void run(int hold) {
 int main(void) {
     run(1);
     run(0);
+    run(2);
     printf("t_crash_stderr: %d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

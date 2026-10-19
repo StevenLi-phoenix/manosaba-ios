@@ -33,6 +33,8 @@ run: \
 	$(B)/t_oe \
 	$(B)/t_padmap \
 	$(B)/t_romfs_validate \
+	$(B)/t_sead \
+	$(B)/t_sead_broken \
 	$(B)/t_sleep \
 	$(B)/t_swkbd \
 	$(B)/t_sysevent \
@@ -81,6 +83,11 @@ run: \
 	$(B)/t_oe 2>/dev/null
 	$(B)/t_padmap
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
+	$(B)/t_sead 2>/dev/null
+	@status=0; $(B)/t_sead_broken > $(B)/t_sead_broken.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ an address past A's end" $(B)/t_sead_broken.log; then \
+	   cat $(B)/t_sead_broken.log; echo "t_sead_broken: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_sead_broken: a heap taken without checking it reaches the address is found past its end, as expected"
 	$(B)/t_sleep
 	$(B)/t_swkbd
 	$(B)/t_sysevent 2>/dev/null
@@ -119,6 +126,10 @@ $(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_arbiter.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_padmap.c
+$(B)/t_sead: t_sead.c ../sead.c ../dm.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_sead.c
+$(B)/t_sead_broken: t_sead.c ../sead.c ../dm.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_SEAD_BROKEN -I.. -o $@ t_sead.c
 $(B)/t_sleep: t_sleep.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_sleep.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_envfile: t_envfile.c ../envfile.h | $(B)
