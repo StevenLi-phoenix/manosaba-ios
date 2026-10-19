@@ -150,6 +150,13 @@ static void map_add(uint64_t b, uint64_t n, uint64_t src, uint32_t st) {
     pthread_mutex_unlock(&g_map_lock);
 }
 static void map_del(int i) { pthread_mutex_lock(&g_map_lock); g_map[i] = g_map[--g_nmap]; pthread_mutex_unlock(&g_map_lock); }
+// The MapMemory mapping holding a: its base and *size, 0 when a is in none (hle_thread.c: a new thread's stack)
+uint64_t dm_mapping_of(uint64_t a, uint64_t *size) {
+    pthread_mutex_lock(&g_map_lock);
+    int k = map_find(a, 1); uint64_t b = k ? g_map[k - 1].base : 0; *size = k ? g_map[k - 1].size : 0;
+    pthread_mutex_unlock(&g_map_lock);
+    return b;
+}
 static pthread_mutex_t g_mapmem_mu = PTHREAD_MUTEX_INITIALIZER;   // MapMemory / UnmapMemory as a whole (check, copy, register, release pages)
 
 int svc_thread(int num, uint64_t *regs);   // hle_thread.c: thread and synchronization kind

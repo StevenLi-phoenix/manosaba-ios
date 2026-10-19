@@ -7,6 +7,7 @@
 struct dm_flags g_flag;
 uint64_t unimpl_stubs[4096];
 void *hlecount_wrap(const char *kind, const char *name, void *function) { (void)kind; (void)name; return function; }
+void *dm_hwrap(void *fn) { return fn; }
 HLE("host_provided", int, host_provided, void) { return 7; }
 static int n, fail;
 #define CHECK(c, ...) do { n++; if (c) printf("  ✓ "); else { fail++; printf("  ✗ "); } printf(__VA_ARGS__); printf("\n"); } while (0)

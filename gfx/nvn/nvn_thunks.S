@@ -12,7 +12,7 @@ _nvnth_0:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_1
 _nvnth_1:
     adrp x16, _nvn_slot@PAGE
@@ -22,7 +22,7 @@ _nvnth_1:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_2
 _nvnth_2:
     adrp x16, _nvn_slot@PAGE
@@ -32,7 +32,7 @@ _nvnth_2:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_3
 _nvnth_3:
     adrp x16, _nvn_slot@PAGE
@@ -42,7 +42,7 @@ _nvnth_3:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_4
 _nvnth_4:
     adrp x16, _nvn_slot@PAGE
@@ -52,7 +52,7 @@ _nvnth_4:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_5
 _nvnth_5:
     adrp x16, _nvn_slot@PAGE
@@ -62,7 +62,7 @@ _nvnth_5:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_6
 _nvnth_6:
     adrp x16, _nvn_slot@PAGE
@@ -72,7 +72,7 @@ _nvnth_6:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_7
 _nvnth_7:
     adrp x16, _nvn_slot@PAGE
@@ -82,7 +82,7 @@ _nvnth_7:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_8
 _nvnth_8:
     adrp x16, _nvn_slot@PAGE
@@ -92,7 +92,7 @@ _nvnth_8:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_9
 _nvnth_9:
     adrp x16, _nvn_slot@PAGE
@@ -102,7 +102,7 @@ _nvnth_9:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_10
 _nvnth_10:
     adrp x16, _nvn_slot@PAGE
@@ -112,7 +112,7 @@ _nvnth_10:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_11
 _nvnth_11:
     adrp x16, _nvn_slot@PAGE
@@ -122,7 +122,7 @@ _nvnth_11:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_12
 _nvnth_12:
     adrp x16, _nvn_slot@PAGE
@@ -132,7 +132,7 @@ _nvnth_12:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_13
 _nvnth_13:
     adrp x16, _nvn_slot@PAGE
@@ -142,7 +142,7 @@ _nvnth_13:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_14
 _nvnth_14:
     adrp x16, _nvn_slot@PAGE
@@ -152,7 +152,7 @@ _nvnth_14:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_15
 _nvnth_15:
     adrp x16, _nvn_slot@PAGE
@@ -162,7 +162,7 @@ _nvnth_15:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_16
 _nvnth_16:
     adrp x16, _nvn_slot@PAGE
@@ -172,7 +172,7 @@ _nvnth_16:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_17
 _nvnth_17:
     adrp x16, _nvn_slot@PAGE
@@ -182,7 +182,7 @@ _nvnth_17:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_18
 _nvnth_18:
     adrp x16, _nvn_slot@PAGE
@@ -192,7 +192,7 @@ _nvnth_18:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_19
 _nvnth_19:
     adrp x16, _nvn_slot@PAGE
@@ -202,7 +202,7 @@ _nvnth_19:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_20
 _nvnth_20:
     adrp x16, _nvn_slot@PAGE
@@ -212,7 +212,7 @@ _nvnth_20:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_21
 _nvnth_21:
     adrp x16, _nvn_slot@PAGE
@@ -222,7 +222,7 @@ _nvnth_21:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_22
 _nvnth_22:
     adrp x16, _nvn_slot@PAGE
@@ -232,7 +232,7 @@ _nvnth_22:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_23
 _nvnth_23:
     adrp x16, _nvn_slot@PAGE
@@ -242,7 +242,7 @@ _nvnth_23:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_24
 _nvnth_24:
     adrp x16, _nvn_slot@PAGE
@@ -252,7 +252,7 @@ _nvnth_24:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_25
 _nvnth_25:
     adrp x16, _nvn_slot@PAGE
@@ -262,7 +262,7 @@ _nvnth_25:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_26
 _nvnth_26:
     adrp x16, _nvn_slot@PAGE
@@ -272,7 +272,7 @@ _nvnth_26:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_27
 _nvnth_27:
     adrp x16, _nvn_slot@PAGE
@@ -282,7 +282,7 @@ _nvnth_27:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_28
 _nvnth_28:
     adrp x16, _nvn_slot@PAGE
@@ -292,7 +292,7 @@ _nvnth_28:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_29
 _nvnth_29:
     adrp x16, _nvn_slot@PAGE
@@ -302,7 +302,7 @@ _nvnth_29:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_30
 _nvnth_30:
     adrp x16, _nvn_slot@PAGE
@@ -312,7 +312,7 @@ _nvnth_30:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_31
 _nvnth_31:
     adrp x16, _nvn_slot@PAGE
@@ -322,7 +322,7 @@ _nvnth_31:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_32
 _nvnth_32:
     adrp x16, _nvn_slot@PAGE
@@ -332,7 +332,7 @@ _nvnth_32:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_33
 _nvnth_33:
     adrp x16, _nvn_slot@PAGE
@@ -342,7 +342,7 @@ _nvnth_33:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_34
 _nvnth_34:
     adrp x16, _nvn_slot@PAGE
@@ -352,7 +352,7 @@ _nvnth_34:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_35
 _nvnth_35:
     adrp x16, _nvn_slot@PAGE
@@ -362,7 +362,7 @@ _nvnth_35:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_36
 _nvnth_36:
     adrp x16, _nvn_slot@PAGE
@@ -372,7 +372,7 @@ _nvnth_36:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_37
 _nvnth_37:
     adrp x16, _nvn_slot@PAGE
@@ -382,7 +382,7 @@ _nvnth_37:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_38
 _nvnth_38:
     adrp x16, _nvn_slot@PAGE
@@ -392,7 +392,7 @@ _nvnth_38:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_39
 _nvnth_39:
     adrp x16, _nvn_slot@PAGE
@@ -402,7 +402,7 @@ _nvnth_39:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_40
 _nvnth_40:
     adrp x16, _nvn_slot@PAGE
@@ -412,7 +412,7 @@ _nvnth_40:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_41
 _nvnth_41:
     adrp x16, _nvn_slot@PAGE
@@ -422,7 +422,7 @@ _nvnth_41:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_42
 _nvnth_42:
     adrp x16, _nvn_slot@PAGE
@@ -432,7 +432,7 @@ _nvnth_42:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_43
 _nvnth_43:
     adrp x16, _nvn_slot@PAGE
@@ -442,7 +442,7 @@ _nvnth_43:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_44
 _nvnth_44:
     adrp x16, _nvn_slot@PAGE
@@ -452,7 +452,7 @@ _nvnth_44:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_45
 _nvnth_45:
     adrp x16, _nvn_slot@PAGE
@@ -462,7 +462,7 @@ _nvnth_45:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_46
 _nvnth_46:
     adrp x16, _nvn_slot@PAGE
@@ -472,7 +472,7 @@ _nvnth_46:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_47
 _nvnth_47:
     adrp x16, _nvn_slot@PAGE
@@ -482,7 +482,7 @@ _nvnth_47:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_48
 _nvnth_48:
     adrp x16, _nvn_slot@PAGE
@@ -492,7 +492,7 @@ _nvnth_48:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_49
 _nvnth_49:
     adrp x16, _nvn_slot@PAGE
@@ -502,7 +502,7 @@ _nvnth_49:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_50
 _nvnth_50:
     adrp x16, _nvn_slot@PAGE
@@ -512,7 +512,7 @@ _nvnth_50:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_51
 _nvnth_51:
     adrp x16, _nvn_slot@PAGE
@@ -522,7 +522,7 @@ _nvnth_51:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_52
 _nvnth_52:
     adrp x16, _nvn_slot@PAGE
@@ -532,7 +532,7 @@ _nvnth_52:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_53
 _nvnth_53:
     adrp x16, _nvn_slot@PAGE
@@ -542,7 +542,7 @@ _nvnth_53:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_54
 _nvnth_54:
     adrp x16, _nvn_slot@PAGE
@@ -552,7 +552,7 @@ _nvnth_54:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_55
 _nvnth_55:
     adrp x16, _nvn_slot@PAGE
@@ -562,7 +562,7 @@ _nvnth_55:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_56
 _nvnth_56:
     adrp x16, _nvn_slot@PAGE
@@ -572,7 +572,7 @@ _nvnth_56:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_57
 _nvnth_57:
     adrp x16, _nvn_slot@PAGE
@@ -582,7 +582,7 @@ _nvnth_57:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_58
 _nvnth_58:
     adrp x16, _nvn_slot@PAGE
@@ -592,7 +592,7 @@ _nvnth_58:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_59
 _nvnth_59:
     adrp x16, _nvn_slot@PAGE
@@ -602,7 +602,7 @@ _nvnth_59:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_60
 _nvnth_60:
     adrp x16, _nvn_slot@PAGE
@@ -612,7 +612,7 @@ _nvnth_60:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_61
 _nvnth_61:
     adrp x16, _nvn_slot@PAGE
@@ -622,7 +622,7 @@ _nvnth_61:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_62
 _nvnth_62:
     adrp x16, _nvn_slot@PAGE
@@ -632,7 +632,7 @@ _nvnth_62:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_63
 _nvnth_63:
     adrp x16, _nvn_slot@PAGE
@@ -642,7 +642,7 @@ _nvnth_63:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_64
 _nvnth_64:
     adrp x16, _nvn_slot@PAGE
@@ -652,7 +652,7 @@ _nvnth_64:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_65
 _nvnth_65:
     adrp x16, _nvn_slot@PAGE
@@ -662,7 +662,7 @@ _nvnth_65:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_66
 _nvnth_66:
     adrp x16, _nvn_slot@PAGE
@@ -672,7 +672,7 @@ _nvnth_66:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_67
 _nvnth_67:
     adrp x16, _nvn_slot@PAGE
@@ -682,7 +682,7 @@ _nvnth_67:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_68
 _nvnth_68:
     adrp x16, _nvn_slot@PAGE
@@ -692,7 +692,7 @@ _nvnth_68:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_69
 _nvnth_69:
     adrp x16, _nvn_slot@PAGE
@@ -702,7 +702,7 @@ _nvnth_69:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_70
 _nvnth_70:
     adrp x16, _nvn_slot@PAGE
@@ -712,7 +712,7 @@ _nvnth_70:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_71
 _nvnth_71:
     adrp x16, _nvn_slot@PAGE
@@ -722,7 +722,7 @@ _nvnth_71:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_72
 _nvnth_72:
     adrp x16, _nvn_slot@PAGE
@@ -732,7 +732,7 @@ _nvnth_72:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_73
 _nvnth_73:
     adrp x16, _nvn_slot@PAGE
@@ -742,7 +742,7 @@ _nvnth_73:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_74
 _nvnth_74:
     adrp x16, _nvn_slot@PAGE
@@ -752,7 +752,7 @@ _nvnth_74:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_75
 _nvnth_75:
     adrp x16, _nvn_slot@PAGE
@@ -762,7 +762,7 @@ _nvnth_75:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_76
 _nvnth_76:
     adrp x16, _nvn_slot@PAGE
@@ -772,7 +772,7 @@ _nvnth_76:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_77
 _nvnth_77:
     adrp x16, _nvn_slot@PAGE
@@ -782,7 +782,7 @@ _nvnth_77:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_78
 _nvnth_78:
     adrp x16, _nvn_slot@PAGE
@@ -792,7 +792,7 @@ _nvnth_78:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_79
 _nvnth_79:
     adrp x16, _nvn_slot@PAGE
@@ -802,7 +802,7 @@ _nvnth_79:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_80
 _nvnth_80:
     adrp x16, _nvn_slot@PAGE
@@ -812,7 +812,7 @@ _nvnth_80:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_81
 _nvnth_81:
     adrp x16, _nvn_slot@PAGE
@@ -822,7 +822,7 @@ _nvnth_81:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_82
 _nvnth_82:
     adrp x16, _nvn_slot@PAGE
@@ -832,7 +832,7 @@ _nvnth_82:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_83
 _nvnth_83:
     adrp x16, _nvn_slot@PAGE
@@ -842,7 +842,7 @@ _nvnth_83:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_84
 _nvnth_84:
     adrp x16, _nvn_slot@PAGE
@@ -852,7 +852,7 @@ _nvnth_84:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_85
 _nvnth_85:
     adrp x16, _nvn_slot@PAGE
@@ -862,7 +862,7 @@ _nvnth_85:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_86
 _nvnth_86:
     adrp x16, _nvn_slot@PAGE
@@ -872,7 +872,7 @@ _nvnth_86:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_87
 _nvnth_87:
     adrp x16, _nvn_slot@PAGE
@@ -882,7 +882,7 @@ _nvnth_87:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_88
 _nvnth_88:
     adrp x16, _nvn_slot@PAGE
@@ -892,7 +892,7 @@ _nvnth_88:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_89
 _nvnth_89:
     adrp x16, _nvn_slot@PAGE
@@ -902,7 +902,7 @@ _nvnth_89:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_90
 _nvnth_90:
     adrp x16, _nvn_slot@PAGE
@@ -912,7 +912,7 @@ _nvnth_90:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_91
 _nvnth_91:
     adrp x16, _nvn_slot@PAGE
@@ -922,7 +922,7 @@ _nvnth_91:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_92
 _nvnth_92:
     adrp x16, _nvn_slot@PAGE
@@ -932,7 +932,7 @@ _nvnth_92:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_93
 _nvnth_93:
     adrp x16, _nvn_slot@PAGE
@@ -942,7 +942,7 @@ _nvnth_93:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_94
 _nvnth_94:
     adrp x16, _nvn_slot@PAGE
@@ -952,7 +952,7 @@ _nvnth_94:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_95
 _nvnth_95:
     adrp x16, _nvn_slot@PAGE
@@ -962,7 +962,7 @@ _nvnth_95:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_96
 _nvnth_96:
     adrp x16, _nvn_slot@PAGE
@@ -972,7 +972,7 @@ _nvnth_96:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_97
 _nvnth_97:
     adrp x16, _nvn_slot@PAGE
@@ -982,7 +982,7 @@ _nvnth_97:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_98
 _nvnth_98:
     adrp x16, _nvn_slot@PAGE
@@ -992,7 +992,7 @@ _nvnth_98:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_99
 _nvnth_99:
     adrp x16, _nvn_slot@PAGE
@@ -1002,7 +1002,7 @@ _nvnth_99:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_100
 _nvnth_100:
     adrp x16, _nvn_slot@PAGE
@@ -1012,7 +1012,7 @@ _nvnth_100:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_101
 _nvnth_101:
     adrp x16, _nvn_slot@PAGE
@@ -1022,7 +1022,7 @@ _nvnth_101:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_102
 _nvnth_102:
     adrp x16, _nvn_slot@PAGE
@@ -1032,7 +1032,7 @@ _nvnth_102:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_103
 _nvnth_103:
     adrp x16, _nvn_slot@PAGE
@@ -1042,7 +1042,7 @@ _nvnth_103:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_104
 _nvnth_104:
     adrp x16, _nvn_slot@PAGE
@@ -1052,7 +1052,7 @@ _nvnth_104:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_105
 _nvnth_105:
     adrp x16, _nvn_slot@PAGE
@@ -1062,7 +1062,7 @@ _nvnth_105:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_106
 _nvnth_106:
     adrp x16, _nvn_slot@PAGE
@@ -1072,7 +1072,7 @@ _nvnth_106:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_107
 _nvnth_107:
     adrp x16, _nvn_slot@PAGE
@@ -1082,7 +1082,7 @@ _nvnth_107:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_108
 _nvnth_108:
     adrp x16, _nvn_slot@PAGE
@@ -1092,7 +1092,7 @@ _nvnth_108:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_109
 _nvnth_109:
     adrp x16, _nvn_slot@PAGE
@@ -1102,7 +1102,7 @@ _nvnth_109:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_110
 _nvnth_110:
     adrp x16, _nvn_slot@PAGE
@@ -1112,7 +1112,7 @@ _nvnth_110:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_111
 _nvnth_111:
     adrp x16, _nvn_slot@PAGE
@@ -1122,7 +1122,7 @@ _nvnth_111:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_112
 _nvnth_112:
     adrp x16, _nvn_slot@PAGE
@@ -1132,7 +1132,7 @@ _nvnth_112:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_113
 _nvnth_113:
     adrp x16, _nvn_slot@PAGE
@@ -1142,7 +1142,7 @@ _nvnth_113:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_114
 _nvnth_114:
     adrp x16, _nvn_slot@PAGE
@@ -1152,7 +1152,7 @@ _nvnth_114:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_115
 _nvnth_115:
     adrp x16, _nvn_slot@PAGE
@@ -1162,7 +1162,7 @@ _nvnth_115:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_116
 _nvnth_116:
     adrp x16, _nvn_slot@PAGE
@@ -1172,7 +1172,7 @@ _nvnth_116:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_117
 _nvnth_117:
     adrp x16, _nvn_slot@PAGE
@@ -1182,7 +1182,7 @@ _nvnth_117:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_118
 _nvnth_118:
     adrp x16, _nvn_slot@PAGE
@@ -1192,7 +1192,7 @@ _nvnth_118:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_119
 _nvnth_119:
     adrp x16, _nvn_slot@PAGE
@@ -1202,7 +1202,7 @@ _nvnth_119:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_120
 _nvnth_120:
     adrp x16, _nvn_slot@PAGE
@@ -1212,7 +1212,7 @@ _nvnth_120:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_121
 _nvnth_121:
     adrp x16, _nvn_slot@PAGE
@@ -1222,7 +1222,7 @@ _nvnth_121:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_122
 _nvnth_122:
     adrp x16, _nvn_slot@PAGE
@@ -1232,7 +1232,7 @@ _nvnth_122:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_123
 _nvnth_123:
     adrp x16, _nvn_slot@PAGE
@@ -1242,7 +1242,7 @@ _nvnth_123:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_124
 _nvnth_124:
     adrp x16, _nvn_slot@PAGE
@@ -1252,7 +1252,7 @@ _nvnth_124:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_125
 _nvnth_125:
     adrp x16, _nvn_slot@PAGE
@@ -1262,7 +1262,7 @@ _nvnth_125:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_126
 _nvnth_126:
     adrp x16, _nvn_slot@PAGE
@@ -1272,7 +1272,7 @@ _nvnth_126:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_127
 _nvnth_127:
     adrp x16, _nvn_slot@PAGE
@@ -1282,7 +1282,7 @@ _nvnth_127:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_128
 _nvnth_128:
     adrp x16, _nvn_slot@PAGE
@@ -1292,7 +1292,7 @@ _nvnth_128:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_129
 _nvnth_129:
     adrp x16, _nvn_slot@PAGE
@@ -1302,7 +1302,7 @@ _nvnth_129:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_130
 _nvnth_130:
     adrp x16, _nvn_slot@PAGE
@@ -1312,7 +1312,7 @@ _nvnth_130:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_131
 _nvnth_131:
     adrp x16, _nvn_slot@PAGE
@@ -1322,7 +1322,7 @@ _nvnth_131:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_132
 _nvnth_132:
     adrp x16, _nvn_slot@PAGE
@@ -1332,7 +1332,7 @@ _nvnth_132:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_133
 _nvnth_133:
     adrp x16, _nvn_slot@PAGE
@@ -1342,7 +1342,7 @@ _nvnth_133:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_134
 _nvnth_134:
     adrp x16, _nvn_slot@PAGE
@@ -1352,7 +1352,7 @@ _nvnth_134:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_135
 _nvnth_135:
     adrp x16, _nvn_slot@PAGE
@@ -1362,7 +1362,7 @@ _nvnth_135:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_136
 _nvnth_136:
     adrp x16, _nvn_slot@PAGE
@@ -1372,7 +1372,7 @@ _nvnth_136:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_137
 _nvnth_137:
     adrp x16, _nvn_slot@PAGE
@@ -1382,7 +1382,7 @@ _nvnth_137:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_138
 _nvnth_138:
     adrp x16, _nvn_slot@PAGE
@@ -1392,7 +1392,7 @@ _nvnth_138:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_139
 _nvnth_139:
     adrp x16, _nvn_slot@PAGE
@@ -1402,7 +1402,7 @@ _nvnth_139:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_140
 _nvnth_140:
     adrp x16, _nvn_slot@PAGE
@@ -1412,7 +1412,7 @@ _nvnth_140:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_141
 _nvnth_141:
     adrp x16, _nvn_slot@PAGE
@@ -1422,7 +1422,7 @@ _nvnth_141:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_142
 _nvnth_142:
     adrp x16, _nvn_slot@PAGE
@@ -1432,7 +1432,7 @@ _nvnth_142:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_143
 _nvnth_143:
     adrp x16, _nvn_slot@PAGE
@@ -1442,7 +1442,7 @@ _nvnth_143:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_144
 _nvnth_144:
     adrp x16, _nvn_slot@PAGE
@@ -1452,7 +1452,7 @@ _nvnth_144:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_145
 _nvnth_145:
     adrp x16, _nvn_slot@PAGE
@@ -1462,7 +1462,7 @@ _nvnth_145:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_146
 _nvnth_146:
     adrp x16, _nvn_slot@PAGE
@@ -1472,7 +1472,7 @@ _nvnth_146:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_147
 _nvnth_147:
     adrp x16, _nvn_slot@PAGE
@@ -1482,7 +1482,7 @@ _nvnth_147:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_148
 _nvnth_148:
     adrp x16, _nvn_slot@PAGE
@@ -1492,7 +1492,7 @@ _nvnth_148:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_149
 _nvnth_149:
     adrp x16, _nvn_slot@PAGE
@@ -1502,7 +1502,7 @@ _nvnth_149:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_150
 _nvnth_150:
     adrp x16, _nvn_slot@PAGE
@@ -1512,7 +1512,7 @@ _nvnth_150:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_151
 _nvnth_151:
     adrp x16, _nvn_slot@PAGE
@@ -1522,7 +1522,7 @@ _nvnth_151:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_152
 _nvnth_152:
     adrp x16, _nvn_slot@PAGE
@@ -1532,7 +1532,7 @@ _nvnth_152:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_153
 _nvnth_153:
     adrp x16, _nvn_slot@PAGE
@@ -1542,7 +1542,7 @@ _nvnth_153:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_154
 _nvnth_154:
     adrp x16, _nvn_slot@PAGE
@@ -1552,7 +1552,7 @@ _nvnth_154:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_155
 _nvnth_155:
     adrp x16, _nvn_slot@PAGE
@@ -1562,7 +1562,7 @@ _nvnth_155:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_156
 _nvnth_156:
     adrp x16, _nvn_slot@PAGE
@@ -1572,7 +1572,7 @@ _nvnth_156:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_157
 _nvnth_157:
     adrp x16, _nvn_slot@PAGE
@@ -1582,7 +1582,7 @@ _nvnth_157:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_158
 _nvnth_158:
     adrp x16, _nvn_slot@PAGE
@@ -1592,7 +1592,7 @@ _nvnth_158:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_159
 _nvnth_159:
     adrp x16, _nvn_slot@PAGE
@@ -1602,7 +1602,7 @@ _nvnth_159:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_160
 _nvnth_160:
     adrp x16, _nvn_slot@PAGE
@@ -1612,7 +1612,7 @@ _nvnth_160:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_161
 _nvnth_161:
     adrp x16, _nvn_slot@PAGE
@@ -1622,7 +1622,7 @@ _nvnth_161:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_162
 _nvnth_162:
     adrp x16, _nvn_slot@PAGE
@@ -1632,7 +1632,7 @@ _nvnth_162:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_163
 _nvnth_163:
     adrp x16, _nvn_slot@PAGE
@@ -1642,7 +1642,7 @@ _nvnth_163:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_164
 _nvnth_164:
     adrp x16, _nvn_slot@PAGE
@@ -1652,7 +1652,7 @@ _nvnth_164:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_165
 _nvnth_165:
     adrp x16, _nvn_slot@PAGE
@@ -1662,7 +1662,7 @@ _nvnth_165:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_166
 _nvnth_166:
     adrp x16, _nvn_slot@PAGE
@@ -1672,7 +1672,7 @@ _nvnth_166:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_167
 _nvnth_167:
     adrp x16, _nvn_slot@PAGE
@@ -1682,7 +1682,7 @@ _nvnth_167:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_168
 _nvnth_168:
     adrp x16, _nvn_slot@PAGE
@@ -1692,7 +1692,7 @@ _nvnth_168:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_169
 _nvnth_169:
     adrp x16, _nvn_slot@PAGE
@@ -1702,7 +1702,7 @@ _nvnth_169:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_170
 _nvnth_170:
     adrp x16, _nvn_slot@PAGE
@@ -1712,7 +1712,7 @@ _nvnth_170:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_171
 _nvnth_171:
     adrp x16, _nvn_slot@PAGE
@@ -1722,7 +1722,7 @@ _nvnth_171:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_172
 _nvnth_172:
     adrp x16, _nvn_slot@PAGE
@@ -1732,7 +1732,7 @@ _nvnth_172:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_173
 _nvnth_173:
     adrp x16, _nvn_slot@PAGE
@@ -1742,7 +1742,7 @@ _nvnth_173:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_174
 _nvnth_174:
     adrp x16, _nvn_slot@PAGE
@@ -1752,7 +1752,7 @@ _nvnth_174:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_175
 _nvnth_175:
     adrp x16, _nvn_slot@PAGE
@@ -1762,7 +1762,7 @@ _nvnth_175:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_176
 _nvnth_176:
     adrp x16, _nvn_slot@PAGE
@@ -1772,7 +1772,7 @@ _nvnth_176:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_177
 _nvnth_177:
     adrp x16, _nvn_slot@PAGE
@@ -1782,7 +1782,7 @@ _nvnth_177:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_178
 _nvnth_178:
     adrp x16, _nvn_slot@PAGE
@@ -1792,7 +1792,7 @@ _nvnth_178:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_179
 _nvnth_179:
     adrp x16, _nvn_slot@PAGE
@@ -1802,7 +1802,7 @@ _nvnth_179:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_180
 _nvnth_180:
     adrp x16, _nvn_slot@PAGE
@@ -1812,7 +1812,7 @@ _nvnth_180:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_181
 _nvnth_181:
     adrp x16, _nvn_slot@PAGE
@@ -1822,7 +1822,7 @@ _nvnth_181:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_182
 _nvnth_182:
     adrp x16, _nvn_slot@PAGE
@@ -1832,7 +1832,7 @@ _nvnth_182:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_183
 _nvnth_183:
     adrp x16, _nvn_slot@PAGE
@@ -1842,7 +1842,7 @@ _nvnth_183:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_184
 _nvnth_184:
     adrp x16, _nvn_slot@PAGE
@@ -1852,7 +1852,7 @@ _nvnth_184:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_185
 _nvnth_185:
     adrp x16, _nvn_slot@PAGE
@@ -1862,7 +1862,7 @@ _nvnth_185:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_186
 _nvnth_186:
     adrp x16, _nvn_slot@PAGE
@@ -1872,7 +1872,7 @@ _nvnth_186:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_187
 _nvnth_187:
     adrp x16, _nvn_slot@PAGE
@@ -1882,7 +1882,7 @@ _nvnth_187:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_188
 _nvnth_188:
     adrp x16, _nvn_slot@PAGE
@@ -1892,7 +1892,7 @@ _nvnth_188:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_189
 _nvnth_189:
     adrp x16, _nvn_slot@PAGE
@@ -1902,7 +1902,7 @@ _nvnth_189:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_190
 _nvnth_190:
     adrp x16, _nvn_slot@PAGE
@@ -1912,7 +1912,7 @@ _nvnth_190:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_191
 _nvnth_191:
     adrp x16, _nvn_slot@PAGE
@@ -1922,7 +1922,7 @@ _nvnth_191:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_192
 _nvnth_192:
     adrp x16, _nvn_slot@PAGE
@@ -1932,7 +1932,7 @@ _nvnth_192:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_193
 _nvnth_193:
     adrp x16, _nvn_slot@PAGE
@@ -1942,7 +1942,7 @@ _nvnth_193:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_194
 _nvnth_194:
     adrp x16, _nvn_slot@PAGE
@@ -1952,7 +1952,7 @@ _nvnth_194:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_195
 _nvnth_195:
     adrp x16, _nvn_slot@PAGE
@@ -1962,7 +1962,7 @@ _nvnth_195:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_196
 _nvnth_196:
     adrp x16, _nvn_slot@PAGE
@@ -1972,7 +1972,7 @@ _nvnth_196:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_197
 _nvnth_197:
     adrp x16, _nvn_slot@PAGE
@@ -1982,7 +1982,7 @@ _nvnth_197:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_198
 _nvnth_198:
     adrp x16, _nvn_slot@PAGE
@@ -1992,7 +1992,7 @@ _nvnth_198:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_199
 _nvnth_199:
     adrp x16, _nvn_slot@PAGE
@@ -2002,7 +2002,7 @@ _nvnth_199:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_200
 _nvnth_200:
     adrp x16, _nvn_slot@PAGE
@@ -2012,7 +2012,7 @@ _nvnth_200:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_201
 _nvnth_201:
     adrp x16, _nvn_slot@PAGE
@@ -2022,7 +2022,7 @@ _nvnth_201:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_202
 _nvnth_202:
     adrp x16, _nvn_slot@PAGE
@@ -2032,7 +2032,7 @@ _nvnth_202:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_203
 _nvnth_203:
     adrp x16, _nvn_slot@PAGE
@@ -2042,7 +2042,7 @@ _nvnth_203:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_204
 _nvnth_204:
     adrp x16, _nvn_slot@PAGE
@@ -2052,7 +2052,7 @@ _nvnth_204:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_205
 _nvnth_205:
     adrp x16, _nvn_slot@PAGE
@@ -2062,7 +2062,7 @@ _nvnth_205:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_206
 _nvnth_206:
     adrp x16, _nvn_slot@PAGE
@@ -2072,7 +2072,7 @@ _nvnth_206:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_207
 _nvnth_207:
     adrp x16, _nvn_slot@PAGE
@@ -2082,7 +2082,7 @@ _nvnth_207:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_208
 _nvnth_208:
     adrp x16, _nvn_slot@PAGE
@@ -2092,7 +2092,7 @@ _nvnth_208:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_209
 _nvnth_209:
     adrp x16, _nvn_slot@PAGE
@@ -2102,7 +2102,7 @@ _nvnth_209:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_210
 _nvnth_210:
     adrp x16, _nvn_slot@PAGE
@@ -2112,7 +2112,7 @@ _nvnth_210:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_211
 _nvnth_211:
     adrp x16, _nvn_slot@PAGE
@@ -2122,7 +2122,7 @@ _nvnth_211:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_212
 _nvnth_212:
     adrp x16, _nvn_slot@PAGE
@@ -2132,7 +2132,7 @@ _nvnth_212:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_213
 _nvnth_213:
     adrp x16, _nvn_slot@PAGE
@@ -2142,7 +2142,7 @@ _nvnth_213:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_214
 _nvnth_214:
     adrp x16, _nvn_slot@PAGE
@@ -2152,7 +2152,7 @@ _nvnth_214:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_215
 _nvnth_215:
     adrp x16, _nvn_slot@PAGE
@@ -2162,7 +2162,7 @@ _nvnth_215:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_216
 _nvnth_216:
     adrp x16, _nvn_slot@PAGE
@@ -2172,7 +2172,7 @@ _nvnth_216:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_217
 _nvnth_217:
     adrp x16, _nvn_slot@PAGE
@@ -2182,7 +2182,7 @@ _nvnth_217:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_218
 _nvnth_218:
     adrp x16, _nvn_slot@PAGE
@@ -2192,7 +2192,7 @@ _nvnth_218:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_219
 _nvnth_219:
     adrp x16, _nvn_slot@PAGE
@@ -2202,7 +2202,7 @@ _nvnth_219:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_220
 _nvnth_220:
     adrp x16, _nvn_slot@PAGE
@@ -2212,7 +2212,7 @@ _nvnth_220:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_221
 _nvnth_221:
     adrp x16, _nvn_slot@PAGE
@@ -2222,7 +2222,7 @@ _nvnth_221:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_222
 _nvnth_222:
     adrp x16, _nvn_slot@PAGE
@@ -2232,7 +2232,7 @@ _nvnth_222:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_223
 _nvnth_223:
     adrp x16, _nvn_slot@PAGE
@@ -2242,7 +2242,7 @@ _nvnth_223:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_224
 _nvnth_224:
     adrp x16, _nvn_slot@PAGE
@@ -2252,7 +2252,7 @@ _nvnth_224:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_225
 _nvnth_225:
     adrp x16, _nvn_slot@PAGE
@@ -2262,7 +2262,7 @@ _nvnth_225:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_226
 _nvnth_226:
     adrp x16, _nvn_slot@PAGE
@@ -2272,7 +2272,7 @@ _nvnth_226:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_227
 _nvnth_227:
     adrp x16, _nvn_slot@PAGE
@@ -2282,7 +2282,7 @@ _nvnth_227:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_228
 _nvnth_228:
     adrp x16, _nvn_slot@PAGE
@@ -2292,7 +2292,7 @@ _nvnth_228:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_229
 _nvnth_229:
     adrp x16, _nvn_slot@PAGE
@@ -2302,7 +2302,7 @@ _nvnth_229:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_230
 _nvnth_230:
     adrp x16, _nvn_slot@PAGE
@@ -2312,7 +2312,7 @@ _nvnth_230:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_231
 _nvnth_231:
     adrp x16, _nvn_slot@PAGE
@@ -2322,7 +2322,7 @@ _nvnth_231:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_232
 _nvnth_232:
     adrp x16, _nvn_slot@PAGE
@@ -2332,7 +2332,7 @@ _nvnth_232:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_233
 _nvnth_233:
     adrp x16, _nvn_slot@PAGE
@@ -2342,7 +2342,7 @@ _nvnth_233:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_234
 _nvnth_234:
     adrp x16, _nvn_slot@PAGE
@@ -2352,7 +2352,7 @@ _nvnth_234:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_235
 _nvnth_235:
     adrp x16, _nvn_slot@PAGE
@@ -2362,7 +2362,7 @@ _nvnth_235:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_236
 _nvnth_236:
     adrp x16, _nvn_slot@PAGE
@@ -2372,7 +2372,7 @@ _nvnth_236:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_237
 _nvnth_237:
     adrp x16, _nvn_slot@PAGE
@@ -2382,7 +2382,7 @@ _nvnth_237:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_238
 _nvnth_238:
     adrp x16, _nvn_slot@PAGE
@@ -2392,7 +2392,7 @@ _nvnth_238:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_239
 _nvnth_239:
     adrp x16, _nvn_slot@PAGE
@@ -2402,7 +2402,7 @@ _nvnth_239:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_240
 _nvnth_240:
     adrp x16, _nvn_slot@PAGE
@@ -2412,7 +2412,7 @@ _nvnth_240:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_241
 _nvnth_241:
     adrp x16, _nvn_slot@PAGE
@@ -2422,7 +2422,7 @@ _nvnth_241:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_242
 _nvnth_242:
     adrp x16, _nvn_slot@PAGE
@@ -2432,7 +2432,7 @@ _nvnth_242:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_243
 _nvnth_243:
     adrp x16, _nvn_slot@PAGE
@@ -2442,7 +2442,7 @@ _nvnth_243:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_244
 _nvnth_244:
     adrp x16, _nvn_slot@PAGE
@@ -2452,7 +2452,7 @@ _nvnth_244:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_245
 _nvnth_245:
     adrp x16, _nvn_slot@PAGE
@@ -2462,7 +2462,7 @@ _nvnth_245:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_246
 _nvnth_246:
     adrp x16, _nvn_slot@PAGE
@@ -2472,7 +2472,7 @@ _nvnth_246:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_247
 _nvnth_247:
     adrp x16, _nvn_slot@PAGE
@@ -2482,7 +2482,7 @@ _nvnth_247:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_248
 _nvnth_248:
     adrp x16, _nvn_slot@PAGE
@@ -2492,7 +2492,7 @@ _nvnth_248:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_249
 _nvnth_249:
     adrp x16, _nvn_slot@PAGE
@@ -2502,7 +2502,7 @@ _nvnth_249:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_250
 _nvnth_250:
     adrp x16, _nvn_slot@PAGE
@@ -2512,7 +2512,7 @@ _nvnth_250:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_251
 _nvnth_251:
     adrp x16, _nvn_slot@PAGE
@@ -2522,7 +2522,7 @@ _nvnth_251:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_252
 _nvnth_252:
     adrp x16, _nvn_slot@PAGE
@@ -2532,7 +2532,7 @@ _nvnth_252:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_253
 _nvnth_253:
     adrp x16, _nvn_slot@PAGE
@@ -2542,7 +2542,7 @@ _nvnth_253:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_254
 _nvnth_254:
     adrp x16, _nvn_slot@PAGE
@@ -2552,7 +2552,7 @@ _nvnth_254:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_255
 _nvnth_255:
     adrp x16, _nvn_slot@PAGE
@@ -2562,7 +2562,7 @@ _nvnth_255:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_256
 _nvnth_256:
     adrp x16, _nvn_slot@PAGE
@@ -2572,7 +2572,7 @@ _nvnth_256:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_257
 _nvnth_257:
     adrp x16, _nvn_slot@PAGE
@@ -2582,7 +2582,7 @@ _nvnth_257:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_258
 _nvnth_258:
     adrp x16, _nvn_slot@PAGE
@@ -2592,7 +2592,7 @@ _nvnth_258:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_259
 _nvnth_259:
     adrp x16, _nvn_slot@PAGE
@@ -2602,7 +2602,7 @@ _nvnth_259:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_260
 _nvnth_260:
     adrp x16, _nvn_slot@PAGE
@@ -2612,7 +2612,7 @@ _nvnth_260:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_261
 _nvnth_261:
     adrp x16, _nvn_slot@PAGE
@@ -2622,7 +2622,7 @@ _nvnth_261:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_262
 _nvnth_262:
     adrp x16, _nvn_slot@PAGE
@@ -2632,7 +2632,7 @@ _nvnth_262:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_263
 _nvnth_263:
     adrp x16, _nvn_slot@PAGE
@@ -2642,7 +2642,7 @@ _nvnth_263:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_264
 _nvnth_264:
     adrp x16, _nvn_slot@PAGE
@@ -2652,7 +2652,7 @@ _nvnth_264:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_265
 _nvnth_265:
     adrp x16, _nvn_slot@PAGE
@@ -2662,7 +2662,7 @@ _nvnth_265:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_266
 _nvnth_266:
     adrp x16, _nvn_slot@PAGE
@@ -2672,7 +2672,7 @@ _nvnth_266:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_267
 _nvnth_267:
     adrp x16, _nvn_slot@PAGE
@@ -2682,7 +2682,7 @@ _nvnth_267:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_268
 _nvnth_268:
     adrp x16, _nvn_slot@PAGE
@@ -2692,7 +2692,7 @@ _nvnth_268:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_269
 _nvnth_269:
     adrp x16, _nvn_slot@PAGE
@@ -2702,7 +2702,7 @@ _nvnth_269:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_270
 _nvnth_270:
     adrp x16, _nvn_slot@PAGE
@@ -2712,7 +2712,7 @@ _nvnth_270:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_271
 _nvnth_271:
     adrp x16, _nvn_slot@PAGE
@@ -2722,7 +2722,7 @@ _nvnth_271:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_272
 _nvnth_272:
     adrp x16, _nvn_slot@PAGE
@@ -2732,7 +2732,7 @@ _nvnth_272:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_273
 _nvnth_273:
     adrp x16, _nvn_slot@PAGE
@@ -2742,7 +2742,7 @@ _nvnth_273:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_274
 _nvnth_274:
     adrp x16, _nvn_slot@PAGE
@@ -2752,7 +2752,7 @@ _nvnth_274:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_275
 _nvnth_275:
     adrp x16, _nvn_slot@PAGE
@@ -2762,7 +2762,7 @@ _nvnth_275:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_276
 _nvnth_276:
     adrp x16, _nvn_slot@PAGE
@@ -2772,7 +2772,7 @@ _nvnth_276:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_277
 _nvnth_277:
     adrp x16, _nvn_slot@PAGE
@@ -2782,7 +2782,7 @@ _nvnth_277:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_278
 _nvnth_278:
     adrp x16, _nvn_slot@PAGE
@@ -2792,7 +2792,7 @@ _nvnth_278:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_279
 _nvnth_279:
     adrp x16, _nvn_slot@PAGE
@@ -2802,7 +2802,7 @@ _nvnth_279:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_280
 _nvnth_280:
     adrp x16, _nvn_slot@PAGE
@@ -2812,7 +2812,7 @@ _nvnth_280:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_281
 _nvnth_281:
     adrp x16, _nvn_slot@PAGE
@@ -2822,7 +2822,7 @@ _nvnth_281:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_282
 _nvnth_282:
     adrp x16, _nvn_slot@PAGE
@@ -2832,7 +2832,7 @@ _nvnth_282:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_283
 _nvnth_283:
     adrp x16, _nvn_slot@PAGE
@@ -2842,7 +2842,7 @@ _nvnth_283:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_284
 _nvnth_284:
     adrp x16, _nvn_slot@PAGE
@@ -2852,7 +2852,7 @@ _nvnth_284:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_285
 _nvnth_285:
     adrp x16, _nvn_slot@PAGE
@@ -2862,7 +2862,7 @@ _nvnth_285:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_286
 _nvnth_286:
     adrp x16, _nvn_slot@PAGE
@@ -2872,7 +2872,7 @@ _nvnth_286:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_287
 _nvnth_287:
     adrp x16, _nvn_slot@PAGE
@@ -2882,7 +2882,7 @@ _nvnth_287:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_288
 _nvnth_288:
     adrp x16, _nvn_slot@PAGE
@@ -2892,7 +2892,7 @@ _nvnth_288:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_289
 _nvnth_289:
     adrp x16, _nvn_slot@PAGE
@@ -2902,7 +2902,7 @@ _nvnth_289:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_290
 _nvnth_290:
     adrp x16, _nvn_slot@PAGE
@@ -2912,7 +2912,7 @@ _nvnth_290:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_291
 _nvnth_291:
     adrp x16, _nvn_slot@PAGE
@@ -2922,7 +2922,7 @@ _nvnth_291:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_292
 _nvnth_292:
     adrp x16, _nvn_slot@PAGE
@@ -2932,7 +2932,7 @@ _nvnth_292:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_293
 _nvnth_293:
     adrp x16, _nvn_slot@PAGE
@@ -2942,7 +2942,7 @@ _nvnth_293:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_294
 _nvnth_294:
     adrp x16, _nvn_slot@PAGE
@@ -2952,7 +2952,7 @@ _nvnth_294:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_295
 _nvnth_295:
     adrp x16, _nvn_slot@PAGE
@@ -2962,7 +2962,7 @@ _nvnth_295:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_296
 _nvnth_296:
     adrp x16, _nvn_slot@PAGE
@@ -2972,7 +2972,7 @@ _nvnth_296:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_297
 _nvnth_297:
     adrp x16, _nvn_slot@PAGE
@@ -2982,7 +2982,7 @@ _nvnth_297:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_298
 _nvnth_298:
     adrp x16, _nvn_slot@PAGE
@@ -2992,7 +2992,7 @@ _nvnth_298:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_299
 _nvnth_299:
     adrp x16, _nvn_slot@PAGE
@@ -3002,7 +3002,7 @@ _nvnth_299:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_300
 _nvnth_300:
     adrp x16, _nvn_slot@PAGE
@@ -3012,7 +3012,7 @@ _nvnth_300:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_301
 _nvnth_301:
     adrp x16, _nvn_slot@PAGE
@@ -3022,7 +3022,7 @@ _nvnth_301:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_302
 _nvnth_302:
     adrp x16, _nvn_slot@PAGE
@@ -3032,7 +3032,7 @@ _nvnth_302:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_303
 _nvnth_303:
     adrp x16, _nvn_slot@PAGE
@@ -3042,7 +3042,7 @@ _nvnth_303:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_304
 _nvnth_304:
     adrp x16, _nvn_slot@PAGE
@@ -3052,7 +3052,7 @@ _nvnth_304:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_305
 _nvnth_305:
     adrp x16, _nvn_slot@PAGE
@@ -3062,7 +3062,7 @@ _nvnth_305:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_306
 _nvnth_306:
     adrp x16, _nvn_slot@PAGE
@@ -3072,7 +3072,7 @@ _nvnth_306:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_307
 _nvnth_307:
     adrp x16, _nvn_slot@PAGE
@@ -3082,7 +3082,7 @@ _nvnth_307:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_308
 _nvnth_308:
     adrp x16, _nvn_slot@PAGE
@@ -3092,7 +3092,7 @@ _nvnth_308:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_309
 _nvnth_309:
     adrp x16, _nvn_slot@PAGE
@@ -3102,7 +3102,7 @@ _nvnth_309:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_310
 _nvnth_310:
     adrp x16, _nvn_slot@PAGE
@@ -3112,7 +3112,7 @@ _nvnth_310:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_311
 _nvnth_311:
     adrp x16, _nvn_slot@PAGE
@@ -3122,7 +3122,7 @@ _nvnth_311:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_312
 _nvnth_312:
     adrp x16, _nvn_slot@PAGE
@@ -3132,7 +3132,7 @@ _nvnth_312:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_313
 _nvnth_313:
     adrp x16, _nvn_slot@PAGE
@@ -3142,7 +3142,7 @@ _nvnth_313:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_314
 _nvnth_314:
     adrp x16, _nvn_slot@PAGE
@@ -3152,7 +3152,7 @@ _nvnth_314:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_315
 _nvnth_315:
     adrp x16, _nvn_slot@PAGE
@@ -3162,7 +3162,7 @@ _nvnth_315:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_316
 _nvnth_316:
     adrp x16, _nvn_slot@PAGE
@@ -3172,7 +3172,7 @@ _nvnth_316:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_317
 _nvnth_317:
     adrp x16, _nvn_slot@PAGE
@@ -3182,7 +3182,7 @@ _nvnth_317:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_318
 _nvnth_318:
     adrp x16, _nvn_slot@PAGE
@@ -3192,7 +3192,7 @@ _nvnth_318:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_319
 _nvnth_319:
     adrp x16, _nvn_slot@PAGE
@@ -3202,7 +3202,7 @@ _nvnth_319:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_320
 _nvnth_320:
     adrp x16, _nvn_slot@PAGE
@@ -3212,7 +3212,7 @@ _nvnth_320:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_321
 _nvnth_321:
     adrp x16, _nvn_slot@PAGE
@@ -3222,7 +3222,7 @@ _nvnth_321:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_322
 _nvnth_322:
     adrp x16, _nvn_slot@PAGE
@@ -3232,7 +3232,7 @@ _nvnth_322:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_323
 _nvnth_323:
     adrp x16, _nvn_slot@PAGE
@@ -3242,7 +3242,7 @@ _nvnth_323:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_324
 _nvnth_324:
     adrp x16, _nvn_slot@PAGE
@@ -3252,7 +3252,7 @@ _nvnth_324:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_325
 _nvnth_325:
     adrp x16, _nvn_slot@PAGE
@@ -3262,7 +3262,7 @@ _nvnth_325:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_326
 _nvnth_326:
     adrp x16, _nvn_slot@PAGE
@@ -3272,7 +3272,7 @@ _nvnth_326:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_327
 _nvnth_327:
     adrp x16, _nvn_slot@PAGE
@@ -3282,7 +3282,7 @@ _nvnth_327:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_328
 _nvnth_328:
     adrp x16, _nvn_slot@PAGE
@@ -3292,7 +3292,7 @@ _nvnth_328:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_329
 _nvnth_329:
     adrp x16, _nvn_slot@PAGE
@@ -3302,7 +3302,7 @@ _nvnth_329:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_330
 _nvnth_330:
     adrp x16, _nvn_slot@PAGE
@@ -3312,7 +3312,7 @@ _nvnth_330:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_331
 _nvnth_331:
     adrp x16, _nvn_slot@PAGE
@@ -3322,7 +3322,7 @@ _nvnth_331:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_332
 _nvnth_332:
     adrp x16, _nvn_slot@PAGE
@@ -3332,7 +3332,7 @@ _nvnth_332:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_333
 _nvnth_333:
     adrp x16, _nvn_slot@PAGE
@@ -3342,7 +3342,7 @@ _nvnth_333:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_334
 _nvnth_334:
     adrp x16, _nvn_slot@PAGE
@@ -3352,7 +3352,7 @@ _nvnth_334:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_335
 _nvnth_335:
     adrp x16, _nvn_slot@PAGE
@@ -3362,7 +3362,7 @@ _nvnth_335:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_336
 _nvnth_336:
     adrp x16, _nvn_slot@PAGE
@@ -3372,7 +3372,7 @@ _nvnth_336:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_337
 _nvnth_337:
     adrp x16, _nvn_slot@PAGE
@@ -3382,7 +3382,7 @@ _nvnth_337:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_338
 _nvnth_338:
     adrp x16, _nvn_slot@PAGE
@@ -3392,7 +3392,7 @@ _nvnth_338:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_339
 _nvnth_339:
     adrp x16, _nvn_slot@PAGE
@@ -3402,7 +3402,7 @@ _nvnth_339:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_340
 _nvnth_340:
     adrp x16, _nvn_slot@PAGE
@@ -3412,7 +3412,7 @@ _nvnth_340:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_341
 _nvnth_341:
     adrp x16, _nvn_slot@PAGE
@@ -3422,7 +3422,7 @@ _nvnth_341:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_342
 _nvnth_342:
     adrp x16, _nvn_slot@PAGE
@@ -3432,7 +3432,7 @@ _nvnth_342:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_343
 _nvnth_343:
     adrp x16, _nvn_slot@PAGE
@@ -3442,7 +3442,7 @@ _nvnth_343:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_344
 _nvnth_344:
     adrp x16, _nvn_slot@PAGE
@@ -3452,7 +3452,7 @@ _nvnth_344:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_345
 _nvnth_345:
     adrp x16, _nvn_slot@PAGE
@@ -3462,7 +3462,7 @@ _nvnth_345:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_346
 _nvnth_346:
     adrp x16, _nvn_slot@PAGE
@@ -3472,7 +3472,7 @@ _nvnth_346:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_347
 _nvnth_347:
     adrp x16, _nvn_slot@PAGE
@@ -3482,7 +3482,7 @@ _nvnth_347:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_348
 _nvnth_348:
     adrp x16, _nvn_slot@PAGE
@@ -3492,7 +3492,7 @@ _nvnth_348:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_349
 _nvnth_349:
     adrp x16, _nvn_slot@PAGE
@@ -3502,7 +3502,7 @@ _nvnth_349:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_350
 _nvnth_350:
     adrp x16, _nvn_slot@PAGE
@@ -3512,7 +3512,7 @@ _nvnth_350:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_351
 _nvnth_351:
     adrp x16, _nvn_slot@PAGE
@@ -3522,7 +3522,7 @@ _nvnth_351:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_352
 _nvnth_352:
     adrp x16, _nvn_slot@PAGE
@@ -3532,7 +3532,7 @@ _nvnth_352:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_353
 _nvnth_353:
     adrp x16, _nvn_slot@PAGE
@@ -3542,7 +3542,7 @@ _nvnth_353:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_354
 _nvnth_354:
     adrp x16, _nvn_slot@PAGE
@@ -3552,7 +3552,7 @@ _nvnth_354:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_355
 _nvnth_355:
     adrp x16, _nvn_slot@PAGE
@@ -3562,7 +3562,7 @@ _nvnth_355:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_356
 _nvnth_356:
     adrp x16, _nvn_slot@PAGE
@@ -3572,7 +3572,7 @@ _nvnth_356:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_357
 _nvnth_357:
     adrp x16, _nvn_slot@PAGE
@@ -3582,7 +3582,7 @@ _nvnth_357:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_358
 _nvnth_358:
     adrp x16, _nvn_slot@PAGE
@@ -3592,7 +3592,7 @@ _nvnth_358:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_359
 _nvnth_359:
     adrp x16, _nvn_slot@PAGE
@@ -3602,7 +3602,7 @@ _nvnth_359:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_360
 _nvnth_360:
     adrp x16, _nvn_slot@PAGE
@@ -3612,7 +3612,7 @@ _nvnth_360:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_361
 _nvnth_361:
     adrp x16, _nvn_slot@PAGE
@@ -3622,7 +3622,7 @@ _nvnth_361:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_362
 _nvnth_362:
     adrp x16, _nvn_slot@PAGE
@@ -3632,7 +3632,7 @@ _nvnth_362:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_363
 _nvnth_363:
     adrp x16, _nvn_slot@PAGE
@@ -3642,7 +3642,7 @@ _nvnth_363:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_364
 _nvnth_364:
     adrp x16, _nvn_slot@PAGE
@@ -3652,7 +3652,7 @@ _nvnth_364:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_365
 _nvnth_365:
     adrp x16, _nvn_slot@PAGE
@@ -3662,7 +3662,7 @@ _nvnth_365:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_366
 _nvnth_366:
     adrp x16, _nvn_slot@PAGE
@@ -3672,7 +3672,7 @@ _nvnth_366:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_367
 _nvnth_367:
     adrp x16, _nvn_slot@PAGE
@@ -3682,7 +3682,7 @@ _nvnth_367:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_368
 _nvnth_368:
     adrp x16, _nvn_slot@PAGE
@@ -3692,7 +3692,7 @@ _nvnth_368:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_369
 _nvnth_369:
     adrp x16, _nvn_slot@PAGE
@@ -3702,7 +3702,7 @@ _nvnth_369:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_370
 _nvnth_370:
     adrp x16, _nvn_slot@PAGE
@@ -3712,7 +3712,7 @@ _nvnth_370:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_371
 _nvnth_371:
     adrp x16, _nvn_slot@PAGE
@@ -3722,7 +3722,7 @@ _nvnth_371:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_372
 _nvnth_372:
     adrp x16, _nvn_slot@PAGE
@@ -3732,7 +3732,7 @@ _nvnth_372:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_373
 _nvnth_373:
     adrp x16, _nvn_slot@PAGE
@@ -3742,7 +3742,7 @@ _nvnth_373:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_374
 _nvnth_374:
     adrp x16, _nvn_slot@PAGE
@@ -3752,7 +3752,7 @@ _nvnth_374:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_375
 _nvnth_375:
     adrp x16, _nvn_slot@PAGE
@@ -3762,7 +3762,7 @@ _nvnth_375:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_376
 _nvnth_376:
     adrp x16, _nvn_slot@PAGE
@@ -3772,7 +3772,7 @@ _nvnth_376:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_377
 _nvnth_377:
     adrp x16, _nvn_slot@PAGE
@@ -3782,7 +3782,7 @@ _nvnth_377:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_378
 _nvnth_378:
     adrp x16, _nvn_slot@PAGE
@@ -3792,7 +3792,7 @@ _nvnth_378:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_379
 _nvnth_379:
     adrp x16, _nvn_slot@PAGE
@@ -3802,7 +3802,7 @@ _nvnth_379:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_380
 _nvnth_380:
     adrp x16, _nvn_slot@PAGE
@@ -3812,7 +3812,7 @@ _nvnth_380:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_381
 _nvnth_381:
     adrp x16, _nvn_slot@PAGE
@@ -3822,7 +3822,7 @@ _nvnth_381:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_382
 _nvnth_382:
     adrp x16, _nvn_slot@PAGE
@@ -3832,7 +3832,7 @@ _nvnth_382:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_383
 _nvnth_383:
     adrp x16, _nvn_slot@PAGE
@@ -3842,7 +3842,7 @@ _nvnth_383:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_384
 _nvnth_384:
     adrp x16, _nvn_slot@PAGE
@@ -3852,7 +3852,7 @@ _nvnth_384:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_385
 _nvnth_385:
     adrp x16, _nvn_slot@PAGE
@@ -3862,7 +3862,7 @@ _nvnth_385:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_386
 _nvnth_386:
     adrp x16, _nvn_slot@PAGE
@@ -3872,7 +3872,7 @@ _nvnth_386:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_387
 _nvnth_387:
     adrp x16, _nvn_slot@PAGE
@@ -3882,7 +3882,7 @@ _nvnth_387:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_388
 _nvnth_388:
     adrp x16, _nvn_slot@PAGE
@@ -3892,7 +3892,7 @@ _nvnth_388:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_389
 _nvnth_389:
     adrp x16, _nvn_slot@PAGE
@@ -3902,7 +3902,7 @@ _nvnth_389:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_390
 _nvnth_390:
     adrp x16, _nvn_slot@PAGE
@@ -3912,7 +3912,7 @@ _nvnth_390:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_391
 _nvnth_391:
     adrp x16, _nvn_slot@PAGE
@@ -3922,7 +3922,7 @@ _nvnth_391:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_392
 _nvnth_392:
     adrp x16, _nvn_slot@PAGE
@@ -3932,7 +3932,7 @@ _nvnth_392:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_393
 _nvnth_393:
     adrp x16, _nvn_slot@PAGE
@@ -3942,7 +3942,7 @@ _nvnth_393:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_394
 _nvnth_394:
     adrp x16, _nvn_slot@PAGE
@@ -3952,7 +3952,7 @@ _nvnth_394:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_395
 _nvnth_395:
     adrp x16, _nvn_slot@PAGE
@@ -3962,7 +3962,7 @@ _nvnth_395:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_396
 _nvnth_396:
     adrp x16, _nvn_slot@PAGE
@@ -3972,7 +3972,7 @@ _nvnth_396:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_397
 _nvnth_397:
     adrp x16, _nvn_slot@PAGE
@@ -3982,7 +3982,7 @@ _nvnth_397:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_398
 _nvnth_398:
     adrp x16, _nvn_slot@PAGE
@@ -3992,7 +3992,7 @@ _nvnth_398:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_399
 _nvnth_399:
     adrp x16, _nvn_slot@PAGE
@@ -4002,7 +4002,7 @@ _nvnth_399:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_400
 _nvnth_400:
     adrp x16, _nvn_slot@PAGE
@@ -4012,7 +4012,7 @@ _nvnth_400:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_401
 _nvnth_401:
     adrp x16, _nvn_slot@PAGE
@@ -4022,7 +4022,7 @@ _nvnth_401:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_402
 _nvnth_402:
     adrp x16, _nvn_slot@PAGE
@@ -4032,7 +4032,7 @@ _nvnth_402:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_403
 _nvnth_403:
     adrp x16, _nvn_slot@PAGE
@@ -4042,7 +4042,7 @@ _nvnth_403:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_404
 _nvnth_404:
     adrp x16, _nvn_slot@PAGE
@@ -4052,7 +4052,7 @@ _nvnth_404:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_405
 _nvnth_405:
     adrp x16, _nvn_slot@PAGE
@@ -4062,7 +4062,7 @@ _nvnth_405:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_406
 _nvnth_406:
     adrp x16, _nvn_slot@PAGE
@@ -4072,7 +4072,7 @@ _nvnth_406:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_407
 _nvnth_407:
     adrp x16, _nvn_slot@PAGE
@@ -4082,7 +4082,7 @@ _nvnth_407:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_408
 _nvnth_408:
     adrp x16, _nvn_slot@PAGE
@@ -4092,7 +4092,7 @@ _nvnth_408:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_409
 _nvnth_409:
     adrp x16, _nvn_slot@PAGE
@@ -4102,7 +4102,7 @@ _nvnth_409:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_410
 _nvnth_410:
     adrp x16, _nvn_slot@PAGE
@@ -4112,7 +4112,7 @@ _nvnth_410:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_411
 _nvnth_411:
     adrp x16, _nvn_slot@PAGE
@@ -4122,7 +4122,7 @@ _nvnth_411:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_412
 _nvnth_412:
     adrp x16, _nvn_slot@PAGE
@@ -4132,7 +4132,7 @@ _nvnth_412:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_413
 _nvnth_413:
     adrp x16, _nvn_slot@PAGE
@@ -4142,7 +4142,7 @@ _nvnth_413:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_414
 _nvnth_414:
     adrp x16, _nvn_slot@PAGE
@@ -4152,7 +4152,7 @@ _nvnth_414:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_415
 _nvnth_415:
     adrp x16, _nvn_slot@PAGE
@@ -4162,7 +4162,7 @@ _nvnth_415:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_416
 _nvnth_416:
     adrp x16, _nvn_slot@PAGE
@@ -4172,7 +4172,7 @@ _nvnth_416:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_417
 _nvnth_417:
     adrp x16, _nvn_slot@PAGE
@@ -4182,7 +4182,7 @@ _nvnth_417:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_418
 _nvnth_418:
     adrp x16, _nvn_slot@PAGE
@@ -4192,7 +4192,7 @@ _nvnth_418:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_419
 _nvnth_419:
     adrp x16, _nvn_slot@PAGE
@@ -4202,7 +4202,7 @@ _nvnth_419:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_420
 _nvnth_420:
     adrp x16, _nvn_slot@PAGE
@@ -4212,7 +4212,7 @@ _nvnth_420:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_421
 _nvnth_421:
     adrp x16, _nvn_slot@PAGE
@@ -4222,7 +4222,7 @@ _nvnth_421:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_422
 _nvnth_422:
     adrp x16, _nvn_slot@PAGE
@@ -4232,7 +4232,7 @@ _nvnth_422:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_423
 _nvnth_423:
     adrp x16, _nvn_slot@PAGE
@@ -4242,7 +4242,7 @@ _nvnth_423:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_424
 _nvnth_424:
     adrp x16, _nvn_slot@PAGE
@@ -4252,7 +4252,7 @@ _nvnth_424:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_425
 _nvnth_425:
     adrp x16, _nvn_slot@PAGE
@@ -4262,7 +4262,7 @@ _nvnth_425:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_426
 _nvnth_426:
     adrp x16, _nvn_slot@PAGE
@@ -4272,7 +4272,7 @@ _nvnth_426:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_427
 _nvnth_427:
     adrp x16, _nvn_slot@PAGE
@@ -4282,7 +4282,7 @@ _nvnth_427:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_428
 _nvnth_428:
     adrp x16, _nvn_slot@PAGE
@@ -4292,7 +4292,7 @@ _nvnth_428:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_429
 _nvnth_429:
     adrp x16, _nvn_slot@PAGE
@@ -4302,7 +4302,7 @@ _nvnth_429:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_430
 _nvnth_430:
     adrp x16, _nvn_slot@PAGE
@@ -4312,7 +4312,7 @@ _nvnth_430:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_431
 _nvnth_431:
     adrp x16, _nvn_slot@PAGE
@@ -4322,7 +4322,7 @@ _nvnth_431:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_432
 _nvnth_432:
     adrp x16, _nvn_slot@PAGE
@@ -4332,7 +4332,7 @@ _nvnth_432:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_433
 _nvnth_433:
     adrp x16, _nvn_slot@PAGE
@@ -4342,7 +4342,7 @@ _nvnth_433:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_434
 _nvnth_434:
     adrp x16, _nvn_slot@PAGE
@@ -4352,7 +4352,7 @@ _nvnth_434:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_435
 _nvnth_435:
     adrp x16, _nvn_slot@PAGE
@@ -4362,7 +4362,7 @@ _nvnth_435:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_436
 _nvnth_436:
     adrp x16, _nvn_slot@PAGE
@@ -4372,7 +4372,7 @@ _nvnth_436:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_437
 _nvnth_437:
     adrp x16, _nvn_slot@PAGE
@@ -4382,7 +4382,7 @@ _nvnth_437:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_438
 _nvnth_438:
     adrp x16, _nvn_slot@PAGE
@@ -4392,7 +4392,7 @@ _nvnth_438:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_439
 _nvnth_439:
     adrp x16, _nvn_slot@PAGE
@@ -4402,7 +4402,7 @@ _nvnth_439:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_440
 _nvnth_440:
     adrp x16, _nvn_slot@PAGE
@@ -4412,7 +4412,7 @@ _nvnth_440:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_441
 _nvnth_441:
     adrp x16, _nvn_slot@PAGE
@@ -4422,7 +4422,7 @@ _nvnth_441:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_442
 _nvnth_442:
     adrp x16, _nvn_slot@PAGE
@@ -4432,7 +4432,7 @@ _nvnth_442:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_443
 _nvnth_443:
     adrp x16, _nvn_slot@PAGE
@@ -4442,7 +4442,7 @@ _nvnth_443:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_444
 _nvnth_444:
     adrp x16, _nvn_slot@PAGE
@@ -4452,7 +4452,7 @@ _nvnth_444:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_445
 _nvnth_445:
     adrp x16, _nvn_slot@PAGE
@@ -4462,7 +4462,7 @@ _nvnth_445:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_446
 _nvnth_446:
     adrp x16, _nvn_slot@PAGE
@@ -4472,7 +4472,7 @@ _nvnth_446:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_447
 _nvnth_447:
     adrp x16, _nvn_slot@PAGE
@@ -4482,7 +4482,7 @@ _nvnth_447:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_448
 _nvnth_448:
     adrp x16, _nvn_slot@PAGE
@@ -4492,7 +4492,7 @@ _nvnth_448:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_449
 _nvnth_449:
     adrp x16, _nvn_slot@PAGE
@@ -4502,7 +4502,7 @@ _nvnth_449:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_450
 _nvnth_450:
     adrp x16, _nvn_slot@PAGE
@@ -4512,7 +4512,7 @@ _nvnth_450:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_451
 _nvnth_451:
     adrp x16, _nvn_slot@PAGE
@@ -4522,7 +4522,7 @@ _nvnth_451:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_452
 _nvnth_452:
     adrp x16, _nvn_slot@PAGE
@@ -4532,7 +4532,7 @@ _nvnth_452:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_453
 _nvnth_453:
     adrp x16, _nvn_slot@PAGE
@@ -4542,7 +4542,7 @@ _nvnth_453:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_454
 _nvnth_454:
     adrp x16, _nvn_slot@PAGE
@@ -4552,7 +4552,7 @@ _nvnth_454:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_455
 _nvnth_455:
     adrp x16, _nvn_slot@PAGE
@@ -4562,7 +4562,7 @@ _nvnth_455:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_456
 _nvnth_456:
     adrp x16, _nvn_slot@PAGE
@@ -4572,7 +4572,7 @@ _nvnth_456:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_457
 _nvnth_457:
     adrp x16, _nvn_slot@PAGE
@@ -4582,7 +4582,7 @@ _nvnth_457:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_458
 _nvnth_458:
     adrp x16, _nvn_slot@PAGE
@@ -4592,7 +4592,7 @@ _nvnth_458:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_459
 _nvnth_459:
     adrp x16, _nvn_slot@PAGE
@@ -4602,7 +4602,7 @@ _nvnth_459:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_460
 _nvnth_460:
     adrp x16, _nvn_slot@PAGE
@@ -4612,7 +4612,7 @@ _nvnth_460:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_461
 _nvnth_461:
     adrp x16, _nvn_slot@PAGE
@@ -4622,7 +4622,7 @@ _nvnth_461:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_462
 _nvnth_462:
     adrp x16, _nvn_slot@PAGE
@@ -4632,7 +4632,7 @@ _nvnth_462:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_463
 _nvnth_463:
     adrp x16, _nvn_slot@PAGE
@@ -4642,7 +4642,7 @@ _nvnth_463:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_464
 _nvnth_464:
     adrp x16, _nvn_slot@PAGE
@@ -4652,7 +4652,7 @@ _nvnth_464:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_465
 _nvnth_465:
     adrp x16, _nvn_slot@PAGE
@@ -4662,7 +4662,7 @@ _nvnth_465:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_466
 _nvnth_466:
     adrp x16, _nvn_slot@PAGE
@@ -4672,7 +4672,7 @@ _nvnth_466:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_467
 _nvnth_467:
     adrp x16, _nvn_slot@PAGE
@@ -4682,7 +4682,7 @@ _nvnth_467:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_468
 _nvnth_468:
     adrp x16, _nvn_slot@PAGE
@@ -4692,7 +4692,7 @@ _nvnth_468:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_469
 _nvnth_469:
     adrp x16, _nvn_slot@PAGE
@@ -4702,7 +4702,7 @@ _nvnth_469:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_470
 _nvnth_470:
     adrp x16, _nvn_slot@PAGE
@@ -4712,7 +4712,7 @@ _nvnth_470:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_471
 _nvnth_471:
     adrp x16, _nvn_slot@PAGE
@@ -4722,7 +4722,7 @@ _nvnth_471:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_472
 _nvnth_472:
     adrp x16, _nvn_slot@PAGE
@@ -4732,7 +4732,7 @@ _nvnth_472:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_473
 _nvnth_473:
     adrp x16, _nvn_slot@PAGE
@@ -4742,7 +4742,7 @@ _nvnth_473:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_474
 _nvnth_474:
     adrp x16, _nvn_slot@PAGE
@@ -4752,7 +4752,7 @@ _nvnth_474:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_475
 _nvnth_475:
     adrp x16, _nvn_slot@PAGE
@@ -4762,7 +4762,7 @@ _nvnth_475:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_476
 _nvnth_476:
     adrp x16, _nvn_slot@PAGE
@@ -4772,7 +4772,7 @@ _nvnth_476:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_477
 _nvnth_477:
     adrp x16, _nvn_slot@PAGE
@@ -4782,7 +4782,7 @@ _nvnth_477:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_478
 _nvnth_478:
     adrp x16, _nvn_slot@PAGE
@@ -4792,7 +4792,7 @@ _nvnth_478:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_479
 _nvnth_479:
     adrp x16, _nvn_slot@PAGE
@@ -4802,7 +4802,7 @@ _nvnth_479:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_480
 _nvnth_480:
     adrp x16, _nvn_slot@PAGE
@@ -4812,7 +4812,7 @@ _nvnth_480:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_481
 _nvnth_481:
     adrp x16, _nvn_slot@PAGE
@@ -4822,7 +4822,7 @@ _nvnth_481:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_482
 _nvnth_482:
     adrp x16, _nvn_slot@PAGE
@@ -4832,7 +4832,7 @@ _nvnth_482:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_483
 _nvnth_483:
     adrp x16, _nvn_slot@PAGE
@@ -4842,7 +4842,7 @@ _nvnth_483:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_484
 _nvnth_484:
     adrp x16, _nvn_slot@PAGE
@@ -4852,7 +4852,7 @@ _nvnth_484:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_485
 _nvnth_485:
     adrp x16, _nvn_slot@PAGE
@@ -4862,7 +4862,7 @@ _nvnth_485:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_486
 _nvnth_486:
     adrp x16, _nvn_slot@PAGE
@@ -4872,7 +4872,7 @@ _nvnth_486:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_487
 _nvnth_487:
     adrp x16, _nvn_slot@PAGE
@@ -4882,7 +4882,7 @@ _nvnth_487:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_488
 _nvnth_488:
     adrp x16, _nvn_slot@PAGE
@@ -4892,7 +4892,7 @@ _nvnth_488:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_489
 _nvnth_489:
     adrp x16, _nvn_slot@PAGE
@@ -4902,7 +4902,7 @@ _nvnth_489:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_490
 _nvnth_490:
     adrp x16, _nvn_slot@PAGE
@@ -4912,7 +4912,7 @@ _nvnth_490:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_491
 _nvnth_491:
     adrp x16, _nvn_slot@PAGE
@@ -4922,7 +4922,7 @@ _nvnth_491:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_492
 _nvnth_492:
     adrp x16, _nvn_slot@PAGE
@@ -4932,7 +4932,7 @@ _nvnth_492:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_493
 _nvnth_493:
     adrp x16, _nvn_slot@PAGE
@@ -4942,7 +4942,7 @@ _nvnth_493:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_494
 _nvnth_494:
     adrp x16, _nvn_slot@PAGE
@@ -4952,7 +4952,7 @@ _nvnth_494:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_495
 _nvnth_495:
     adrp x16, _nvn_slot@PAGE
@@ -4962,7 +4962,7 @@ _nvnth_495:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_496
 _nvnth_496:
     adrp x16, _nvn_slot@PAGE
@@ -4972,7 +4972,7 @@ _nvnth_496:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_497
 _nvnth_497:
     adrp x16, _nvn_slot@PAGE
@@ -4982,7 +4982,7 @@ _nvnth_497:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_498
 _nvnth_498:
     adrp x16, _nvn_slot@PAGE
@@ -4992,7 +4992,7 @@ _nvnth_498:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_499
 _nvnth_499:
     adrp x16, _nvn_slot@PAGE
@@ -5002,7 +5002,7 @@ _nvnth_499:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_500
 _nvnth_500:
     adrp x16, _nvn_slot@PAGE
@@ -5012,7 +5012,7 @@ _nvnth_500:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_501
 _nvnth_501:
     adrp x16, _nvn_slot@PAGE
@@ -5022,7 +5022,7 @@ _nvnth_501:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_502
 _nvnth_502:
     adrp x16, _nvn_slot@PAGE
@@ -5032,7 +5032,7 @@ _nvnth_502:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_503
 _nvnth_503:
     adrp x16, _nvn_slot@PAGE
@@ -5042,7 +5042,7 @@ _nvnth_503:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_504
 _nvnth_504:
     adrp x16, _nvn_slot@PAGE
@@ -5052,7 +5052,7 @@ _nvnth_504:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_505
 _nvnth_505:
     adrp x16, _nvn_slot@PAGE
@@ -5062,7 +5062,7 @@ _nvnth_505:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_506
 _nvnth_506:
     adrp x16, _nvn_slot@PAGE
@@ -5072,7 +5072,7 @@ _nvnth_506:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_507
 _nvnth_507:
     adrp x16, _nvn_slot@PAGE
@@ -5082,7 +5082,7 @@ _nvnth_507:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_508
 _nvnth_508:
     adrp x16, _nvn_slot@PAGE
@@ -5092,7 +5092,7 @@ _nvnth_508:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_509
 _nvnth_509:
     adrp x16, _nvn_slot@PAGE
@@ -5102,7 +5102,7 @@ _nvnth_509:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_510
 _nvnth_510:
     adrp x16, _nvn_slot@PAGE
@@ -5112,7 +5112,7 @@ _nvnth_510:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_511
 _nvnth_511:
     adrp x16, _nvn_slot@PAGE
@@ -5122,7 +5122,7 @@ _nvnth_511:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_512
 _nvnth_512:
     adrp x16, _nvn_slot@PAGE
@@ -5132,7 +5132,7 @@ _nvnth_512:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_513
 _nvnth_513:
     adrp x16, _nvn_slot@PAGE
@@ -5142,7 +5142,7 @@ _nvnth_513:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_514
 _nvnth_514:
     adrp x16, _nvn_slot@PAGE
@@ -5152,7 +5152,7 @@ _nvnth_514:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_515
 _nvnth_515:
     adrp x16, _nvn_slot@PAGE
@@ -5162,7 +5162,7 @@ _nvnth_515:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_516
 _nvnth_516:
     adrp x16, _nvn_slot@PAGE
@@ -5172,7 +5172,7 @@ _nvnth_516:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_517
 _nvnth_517:
     adrp x16, _nvn_slot@PAGE
@@ -5182,7 +5182,7 @@ _nvnth_517:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_518
 _nvnth_518:
     adrp x16, _nvn_slot@PAGE
@@ -5192,7 +5192,7 @@ _nvnth_518:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_519
 _nvnth_519:
     adrp x16, _nvn_slot@PAGE
@@ -5202,7 +5202,7 @@ _nvnth_519:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_520
 _nvnth_520:
     adrp x16, _nvn_slot@PAGE
@@ -5212,7 +5212,7 @@ _nvnth_520:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_521
 _nvnth_521:
     adrp x16, _nvn_slot@PAGE
@@ -5222,7 +5222,7 @@ _nvnth_521:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_522
 _nvnth_522:
     adrp x16, _nvn_slot@PAGE
@@ -5232,7 +5232,7 @@ _nvnth_522:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_523
 _nvnth_523:
     adrp x16, _nvn_slot@PAGE
@@ -5242,7 +5242,7 @@ _nvnth_523:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_524
 _nvnth_524:
     adrp x16, _nvn_slot@PAGE
@@ -5252,7 +5252,7 @@ _nvnth_524:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_525
 _nvnth_525:
     adrp x16, _nvn_slot@PAGE
@@ -5262,7 +5262,7 @@ _nvnth_525:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_526
 _nvnth_526:
     adrp x16, _nvn_slot@PAGE
@@ -5272,7 +5272,7 @@ _nvnth_526:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_527
 _nvnth_527:
     adrp x16, _nvn_slot@PAGE
@@ -5282,7 +5282,7 @@ _nvnth_527:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_528
 _nvnth_528:
     adrp x16, _nvn_slot@PAGE
@@ -5292,7 +5292,7 @@ _nvnth_528:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_529
 _nvnth_529:
     adrp x16, _nvn_slot@PAGE
@@ -5302,7 +5302,7 @@ _nvnth_529:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_530
 _nvnth_530:
     adrp x16, _nvn_slot@PAGE
@@ -5312,7 +5312,7 @@ _nvnth_530:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_531
 _nvnth_531:
     adrp x16, _nvn_slot@PAGE
@@ -5322,7 +5322,7 @@ _nvnth_531:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_532
 _nvnth_532:
     adrp x16, _nvn_slot@PAGE
@@ -5332,7 +5332,7 @@ _nvnth_532:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_533
 _nvnth_533:
     adrp x16, _nvn_slot@PAGE
@@ -5342,7 +5342,7 @@ _nvnth_533:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_534
 _nvnth_534:
     adrp x16, _nvn_slot@PAGE
@@ -5352,7 +5352,7 @@ _nvnth_534:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .globl _nvnth_535
 _nvnth_535:
     adrp x16, _nvn_slot@PAGE
@@ -5362,7 +5362,7 @@ _nvnth_535:
     mov x17, #1
     stadd x17, [x16]
     ldr x17, [x16, #8]
-    br x17
+    b _dm_hcall
     .data
     .p2align 3
     .globl _nvn_thunk

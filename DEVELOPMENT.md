@@ -451,7 +451,7 @@ RomFS; no key value in any output). Not run yet: XCI input (no XCI dump here) an
   save thread with 8 KB; NVN functions other than command recording, d6cd8a8…). Our HLE functions run on the calling guest thread's stack too
   (imports resolve straight to them), and the file system ones keep path buffers on it. Not ported yet: an assembly trampoline that only
   carries register arguments, and it cuts the guest backtrace of crash reports at the switch; wants a game whose small stacks overflow.
-  MacNativeGames' version keeps the backtrace: see "Wider review of 2026-10-19".
+  MacNativeGames' version keeps the backtrace: see "Wider review of 2026-10-19". Done in plan item 40 (`host/hstack.S`).
 - **Diagnostics**: `DM_NVN_KEYDUMP` (every input of one fragment shader's draws) and sampler / swizzle output in PASSDUMP
   (734a286328d18404fd5a67785a1e05d2149c5986).
 - **nn::ro .nro modules**: nx-port `dm/host/hle_ro.c` and loader changes (3e6366b…).
@@ -656,7 +656,7 @@ Correctness, medium:
   bytes on the guest stack and host functions run there (a RomFS open with the overlay stacks about 5.6 KB of path buffers); their note says
   Tears of the Kingdom makes threads with stacks as small as 4 KiB, and 16 KiB host pages make 4 KiB guard pages writable. A possible cause of
   the blood moon crash (unproven): log the least free stack per thread at gate entry first. Replaces "Small guest stacks" above; manosaba's
-  stop-the-world reads host frames on the guest stack and would need the guest sp the switch saves.
+  stop-the-world reads host frames on the guest stack and would need the guest sp the switch saves. Done: plan item 40.
 - **A draw that samples the attachment it draws into** (tomodachi-native 4dbd30f + da08d11 `fbx_hazard`: every draw, mip aware, copies from a
   pool of 32, views held until completion): we split only merged continuations (`draw_samples_rt`). Count such draws in the dive and in manosaba
   first.
@@ -872,7 +872,19 @@ Tier 2, small code, one shader chain rebuild for all four:
   one build, from the cutscene's timing); both IPAs carry the new libraries
 
 Tier 3, medium:
-- [ ] 40 host calls and svcs on a per-thread host stack, backtraces kept (manosaba's stop-the-world needs the saved guest sp)
+- [x] batch 6 · 40 host calls and svcs on a per-thread host stack (`host/hstack.S`, `hstack.c`; after MacNativeGames' hle_stack, MIT). Imports,
+  takeovers, the NVN functions, the movie vtables, the audio renderer's thread entry and the unimplemented stubs run on the guest thread's own
+  pthread stack (1 MiB), svc gates too; the guest stack holds 32 bytes at an svc and none at a host call, where a RomFS open with the overlay kept
+  about 5.6 KB of path buffers (read from the code) and a first `localtime_r` 4,504 bytes (measured). Tears of the Kingdom has four threads with 4
+  KiB guest stacks (VibrationThread, two DecompThread, gmd::GameDataMgr). A record at the top of the host stack is a frame record back to the guest
+  caller (crash, sampler and thread dump walks take the one step between the stacks; `DM_GUEST_RA` for the NVN diagnostics) and gives
+  GetThreadContext3 the guest's sp, x19-x28 and the call's arguments: manosaba's 307 GC context fetches in a run all reported an sp on the guest
+  stack. `host/tests/t_hstack`: the switch with 64 KiB used on a 16 KiB guest stack, svc registers, nested calls, stubs, three paused contexts, the
+  frame walk; `DM_HSTACK=0` faults on the guard page, the context as before fails all three pauses. The libc memory, string and math functions stay
+  direct (each at most 144 bytes of stack, measured by the test); no host function the guest calls takes stack arguments (`tools/hle_args.py`, 427
+  functions). Thread dumps show each thread's least free guest stack at svc entries (Tears of the Kingdom's prologue: 3,808 of 4,064 bytes left at
+  the least), a `[stack]` line below 1 KiB. A wrapped call costs 5.3 ns more on the M5; both games' frame times, energy and shots are unchanged.
+  `DM_HSTACK=0` turns it off
 - [ ] 41 occlusion counts across submissions
 - [ ] 42 draws that sample their own attachment (count first)
 - [ ] 43 counter timestamps where the report sits (check first)
@@ -906,7 +918,7 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
-- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b)
+- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it)
 - [ ] 71 an iOS 17 device test (which device: to ask)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups

@@ -5,7 +5,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-typedef struct { const char *name; void *fn; } hle_ent;
+typedef struct { const char *name; void *fn; int direct; } hle_ent;   // = hle.h
 
 // ---------- Unimplemented imports: named stubs (the statically assembled stub table in entry.S, the k-th = movz x9,#k; b unimpl_entry) ----------
 #define MAX_STUB 4096                 // Matches the .rept count in entry.S
@@ -27,7 +27,8 @@ uint64_t resolve_import(module_t *m, const char *name, int weak) {
     for (unsigned i = 0; i < secsz / sizeof(hle_ent); i++)
         if (!strcmp(sec[i].name, name)) {
             if (g_flag.imports) { Dl_info di; dladdr(sec[i].fn, &di); LOG("import %s -> %s", name, di.dli_sname); }
-            void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("HLE", name, sec[i].fn);   // With DM_HLECOUNT it is a counting stub (including the libc passthrough table)
+            // On the thread's host stack (hstack.S), except the libc functions hle_table.c calls direct; with DM_HLECOUNT a counting stub in front
+            void *hlecount_wrap(const char *, const char *, void *); return (uint64_t)hlecount_wrap("HLE", name, sec[i].direct ? sec[i].fn : dm_hwrap(sec[i].fn));
         }
     if (weak) { if (g_flag.imports) LOG("import %s: undefined weak symbol, 0", name); return 0; }
     // Reuse the stub if one was already allocated for the same name

@@ -3,10 +3,10 @@
 // such parameters are always declared as int/unsigned and truncated by ourselves. Variadic arguments go on the stack on Apple and in registers on Switch ⇒ variadic functions cannot use C's "..." directly.
 #pragma once
 #include "dm.h"
-typedef struct { const char *name; void *fn; } hle_ent;
+typedef struct { const char *name; void *fn; int direct; } hle_ent;   // direct: called as it is, not on the host stack (hle_table.c)
 #define HLE(mangled, ret, cname, ...)                                                             \
     static ret cname(__VA_ARGS__);                                                                \
-    __attribute__((used, section("__DATA,swhle"))) static const hle_ent hle_ent_##cname = {mangled, (void *)cname}; \
+    __attribute__((used, section("__DATA,swhle"))) static const hle_ent hle_ent_##cname = {mangled, (void *)cname, 0}; \
     static ret cname(__VA_ARGS__)
 
 typedef uint32_t Result;   // nn::Result: w0, 0 = success

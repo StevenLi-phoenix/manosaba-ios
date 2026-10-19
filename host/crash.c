@@ -78,13 +78,15 @@ void crash_off(const char *tag, uint64_t a) {   // Also used by diag.c
     else if (dladdr((void *)a, &di) && di.dli_sname) fprintf(stderr, " %s%s%s+%#lx", tag, *tag ? "=" : "", di.dli_sname, (unsigned long)(a - (uint64_t)di.dli_saddr));
     else fprintf(stderr, " %s%s%#llx", tag, *tag ? "=" : "", a);
 }
-// Frame pointer backtrace: x29 chain [fp]=previous frame's fp, [fp+8]=return address; only 8-byte aligned, monotonically increasing frames are walked
+// Frame pointer backtrace: x29 chain [fp]=previous frame's fp, [fp+8]=return address; only 8-byte aligned, increasing frames are walked, but for one step
+// down or up from a host stack to the guest's (dm_fp_step_ok: a host call's record, hstack.S)
 void dm_backtrace(uint64_t fp) {
     fprintf(stderr, "[dm] bt:");
+    int jumps = 0;
     for (int i = 0; i < 32 && fp && !(fp & 7); i++) {
         uint64_t nfp = ((uint64_t *)fp)[0], ra = ((uint64_t *)fp)[1];
         off("", ra);
-        if (nfp <= fp) break;
+        if (!dm_fp_step_ok(fp, nfp, &jumps)) break;
         fp = nfp;
     }
     fputc('\n', stderr);

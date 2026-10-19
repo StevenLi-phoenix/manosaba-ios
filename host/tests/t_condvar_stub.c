@@ -7,7 +7,8 @@ pthread_key_t g_key18, g_keytls;   // used by thread pausing to read the x18 / t
 uint64_t g_t0_ns;
 void crash_thread_init(void) {}
 void guest_thread_init(void) {}
-void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp) { (void)entry; (void)arg; (void)sp; abort(); }
+void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp, uint64_t *top) { (void)entry; (void)arg; (void)sp; (void)top; abort(); }
+const uint64_t *dm_hstack_record(uint64_t tsd, uint64_t top) { (void)tsd; (void)top; return NULL; }
 #ifndef T_OWN_GUEST_SYM   // t_sysevent provides the SDK functions it needs
 void *guest_sym(const char *name) { (void)name; return NULL; }
 #endif

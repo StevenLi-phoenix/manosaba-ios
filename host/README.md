@@ -30,7 +30,8 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 2. On the guest main thread: the SDK initialization in the order of `nn::init::Start` (`nnosInitialize`, `nninitInitializeSdkModule`,
    `nninitStartup`), the modules' constructors, `dm_game_boot()`, then `nnMain`.
 3. While the game runs, rewritten `svc` and timer reads enter `entry.S` → `gate_dispatch` (`hle.c`); `svc` numbers 0x80–0xff are host calls
-   registered by game code (`dm_host_call_register`).
+   registered by game code (`dm_host_call_register`). Gates and the host functions the guest calls run on the thread's host stack
+   (`hstack.S`: imports and takeovers get a wrapper, `dm_hwrap`; `DM_HSTACK=0` leaves them on the guest stack).
 
 ## Interfaces for game code
 
@@ -45,6 +46,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `main.c` | Bootstrap: load the modules, initialize the SDK runtime in the order of `nn::init::Start`, enter `nnMain` |
 | `loader.c` | Multi-module loading (Horizon's `rtld` role): mapping, thread slots, gate registration, relocation, takeover by name, permissions |
 | `entry.S` | The two common gate entries and the static stub table |
+| `hstack.S`, `hstack.c` | Host calls on a per-thread host stack: the switch, the wrappers handed to the guest, the record GetThreadContext3 reads |
 | `thread.c` | Guest thread environment: gate slot, x18 slot, `tpidr_el0` (ELF TLS), `tpidrro_el0` (Horizon ThreadLocalRegion) |
 | `hle.c`, `hle.h` | Import resolution and gate dispatch; registration macros for host implementations |
 | `hle_table.c` | libc passthrough table: C library functions with the same ABI, connected to Apple libc |

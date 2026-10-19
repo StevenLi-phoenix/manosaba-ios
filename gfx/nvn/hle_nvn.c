@@ -293,11 +293,11 @@ static void tex_reg_check(const char *what, int id, const NVNtexture *t, uint64_
     if (why) tex_diag(what, id, o, why, lr);
 }
 NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
-    (void)tp; tex_reg_check("RegisterTexture", id, t, (uint64_t)__builtin_return_address(0)); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
+    (void)tp; tex_reg_check("RegisterTexture", id, t, DM_GUEST_RA()); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
 }
 // Image descriptors live in the texture pool alongside texture descriptors, in the same ID space (the replay layer's image slots fetch textures from the same registration table, see nvn_mtl.m NVN_RB_IMG)
 NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
-    (void)tp; tex_reg_check("RegisterImage", id, t, (uint64_t)__builtin_return_address(0)); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
+    (void)tp; tex_reg_check("RegisterImage", id, t, DM_GUEST_RA()); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
 }
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
     *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); return 1;
@@ -330,7 +330,7 @@ NVN(nvnTextureBuilderSetLevels, void, NVNtextureBuilder *b, int v) { TB(b)->d.le
 NVN(nvnTextureBuilderSetFormat, void, NVNtextureBuilder *b, NVNformat f) { TB(b)->d.format = f; }
 NVN(nvnTextureBuilderSetSamples, void, NVNtextureBuilder *b, int s) { TB(b)->d.samples = s; }
 NVN(nvnTextureBuilderSetStride, void, NVNtextureBuilder *b, ptrdiff_t s) { TB(b)->d.stride = (uint32_t)s; }
-NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, ptrdiff_t off) { { uint64_t lr = (uint64_t)__builtin_return_address(0); module_t *m = module_of((void *)lr); OLOG("TextureBuilderSetStorage b=%p pool=%p off=%#llx lr=%s+%#llx", (void *)b, (void *)p, (long long)off, m ? m->name : "?", m ? lr - (uint64_t)m->base : lr); } TB(b)->pool = (pool_t *)p; TB(b)->off = off; }
+NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, ptrdiff_t off) { { uint64_t lr = DM_GUEST_RA(); module_t *m = module_of((void *)lr); OLOG("TextureBuilderSetStorage b=%p pool=%p off=%#llx lr=%s+%#llx", (void *)b, (void *)p, (long long)off, m ? m->name : "?", m ? lr - (uint64_t)m->base : lr); } TB(b)->pool = (pool_t *)p; TB(b)->off = off; }
 // The SDK reference says the console ignores this pointer: packaged data is expected to be in the texture's pool storage already (only the Windows
 // reference implementation converts and copies it). Tears of the Kingdom calls it
 NVN(nvnTextureBuilderSetPackagedTextureData, void, NVNtextureBuilder *b, const void *data) { (void)b; (void)data; }
@@ -395,7 +395,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     o->mem = s->pool && s->pool->mem ? s->pool->mem + s->off : NULL;
     o->serial = nvn_new_serial();
     mtl_tex_live(o);   // the texture now at this storage (a registration of a finalized one there follows it: nvn_mtl.m tex_by_id)
-    { const char *why = !o->d.format ? "format 0" : nvn_texdesc_metal_check(&o->d); if (why) tex_diag("TextureInitialize", -1, o, why, (uint64_t)__builtin_return_address(0)); }
+    { const char *why = !o->d.format ? "format 0" : nvn_texdesc_metal_check(&o->d); if (why) tex_diag("TextureInitialize", -1, o, why, DM_GUEST_RA()); }
     if (g_log && o->d.width == 1920 && o->d.height == 1080) { const uint8_t *q = (const uint8_t *)t; char hx[0xC0 * 2 + 1]; for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] Texture %p 0xC0 bytes: %s", (void *)t, hx); }
     OLOG("Texture %p ser %llu %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx mem=%p", (void *)t, o->serial, o->d.width, o->d.height, o->d.depth,
          o->d.levels, o->d.format, o->d.target, o->d.flags, (unsigned long long)o->size, (void *)o->mem);
@@ -1018,7 +1018,7 @@ NVN(nvnCommandBufferDrawElementsBaseVertex, void, NVNcommandBuffer *c, NVNdrawPr
 }
 NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, int z) {
     // The thunk is a tail jump (br), so the return address here is the call site in the game
-    *REC(c, OP_DISPATCH, p_dispatch) = (p_dispatch){x, y, z, (uint64_t)__builtin_return_address(0)};
+    *REC(c, OP_DISPATCH, p_dispatch) = (p_dispatch){x, y, z, DM_GUEST_RA()};
 }
 NVN(nvnCommandBufferBarrier, void, NVNcommandBuffer *c, int bits) { *(int32_t *)rec(c, OP_BARRIER, 8) = bits; }
 NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { REC(c, OP_SET_TEX_POOL, p_set_pool)->pool = (const dpool_t *)p; }

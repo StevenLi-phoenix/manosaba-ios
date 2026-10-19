@@ -88,6 +88,9 @@ typedef struct thr {
     uint64_t *svc_regs, svc_pc;   // Guest register area saved by the current svc gate and the svc's original address
     _Atomic int pause_req, parked;   // Pause requested / stopped at the svc gate exit
     int stop_kind;             // How it was stopped: 1 = inside an svc (report from the gate's saved registers) 2 = Mach-suspended (report from the thread state)
+    uint64_t hstk_top;         // Top of this thread's host stack (hstack.S; dm_thread_enter writes it), 0 = none (the main thread, DM_HSTACK=0)
+    uint64_t stack_bot, stack_low;   // Guest stack: bottom (the MapMemory mapping holding its top, 0 = not known) and the lowest sp seen at an svc entry
+    int stack_said;            // the low-stack line was logged
     int cur_core;              // Virtual core held while running guest code (-1 while blocked / not started; only with virtual cores, see below)
     int host_work;             // Created for host work (dm_guest_thread_spawn: the audio renderer) that waits on host primitives: holds no virtual core
     int next_host;             // This thread is about to create a host-work thread (svc CreateThread inside nn::os::CreateThread takes it)
@@ -257,11 +260,16 @@ static void lock_acquire_for(thr_t *t, uint64_t addr, uint32_t tag) {
 //   - GetThreadContext3 requires the thread to be paused; a thread inside an svc reports only x19–x28, fp, lr, sp, pc and v8–v15 (the callee-saved part), the rest 0; otherwise all registers.
 // Host mapping:
 //   - Inside an svc gate (in_svc) = in the kernel: not suspended; on leaving the gate (before gate_dispatch returns) it stops itself on G until resumed; the context comes from the gate's saved guest registers
-//     (the gate block does stp x29,x30,[sp,#-16]! then blr dm_gate, and dm_gate opens 800 more bytes to save x0–x30 / q0–q31 ⇒ guest sp = save area + 816, guest lr at save area + 808).
+//     (the gate block does stp x29,x30,[sp,#-16]! then blr dm_gate; dm_gate keeps x16 / x17 below that, takes the host stack and puts its record (guest sp at +16) and the 800-byte
+//     register area below it ⇒ guest sp = the record's, guest lr just below the guest sp).
+//   - Inside a host call or an svc gate that took the thread's host stack (hstack.S): the guest's state at that entry, from the record at the top of the host stack: guest sp,
+//     x19–x28, fp, lr, and for a host call x0–x8 (its arguments). The host frames, and any guest code a host function called, are on the host stack: the guest stack above that sp
+//     holds every guest frame, and a value only a host frame saved is in these registers. The IL2CPP GC scans exactly that.
 //   - In guest code (pc inside a module): Mach thread_suspend, report from the thread state; x18 is read from the K18 slot (the rewriter moved the guest's x18 into a TSD slot).
 //     Guest code holds no host locks, so keeping it suspended cannot hang other host calls during the stop-the-world.
-//   - In host code (an HLE implementation): if it is parked in a system wait stub (condition variable / semaphore / sleep / mach_msg), treat it like a kernel wait: suspend and report from the thread state
-//     (the host frames are on the guest stack with a lower sp, so scanning upward from it covers every guest frame); otherwise let it go and retry shortly, until it returns to guest code or enters a wait.
+//   - In host code (an HLE implementation): if it is parked in a system wait stub (condition variable / semaphore / sleep / mach_msg), treat it like a kernel wait: suspend and report
+//     from the record above, or with DM_HSTACK=0 from the thread state (the host frames are then on the guest stack with a lower sp, so scanning upward from it covers every guest
+//     frame); otherwise let it go and retry shortly, until it returns to guest code or enters a wait.
 #include <mach/thread_act.h>
 static struct { uint64_t a; } g_waitstub[16]; static int g_nwaitstub;
 static void waitstub_init(void) {
@@ -275,6 +283,22 @@ static uint64_t tsd_slot(const thr_t *t, pthread_key_t k) { return t->tsd ? ((co
 void thr_svc_enter(uint64_t *regs, uint64_t pc) {
     thr_t *t = pthread_getspecific(g_keythr); if (!t) return;
     t->svc_regs = regs; t->svc_pc = pc; atomic_store(&t->in_svc, 1);
+    // The least free guest stack, sampled at svc entries: the guest sp from dm_gate's record above the register area (a gate nested in a host call
+    // has its record on the host stack, outside the range)
+    uint64_t sp = regs[(800 + 16) / 8];
+    if (sp < t->stack_low && sp > t->stack_bot && sp <= t->stack_top && t->stack_top - sp < (64u << 20)) {
+        t->stack_low = sp;
+        if (t->stack_bot && sp - t->stack_bot < 1024 && !t->stack_said) { t->stack_said = 1;
+            module_t *m = module_of((void *)pc);
+            LOG("[stack] thread %#x: %llu of its %llu bytes of guest stack left at an svc entry (%s+%#llx)", t->handle, (unsigned long long)(sp - t->stack_bot),
+                (unsigned long long)(t->stack_top - t->stack_bot), m ? m->name : "?", m ? pc - (uint64_t)m->base : pc); }
+    }
+}
+// Guest stack of a thread (the unit test): top, lowest sp at an svc entry, bottom (0 = not known); 0 when there is no such thread
+int thr_stack_info(uint32_t h, uint64_t *top, uint64_t *low, uint64_t *bot, int *said) {
+    pthread_mutex_lock(&G); thr_t *t = h_peek(h, O_THREAD);
+    if (t) { *top = t->stack_top; *low = t->stack_low; *bot = t->stack_bot; *said = t->stack_said; }
+    pthread_mutex_unlock(&G); return t != NULL;
 }
 void thr_svc_exit(void) {
     thr_t *t = pthread_getspecific(g_keythr); if (!t) return;
@@ -321,10 +345,33 @@ static uint32_t get_context3(uint8_t *out, uint32_t h) {
     if (r) return r;
     uint64_t *x = (uint64_t *)out; memset(out, 0, 0x320);   // ThreadContext layout (as copied by sdk+0x152600)
     if (t->exited) return 0;                                // Terminated: mesosphere leaves the context unfilled
-    if (t->stop_kind == 1) {
+#ifndef DM_TEST_HSTACK_OLD_CONTEXT   // negative control of t_hstack only: the context as before the host stack (item 40)
+    const uint64_t *rec = t->stop_kind ? dm_hstack_record(t->tsd, t->hstk_top) : NULL;
+#else
+    const uint64_t *rec = NULL;
+#endif
+    if (rec) {   // inside a host call or an svc gate that took the host stack: the guest's state at that entry
+        if (rec[13] == 2) {   // svc gate: its register area is below the record
+            const uint64_t *g = rec - 800 / 8;
+            for (int i = 19; i < 29; i++) x[i] = g[i];
+            x[29] = g[29]; x[32] = t->stop_kind == 1 && t->svc_regs == g ? t->svc_pc : rec[1];
+            memcpy(out + 0x110 + 8 * 16, (const uint8_t *)g + 256 + 8 * 16, 8 * 16);   // v8–v15
+            x[30] = *(const uint64_t *)(rec[2] - 8);         // the gate block's x30, just below the guest sp
+        } else {              // host call: its arguments x0–x8 too, and x18 from its slot
+            for (int i = 0; i < 9; i++) x[i] = rec[4 + i];
+            for (int i = 19; i < 29; i++) x[i] = rec[14 + i - 19];
+            x[18] = tsd_slot(t, g_key18);
+            x[29] = rec[0]; x[30] = x[32] = rec[1];
+        }
+        x[31] = rec[2];
+    } else if (t->stop_kind == 1) {
         const uint64_t *g = t->svc_regs;
         for (int i = 19; i < 29; i++) x[i] = g[i];
+#ifndef DM_TEST_HSTACK_OLD_CONTEXT
+        x[29] = g[29]; x[31] = g[(800 + 16) / 8]; x[30] = *(const uint64_t *)(x[31] - 8); x[32] = t->svc_pc;   // dm_gate's record, on the same stack here
+#else
         x[29] = g[29]; x[30] = *(const uint64_t *)((const uint8_t *)g + 808); x[31] = (uint64_t)g + 816; x[32] = t->svc_pc;
+#endif
         memcpy(out + 0x110 + 8 * 16, (const uint8_t *)g + 256 + 8 * 16, 8 * 16);   // v8–v15
     } else if (t->stop_kind == 2) {
         arm_thread_state64_t st; mach_msg_type_number_t c = ARM_THREAD_STATE64_COUNT;
@@ -350,7 +397,7 @@ uint64_t svc_thread_activity(uint64_t *regs) { regs[0] = set_activity((uint32_t)
 uint64_t svc_thread_context3(uint64_t *regs) { regs[0] = get_context3((uint8_t *)regs[0], (uint32_t)regs[1]); return 0; }
 
 // ---------- Threads ----------
-extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);   // entry.S
+extern void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp, uint64_t *host_top);   // entry.S
 void crash_thread_init(void);
 void guest_thread_init(void);   // thread.c: the single place that sets the per-thread TSD slots (gate, x18, TLS, TLR)
 static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads chain and free
@@ -359,6 +406,7 @@ static void thr_free(thr_t *t) {   // Holding G; unlink from the all-threads cha
 }
 static const char *thr_name(thr_t *t, char *buf, size_t n);
 __attribute__((weak)) void wp_thread_start(void) {}   // diag.c (DM_WATCHPOINT, Mac) provides the real one; iOS and the unit tests link without it
+__attribute__((weak)) uint64_t dm_mapping_of(uint64_t a, uint64_t *size) { (void)a; *size = 0; return 0; }   // hle_svc.c; the unit tests link without it
 static void wake_sync_waiters(void *obj);
 static void kt_dump(int last);   // the lock / condition variable trace (below svc_thread)
 // Publish the exit: record the time, mark exited and wake synchronization waiters. Once G is released a waiter may close the handle and free t,
@@ -393,7 +441,7 @@ static void *thread_main(void *p) {
         return NULL;   // pthread TSD destructors (TLS / TLR blocks, the signal alternate stack) run on this host stack
     }
     t->host_exit_valid = 1;
-    dm_thread_enter(t->entry, t->arg, t->stack_top);   // Does not return: the guest must exit through ExitThread
+    dm_thread_enter(t->entry, t->arg, t->stack_top, &t->hstk_top);   // Does not return: the guest must exit through ExitThread
     die("guest thread entry returned");
 }
 // ExitThread. A thread started by thread_main leaves the guest stack first, doing nothing on it before the jump (no clock reads, logging or locks):
@@ -536,12 +584,12 @@ static void thr_bt(thr_t *t) {
             if (sp > 0x100000000ull && !vm_read_overwrite(mach_task_self(), sp, sizeof stk, (vm_address_t)stk, &g) && g == sizeof stk)
                 for (int r = 0; r < 128; r += 8) fprintf(stderr, "[dm]   %#x stack sp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n", t->handle, r * 8,
                         stk[r], stk[r + 1], stk[r + 2], stk[r + 3], stk[r + 4], stk[r + 5], stk[r + 6], stk[r + 7]); }
-        char line[1024]; int p = snprintf(line, sizeof line, "[dm]   %#x backtrace:", t->handle), nf = 0;
+        char line[1024]; int p = snprintf(line, sizeof line, "[dm]   %#x backtrace:", t->handle), nf = 0, jumps = 0;
         for (int k = 0; k < 64 && fp && nf < 20 && p < (int)sizeof line - 40; k++) {
             module_t *m = module_of((void *)lr);
             if (m) { p += snprintf(line + p, sizeof line - p, " %s+%#llx", m->name, lr - (uint64_t)m->base); nf++; }
             uint64_t fr[2]; vm_size_t g2 = 0;
-            if (vm_read_overwrite(mach_task_self(), fp, 16, (vm_address_t)fr, &g2) || g2 != 16 || fr[0] <= fp) break;
+            if (vm_read_overwrite(mach_task_self(), fp, 16, (vm_address_t)fr, &g2) || g2 != 16 || !dm_fp_step_ok(fp, fr[0], &jumps)) break;
             fp = fr[0]; lr = fr[1];
         }
         fprintf(stderr, "%s\n", line);
@@ -575,6 +623,11 @@ void svc_thread_dump(void) {
                 cpu, t->nsvc, t->exited ? " exited" : "", t->started ? "" : " not started", life, kinds[t->wkind & 7], t->waddr, own, t->last_svc,
                 m ? m->name : "?", m ? t->last_lr - (uint64_t)m->base : t->last_lr,
                 g_keythr && t == pthread_getspecific(g_keythr) ? " ← the thread writing this dump (after a CRASH line: the one that crashed)" : "");
+        if (t->stack_low < t->stack_top) {   // the least free guest stack at an svc entry (item 40; the blood moon crash)
+            if (t->stack_bot) fprintf(stderr, "[dm]   %#x guest stack %llu bytes, %llu of them left at the deepest svc entry\n", t->handle,
+                                      (unsigned long long)(t->stack_top - t->stack_bot), (unsigned long long)(t->stack_low - t->stack_bot));
+            else fprintf(stderr, "[dm]   %#x guest stack %llu bytes deep at the deepest svc entry (size not known)\n", t->handle, (unsigned long long)(t->stack_top - t->stack_low));
+        }
         if (t->wkind == 4 && t->whn > 0) {   // which objects a WaitSynchronization waits for, and whether each is signaled now (the address column is not used by it)
             char hl[400]; int q = 0;
             for (int i = 0; i < t->whn && i < 8; i++) { uint32_t h = t->whp[i]; unsigned x = h - 0x1000; int ty = x && x < MAX_H ? g_h[x].type : O_FREE;
@@ -717,7 +770,8 @@ int svc_thread(int num, uint64_t *regs) {
     case 0x08: {  // CreateThread(→w1 handle; x1 entry, x2 argument, x3 stack top, w4 priority, w5 core)
         thr_t *t = calloc(1, sizeof *t);
         pthread_cond_init(&t->cv, NULL);
-        t->entry = regs[1]; t->arg = regs[2]; t->stack_top = regs[3] & ~0xFull;
+        t->entry = regs[1]; t->arg = regs[2]; t->stack_top = t->stack_low = regs[3] & ~0xFull;
+        { uint64_t sz = 0, b = dm_mapping_of(t->stack_top - 16, &sz); if (b && t->stack_top <= b + sz) t->stack_bot = b; }   // the SDK maps each thread's stack (MapMemory)
         int c = (int)regs[5] == -2 ? PROC_IDEAL_CORE : (int)regs[5];   // -2 = IdealCoreUseProcessValue
         if (c < 0 || c >= 64 || !(PROC_CORE_MASK >> c & 1)) { pthread_cond_destroy(&t->cv); free(t); regs[0] = R_BAD_CORE; return 1; }
         t->prio = (int)regs[4]; t->core = t->act = c; t->mask = 1ull << c; t->cur_core = -1;   // a new thread may run only on its ideal core (KThread::Initialize)

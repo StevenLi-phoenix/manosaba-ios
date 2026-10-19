@@ -316,12 +316,12 @@ static void on_sample(int sig, siginfo_t *si, void *uc_) {
     unsigned i = atomic_load(&g_shead) % SRING;
     uint32_t thr_cur_handle(void);
     g_sring[i].h = thr_cur_handle(); g_sring[i].t = now_ns(); g_sring[i].pc = uc->uc_mcontext->__ss.__pc; g_sring[i].lr = uc->uc_mcontext->__ss.__lr;
-    uint64_t fp = uc->uc_mcontext->__ss.__fp; int n = 0;
+    uint64_t fp = uc->uc_mcontext->__ss.__fp; int n = 0, jumps = 0;
     for (; n < 16 && fp && !(fp & 7); n++) {   // safe reads: x29 may be an ordinary register in the interrupted function
         uint64_t fr[2]; vm_size_t got = 0;
         if (vm_read_overwrite(mach_task_self(), fp, sizeof fr, (vm_address_t)fr, &got) || got != sizeof fr) break;
         g_sring[i].bt[n] = fr[1];
-        if (fr[0] <= fp) { n++; break; }
+        if (!dm_fp_step_ok(fp, fr[0], &jumps)) { n++; break; }
         fp = fr[0];
     }
     g_sring[i].n = n;

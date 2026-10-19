@@ -29,6 +29,8 @@ SRC = \
 	gamepad.m \
 	$(PROFILE) \
 	hle.c \
+	hstack.S \
+	hstack.c \
 	loader.c \
 	main.c \
 	memsnap.c \

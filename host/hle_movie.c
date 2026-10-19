@@ -327,7 +327,7 @@ static void *const g_ext_vt[16] = {
 HLE_FORCE("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", "movie::Extractor → host (AVFoundation)", void, mv_Extractor, void **self, int type) {
     (void)type; guest_fns();
     ext_t *x = calloc(1, sizeof *x); pthread_mutex_init(&x->mu, NULL);
-    self[0] = (void *)g_ext_vt; self[1] = x;
+    self[0] = (void *)dm_hwrap_vt(g_ext_vt, 16); self[1] = x;   // the slots run on the thread's host stack (hstack.S)
 }
 // The non-virtual entries main imports directly
 HLE_FORCE_OPT("_ZN5movie9ExtractorD1Ev", "movie::Extractor → host", void, mv_ExtractorD, void **self) { ext_dtor(self); }
@@ -876,7 +876,7 @@ static void vx_create(void **self, int type, int fmt, int mode) {
     vx_t *v = calloc(1, sizeof *v); pthread_mutex_init(&v->mu, NULL);
     v->type = type; v->fmt = fmt; v->mode = mode; vx_reset_queues(v);
     pthread_mutex_lock(&g_vx_mu); v->next = g_vx; g_vx = v; pthread_mutex_unlock(&g_vx_mu);
-    self[0] = (void *)g_vx_vt; self[1] = v;
+    self[0] = (void *)dm_hwrap_vt(g_vx_vt, 19); self[1] = v;
     MVLOG("VP%d decoder %p created (libvpx %s): output format %d mode %d", type == DEC_VP9 ? 9 : 8, (void *)self, vpx_codec_version_str(), fmt, mode);
 }
 // Called at every present (gfx/nvn/hle_nvn.c, on the game's thread before it gives its core away): hands paced frames over
@@ -904,6 +904,6 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
     d->type = type; d->fmt = fmt; d->mode = mode;
     if (mode != 1 || (fmt != 1 && fmt != 4))   // DecoderMode_Cpu with AudioPcm16 / VideoColorNv12 only
         LOG("[movie] [red] Decoder type %d output format %d mode %d: only CPU mode with PCM16 / NV12 is implemented", type, fmt, mode);
-    self[0] = (void *)g_dec_vt; self[1] = d;
+    self[0] = (void *)dm_hwrap_vt(g_dec_vt, 19); self[1] = d;
     MVLOG("Decoder %p created: type %d format %d mode %d", (void *)self, type, fmt, mode);
 }

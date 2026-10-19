@@ -1,15 +1,15 @@
 // Two common entries + a static stub table.
-// 0) unimpl_stubs: named stubs for unimplemented imports, the k-th = movz x9,#k; b unimpl_entry (static code; iOS does not allow runtime generation)
-// 1) unimpl_entry: stub entry for unimplemented imports, x9 = stub number; save x0-x8+lr and call unimpl_c(idx, regs).
-// 2) dm_gate: the rewriter replaces svc / cntpct reads with "bl to this entry". On entry lr = the gate block return point (gate_dispatch uses it to look up which gate this is),
-//    save x0-x30 to a contiguous area on the stack, call gate_dispatch(ret, regs), write back x0 (gate return value), return.
+// 0) unimpl_stubs: named stubs for unimplemented imports, the k-th = movz x16,#k; b unimpl_entry (static code; iOS does not allow runtime generation)
+// 1) unimpl_entry: stub entry for unimplemented imports, x16 = stub number; on the thread's host stack (hstack.S dm_hcall) save x0-x8+lr and call unimpl_c(idx, regs).
+// 2) dm_gate: the rewriter replaces svc / cntpct reads with "bl to this entry". On entry lr = the gate block return point (gate_dispatch uses it to look up which gate this is);
+//    take the thread's host stack (hstack.S), save x0-x30 there, call gate_dispatch(ret, regs), write back x0 (gate return value), return.
     .text
     .globl _unimpl_stubs
     .p2align 3
 _unimpl_stubs:
     .set k, 0
     .rept 4096                // = hle.c MAX_STUB
-    movz x9, #k
+    movz x16, #k
     b _unimpl_entry
     .set k, k + 1
     .endr
@@ -17,6 +17,9 @@ _unimpl_stubs:
     .globl _unimpl_entry
     .p2align 2
 _unimpl_entry:
+    adr x17, Lunimpl_body
+    b _dm_hcall               // x16 (the stub number) passes through
+Lunimpl_body:
     stp x29, x30, [sp, #-96]!
     mov x29, sp
     stp x0, x1, [sp, #16]
@@ -24,7 +27,7 @@ _unimpl_entry:
     stp x4, x5, [sp, #48]
     stp x6, x7, [sp, #64]
     str x8, [sp, #80]
-    mov x0, x9
+    mov x0, x16
     add x1, sp, #16
     bl _unimpl_c
     ldp x29, x30, [sp], #96
@@ -33,6 +36,29 @@ _unimpl_entry:
     .globl _dm_gate
     .p2align 2
 _dm_gate:
+    // Take the thread's host stack (hstack.S) with x16 / x17 as scratch, kept on the guest stack: the guest stack holds 32 bytes, these and the gate
+    // block's x29 / x30. Then the record (DM_HREC = 192 bytes, kind 2) at the top of the host stack, or on the current stack when it is not taken:
+    // [0] guest x29 [8] gate return point (a frame record) [16] guest sp [24] host top or 0 [104] kind; GetThreadContext3 reads it (hle_thread.c)
+    stp x16, x17, [sp, #-16]!
+    adrp x17, _dm_hstk_off@PAGE
+    ldr x17, [x17, _dm_hstk_off@PAGEOFF]
+    cbz x17, 1f
+    mrs x16, tpidrro_el0
+    add x16, x16, x17
+    ldr x17, [x16]
+    cbz x17, 1f
+    str xzr, [x16]
+    add x16, sp, #32
+    sub sp, x17, #192
+    stp x16, x17, [sp, #16]
+    b 2f
+1:  add x16, sp, #32
+    sub sp, sp, #192
+    stp x16, xzr, [sp, #16]
+2:  stp x29, x30, [sp]
+    mov x17, #2
+    str x17, [sp, #104]
+    ldp x16, x17, [x16, #-32]   // the guest's x16 / x17 back
     // Open a 256-byte frame and save x0..x30 (x0..x29 in pairs, x30 alone); the gate may read and modify x0..x30
     sub sp, sp, #800
     stp x0, x1, [sp, #0]
@@ -73,10 +99,17 @@ _dm_gate:
     str x9, [sp, #776]
     mrs x9, fpcr
     str x9, [sp, #784]
+    add x29, sp, #800        // the record: host backtraces continue into the guest
     mov x0, x30              // Return point = gate identifier
     mov x1, sp               // regs
     bl _gate_dispatch
-    ldr x9, [sp, #784]
+    ldr x9, [sp, #824]       // give the host stack back
+    cbz x9, 3f
+    mrs x10, tpidrro_el0
+    adrp x11, _dm_hstk_off@PAGE
+    ldr x11, [x11, _dm_hstk_off@PAGEOFF]
+    str x9, [x10, x11]
+3:  ldr x9, [sp, #784]
     msr fpcr, x9
     ldr x9, [sp, #776]
     msr fpsr, x9
@@ -116,19 +149,34 @@ _dm_gate:
     ldp x26, x27, [sp, #208]
     ldp x28, x29, [sp, #224]
     ldr x30, [sp, #240]
-    add sp, sp, #800
+    ldr x16, [sp, #816]      // back to the guest stack; the final x16 / x17 (a cntpct target can be either) travel through their slot there
+    ldr x17, [sp, #128]
+    stur x17, [x16, #-32]
+    ldr x17, [sp, #136]
+    stur x17, [x16, #-24]
+    sub sp, x16, #32
+    ldp x16, x17, [sp], #16
     ret
 
-// 3) dm_thread_enter(entry, arg, sp): guest thread start. Switch to the guest stack given by the SDK and call entry with x0 = argument;
+// 3) dm_thread_enter(entry, arg, sp, &host top): guest thread start. The host stack below the caller's frame becomes this thread's host stack
+//    (hstack.S; its top is also written to *x3), then switch to the guest stack given by the SDK and call entry with x0 = argument;
 //    Horizon threads must exit via ExitThread; returning from entry is reported as an error.
     .globl _dm_thread_enter
     .p2align 2
 _dm_thread_enter:
-    mov sp, x2
+    adrp x9, _dm_hstk_off@PAGE
+    ldr x9, [x9, _dm_hstk_off@PAGEOFF]
+    cbz x9, 1f
+    mov x10, sp
+    mrs x11, tpidrro_el0
+    str x10, [x11, x9]
+    cbz x3, 1f
+    str x10, [x3]
+1:  mov sp, x2
     mov x29, #0
     mov x16, x0
     mov x0, x1
-    adr x30, 1f
+    adr x30, 2f
     br x16
-1:  bl _dm_thread_returned
+2:  bl _dm_thread_returned
     brk #0

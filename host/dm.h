@@ -72,6 +72,22 @@ void dm_guest_frame_tick(void);        // Called on every present (hle_nvn.c): w
 uint64_t dm_nvn_frame_count(void);
 uint64_t dm_nvn_sub_cpu_ns(void);     // Cumulative CPU nanoseconds of submit (excluding present)
 void dm_backtrace(uint64_t fp);
+// Host calls on a per-thread host stack (hstack.S, hstack.c): dm_hwrap(fn) is what the guest gets in place of a host function (a wrapper that
+// runs it on the thread's host stack; fn itself when DM_HSTACK=0); dm_hwrap_vt does it for every slot of a host vtable. DM_HREC = the record a
+// host call or svc gate leaves at the top of the host stack (layout in hstack.S); dm_hstack_record finds it for a stopped thread
+#define DM_HREC 192
+void dm_hstack_init(void);
+void *dm_hwrap(void *fn);
+void *const *dm_hwrap_vt(void *const *vt, int n);
+const uint64_t *dm_hstack_record(uint64_t tsd, uint64_t top);
+// The guest return address of a host function the guest called (diagnostics): through the switch the function's own return address is the
+// switch's, and the guest's is in the switch's frame record
+extern char dm_hcall_ret[];
+#define DM_GUEST_RA() ((uint64_t)__builtin_return_address(0) == (uint64_t)dm_hcall_ret \
+                       ? ((const uint64_t *)*(const uint64_t *)__builtin_frame_address(0))[1] : (uint64_t)__builtin_return_address(0))
+// Frame pointer walks (crash.c, diag.c, hle_thread.c): frames go up the stack, except once, where a host call's record links the host stack to
+// the guest's
+static inline int dm_fp_step_ok(uint64_t fp, uint64_t nfp, int *jumps) { return nfp > fp || (nfp && !(*jumps)++); }
 void crash_watch_progress(uint32_t tick, const char *stage);
 void crash_watch_frame(void);
 void crash_watch_pregame_done(void);

@@ -14,7 +14,7 @@ void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stac
     void *stack = aligned_alloc(0x1000, stack_size);             // the SDK wants a 4 KiB aligned stack whose size is a multiple of 4 KiB
     if (!tt || !stack) die("host guest thread: out of memory");
     void dm_thread_next_host_work(void); dm_thread_next_host_work();   // the thread runs host code: no virtual core (hle_thread.c)
-    int rc = ((create_fn)need("_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi"))(tt, fn, arg, stack, stack_size, prio);
+    int rc = ((create_fn)need("_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES3_S3_mi"))(tt, (void (*)(void *))dm_hwrap((void *)fn), arg, stack, stack_size, prio);   // fn runs on the host stack
     if (rc) die("host guest thread: CreateThread failed %#x", rc);
     ((tt_fn)need("_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE"))(tt);
     return tt;
