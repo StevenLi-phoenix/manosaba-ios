@@ -2,7 +2,7 @@
 
 Three projects from Ryujinx 1.3.2: `Ryujinx.Graphics.Shader`, `Ryujinx.Common` and `Spv.Generator`.
 The shader translation tool in `gfx/tools/dmsh_xlate` references them to translate the original Switch shaders to SPIR-V.
-License: MIT, see `LICENSE.txt`. Upstream: <https://github.com/Ryubing>.
+License: MIT, see `LICENSE.txt`. Upstream: <https://ryujinx.app> (Ryubing; the source is on the project's own Forgejo instance).
 
 Local changes (each marked `dm patch` in the source):
 - `CodeGen/Spirv/Instructions.cs` `GenerateTextureSample`: texel offsets read from a register are built with `OpCompositeConstruct` and

@@ -5,8 +5,9 @@ processor, so the game's own aarch64 code executes directly. Only the few instru
 offline; the console's system services and its NVN graphics API are reimplemented by a small host on Apple's frameworks and Metal; the game's
 shaders are translated to Metal ahead of time.
 
-The supported game is **魔法少女ノ魔女裁判** (manosaba), Switch version 2.0.4b. The code is organized so that another game is a new
-directory under `games/` plus whatever services and graphics paths that game needs: see [PORTING.md](PORTING.md).
+The supported game is **魔法少女ノ魔女裁判** (manosaba), Switch version 2.0.4b. **The Legend of Zelda: Tears of the Kingdom** 1.4.3 is in
+progress on the Mac ([status](#status-tears-of-the-kingdom-143-in-progress)). The code is organized so that another game is a new directory
+under `games/` plus whatever services and graphics paths that game needs: see [PORTING.md](PORTING.md).
 
 It is a fork of [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile), which ported Diablo II: Resurrected the same way; the D2R-specific code
 has been removed here.
@@ -42,6 +43,14 @@ The growth is the game's own: every save load builds a new set of Naninovel's sc
 with their parsed scripts and UI objects (a census of the managed heap after 9 reloads of one save held up to 12 copies of the same scripts).
 The Switch version is reported to end with an error now and then in long sessions too, and version 2.0.4's notes say such errors were made less
 likely.
+
+## Status (Tears of the Kingdom 1.4.3, in progress)
+
+On the Mac, in a window: the title screen, the prologue with its tutorial and pre-rendered cutscenes (VP9 movies, decoded with libvpx), and the
+dive from the Great Sky Island. The default product runs at 30 fps; a product with the frame-rate rules runs at 60 fps and up, with a RomFS
+overlay that `games/totk/romfs_overlay.py` builds from your own RomFS. Open: a crash after skipping the second blood moon movie; alpha test
+and stencil views not modelled; six-axis and vibration are stubs. iPhone and iPad: not verified; known to be missing there are a VP9 decoder
+in the iOS app and the BC render target path for GPUs without BC. Details: [DEVELOPMENT.md](DEVELOPMENT.md#next-game-tears-of-the-kingdom-started-2026-10-17).
 
 ## How it works
 
@@ -92,34 +101,45 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
 
 ## Acknowledgements
 
-- **d2r-mobile** (jhaizhou, MIT): the architecture and most of the host, graphics layer and verification tools.
-- **d2r-mobile contributors** SepheTT (buffer ↔ texture copy strides) and BossaMelon (the declared launch screen).
-- **nxnative** (seedds, MIT) and **botw-mobile** (Tommy Lau, MIT), community ports built on d2r-mobile: the crash-report, dirty-page,
-  RomFS-index and thread-exit fixes, and from nxnative the memory pool lookup index, compatible texture views, unwritten colour outputs
-  and frame-timed scripted input, credited in their commits; `tools/game_extract` follows nxnative's `nx_extract`. For Tears of the Kingdom,
-  whose system modules are the ones nxnative brought up for Breath of the Wild 1.9.0: the explicit jump-table rewrite (`site_br_tab`), the
-  in-process audio renderer, host guest threads, amiibo, play report, oe / hid / fs additions, NVN 55 functions, deferred texture binds,
-  growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool
-  buffer, the inline-uniform ring and per-stage vertex shader padding; later the autorelease pool for retired objects, the driver segment for
-  vertex and compute shaders, clears on a left-out attachment slot, the growable dirty-range table, QueueFinish without present waits, two
-  translator fixes, vertex output defaults, invariance and the Metal compile cache, credited in the code.
-- **tomodachi-native** (kuosuko, MIT), a fork of nxnative: the variant of the duplicated colour slot handling that keeps the slot the pass writes.
-- **MacNativeGames** (ly05010419, MIT), a Tears of the Kingdom port on the same lineage: which RomFS files hold the shaders, virtual cores, clears
-  drawn as quads, BC render targets through an auxiliary texture, storage buffers addressed from uniform buffers, stale texture views, the
-  behaviour and pacing of the VP9 movie decoder, the 60 fps controller words and the real-time frame step, uniform snapshots, and from its
-  graphics layer the pending-write table, keep-alive, chunked commits, render-state filter, upload staging pool, storage-followed and
-  storage-shared textures, GPU write-back, uniform renaming, small-texture hashing and once-per-submission checks, layered passes, the encode
-  stage, driver segment fills, block height and D16 clear fixes, the GPU memory budget and pool range checks, and the RomFS overlay findings
-  for 60 fps, ported by hand and credited in the code.
-- **LASRecomp** (hjqcan, MIT): its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled
-  textures of Tears of the Kingdom, and the order of WaitSynchronization's checks.
-- **LibHac** (Alex Barney, MIT): reads NSP, XCI and NCA containers in `tools/game_extract`.
-- **Ryujinx** (MIT): the shader translator in `third_party/ryujinx`.
-- **deko3d** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c`.
-- **nvn.h** (h1k421, MIT): NVN declarations in `gfx/nvn/include/nvn.h`.
-- **bcdec** (iOrange, MIT or Unlicense): BC texture decoding.
-- **libvpx** (WebM Project, BSD-3-Clause): VP8 / VP9 movie decoding, linked statically from Homebrew when installed.
-- Tools: SPIRV-Cross, XcodeGen, .NET, Capstone, Unicorn, lz4, UnityPy, hactool, nxdumptool, libimobiledevice.
+- **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** ([jhaizhou](https://github.com/jhaizhou-ops), MIT): the architecture and most of
+  the host, graphics layer and verification tools.
+- **d2r-mobile contributors** [SepheTT](https://github.com/SepheTT) (buffer ↔ texture copy strides) and
+  [BossaMelon](https://github.com/BossaMelon) (the declared launch screen).
+- **[nxnative](https://github.com/seedds/nxnative)** ([seedds](https://github.com/seedds), MIT) and **botw-mobile**
+  ([Tommy Lau](https://github.com/TommyLau), MIT; the repository is no longer on GitHub), community ports built on d2r-mobile: the crash-report,
+  dirty-page, RomFS-index and thread-exit fixes, and from nxnative the memory pool lookup index, compatible texture views, unwritten colour
+  outputs and frame-timed scripted input, credited in their commits; `tools/game_extract` follows nxnative's `nx_extract`. For Tears of the
+  Kingdom, whose system modules are the ones nxnative brought up for Breath of the Wild 1.9.0: the explicit jump-table rewrite (`site_br_tab`),
+  the in-process audio renderer, host guest threads, amiibo, play report, oe / hid / fs additions, NVN 55 functions, deferred texture binds,
+  growable command-memory segments, the NVN API version setting, shader keys over control section and code, linear textures on the pool buffer,
+  the inline-uniform ring and per-stage vertex shader padding; later the autorelease pool for retired objects, the driver segment for vertex and
+  compute shaders, clears on a left-out attachment slot, the growable dirty-range table, QueueFinish without present waits, two translator fixes,
+  vertex output defaults, invariance and the Metal compile cache, credited in the code.
+- **[tomodachi-native](https://github.com/kuosuko/tomodachi-native)** ([kuosuko](https://github.com/kuosuko), MIT), a fork of nxnative: the
+  variant of the duplicated colour slot handling that keeps the slot the pass writes.
+- **[MacNativeGames](https://github.com/ly05010419/MacNativeGames)** ([ly05010419](https://github.com/ly05010419), MIT), a Tears of the Kingdom
+  port on the same lineage: which RomFS files hold the shaders, virtual cores, clears drawn as quads, BC render targets through an auxiliary
+  texture, storage buffers addressed from uniform buffers, stale texture views, the behaviour and pacing of the VP9 movie decoder, the 60 fps
+  controller words and the real-time frame step, uniform snapshots, and from its graphics layer the pending-write table, keep-alive, chunked
+  commits, render-state filter, upload staging pool, storage-followed and storage-shared textures, GPU write-back, uniform renaming,
+  small-texture hashing and once-per-submission checks, layered passes, the encode stage, driver segment fills, block height and D16 clear fixes,
+  the GPU memory budget and pool range checks, and the RomFS overlay findings for 60 fps, ported by hand and credited in the code.
+- **[LASRecomp](https://github.com/peiikai/LASRecomp)** ([Peiikai](https://github.com/peiikai), MIT), a static recompilation of Link's Awakening:
+  its rule that a texture is uploaded from guest memory until the GPU renders into it, behind the CPU-filled textures of Tears of the Kingdom,
+  and the order of WaitSynchronization's checks.
+- **[LibHac](https://www.nuget.org/packages/LibHac/0.19.0)** ([Alex Barney](https://github.com/Thealexbarney), MIT; the NuGet package, as its
+  GitHub repository is no longer reachable): reads NSP, XCI and NCA containers in `tools/game_extract`.
+- **[Ryujinx](https://ryujinx.app)** (MIT; source on the project's own Forgejo instance): the shader translator in `third_party/ryujinx`.
+- **[deko3d](https://github.com/devkitPro/deko3d)** (devkitPro, zlib): the texture layout size algorithm in `gfx/nvn/nvn_tex.c`.
+- **nvn.h** ([h1k421](https://github.com/h1k421), MIT): NVN declarations in `gfx/nvn/include/nvn.h`.
+- **[bcdec](https://github.com/iOrange/bcdec)** ([iOrange](https://github.com/iOrange), MIT or Unlicense): BC texture decoding.
+- **[libvpx](https://github.com/webmproject/libvpx)** (WebM Project, BSD-3-Clause): VP8 / VP9 movie decoding, linked statically from Homebrew
+  when installed.
+- Tools: [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross), [XcodeGen](https://github.com/yonaskolb/XcodeGen),
+  [.NET](https://dotnet.microsoft.com/), [Capstone](https://github.com/capstone-engine/capstone),
+  [Unicorn](https://github.com/unicorn-engine/unicorn), [python-lz4](https://github.com/python-lz4/python-lz4),
+  [UnityPy](https://github.com/K0lb3/UnityPy), [hactool](https://github.com/SciresM/hactool),
+  [nxdumptool](https://github.com/DarkMatterCore/nxdumptool), [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice).
 
 ## License
 

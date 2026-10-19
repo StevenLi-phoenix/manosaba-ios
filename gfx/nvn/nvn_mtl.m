@@ -1779,7 +1779,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp) {
 // last. Textures with a packaged layout were always uploaded from the pool (and re-uploaded when its pages change); every other texture was GPU-only and
 // started as zeros. Tears of the Kingdom gives no packaged layout to its assets (26 SetPackagedTextureLayout calls against 757 registered textures): it
 // writes the block-linear data into CPU-cached pools and flushes the range (8536 FlushMappedRange calls at startup), so the title mural's albedo and
-// every other asset sampled as black. Now, as in LASRecomp (hjqcan, MIT: a texture is uploaded from guest memory when sampled until it is rendered
+// every other asset sampled as black. Now, as in LASRecomp (Peiikai, MIT: a texture is uploaded from guest memory when sampled until it is rendered
 // into), a texture in a CPU-visible pool, not compressible, and not yet written by the GPU is uploaded from its storage once the CPU has filled it:
 // non-zero storage at first use (the host never writes texture storage and a fresh pool reads as zero), or written pages later (it is watched). Such
 // an upload is created render-target capable; when the GPU first writes the texture (render target, copy or clear destination, image store) that

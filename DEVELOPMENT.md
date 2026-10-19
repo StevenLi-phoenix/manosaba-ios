@@ -352,13 +352,12 @@ resource at +0x28 of a binder of type 0xe (+0xc) after waiting for it (`WaitLigh
 Also seen: `nn::os::WaitForAddress(long const*, long)` (sdk 0x146fb0) uses arbitration type 3 (64-bit wait if equal), which svc 0x34 treats
 as type 0; main and subsdk0 do not import it. The vertex shader `1eee2726aae7493e` (SPIRV-Cross "nullptr") is now drawn with.
 
-Known gaps: alpha
-test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn (red line); GPUs without BC
-(iOS) do not get the BC render target path; iOS needs `DM_CACHE` and the
-large heap; hid six-axis and vibration are stubs; no 2K canvas (both in the 2026-10-19 review, not done yet). The two 4x4 textures that were re-uploaded every frame are
-checked by content now (small-texture hashing, 06c80bd). Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`,
-`DM_NVN_TEXSNAP` (ordered on the replay's encoder, `@WxH` and ranges), `DM_NVN_TEXNZ`, `DM_NVN_TEXCLASS`, `DM_NVN_REUPLOG`; the pass dump prints
-cull / depth range / index type, the inline uniform data, the first vertices and the counters seen by conditional rendering. Run after
+Known gaps: alpha test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn (red line); GPUs
+without BC (iOS) do not get the BC render target path; iOS needs `DM_CACHE` and the large heap; hid six-axis and vibration are stubs; no 2K
+canvas (both in the 2026-10-19 review, not done yet). The two 4x4 textures that were re-uploaded every frame are checked by content now
+(small-texture hashing, 06c80bd). Diagnostics added on the way: `DM_NVN_NOCULL`, `DM_NVN_RTCLEAR=<serial>`, `DM_NVN_TEXSNAP` (ordered on the
+replay's encoder, `@WxH` and ranges), `DM_NVN_TEXNZ`, `DM_NVN_TEXCLASS`, `DM_NVN_REUPLOG`; the pass dump prints cull / depth range / index type,
+the inline uniform data, the first vertices and the counters seen by conditional rendering. Run after
 `make -C host GAME=totk`:
 `DM_GAME=totk DM_ROOT=$PWD/work DM_SHDUMP=$PWD/work/build/totk/shader_capture DM_SAVE=… DM_TEMP=… DM_CACHE=… DM_WATCH=120 host/dmhost` (the
 stage map and library directory come from the profile; rebuild them with `shmap_from_capture.py` and `DM_GAME=totk dmsh_build.py`).
