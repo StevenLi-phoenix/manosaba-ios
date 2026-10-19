@@ -1365,9 +1365,12 @@ static int dcmp(const void *a, const void *b) { double x = *(const double *)a, y
 // Power over the window since the last summary, for the whole process (nxnative's power line, MIT): CPU energy (task_energy, nJ on Apple silicon)
 // in watts and per frame, CPU time (100 = one core) and its share on performance cores, wakeups per second, and the guest threads that yielded most;
 // then render-target traffic per frame (attachment bytes loaded and stored, passes loading and storing everything, stores DM_NVN_UNWRITTEN_DC saved)
-// and guest-thread CPU by Switch priority (nxnative 451e118)
+// and guest-thread CPU by Switch priority (nxnative 451e118); samples-passed reports and resets a frame, the slots a report adds up (since the last
+// reset) and those folded when their visibility buffer was used again (nvn_mtl.m vis_recycle)
+void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]);
+void mtl_vis_state(int *open, uint64_t *folded);
 static void power_line(uint64_t frame) {
-    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
     uint64_t t = now_ns(), cpu = (pw.cpu_energy.total_user + pw.cpu_energy.total_system) * tb.numer / tb.denom, p = pw.task_ptime * tb.numer / tb.denom;
@@ -1380,9 +1383,14 @@ static void power_line(uint64_t frame) {
         LOG("[nvn] render targets up to frame %llu: %.1f MB loaded / %.1f MB stored a frame, %.1f passes a frame load and store everything, %.1f MB a frame of stores saved (DM_NVN_UNWRITTEN_DC)",
             frame, (ld - pld) / 1048576.0 / nf, (st - pst) / 1048576.0 / nf, (fu - pfu) / nf, (udc - pudc) / 1048576.0 / nf);
         char tc[400]; dm_thread_cpu(tc, sizeof tc, s);
-        LOG("[nvn] threads up to frame %llu: guest CPU %s", frame, tc); }
+        LOG("[nvn] threads up to frame %llu: guest CPU %s", frame, tc);
+        uint64_t rep[32], rst[32], fold; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &fold);
+        if (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prep || rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prst)
+            LOG("[nvn] occlusion up to frame %llu: %.1f reports / %.1f resets a frame, %d slots in the open count, %.1f folded a frame", frame,
+                (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prep) / nf, (rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prst) / nf, open, (fold - pfold) / nf); }
     else { char tc[400]; dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
     pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; pf = frame; mtl_bw(&pld, &pst, &pfu); pudc = mtl_udc_saved_bytes();
+    { uint64_t rep[32], rst[32]; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &pfold); prep = rep[NVN_COUNTER_TYPE_SAMPLES_PASSED]; prst = rst[NVN_COUNTER_TYPE_SAMPLES_PASSED]; }
 }
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;

@@ -512,8 +512,11 @@ typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t ad
 // Metal: every render pass attaches a visibility result buffer; draws during counting use counting mode, with a new slot per pass (no reliance on accumulation across passes); a reset empties the 'slot table since the reset',
 // and a report hands the slot table together with its buffer (retained) to the completion callback to sum and write back; after a report a new slot is used, so later draws are not counted into the reported value.
 // (Previously always wrote 0: occlusion query = 'fully occluded', campfires / light sources got culled - the character select screen calls ResetCounter 21 times per frame)
+// A count can span submissions (no reset between them): before a ring buffer is used again, the slots of the open count in it are added into
+// g_vis_base, read once its submission has completed (the ring only hands out completed buffers); a report adds the base to its slots and a reset
+// clears it. Without it both slot entries read the reused slot: 64 samples, then 32 in the next submission, reported 64 (lordran-native 3ef6915, MIT)
 typedef struct { void *buf; uint32_t slot; } vis_slot;
-typedef struct { int n; vis_slot s[]; } vis_list;
+typedef struct { uint64_t base; int n; vis_slot s[]; } vis_list;
 #define VIS_SLOTS 8192
 typedef struct { __strong id<MTLBuffer> buf; uint64_t fence; } vis_buf;
 static vis_buf g_vis_ring[4]; static int g_vis_ring_n, g_vis_ring_i = -1;
@@ -521,10 +524,25 @@ static id<MTLBuffer> g_vis; static uint32_t g_vis_n;   // This submission's visi
 static int vis_in_ring(id<MTLBuffer> b) { for (int i = 0; i < g_vis_ring_n; i++) if (g_vis_ring[i].buf == b) return 1; return 0; }
 static int g_vis_on, g_vis_counting, g_vis_cur = -1; static uint64_t g_vis_cur_pass;
 static vis_slot *g_vs; static int g_nvs, g_vscap;      // Slots since the last reset
+static uint64_t g_vis_base;                              // Samples of slots since the last reset whose buffer was used again (see above)
+static uint64_t g_vis_folded;                            // Slots added into g_vis_base (diagnostics, the unit test)
 static uint64_t g_cnt_report[32], g_cnt_reset[32];       // Report / reset counts per counter type (diagnostics)
-static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; }
+static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; g_vis_base = 0; }
+#ifndef DM_TEST_VIS_NO_FOLD   // negative control of t_visibility only: the slots stay listed and read the reused buffer
+static void vis_recycle(id<MTLBuffer> b) {   // b's last submission has completed and b is about to be used again
+    int keep = 0, n = 0;
+    for (int i = 0; i < g_nvs; i++) {
+        if (g_vs[i].buf == (__bridge void *)b) { g_vis_base += ((const uint64_t *)b.contents)[g_vs[i].slot]; CFRelease(g_vs[i].buf); n++; }
+        else g_vs[keep++] = g_vs[i];
+    }
+    g_nvs = keep; g_vis_folded += (uint64_t)n;
+    if (n) { static int once; if (!once++) MLOG("occlusion count across submissions: %d slots of a reused visibility buffer kept as %llu samples (logged once)", n, (unsigned long long)g_vis_base); }
+}
+#else
+static void vis_recycle(id<MTLBuffer> b) { (void)b; }
+#endif
 static vis_list *vis_snapshot(void) {
-    vis_list *l = malloc(sizeof *l + g_nvs * sizeof(vis_slot)); l->n = g_nvs;
+    vis_list *l = malloc(sizeof *l + g_nvs * sizeof(vis_slot)); l->base = g_vis_base; l->n = g_nvs;
     for (int i = 0; i < g_nvs; i++) { l->s[i] = g_vs[i]; CFRetain(g_vs[i].buf); }
     return l;
 }
@@ -820,6 +838,7 @@ void mtl_sub_begin(void) {
     [g_cb beginCommandBufferWithAllocator:g_alloc4[alloc_i]];
 #endif
     g_commit_blocks = [NSMutableArray array];
+    id<MTLBuffer> vis_prev = g_vis;   // the previous submission's: an overflow buffer is retired below
     g_npost = 0; g_vis = nil; g_vis_n = 0; g_vis_cur = -1; pend_begin(mtl_done_fence());
     zskip_clear(); g_zskip_count = 0; chunk_reset();
     int pick = -1;
@@ -828,8 +847,9 @@ void mtl_sub_begin(void) {
     if (pick < 0) { uint64_t oldest = UINT64_MAX; for (int i = 0; i < 4; i++) if (g_vis_ring[i].fence < oldest) { oldest = g_vis_ring[i].fence; pick = i; } if (oldest > g_done) mtl_wait(oldest, UINT64_MAX); }
     g_vis_ring_i = pick; g_vis_ring[pick].fence = UINT64_MAX;
     if (!g_vis_ring[pick].buf) { g_vis_ring[pick].buf = [g_dev newBufferWithLength:VIS_SLOTS * 8 options:MTLResourceStorageModeShared]; res_add(g_vis_ring[pick].buf); }
-    if (g_vis && !vis_in_ring(g_vis)) defer_obj_release(g_vis);   // the overflow buffer left by the previous submission (see the place with g_vis_n >= VIS_SLOTS): retire it, otherwise it stays in the residency set forever
+    if (vis_prev && !vis_in_ring(vis_prev)) defer_obj_release(vis_prev);   // the overflow buffer left by the previous submission (see the place with g_vis_n >= VIS_SLOTS): retire it, otherwise it stays in the residency set forever (it was read after g_vis was cleared, and never retired)
     g_vis = g_vis_ring[pick].buf;
+    vis_recycle(g_vis);
     void arena_begin(void); arena_begin();
 }
 
@@ -994,6 +1014,7 @@ static void post(post_op o) {
 void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v) { post((post_op){1, val, mode, v, 0, 0, NULL}); }
 void mtl_sub_counter(uint64_t addr, uint32_t type) { post((post_op){2, NULL, 0, 0, addr, type, NULL}); }
 void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]) { memcpy(rep, g_cnt_report, sizeof g_cnt_report); memcpy(rst, g_cnt_reset, sizeof g_cnt_reset); }
+void mtl_vis_state(int *open, uint64_t *folded) { *open = g_nvs; *folded = g_vis_folded; }   // samples-passed slots since the last reset, slots folded so far (power line)
 
 // Counter timestamps: 19.2 MHz ticks of the guest clock, the one behind the guest's system tick (svc GetSystemTick / cntpct). On the console the GPU
 // timer and the CPU's system counter share one time base, and games subtract one from the other: Tears of the Kingdom's frame-rate controller takes
@@ -1277,7 +1298,7 @@ uint64_t mtl_sub_commit(void) {
         for (int i = 0; i < n; i++) {
             if (ops[i].kind == 1) { if (ops[i].mode == 1) *ops[i].val += ops[i].v; else *ops[i].val = ops[i].v; }
             else if (ops[i].kind == 3) {   // Samples passed: the sum of all slots since the reset
-                vis_list *l = ops[i].vis; uint64_t sum = 0;
+                vis_list *l = ops[i].vis; uint64_t sum = l->base;
                 for (int k = 0; k < l->n; k++) { sum += ((const uint64_t *)((__bridge id<MTLBuffer>)l->s[k].buf).contents)[l->s[k].slot]; CFRelease(l->s[k].buf); }
                 free(l); uint64_t rec[2] = {sum, gpu_ticks()}; memcpy((void *)ops[i].addr, rec, sizeof rec);
             }

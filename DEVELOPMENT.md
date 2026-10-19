@@ -885,7 +885,14 @@ Tier 3, medium:
   functions). Thread dumps show each thread's least free guest stack at svc entries (Tears of the Kingdom's prologue: 3,808 of 4,064 bytes left at
   the least), a `[stack]` line below 1 KiB. A wrapped call costs 5.3 ns more on the M5; both games' frame times, energy and shots are unchanged.
   `DM_HSTACK=0` turns it off
-- [ ] 41 occlusion counts across submissions
+- [x] batch 7 · 41 occlusion counts across submissions (after lordran-native 3ef6915, MIT): before a visibility ring buffer is used again, the slots
+  of the open samples-passed count in it are added into a CPU subtotal that reports include and a reset clears; before, both slot entries read the
+  reused slot (`gfx/tests/t_visibility.m`, 23 checks on the GPU with API validation, Metal 4 and Metal 3: 64 then 32 samples reported 64, not 96;
+  without the fold 6 fail). Tears of the Kingdom resets before every report (24-206 a frame in the prologue) but about 39 slots a frame belong to a
+  count still open when their buffer comes round again: those counts read overwritten slots before (the prologue's torch glow and a lens flare
+  differ between the builds; no console capture to say which is right). manosaba makes no occlusion queries. Found on the way: the overflow buffer
+  of a submission with more than 8,192 counting passes was never retired (the check read `g_vis` after it was cleared; the test fails on the old
+  line). The power summary has an occlusion line (reports, resets, open slots, folded slots a frame)
 - [ ] 42 draws that sample their own attachment (count first)
 - [ ] 43 counter timestamps where the report sits (check first)
 - [ ] 44 clears kept on the texture, ClearTexture included (count first)
