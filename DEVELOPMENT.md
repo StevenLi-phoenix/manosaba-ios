@@ -1004,7 +1004,12 @@ Tier 3, medium:
   folder with two of the game's files copied unchanged (one as `01_test/romfs`, one as `atmosphere/contents/0100f2c0115b6000/romfs`): both
   opened from the mods (`DM_FS=1` now prints the host path too), the 60 fps overlay still after them, the prologue as before.
   `host/tests/t_mods.c`: 12 checks on every layout; paths built with the program ID as asked fail one
-- [ ] 55 CoreAudio opened off the calling thread (measure first)
+- [-] batch 17 · 55 measured (tomodachi-native d7f52e1 moved the AudioUnit's creation to a queue after CoreAudio once took about 40 s there):
+  on the M5 the open takes 22-26 ms in the games (manosaba on its main thread, Tears of the Kingdom on the audio renderer's), a process's first
+  AudioUnit 47 ms in a probe and 0.5-1 ms after; nothing here near a stall, so the open stays where it is and the moving's races with Start / Stop
+  / suspend / Close are not taken on. The time and the thread are logged now (red above 1 s), so a device run shows the iPhone's (70).
+  `DM_AUDIO_MUTE=1`: the sound card opened and fed, silence out (measuring at night); `t_audio` checks the blocks are still taken while muted
+  (muting without taking them fails it)
 - [ ] 56 cold CPU textures dropped under memory pressure
 - [ ] 57 code patches chosen at launch (one product for 30 and 60 fps)
 - [ ] 58 on-screen controls with drag-to-look on iOS
@@ -1023,7 +1028,7 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
-- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51)
+- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55)
 - [ ] 71 an iOS 17 device test (which device: to ask)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups; uncapped pacing of 53 in a window (product60, `DM_WINDOW=1`)

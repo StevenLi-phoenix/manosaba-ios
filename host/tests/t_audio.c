@@ -5,6 +5,8 @@
 // Backend changes (nxnative 8530042): three real outputs, two threads starting and stopping them at random while a third suspends and resumes (as going
 // to the background does): never a second consumer on one output (two silent sinks, or a sink beside the AudioUnit), no hang, all stopped at the end.
 // Start used to pick its backend outside the lock the suspend holds. Without an output device (a CI runner) only the silent sink path runs.
+// DM_AUDIO_MUTE (the sound card callback called directly): muted, what goes out is all zeros and the game's block is still taken and released;
+// not muted, the block's samples go out. Negative control: -DDM_TEST_MUTE_NO_PULL (muted without taking the blocks) fails "still taken".
 #include "../hle_audio.c"
 #include <fcntl.h>
 #include <signal.h>
@@ -118,5 +120,21 @@ int main(void) {
     int ok4 = dupes == 0 && clean;
     printf("backend changes from three threads (%s): a second consumer on one output %u times (want 0), all stopped at the end %d %s\n",
            real4 ? "AudioUnits" : "no output device: silent sinks only", dupes, clean, ok4 ? "ok" : "FAIL");
-    return !ok2 || !ok3 || w4 != 0 || !okc || !ok4;
+    int ok5;
+    {   // Scenario 5: the sound card callback with DM_AUDIO_MUTE, called directly (no device needed)
+        char o5[64]; gbuf b5[2]; static int16_t p5[2][480 * 2], out5[480 * 2]; for (int i = 0; i < 480 * 2; i++) p5[0][i] = p5[1][i] = (int16_t)(1000 + i);
+        unsetenv("DM_AUDIO"); if (h_au_Open(o5, NULL, NULL, prm)) return 1;
+        aout *a = ao(o5); for (int i = 0; i < 2; i++) { h_au_SetBuf(&b5[i], p5[i], sizeof p5[i], sizeof p5[i]); h_au_Append(o5, &b5[i]); }
+        atomic_store(&a->state, STATE_STARTED);   // (no backend: only these calls take blocks)
+        AudioBufferList bl = {1, {{2, sizeof out5, out5}}};
+        g_audio_mute = 1; memset(out5, 0x55, sizeof out5); au_render(a, NULL, NULL, 0, 480, &bl);
+        int zero = 1; for (int i = 0; i < 480 * 2; i++) zero &= out5[i] == 0;
+        gbuf *r1 = h_au_Released(o5);
+        g_audio_mute = 0; au_render(a, NULL, NULL, 0, 480, &bl);
+        int same = !memcmp(out5, p5[1], sizeof out5); gbuf *r2 = h_au_Released(o5);
+        atomic_store(&a->state, STATE_STOPPED); h_au_Close(o5);
+        printf("muted: all zeros out %d, the block still taken and released %d; not muted: the samples out %d, released %d\n", zero, r1 == &b5[0], same, r2 == &b5[1]);
+        ok5 = zero && r1 == &b5[0] && same && r2 == &b5[1];
+        printf("DM_AUDIO_MUTE: %s\n", ok5 ? "ok" : "FAIL"); }
+    return !ok2 || !ok3 || w4 != 0 || !okc || !ok4 || !ok5;
 }

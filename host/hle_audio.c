@@ -106,9 +106,14 @@ static void downmix51(const int16_t *in, int16_t *out, unsigned frames) {
         int32_t l = (23170 * in[0] + 16384 * in[2] + 16384 * in[4]) >> 15, r = (23170 * in[1] + 16384 * in[2] + 16384 * in[5]) >> 15;
         out[0] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l); out[1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r); }
 }
+// DM_AUDIO_MUTE=1 (tests on the Mac, at night): the sound card is opened and fed as usual and silence goes out (read at the first OpenAudioOut)
+static int g_audio_mute = -1;
 static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
     (void)f; (void)ts; (void)bus; (void)frames;
     aout *a = ctx;
+#ifdef DM_TEST_MUTE_NO_PULL   // negative control of t_audio only: muted without taking the game's blocks
+    if (g_audio_mute > 0) { memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize); return noErr; }
+#endif
     atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed);
     if (atomic_load_explicit(&a->sinks, memory_order_relaxed)) atomic_fetch_add_explicit(&g_consumer_dupes, 1, memory_order_relaxed);   // counted only: no logging on the audio thread
     if (!a->mix) pull(a, bl->mBuffers[0].mData, bl->mBuffers[0].mDataByteSize);
@@ -117,6 +122,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
     // Diagnostic switch DM_AUDIO_OUT_DUMP=<file>: append the data handed to CoreAudio as is (stereo after the downmix). This machine has no loopback device and cannot record the system output; to tell whether the dialogue was handed over, look at this file
     { static FILE *df; static int on = -1; if (on < 0) { const char *e = getenv("DM_AUDIO_OUT_DUMP"); on = e != NULL; if (on && !(df = fopen(e, "wb"))) LOG("[red] DM_AUDIO_OUT_DUMP: cannot open %s", e); }
       if (df) fwrite(bl->mBuffers[0].mData, 1, bl->mBuffers[0].mDataByteSize, df); }
+    if (g_audio_mute > 0) memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize);   // (after taking the blocks: the game's pacing goes on)
     return noErr;
 }
 #if !TARGET_OS_IPHONE
@@ -124,7 +130,12 @@ static void dev_name(AudioObjectID id, char *o, size_t n) {   // output device n
     CFStringRef nm = NULL; UInt32 sz = sizeof nm; AudioObjectPropertyAddress pa = { kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
     o[0] = 0; if (!AudioObjectGetPropertyData(id, &pa, 0, NULL, &sz, &nm) && nm) { CFStringGetCString(nm, o, (CFIndex)n, kCFStringEncodingUTF8); CFRelease(nm); } }
 #endif
+// The open runs on the thread that calls OpenAudioOut. Measured on an M5 (plan item 55): 47 ms for a process's first AudioUnit (the component
+// loads), 0.5-1 ms after; tomodachi-native once saw CoreAudio take about 40 s and moved the open to a queue (d7f52e1). The time is logged; above 1 s
+// in red (the iPhone's is still to be seen, item 70)
+__attribute__((weak)) const char *thr_cur_name(char *nb, size_t n) { (void)nb; (void)n; return NULL; }   // hle_thread.c; the unit tests link without it
 static int au_open(aout *a) {   // 0 = the sound card is open; -1 = it cannot be opened (a->au set to null, the caller uses the silent sink)
+    uint64_t t0 = now_ns();
     AudioComponentDescription d = {.componentType = kAudioUnitType_Output,
 #if TARGET_OS_IPHONE
                                    .componentSubType = kAudioUnitSubType_RemoteIO,
@@ -154,6 +165,8 @@ static int au_open(aout *a) {   // 0 = the sound card is open; -1 = it cannot be
         AudioObjectGetPropertyData(kAudioObjectSystemObject, &pa, 0, NULL, &sz, &def); dev_name(cur, cn, sizeof cn); dev_name(def, dn, sizeof dn);
         LOG("audio: output device \"%s\" (%u), system default output \"%s\" (%u)%s", cn, (unsigned)cur, dn, (unsigned)def, cur == def ? ", same" : " [red] different"); }
 #endif
+    { double ms = (now_ns() - t0) / 1e6; char tn[64] = ""; const char *gn = thr_cur_name(tn, sizeof tn); if (!gn) { pthread_getname_np(pthread_self(), tn, sizeof tn); gn = tn; }
+      LOG("audio: CoreAudio output opened in %.1f ms on %s thread \"%s\"%s", ms, thr_cur_name(tn, 1) ? "the guest" : "a host", gn, ms > 1000 ? " [red] slow: that thread waited (tomodachi-native once saw 40 s)" : ""); }
     return 0;
 }
 // Silent sink: consumes in real time at 48 kHz every 5 ms
@@ -210,6 +223,7 @@ HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKN
     if (slot < 0) die("more than %d AudioOuts open at once", AOMAX);
     g_aos[slot] = a;
     pthread_mutex_unlock(&g_aos_lock);
+    if (g_audio_mute < 0) { const char *e = getenv("DM_AUDIO_MUTE"); g_audio_mute = e && atoi(e); if (g_audio_mute) LOG("audio: DM_AUDIO_MUTE=1: the sound card is fed, silence goes out"); }
     LOG("audio::OpenAudioOut %s, %d channels, %s", name ? name : "(default)", ch, real_audio() ? "real output" : "silent sink");
     if (real_audio()) au_open(a);   // if it cannot be opened, a->au is null, and playback goes to the silent sink when it starts
     return RES_OK;

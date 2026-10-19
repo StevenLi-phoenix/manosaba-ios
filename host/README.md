@@ -87,7 +87,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_ROOT` | Workspace root for the profile's paths (default `~/dm-work`) |
 | `DM_SAVE`, `DM_TEMP` | Save directory (required) and temporary storage |
 | `DM_ROMFS`, `DM_SYSFONT` | RomFS and system font directories (default: the profile's workspace) |
-| `DM_WINDOW=1`, `DM_AUDIO=1` | Open a window; play sound |
+| `DM_WINDOW=1`, `DM_AUDIO=1` | Open a window; play sound (`DM_AUDIO_MUTE=1`: the sound card is opened and fed, silence goes out) |
 | `DM_KEYS` | Scripted input, e.g. `A@10+0.2` (press A at 10 s for 0.2 s), `T0.5:0.5@15+0.1` (touch at normalized x, y), `A@f3600+12` (at presented frame 3600 for 12 frames: does not drift when the machine is busy), left stick `LSL` / `LSR` / `LSU` / `LSD` |
 | `DM_CMD=<file>` | Live command channel: lines appended to the file run while the game runs (`key A 200`, `down ZR` / `up ZR`, `wait <frames>`, `sleep <ms>`, `shot <png>`, `passdump <frames>`, `threads`, `memsnap <path>`, `hlecount`, `heaps`, `heap <addr>`, `quit`; `#` comments); a line runs once its newline is written. See `cmdchan.c` |
 | `DM_MODS=<dir>` | Mods: each entry's `romfs`, `contents/<program id>/romfs` or `atmosphere/contents/<program id>/romfs` (or loose files) in front of the RomFS, in name order, the first winning; names starting with `.` or `-` are off; code mods are not applied (iOS: `Documents/mods`) |
