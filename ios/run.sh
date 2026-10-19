@@ -9,7 +9,7 @@
 #   run.sh log                fetch Documents/boot.txt (or boot.launch.txt) now
 #   run.sh push-data          copy the game's RomFS and shared fonts from the workspace into the app (Library/Application Support)
 # Build switches: DM_FREE_ACCOUNT=1 (free developer account: no iCloud / memory / sustained-execution entitlements), DM_IOS_M3=1 (older-API build,
-# iOS 18), DM_DEVICE_FAMILY=1 (iPhone only).
+# iOS 18), DM_DEVICE_FAMILY=1 (iPhone only), DM_ENV_FILE=<file> (DM_* switches read at launch, as Documents/env.txt is).
 set -u
 cd "$(dirname "$0")"
 source tools/local_env.sh
@@ -34,6 +34,7 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
   { echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F"; echo "DM_GAME_TITLE = $TITLE"; } >> Gen/dm.xcconfig
   for m in $MODS; do cp "$OUT/$m.fixups.tsv" "$OUT/$m.gates.tsv" Gen/dm/ || exit 1; done
   cp "$(ws shader_map)" Gen/dm/shader_map.tsv || { t "[red] no shader stage map"; exit 1; }
+  if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || exit 1; t "env switches baked in from $DM_ENV_FILE"; fi   # read at launch (host/envfile.h)
   C1=$(ws c1) && [ -f "$C1" ] && cp "$C1" Gen/dm/c1_full.tsv
   # iOS shaders of the current translation chain version
   MSL=$(ws msl_ios); V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../gfx/nvn/dmsh_chain.h)
@@ -76,7 +77,11 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
       done
     fi
     xattr -cr "$W/Payload"
-    (cd "$W" && zip -qryX "$IPA" Payload -x '*/.DS_Store') || { t "[red] zip failed"; exit 1; }
+    # Files already compressed are stored, not deflated again (nxnative's zip_store, MIT): 130 MB of Tears of the Kingdom's .zs took 1.66 s to
+    # deflate into a 17 KB larger archive, 0.26 s to store. DM_ZIP_STORE replaces the suffix list
+    ZS=${DM_ZIP_STORE:-.zs:.webm:.mp4:.png:.jpg:.ogg:.opus}
+    (cd "$W" && zip -qryX -n "$ZS" "$IPA" Payload -x '*/.DS_Store') || { t "[red] zip failed"; exit 1; }
+    t "stored without deflate ($ZS): $(zipinfo "$IPA" | awk '$6 == "stor" && $NF !~ /\/$/' | wc -l | tr -d ' ') files"
     rm -rf "$W"; t "packaged $IPA ($(du -h "$IPA" | cut -f1))"; exit 0
   fi
   DEST='generic/platform=iOS'

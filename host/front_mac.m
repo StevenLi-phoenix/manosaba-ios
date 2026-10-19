@@ -256,6 +256,23 @@ void front_run(void (*guest)(void)) {
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(1); }];
         [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(win.isKeyWindow || dm_game.unfocused_in_focus ? 1 : 2); }];
+        // A window wholly covered by others gets no display-link callbacks: its presents would queue and the game wait on them (false stall lines on a
+        // test Mac whose game window another window covered; upstream d2r-mobile afad65c). While the occlusion state lacks Visible, presents are dropped
+        // (mtl_present_discard, as in the iOS background save wait); game logic, audio and focus go on. DM_OCCL=0 turns it off. DM_TEST_COVER=<s>,<len>
+        // covers the game window with an opaque window at s seconds for len seconds (a check, not for play)
+        { const char *e = getenv("DM_OCCL"); int on = !(e && !strcmp(e, "0"));
+          [nc addObserverForName:NSWindowDidChangeOcclusionStateNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n;
+              int hidden = !(win.occlusionState & NSWindowOcclusionStateVisible); void mtl_present_discard(int on);
+              LOG("window: %s (covered-window handling %s)", hidden ? "wholly covered / not visible" : "visible again", on ? "on" : "off, DM_OCCL=0");
+              if (on) mtl_present_discard(hidden); }];
+          double at = 0, dur = 0;
+          if ((e = getenv("DM_TEST_COVER")) && sscanf(e, "%lf,%lf", &at, &dur) == 2 && at > 0 && dur > 0)
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(at * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                  NSWindow *c = [[NSWindow alloc] initWithContentRect:NSInsetRect(win.frame, -40, -40) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+                  c.opaque = YES; c.backgroundColor = NSColor.grayColor; c.releasedWhenClosed = NO; [c orderFrontRegardless];
+                  LOG("DM_TEST_COVER: covered for %.1f s", dur);
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(dur * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [c orderOut:nil]; LOG("DM_TEST_COVER: uncovered"); });
+              }); }
         // Guest thread: 64 MiB stack (the console main thread stack comes from the npdm; the host gives plenty)
         static guest_arg ga; ga.fn = guest;
         pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 64u << 20);

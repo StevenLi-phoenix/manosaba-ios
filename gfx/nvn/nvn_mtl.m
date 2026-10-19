@@ -118,7 +118,11 @@ int g_dm_present_link;   // Present pacing mode (runtime value of DM_PRESENT_LIN
 static int g_present_latency = 1;
 static uint64_t g_pq_done;
 static uint64_t g_pq_read;
+#if DM_NVN_M3
+static id g_res;   // the MTLResidencySet (iOS 18 / macOS 15); nil on iOS 17, where the Metal 3 path's useResource declarations alone make resources resident
+#else
 static id<MTLResidencySet> g_res;
+#endif
 static int g_res_dirty;
 static id<MTLSharedEvent> g_ev;
 static uint64_t g_fence;                        // Highest committed fence value (incremented exclusively by the submit thread)
@@ -334,12 +338,14 @@ void mtl_init(void) { @autoreleasepool {
 #if DM_NVN_M3
     stream_queue_once();
 #endif
-    MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
-    rd.initialCapacity = 4096;
     NSError *re = nil;
-    g_res = [g_dev newResidencySetWithDescriptor:rd error:&re];
-    if (!g_res) MDIE("failed to create MTLResidencySet");
-    [g_q addResidencySet:g_res];
+    if (@available(iOS 18.0, macOS 15.0, *)) {   // (4ppp44's iOS 17 build compiles the set out; checked here, one Metal 3 binary keeps it from iOS 18 on)
+        MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
+        rd.initialCapacity = 4096;
+        g_res = [g_dev newResidencySetWithDescriptor:rd error:&re];
+        if (!g_res) MDIE("failed to create MTLResidencySet");
+        [g_q addResidencySet:g_res];
+    } else MLOG("no residency set before iOS 18: resources are made resident by the encoders' useResource declarations only");
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }
 #if !DM_NVN_M3
     dispatch_queue_attr_t feedback_attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);

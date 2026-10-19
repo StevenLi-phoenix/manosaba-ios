@@ -52,6 +52,14 @@ static _Atomic uint64_t g_txn_first_ns;     // time of this transaction's first 
 // and the front end is notified (front_save_failed); the next transaction (the game's next full save rewrite) is attempted as usual and committed if it succeeds. g_save_poison = errno of the first failure in this transaction (0 = none).
 static _Atomic int g_save_poison;
 static void save_poison(int e) { int z = 0; atomic_compare_exchange_strong(&g_save_poison, &z, e ? e : EIO); }
+// Quitting while the game is saving (MacNativeGames' frontend waits up to 15 s, MIT): a save transaction with writes and no commit yet is lost by an
+// exit (consistently: the last commit stays). Waits until it commits or max_s pass; returns the seconds waited, and *still = 1 if it did not commit
+double dm_fs_save_wait(double max_s, int *still) {
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC), lim = (uint64_t)(max_s * 1e9);
+    while (atomic_load(&g_txn_first_ns) && clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0 < lim) usleep(10000);
+    if (still) *still = atomic_load(&g_txn_first_ns) != 0;
+    return (clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0) / 1e9;
+}
 void dm_fs_save_poison(int e) { save_poison(e); }   // game.h: a side file written by the pre-commit hook that failed to write also counts as a write failure of this transaction -- if the commit went ahead as usual, the items would no longer be in the character save and would not be in the side file either
 // The default weak implementation only logs (Mac); the iOS front end provides a strong implementation of the same name that shows a native alert. Called on the game thread, the front end switches to the main thread itself
 __attribute__((weak)) void front_save_failed(int err) { LOG("front_save_failed(errno=%d): no front end handler (weak default)", err); }

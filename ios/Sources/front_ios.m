@@ -235,7 +235,8 @@ void front_ios_focus_event(int ev) {
 void front_ios_lifecycle_install(void) {
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     NSProcessInfo *pi = NSProcessInfo.processInfo;
-    LOG("front: thermal state %ld, sustained performance profile %d", (long)pi.thermalState, (int)[pi hasPerformanceProfile:NSProcessPerformanceProfileSustained]);
+    int sustained = -1; if (@available(iOS 18.0, *)) sustained = (int)[pi hasPerformanceProfile:NSProcessPerformanceProfileSustained];   // -1: no such query before iOS 18
+    LOG("front: thermal state %ld, sustained performance profile %d", (long)pi.thermalState, sustained);
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter; NSOperationQueue *mq = NSOperationQueue.mainQueue;
     [nc addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:mq usingBlock:^(NSNotification *n) {
         (void)n; LOG("front: thermal state %ld", (long)NSProcessInfo.processInfo.thermalState); }];

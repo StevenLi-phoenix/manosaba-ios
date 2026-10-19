@@ -43,7 +43,8 @@ targets:
         UIStatusBarHidden: true
         UIViewControllerBasedStatusBarAppearance: false
         LSApplicationCategoryType: public.app-category.games   # iOS Game Mode is only offered to apps in a game category
-        LSSupportsGameMode: true
+        LSSupportsGameMode: true   # Game Mode from iOS 18.6 / macOS 26 (Apple's Information Property List reference)
+        GCSupportsGameMode: true   # the same for iOS / iPadOS 18.0-18.5, which only read this one (BotWRecomp sets both)
         ITSAppUsesNonExemptEncryption: false
         CADisableMinimumFrameDurationOnPhone: true   # without it iPhone caps apps at 60 Hz
         UIApplicationSceneManifest:

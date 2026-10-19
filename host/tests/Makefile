@@ -13,6 +13,7 @@ run: \
 	$(B)/t_condvar_old \
 	$(B)/t_waitsync \
 	$(B)/t_crash_stderr \
+	$(B)/t_envfile \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
@@ -38,6 +39,7 @@ run: \
 	$(B)/t_condvar_old
 	$(B)/t_waitsync
 	$(B)/t_crash_stderr
+	TMPDIR="$(abspath $(B))" $(B)/t_envfile
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
@@ -79,6 +81,8 @@ $(B)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_padmap.c
 $(B)/t_sleep: t_sleep.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_sleep.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_envfile: t_envfile.c ../envfile.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_envfile.c
 $(B)/t_waitsync: t_waitsync.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_waitsync.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)

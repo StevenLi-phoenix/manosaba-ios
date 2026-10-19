@@ -8,6 +8,7 @@
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
+#include "envfile.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <mach/mach.h>
@@ -157,6 +158,16 @@ static NSString *sysfont_locate(void) {
     return nil;
 }
 
+// The game data is the player's own dump, copied in again at will and gigabytes large (Tears of the Kingdom's RomFS is 17 GB): kept out of iCloud and
+// computer backups (BotWRecomp does the same). The bundle is never backed up; the Files app still shows the folders. Logged with the value read back
+static void exclude_from_backup(NSString *d) {
+    if (!d || [d hasPrefix:bundle_dir()]) return;
+    NSURL *u = [NSURL fileURLWithPath:d isDirectory:YES]; NSError *e = nil; NSNumber *v = nil;
+    BOOL set = [u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e];
+    [u getResourceValue:&v forKey:NSURLIsExcludedFromBackupKey error:nil];
+    plog("boot: %s excluded from backups: %s%s%s", d.fileSystemRepresentation, set && v.boolValue ? "yes" : "no", e ? " — " : "", e ? e.localizedDescription.UTF8String : "");
+}
+
 // ---------- Host ----------
 static char *g_argv[16]; static int g_argc;
 static int g_host_up;
@@ -166,6 +177,7 @@ static void boot_prepare(NSString *romfs) {
     for (NSString *d in @[@"save", @"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
     NSString *font = sysfont_locate(); if (font) setenv("DM_SYSFONT", font.fileSystemRepresentation, 0);
+    exclude_from_backup(romfs); exclude_from_backup(font);
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     setenv("DM_NVN_SHMAP", [res stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
@@ -253,6 +265,23 @@ static void host_start(NSString *romfs) {
 - (void)tap { if (self.retry) self.retry(); }
 @end
 
+// The GPU this build needs: Metal 4 (A14 / M1 and newer on iOS 26; iOS 26 also runs on A13, where creating the Metal 4 queue fails and the app
+// ended with no word), or Metal 3 for the DM_IOS_M3 build. Checked before the host starts, so an unsupported device gets a screen saying so
+// (upstream d2r-mobile b94670c, issue #41). DM_TEST_NO_METAL4=1 shows the screen on any device (env.txt)
+static int gpu_supported(char *why, size_t n) {
+    id<MTLDevice> dev = MTLCreateSystemDefaultDevice(); int ok = 0;
+    if (getenv("DM_TEST_NO_METAL4")) ok = 0;
+#if DM_NVN_M3
+    else ok = dev && [dev supportsFamily:MTLGPUFamilyMetal3];
+    if (!ok) snprintf(why, n, "This device's GPU (%s) does not support Metal 3, which this build needs.", dev ? dev.name.UTF8String : "none");
+#else
+    else if (@available(iOS 26.0, *)) ok = dev && [dev supportsFamily:MTLGPUFamilyMetal4];
+    if (!ok) snprintf(why, n, "This device's GPU (%s) does not support Metal 4, which this build needs (A14 or M1 and newer, iOS 26). "
+                              "The iOS 18 build (DM_IOS_M3=1) runs on Metal 3 GPUs.", dev ? dev.name.UTF8String : "none");
+#endif
+    return ok;
+}
+
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @property (strong) NSString *romfs;
@@ -260,6 +289,12 @@ static void host_start(NSString *romfs) {
 @implementation SceneDelegate
 - (void)showGameOrMissing:(BOOL)retry {
     UIWindowScene *ws = self.window.windowScene; char why[1024];
+    if (!gpu_supported(why, sizeof why)) {
+        plog("boot: GPU not supported: %s", why);
+        DmMissingVC *m = [DmMissingVC new]; self.window.rootViewController = m;
+        m.label.text = [NSString stringWithFormat:@"%@ %@\n\n%@", @(dm_game.title), @(dm_game.version), @(why)];
+        return;
+    }
     NSString *rf = romfs_locate(why, sizeof why);
     if (rf) {
         self.romfs = rf;
@@ -322,8 +357,13 @@ static void host_start(NSString *romfs) {
 - (BOOL)application:(UIApplication *)a didFinishLaunchingWithOptions:(NSDictionary *)o { (void)a; (void)o; return YES; }
 @end
 
+static void env_said(const char *name, const char *value) { plog("boot: env.txt: %s=%s", name, value); }
 int main(int argc, char *argv[]) {
     log_open();
+    // Switches without a debugger (host/envfile.h): the bundle's dm/env.txt (ios/run.sh DM_ENV_FILE), then Documents/env.txt (Files app) over it
+    { NSString *b = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/env.txt"], *d = [docs_dir() stringByAppendingPathComponent:@"env.txt"];
+      int nb = dm_env_file_apply(b.fileSystemRepresentation, env_said), nd = dm_env_file_apply(d.fileSystemRepresentation, env_said);
+      if (nb >= 0 || nd >= 0) plog("boot: env.txt: %d switch(es) from the bundle, %d from Documents", nb > 0 ? nb : 0, nd > 0 ? nd : 0); }
     // The default soft limit of 256 descriptors is about what a game keeps open; raise it (not above the hard limit)
     { struct rlimit rl; if (!getrlimit(RLIMIT_NOFILE, &rl)) { rlim_t was = rl.rlim_cur, want = 4096; if (rl.rlim_max != RLIM_INFINITY && want > rl.rlim_max) want = rl.rlim_max;
         if (was < want) { rl.rlim_cur = want; int rc = setrlimit(RLIMIT_NOFILE, &rl); plog("boot: descriptor soft limit %llu → %llu%s", (unsigned long long)was, (unsigned long long)want, rc ? " failed" : ""); } } }

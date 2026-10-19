@@ -787,15 +787,18 @@ Tier 1, performance:
 - [x] batch 2 · 18 libvpx row multithreading (`DM_VPX_ROW_MT=0` off): the Ganon movie 1.02-1.03 → 0.95 ms a frame, frames identical
 
 Tier 1, iOS and Mac:
-- [ ] 19 a Metal 4 launch check with a screen
-- [ ] 20 game data excluded from backups
-- [ ] 21 `GCSupportsGameMode`
-- [ ] 22 `env.txt` switches on the device
-- [ ] 23 audio notifier thread at USER_INTERACTIVE
-- [ ] 24 compressed files stored, not deflated, in the IPA
-- [ ] 25 iOS 17 code guards (`@available` around the residency set and `hasPerformanceProfile`)
-- [ ] 26 quit waits for a save in progress (up to 15 s)
-- [ ] 27 a covered Mac window discards presents
+- [x] batch 3 · 19 a Metal 4 launch check with a screen (Metal 3 for the iOS 18 build; `DM_TEST_NO_METAL4=1` shows it anywhere)
+- [x] batch 3 · 20 game data excluded from backups (RomFS and sysfont outside the bundle; the boot log reads the value back)
+- [x] batch 3 · 21 `GCSupportsGameMode` (iOS 18.0-18.5 read only this one; `LSSupportsGameMode` is from 18.6, Apple's reference)
+- [x] batch 3 · 22 `env.txt` switches on the device: the bundle's (`DM_ENV_FILE` at build) then Documents' (`host/envfile.h`, `t_envfile`)
+- [x] batch 3 · 23 audio notifier thread at USER_INTERACTIVE (`t_audio`)
+- [x] batch 3 · 24 compressed files stored, not deflated, in the IPA (130 MB of `.zs`: 1.66 s deflated into a larger archive, 0.26 s stored;
+  `run.sh ipa` reports the count)
+- [x] batch 3 · 25 iOS 17 code guards (`@available` around the residency set and `hasPerformanceProfile`): no unguarded API left for an iOS 17
+  target (`clang -fsyntax-only -target arm64-apple-ios17.0 -DDM_NVN_M3=1 -Wunguarded-availability`)
+- [x] batch 3 · 26 quit waits for a save in progress, 15 s on the Mac, 3 s on iOS (`dm_fs_save_wait`, `t_fs`)
+- [x] batch 3 · 27 a covered Mac window discards presents (`DM_OCCL=0` off, `DM_TEST_COVER=<s>,<len>` to check). The window check is still to
+  run with the display on: during the 2026-10-19 run the display went to sleep (11:25), the display link stopped and no occlusion change came
 
 Tier 1, tooling and diagnostics:
 - [ ] 28 one game at a time on the Mac (flock with a queue)
@@ -850,6 +853,8 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 69 the game over flow with the overlay, in play
 - [ ] 70 manosaba's iOS app with chain 1e41705de87b on the devices
 - [ ] 71 an iOS 17 device test (which device: to ask)
+- [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
+  (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip

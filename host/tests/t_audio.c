@@ -29,6 +29,9 @@ int main(void) {
     h_au_InitParam(prm);
     if (h_au_Open(out, ev, NULL, prm)) return 1;
     if (h_au_Ch(out) != 2 || h_au_Rate(out) != 48000 || h_au_State(out) != STATE_STOPPED) { puts("FAIL parameters"); return 1; }
+    { qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0; pthread_get_qos_class_np(ao(out)->notify_th, &qc, &rp);
+      printf("release notifier thread QoS: want USER_INTERACTIVE (%#x), got %#x %s\n", QOS_CLASS_USER_INTERACTIVE, qc, qc == QOS_CLASS_USER_INTERACTIVE ? "ok" : "FAIL");
+      if (qc != QOS_CLASS_USER_INTERACTIVE) return 1; }
     for (int i = 0; i < 3; i++) { h_au_SetBuf(&b[i], pcm[i], sizeof pcm[i], sizeof pcm[i]); if (!h_au_Append(out, &b[i])) return 1; }
     if (h_au_Released(out)) { puts("FAIL released before start"); return 1; }
     uint64_t t0 = now_ns(); h_au_Start(out);

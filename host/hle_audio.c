@@ -180,7 +180,10 @@ HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKN
     atomic_init(&a->null_run, 0); atomic_init(&a->notify_run, 1);
     atomic_init(&a->notify_pending, 0); atomic_init(&a->notify_armed, 0);
     a->notify_sem = dispatch_semaphore_create(0); a->rel_sem = dispatch_semaphore_create(0);
-    pthread_create(&a->notify_th, NULL, event_notify, a);
+    // The thread that signals the game's buffer event at USER_INTERACTIVE (upstream d2r-mobile afad65c): at the default QoS (21) 16 of its wake-ups
+    // in 240 s came more than 2 ms late on an iPhone 17 Pro Max, none after; a player heard gaps while moving (PR #52)
+    { pthread_attr_t at; pthread_attr_init(&at); pthread_attr_set_qos_class_np(&at, QOS_CLASS_USER_INTERACTIVE, 0);
+      pthread_create(&a->notify_th, &at, event_notify, a); pthread_attr_destroy(&at); }
     if (ev) hle_bind_system_event(ev, 1);   // Buffer release event: bind a kernel event on the guest thread (auto-clear), afterwards signaled by the audio thread
     objmap_put(g, a);
     pthread_mutex_lock(&g_aos_lock);
