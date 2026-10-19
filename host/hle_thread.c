@@ -755,15 +755,20 @@ int svc_thread(int num, uint64_t *regs) {
         int64_t deadline = ns > 0 ? (dm_detclock_enabled() ? (int64_t)guest_ns() : now_mono_ns()) + ns : 0;
         pthread_mutex_lock(&G);
         int64_t r; int idx = -1;
+        // Horizon's order (KSynchronizationObject::Wait, checked against Atmosphère; LASRecomp 1144aea): a signaled object, then timeout 0, then a
+        // pending CancelSynchronization (cleared), then the wait; the flag survives a successful wait and a poll (t_waitsync)
         for (;;) {
-            if (t->cancel) { t->cancel = 0; r = R_CANCELLED; break; }
             int bad = 0;
             for (int i = 0; i < n && idx < 0; i++) if (sig_obj(hs[i], &bad)) idx = i;
             if (bad) { r = R_BAD_HANDLE; break; }
             if (idx >= 0) { r = 0; break; }
-            int64_t left = ns < 0 ? -1 : ns == 0 ? 0 : deadline - (dm_detclock_enabled() ? (int64_t)guest_ns() : now_mono_ns());
+            if (ns == 0) { r = R_TIMEOUT; break; }
+            if (t->cancel) { t->cancel = 0; r = R_CANCELLED; break; }
+            int64_t left = ns < 0 ? -1 : deadline - (dm_detclock_enabled() ? (int64_t)guest_ns() : now_mono_ns());
             if (ns > 0 && left <= 0) { r = R_TIMEOUT; break; }
-            if (block(t, 4, left) == R_TIMEOUT) { r = R_TIMEOUT; break; }
+            int64_t br = block(t, 4, left);
+            if (br == R_TIMEOUT) { r = R_TIMEOUT; break; }
+            if (br == R_CANCELLED) { r = R_CANCELLED; break; }   // CancelSynchronization while blocked
         }
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; regs[1] = idx >= 0 ? (uint64_t)idx : 0; return 1;
@@ -771,7 +776,7 @@ int svc_thread(int num, uint64_t *regs) {
     case 0x19: {  // CancelSynchronization(w0 thread)
         pthread_mutex_lock(&G);
         thr_t *t = h_get((uint32_t)regs[0], O_THREAD);
-        if (t) { t->cancel = 1; if (t->wkind == 4) wake(t, -1); }
+        if (t) { if (t->wkind == 4) wake(t, R_CANCELLED); else t->cancel = 1; }   // a blocked wait ends cancelled; otherwise the next wait finds the flag
         pthread_mutex_unlock(&G);
         regs[0] = t ? 0 : R_BAD_HANDLE; return 1;
     }
