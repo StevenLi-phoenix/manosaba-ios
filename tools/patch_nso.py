@@ -141,6 +141,22 @@ NOP = 0xD503201F
 def dis(w, addr):
     l = list(md.disasm(struct.pack('<I', w), addr)); assert len(l) == 1, hex(w)
     return l[0]
+class Data:
+    """A word Capstone cannot decode (inline data in the text): no registers, no branch, and control never falls through it (decode_words)"""
+    mnemonic, operands = '.word', ()
+    def __init__(self, w, a): self.address, self.bytes, self.op_str = a, struct.pack('<I', w), f'{w:#010x}'
+    def regs_access(self): return [], []
+def decode_words(buf, fa, fb):
+    """The instructions of buf[fa:fb], one entry per word. Capstone's stream decoding stops at the first word it cannot decode, so everything after
+    inline data was hidden from the jump-table, exclusive-section and function-pointer analysis (an exclusive section after it got plain sites; a
+    census of a 4 MB code dump in va11mobile's verify/INPUT-DIAG.zh-CN.md read 0 tpidrro reads that way and 3,116 with skipdata); such a word becomes
+    a Data entry and decoding goes on after it (plan item 129)"""
+    if os.environ.get('DM_TEST_DISASM_STREAM'): return list(md.disasm(bytes(buf[fa:fb]), fa))   # negative control of t_rewriter_synth only: the old stream decoding
+    out, a = [], fa
+    while a < fb:
+        n0 = len(out); out.extend(md.disasm(bytes(buf[a:fb]), a)); a += 4 * (len(out) - n0)
+        if a < fb: out.append(Data(struct.unpack_from('<I', buf, a)[0], a)); a += 4
+    return out
 def regset(ins):
     r, w = ins.regs_access()
     return {ins.reg_name(x) for x in r}, {ins.reg_name(x) for x in w}
@@ -286,10 +302,10 @@ def site_mov_sp(ins):
 
 def alloca_shape(a):
     """True when the x18 that `mov sp, x18` at a installs was computed as (a register copied from sp) minus something, in the same straight-line block."""
-    insl = list(md.disasm(IMG0[max(0, a - 0x40):a], max(0, a - 0x40)))
+    insl = decode_words(IMG0, max(0, a - 0x40), a)
     sub_src = None
     for p in reversed(insl):
-        if p.mnemonic in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') or p.mnemonic.startswith('b.'): return False
+        if p.mnemonic in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz', '.word') or p.mnemonic.startswith('b.'): return False
         _, wr = regset(p)
         if sub_src is None:
             if wr & {'x18', 'w18'}:
@@ -364,7 +380,7 @@ def site_obs(off, oid, word):
 # (site_region).
 EXCL_LD = ('ldxr', 'ldaxr', 'ldxp', 'ldaxp', 'ldxrb', 'ldaxrb', 'ldxrh', 'ldaxrh')
 EXCL_ST = ('stxr', 'stlxr', 'stxp', 'stlxp', 'stxrb', 'stlxrb', 'stxrh', 'stlxrh')
-EXCL_STOP = ('bl', 'blr', 'br', 'ret', 'svc', 'brk', 'hlt', 'udf', 'clrex')   # a path through these is not one exclusive section
+EXCL_STOP = ('bl', 'blr', 'br', 'ret', 'svc', 'brk', 'hlt', 'udf', 'clrex', '.word')   # a path through these is not one exclusive section
 def exclusive_regions(insl):
     """Exclusive sections of one function → sorted lists of instruction indices. From each exclusive load L, walk forward without passing another
     exclusive load or EXCL_STOP and without going past an exclusive store (its status cbz / cbnz is kept); the section of L is what can reach one of
@@ -374,7 +390,7 @@ def exclusive_regions(insl):
     def succ(i):
         x = insl[i]
         if x.mnemonic in EXCL_STOP: return []
-        out = [i + 1] if x.mnemonic != 'b' and i + 1 < len(insl) else []
+        out = [i + 1] if x.mnemonic not in ('b', '.word') and i + 1 < len(insl) else []
         t = dtarget(x)
         if t is not None and t in idx: out.append(idx[t])
         return out
@@ -413,7 +429,7 @@ def region_entries(insl, R, fa, extra=()):
     inR = {insl[i].address for i in R}
     preds = {a: [] for a in inR}
     for i, x in enumerate(insl):
-        if x.mnemonic not in ('b', 'br', 'ret') and i + 1 < len(insl) and insl[i + 1].address in preds: preds[insl[i + 1].address].append(x.address)
+        if x.mnemonic not in ('b', 'br', 'ret', '.word') and i + 1 < len(insl) and insl[i + 1].address in preds: preds[insl[i + 1].address].append(x.address)
         t = dtarget(x) if x.mnemonic != 'bl' else x.operands[0].imm
         if t in preds: preds[t].append(x.address)
     for frm, t in extra:
@@ -567,7 +583,7 @@ def preds_of(insl, extra=()):
     idx = {x.address: i for i, x in enumerate(insl)}
     P = [[] for _ in insl]
     for i, x in enumerate(insl):
-        if x.mnemonic not in ('b', 'br', 'ret') and i + 1 < len(insl): P[i + 1].append((i, 'fall'))
+        if x.mnemonic not in ('b', 'br', 'ret', '.word') and i + 1 < len(insl): P[i + 1].append((i, 'fall'))
         t = dtarget(x)
         if t is not None and t in idx: P[idx[t]].append((i, 'taken'))
     for frm, t in extra:
@@ -656,8 +672,13 @@ def jump_tab(insl, P, j, fa, fb, strict):
     ka = next(iter(ds)); a = insl[ka]
     m = re.fullmatch(rf'{rD}, (x\d+), x(\d+)(?:, lsl #(\d))?', a.op_str) if a.mnemonic == 'add' else None
     if not m: return None, f'defined by {a.address:x} {a.mnemonic} {a.op_str}'
-    rT, sh = f'x{m.group(2)}', int(m.group(3) or 0)
-    anc = const_of(insl, P, ka, m.group(1), strict)
+    rA, rT, sh = m.group(1), f'x{m.group(2)}', int(m.group(3) or 0)
+    anc = const_of(insl, P, ka, rA, strict); order = ''
+    if anc is None and not sh and not os.environ.get('DM_TEST_JT_NO_SWAP'):   # (the env: negative control of t_rewriter_synth only)
+        # add is commutative: offsets relative to the table itself, `ldrsw x18, [xB, xI, lsl #2]; add x18, x18, xB; br x18` (Link's Awakening's
+        # subsdk in nxnative's bring-up notes, va11mobile's site_br_rel, smo's selftest), put the loaded entry first and the anchor second. Same
+        # targets, anchor + entry; not with a shift, which would scale the anchor (plan item 129)
+        rA, rT = rT, rA; anc = const_of(insl, P, ka, rA, strict); order = ' (operands swapped)'
     if anc is None: return None, 'anchor not a constant'
     ld = reaching(insl, P, ka, rT, strict)
     if len(ld) != 1: return None, 'offset defined by several instructions'
@@ -673,7 +694,7 @@ def jump_tab(insl, P, j, fa, fb, strict):
     if n is None: return None, 'index not bounded'
     tg = [anc + (struct.unpack_from(fmt, IMG, tb + size * i)[0] << sh) for i in range(n)]
     if any(not (fa <= t < fb) or t % 4 for t in tg): return None, 'a target outside the function'
-    return tg, f'anchor {anc:#x} table {tb:#x} {n} x {L.mnemonic} << {sh}'
+    return tg, f'anchor {anc:#x} table {tb:#x} {n} x {L.mnemonic} << {sh}{order}'
 def jump_tables(insl, fa, fb):
     """All jump tables of one function → ({br index: targets}, {br index: description or reason}). A table's targets are edges that other tables'
     walks need (a table's own targets can loop back to it), so rounds that ignore paths with an unknown predecessor run to a fixpoint; then every
@@ -700,14 +721,14 @@ done = set(); windows = []; jumps = {}; tabjumps = {}; xbranch = {}
 def x18_fnptr(insl, j):
     """The instruction that last wrote x18 before insl[j], within the same straight-line block: must be `ldr x18, [...]` (a function pointer)."""
     for p in reversed(insl[:j]):
-        if p.mnemonic in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') or p.mnemonic.startswith('b.'): return False
+        if p.mnemonic in ('b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz', '.word') or p.mnemonic.startswith('b.'): return False
         _, wr = regset(p)
         if wr & {'x18', 'w18'}: return p.mnemonic == 'ldr' and p.op_str.startswith('x18, [')
     return False
 funcs = sorted({func_of(a) for a, (k, _) in kinds.items() if k == 'x18'})
 regions = []
 for fa, fb in funcs:
-    insl = list(md.disasm(bytes(IMG[fa:fb]), fa))
+    insl = decode_words(IMG, fa, fb)
     tabs = None
     for j, ins in enumerate(insl):
         if ins.mnemonic == 'blr' and ins.op_str == 'x18':

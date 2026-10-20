@@ -1579,8 +1579,18 @@ Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, 
   time only fails 4), `t_relr` (144), the pool lookup (`nvn_pool_find.h`: a range wrapping past the end of the address space was found in a pool,
   now in none; totk-mobile's nested and length-0 cases; the wrap fails 1), a NaN alpha reference in `t_alpha` (bayonetta3-mobile's: drawn by
   NOTEQUAL and ALWAYS only; taken as 0 fails 1)
-- [ ] 129 rewriter: swapped-operand jump tables, disassembly past undecodable words, the CBZ success path in equiv, a narrower TSD filter, a
-  synthetic NSO self-test in CI
+- [x] batch 31 · 129 rewriter: a jump table whose add has the loaded entry first (`ldrsw x18, [xB, xI, lsl #2]; add x18, x18, xB; br x18`,
+  offsets relative to the table) is found with the operands swapped (the anchor came from the first operand only: "anchor not a constant", the
+  rewrite stopped); per-function decoding goes past a word Capstone cannot decode (`decode_words`; the stream stopped there, and an exclusive section
+  after inline data got plain sites, which structck and equiv both pass); equiv takes an exclusive store's success path (a status `cbz` becomes a
+  branch to its target; it was a nop, so 5 of the 134 sections of Tears of the Kingdom's main never left by their success exit, and a compare-and-swap
+  whose store comes first looped to the step limit) and leaves out only 8-byte writes to x18's and the thread pointer's slot (it dropped every
+  patched write into the 64 KiB slot area; the slot three past x18's, the review's fixture, is the gate key's, so "any key slot" would still pass
+  it); `tools/tests/t_rewriter_synth.py` runs the rewriter, structck and equiv on a synthetic module in CI (smo's selftest words, bayonetta3-mobile's
+  three sequences: a store-first compare-and-swap in one piece entered at its load, an earlier store next to a section, `mov sp, x18`; inline data
+  before a section; `mrs cntfrq_el0` refused) and on damaged copies of its product (a site left as the original word; a success exit one
+  instruction late; a stray store into the gate key's slot); CI installs lz4 and unicorn. Both games' products are byte-identical apart from the
+  rewriter stamp, `verify/regress.sh --fuzz` OK for both
 
 Tier 3c, Tears of the Kingdom:
 - [ ] 130 pre-rendered cutscenes at 30 fps, and the blood moon skip with and without the cap (72)

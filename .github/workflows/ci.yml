@@ -1,7 +1,8 @@
 # Checks on every push to main and every pull request (after GirlNet's nxnative fork, mac-host.yml of bfc0376, and LASRecomp's ci.yml, both MIT):
 # the Mac host builds for every game in games/ (the Metal 4 host and the Metal 3 one, with libvpx for the VP9 movies), and the tests that need no
 # game files, no keys and no GPU run: the host unit tests (host/tests), the parsers of outside input again under the undefined-behavior sanitizer
-# (make -C host/tests run-ubsan) and the tool tests (tools/tests); every tracked file passes the public-content audit (tools/audit_public.py: no
+# (make -C host/tests run-ubsan) and the tool tests (tools/tests; t_rewriter_synth.py runs the rewriter, verify/structck.py and verify/equiv.py on a
+# synthetic module, so lz4 and unicorn are installed too); every tracked file passes the public-content audit (tools/audit_public.py: no
 # game data, keys or binaries; the repository is public). The graphics tests (gfx/tests, Metal 4 and Metal 3 on a real GPU) and the game runs stay
 # local (DEVELOPMENT.md). Nothing is uploaded or published.
 name: CI
@@ -40,5 +41,5 @@ jobs:
       - name: Tool tests
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install -q --disable-pip-version-check capstone==5.0.9 numpy==2.4.4
+          "$RUNNER_TEMP/venv/bin/pip" install -q --disable-pip-version-check capstone==5.0.9 numpy==2.4.4 lz4==4.4.5 unicorn==2.1.4
           rc=0; for t in tools/tests/t_*.py; do echo "=== $t"; "$RUNNER_TEMP/venv/bin/python" -I "$t" || rc=1; done; exit $rc

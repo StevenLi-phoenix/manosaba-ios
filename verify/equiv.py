@@ -36,7 +36,10 @@ orig = nsoimg.load(A.nso)
 ncut = sum(1 for l in open(f'{DIR}/{MOD}.cuts.tsv') if not l.startswith('#'))
 nobs = sum(1 for l in open(f'{DIR}/{MOD}.obs.tsv') if not l.startswith('#')) if os.path.exists(f'{DIR}/{MOD}.obs.tsv') else 0
 def deexcl(b):
-    # Test only: all exclusive loads/stores (every width, single / pair) → plain ldr/str/ldp/stp; the status cbz/cbnz right after a store → nop. Both images are processed the same way.
+    # Test only: all exclusive loads/stores (every width, single / pair) → plain ldr/str/ldp/stp; the status test right after a store takes the path of
+    # a store that succeeded (status 0): cbnz → nop, cbz → b to its target. Both images are processed the same way. (cbz became a nop as well until plan
+    # item 129, so a section that tests the status with cbz never left by its success exit: 5 of the 134 x18 sections of Tears of the Kingdom's main;
+    # bayonetta3-mobile's copy of blade2-mobile's dm/verify/equiv.py, MIT, does the same)
     LD = {0: 0x39400000, 1: 0x79400000, 2: 0xB9400000, 3: 0xF9400000}
     ST = {0: 0x39000000, 1: 0x79000000, 2: 0xB9000000, 3: 0xF9000000}
     b = bytearray(b); n = 0
@@ -53,7 +56,10 @@ def deexcl(b):
         struct.pack_into('<I', b, o, nw); n += 1
         if not L:
             nx = struct.unpack_from('<I', b, o + 4)[0]
-            if nx & 0x7E000000 == 0x34000000 and nx & 31 == rs: struct.pack_into('<I', b, o + 4, 0xD503201F)
+            if nx & 0x7E000000 == 0x34000000 and nx & 31 == rs:
+                cbz = not nx >> 24 & 1 and not os.environ.get('DM_TEST_EQUIV_CBZ_NOP')   # (the env: negative control of t_rewriter_synth only)
+                imm = (nx >> 5) & 0x7FFFF; imm -= (imm & 0x40000) << 1
+                struct.pack_into('<I', b, o + 4, 0x14000000 | (imm & 0x3FFFFFF) if cbz else 0xD503201F)
     return bytes(b), n
 orig, _ = deexcl(orig); pat, _ = deexcl(pat)
 
@@ -235,6 +241,14 @@ def init_state(rng, kind, site_br=None, fn_target=False, tab=None):
     if tab: g[18] = IB + rng.choice(tab)                             # explicit jump table: one of its targets (any other value stops at the block's brk)
     return {'g': g, 'v': [rng.getrandbits(128) for _ in range(32)], 'nzcv': rng.randrange(16) << 28, 'tls': rng.randrange(0, 0x100000) & ~15, 'tlr': rng.randrange(0x100000, 0x200000) & ~15}
 
+# The patched side's own writes: its scratch registers in the red zone, and one 8-byte store into a slot a rewrite block writes (x18's, the thread
+# pointer's; the other keys' slots are only read). Any other write into the slot area is the block's and is compared: a block that also stored into
+# a wrong slot passed while the filter took all of [TSD, TSD + 64 KiB) (plan item 129; dr3-mobile's third_party/d2r-verify/equiv.py, MIT, drops
+# only 8-byte writes to key slots; here the slot three past x18's, the review's fixture, is the gate key's, so all key slots would still pass it)
+OWN_SLOT_ADDR = {TSD + 8 * SLOT18, TSD + 8 * SLOTTLS}
+def tsd_slot_write(x):
+    if os.environ.get('DM_TEST_EQUIV_TSD_WIDE'): return TSD <= x[0] < TSD + 0x10000   # negative control of t_rewriter_synth only: the old filter
+    return x[1] == 8 and x[0] in OWN_SLOT_ADDR
 def trial(UO, SO, UP, SP, a, init):
     so = run(UO, SO, IB + a, False, init)
     if SO['rz']: return True, False, [], True       # the original read below sp: not a state real code can be in
@@ -242,7 +256,7 @@ def trial(UO, SO, UP, SP, a, init):
     if a in fnptr:   # the function pointer block leaves the target in x17 (IP1, not preserved across a call / tail call by AAPCS64)
         g = list(sp_[0]); g[17] = so[0][17]; sp_ = (g,) + sp_[1:]
     ow = {x[0] for x in so[4]}
-    sp_ = sp_[:4] + ([x for x in sp_[4] if not ((SP0 - 128 <= x[0] < SP0 or TSD <= x[0] < TSD + 0x10000) and x[0] not in ow)],) + sp_[5:]
+    sp_ = sp_[:4] + ([x for x in sp_[4] if not ((SP0 - 128 <= x[0] < SP0 or tsd_slot_write(x)) and x[0] not in ow)],) + sp_[5:]
     both = bool(so[5] and sp_[5])
     same = (so[5] == sp_[5]) if (so[5] or sp_[5]) else (so == sp_)
     return same, both, [k for k, (x, y) in enumerate(zip(so, sp_)) if x != y], False
