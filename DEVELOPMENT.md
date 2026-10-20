@@ -1689,8 +1689,14 @@ Tier 3c, Tears of the Kingdom:
   movie hold, jitter; never paying back fails 3, no margin flaps 19 times in 2,000 frames and fails 1); `DM_PROBE_FP` prints s0..s15
 
 Tier 3c, iOS:
-- [ ] 134 the audio session's sample rate and I/O buffer, an underrun counter, the unit rebuilt after a media services reset (evening sync:
-  nxnative b301431's callback watchdog and Start fallback)
+- [x] batch 36 · 134 iOS audio: the session asks for 48 kHz and a 5 ms I/O buffer and logs what it got (RemoteIO pulled about 1,024 frames a
+  callback against the 4 × 240 queued: nxnative 18c6143); each output counts underruns (started with nothing queued) and the zeros it filled,
+  logged by the watchdog at most every 5 s (never from the audio thread); a watchdog (after nxnative b301431, MIT) moves a started AudioUnit that
+  has not called back for 200 ms to the silent sink and retries it after 1, 2, 4, then every 8 s, and a Start or resume the device refuses does the
+  same (the unit was dropped for good, or stayed "suspended" until the next resume); the media services reset makes every unit again
+  (`dm_audio_reset`, from front_ios.m's observer). `t_audio` scenarios 6 (underruns: 61 with 305 ms of zeros after one 100 ms block, none before
+  the start; uncounted fails) and 7 (a playing unit stopped behind the host's back: the silent sink after 252 ms with blocks still released, the
+  unit again after 1,285 ms; without the watchdog fails; needs an output device). On a device (the user): the session's logged rate and buffer
 - [ ] 135 Low Power Mode and thermal Serious → 30 fps; `ENABLE_DEBUG_DYLIB: NO`
 - [ ] 136 patches always applied, chosen by the page (no option pages on iOS)
 

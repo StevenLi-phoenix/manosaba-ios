@@ -7,6 +7,10 @@
 // Start used to pick its backend outside the lock the suspend holds. Without an output device (a CI runner) only the silent sink path runs.
 // DM_AUDIO_MUTE (the sound card callback called directly): muted, what goes out is all zeros and the game's block is still taken and released;
 // not muted, the block's samples go out. Negative control: -DDM_TEST_MUTE_NO_PULL (muted without taking the blocks) fails "still taken".
+// Underruns (plan item 134): a started output with one 100 ms block counts underruns and zeros after it, none before the start; without the count
+// (-DDM_TEST_AUDIO_NO_UNDERRUN) that fails. The AudioUnit watchdog (a real output device only; after nxnative b301431's scenario, MIT): the unit
+// stopped behind the host's back (as iOS does when Siri, an alarm or a call takes the session) → within 0.5 s the silent sink plays on (blocks
+// keep being released) and about a second later the unit is started again; without the watchdog (-DDM_TEST_AUDIO_NO_WATCHDOG) that fails.
 #include "../hle_audio.c"
 #include <fcntl.h>
 #include <signal.h>
@@ -136,5 +140,41 @@ int main(void) {
         printf("muted: all zeros out %d, the block still taken and released %d; not muted: the samples out %d, released %d\n", zero, r1 == &b5[0], same, r2 == &b5[1]);
         ok5 = zero && r1 == &b5[0] && same && r2 == &b5[1];
         printf("DM_AUDIO_MUTE: %s\n", ok5 ? "ok" : "FAIL"); }
-    return !ok2 || !ok3 || w4 != 0 || !okc || !ok4 || !ok5;
+    int ok6;
+    {   // Scenario 6: underruns while started (silent sink)
+        char o6[64]; gbuf b6; static int16_t p6[4800 * 2]; unsetenv("DM_AUDIO"); if (h_au_Open(o6, NULL, NULL, prm)) return 1;
+        aout *a = ao(o6); h_au_SetBuf(&b6, p6, sizeof p6, sizeof p6); h_au_Append(o6, &b6);
+        usleep(150000); uint64_t before = atomic_load(&a->under_n);
+        h_au_Start(o6); usleep(400000); uint64_t n6 = atomic_load(&a->under_n), z6 = atomic_load(&a->under_b);
+        h_au_Stop(o6); h_au_Close(o6);
+        double zero_ms = z6 / (2.0 * 2 * 48);   // bytes → ms of 16-bit stereo at 48 kHz
+        ok6 = before == 0 && n6 > 0 && zero_ms > 200;
+        printf("underruns: before the start %llu (want 0), after the one 100 ms block %llu with %.0f ms of zeros in 400 ms (want > 0, > 200 ms) %s\n",
+               (unsigned long long)before, (unsigned long long)n6, zero_ms, ok6 ? "ok" : "FAIL"); }
+    int ok7 = 1;
+    {   // Scenario 7: the AudioUnit watchdog (needs an output device)
+        setenv("DM_AUDIO", "1", 1); char o7[64]; static gbuf b7[40]; static int16_t p7[40][4800 * 2];
+        if (h_au_Open(o7, NULL, NULL, prm)) return 1;
+        aout *a = ao(o7);
+        if (!a->au) printf("watchdog: no output device here (CI): not checked\n");
+        else {
+            for (int i = 0; i < 40; i++) { h_au_SetBuf(&b7[i], p7[i], sizeof p7[i], sizeof p7[i]); h_au_Append(o7, &b7[i]); }
+            h_au_Start(o7); usleep(300000);
+            int rel = 0; while (h_au_Released(o7)) rel++;
+            int playing = a->backend == BK_AU;
+            AudioOutputUnitStop(a->au);   // behind the host's back
+            uint64_t t7 = now_ns(); int took = 0, rel2 = 0, back = 0; double took_ms = 0, back_ms = 0;
+            while (now_ns() - t7 < 2500000000ull) {
+                pthread_mutex_lock(&g_aos_lock); int bk = a->backend; pthread_mutex_unlock(&g_aos_lock);
+                if (!took && bk == BK_NULL) { took = 1; took_ms = (now_ns() - t7) / 1e6; }
+                if (took && bk == BK_AU) { back = 1; back_ms = (now_ns() - t7) / 1e6; break; }
+                while (h_au_Released(o7)) rel2++;
+                usleep(10000);
+            }
+            ok7 = playing && rel > 0 && took && took_ms < 500 && rel2 > 0 && back && back_ms > 900;
+            printf("watchdog: playing on the unit %d (%d blocks released); stopped behind the host's back: the silent sink after %.0f ms (want < 500), %d blocks released meanwhile, the unit again after %.0f ms (want about 1,200) %s\n",
+                   playing, rel, took_ms, rel2, back_ms, ok7 ? "ok" : "FAIL");
+        }
+        h_au_Stop(o7); h_au_Close(o7); unsetenv("DM_AUDIO"); }
+    return !ok2 || !ok3 || w4 != 0 || !okc || !ok4 || !ok5 || !ok6 || !ok7;
 }

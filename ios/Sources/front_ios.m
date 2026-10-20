@@ -353,8 +353,16 @@ void front_ios_lifecycle_install(void) {
     AVAudioSession *as = AVAudioSession.sharedInstance; NSError *e = nil;
     // Playback: sound with the silent switch on. MixWithOthers: Playback alone does not mix, and activating the session interrupted other apps'
     // sound (music, a voice call, screen sharing) for as long as the game was in front, whatever its volume (upstream 9393b00, #77)
-    if (![as setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&e] || ![as setActive:YES error:&e])
-        LOG("[red] front: audio session setup failed: %s", e.localizedDescription.UTF8String);
+    // 48 kHz (the game's rate: no resampling) and a 5 ms I/O buffer (plan item 134): asked for nothing, RemoteIO pulled about 1,024 frames a callback
+    // against the 4 x 240 frames queued, so callbacks underran (nxnative 18c6143; Touchable asks the same). The actual values are logged: the system
+    // may give others (a Bluetooth route)
+    static void (^setup)(void) = ^{ AVAudioSession *s = AVAudioSession.sharedInstance; NSError *er = nil;
+        if (![s setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&er]) LOG("[red] front: audio session category: %s", er.localizedDescription.UTF8String);
+        if (![s setPreferredSampleRate:48000 error:&er]) LOG("[red] front: audio session sample rate: %s", er.localizedDescription.UTF8String);
+        if (![s setPreferredIOBufferDuration:0.005 error:&er]) LOG("[red] front: audio session I/O buffer: %s", er.localizedDescription.UTF8String);
+        if (![s setActive:YES error:&er]) LOG("[red] front: audio session activation: %s", er.localizedDescription.UTF8String);
+        LOG("front: audio session %.0f Hz, I/O buffer %.2f ms (asked 48000 Hz, 5 ms), output latency %.1f ms", s.sampleRate, s.IOBufferDuration * 1000, s.outputLatency * 1000); };
+    setup(); (void)e;
     LOG("front: audio session category %s, options %#lx (mixes with other apps: %s), other audio playing %d", as.category.UTF8String, (unsigned long)as.categoryOptions,
         (as.categoryOptions & AVAudioSessionCategoryOptionMixWithOthers) ? "yes" : "no", (int)as.isOtherAudioPlaying);
     [nc addObserverForName:AVAudioSessionInterruptionNotification object:as queue:mq usingBlock:^(NSNotification *n) {
@@ -364,6 +372,9 @@ void front_ios_lifecycle_install(void) {
         g_audio_intr = 0; [AVAudioSession.sharedInstance setActive:YES error:nil]; audio_apply();
         LOG("front: audio interruption ended%s", g_audio_bg ? " (still in the background)" : "");
     }];
+    // The media services were reset (the audio server restarted): every AudioUnit is invalid; set the session up again and make the units again
+    [nc addObserverForName:AVAudioSessionMediaServicesWereResetNotification object:as queue:mq usingBlock:^(NSNotification *n) {
+        (void)n; LOG("front: audio media services were reset"); setup(); dm_audio_reset(); }];
     static DmVolumeWatch *vw; vw = [DmVolumeWatch new];
     [as addObserver:vw forKeyPath:@"outputVolume" options:NSKeyValueObservingOptionOld | NSKeyValueObservingOptionNew context:NULL];
     [nc addObserverForName:AVAudioSessionRouteChangeNotification object:as queue:mq usingBlock:^(NSNotification *n) {
