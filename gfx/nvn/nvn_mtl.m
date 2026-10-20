@@ -354,6 +354,11 @@ void mtl_init(void) { @autoreleasepool {
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }
 #if !DM_NVN_M3
     dispatch_queue_attr_t feedback_attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
+#ifndef DM_TEST_FEEDBACK_NO_POOL   // negative control of t_feedback_pool only
+    // The feedback handlers retire resources and may autorelease objects; a long-lived serial queue only drains its pool when the queue idles, so a
+    // steady stream of completions kept them alive (plan item 159, lordran-native 6145d1d, MIT): a pool per work item. Checked by t_feedback_pool
+    feedback_attr = dispatch_queue_attr_make_with_autorelease_frequency(feedback_attr, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM);
+#endif
     g_feedback_q = dispatch_queue_create("dm.nvn.mtl4-feedback", feedback_attr);
     MTL4CommandQueueDescriptor *q4d = [MTL4CommandQueueDescriptor new]; q4d.feedbackQueue = g_feedback_q;
     g_q4 = [g_dev newMTL4CommandQueueWithDescriptor:q4d error:&re];
@@ -7602,6 +7607,7 @@ static id<MTLTexture> present_src(id<MTLTexture> src) {
     return v;
 }
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
+static MTLViewport present_vp(double dw, double dh, double cw, double ch);
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTexture> dst, const int crop[4]) {
     id<MTLTexture> src = present_src(src0);
     NSUInteger cx = 0, cy = 0, cw = src.width, ch = src.height;
@@ -7620,9 +7626,8 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTe
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     // Keep the game picture's aspect ratio and center it, leaving black bars in the rest (no stretching when the screen ratio differs from the game's, e.g. iPhone about 19.5:9 versus the game's 16:9);
     // when the ratio difference is < 1% (the remainder from the game width being a multiple of 8 in the full-screen setup, e.g. 1952x900 versus 2868x1320 differs by 0.17%) fill directly, leaving no few-pixel border
-    double dw = dst.width, dh = dst.height, s = fmin(dw / cw, dh / ch);
-    MTLViewport vp = {floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
-    if (fabs((dw / dh) / ((double)cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
+    double dw = dst.width, dh = dst.height;
+    MTLViewport vp = present_vp(dw, dh, cw, ch);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     static double last_vp[4];   // Log one line when the viewport changes (used by the real-device screen-level acceptance screen_check.py to check the aspect ratio)
     if (memcmp(last_vp, &vp, sizeof last_vp)) { memcpy(last_vp, &vp, sizeof last_vp);
@@ -7640,11 +7645,19 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTe
     [en endEncoding];
     return 1;
 }
-// Viewport of the game picture (cw x ch) on a dw x dh target: its aspect ratio kept and centered; a ratio difference under 1% fills the target
+// Viewport of the game picture (cw x ch) on a dw x dh target: its aspect ratio kept and centered; a ratio difference under 1% fills the target.
+// The size is rounded (and held to the target) before it is centred (plan item 155, after Touchable 5cab3ac, MIT): floor((dh - ch * s) / 2) with
+// ch * s a hair over dh (contracted to a fused multiply-add, or rounded so) gave an origin of -1 and a picture one pixel off the target. Unit test
+// gfx/tests/t_present_vp.m
 static MTLViewport present_vp(double dw, double dh, double cw, double ch) {
     double s = fmin(dw / cw, dh / ch);
     if (fabs((dw / dh) / (cw / ch) - 1) < 0.01) return (MTLViewport){0, 0, dw, dh, 0, 1};
+#ifndef DM_TEST_PRESENT_VP_OLD   // negative control of t_present_vp only: centred before rounding, as before
+    double w = fmin(round(cw * s), dw), h = fmin(round(ch * s), dh);
+    return (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), w, h, 0, 1};
+#else
     return (MTLViewport){floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
+#endif
 }
 // ---------- MetalFX spatial upscaling of the presented picture ----------
 // Mode: mtl_upscale_set (iOS Settings page), else DM_UPSCALE=metalfx; off = the present pass scales bilinearly. With it on and the picture shown

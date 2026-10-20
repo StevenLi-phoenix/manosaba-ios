@@ -1468,6 +1468,9 @@ static void dump_frame(void) {
 #define TWIN 300
 static double g_tw[6][TWIN]; static unsigned g_tn[6];
 static double g_pres_iv[TWIN]; static unsigned g_presn;   // Present interval (ms; -1 = dropped by the system, 0 = no reading)
+// Each frame's hold (plan item 156, nvn_pace.h nvn_hold_ms): g_pres_exp what the on-screen interval beside it is judged against; g_hold_ring the hold
+// each present was given, by present number (the on-screen interval is read 8 presents late); g_tw0_hold the hold beside each frame interval
+static double g_pres_exp[TWIN], g_pres_exp_last, g_tw0_hold[TWIN], g_hold_ring[16], g_hold_now = 1000.0 / 60;
 __attribute__((weak)) double dm_brightness_now(void) { return -1; }
 __attribute__((weak)) void dm_yield_top(char *out, size_t n) { if (n) snprintf(out, n, "none"); }   // hle_thread.c's when linked (not in the graphics unit tests)
 __attribute__((weak)) void dm_thread_cpu(char *out, size_t n, double secs) { (void)secs; if (n) snprintf(out, n, "-"); }   // hle_thread.c: guest-thread CPU by Switch priority; none in graphics unit tests
@@ -1567,11 +1570,12 @@ static void tsummary(uint64_t frame) {
       pn = g_acq_n; pe = g_acq_early; pw = g_acq_gpu_ns; }
     { char pl[128]; dm_perf_line(pl, sizeof pl); LOG("[nvn] fps / GPU line at frame %llu: %s", frame, pl); }   // what the iOS overlay / Mac title show
     power_line(frame);
-    { unsigned n = g_tn[0] < TWIN ? g_tn[0] : TWIN, over = 0; double v[TWIN];   // frame interval gets its own line (M1 baseline): number of frames > 16.7 ms in this window and p99
-      if (n) { memcpy(v, g_tw[0], n * sizeof *v); qsort(v, n, sizeof *v, dcmp); for (unsigned i = 0; i < n; i++) over += v[i] > 16.7;
-        LOG("[nvn] frame interval up to frame %llu: >16.7ms %u / %u frames, p99 %.2f ms", frame, over, n, v[(n * 99) / 100 < n ? (n * 99) / 100 : n - 1]); } }
-    { unsigned n = g_presn < TWIN ? g_presn : TWIN, k = 0, drop = 0, discard = 0; double v[TWIN];   // on-screen present: dropped frame = interval > 16.7 × 1.5 ms or discarded
-      for (unsigned i = 0; i < n; i++) { double x = g_pres_iv[i]; if (x < 0) { drop++; discard++; } else if (x > 0) { v[k++] = x; drop += x > 25.0; } }
+    { unsigned n = g_tn[0] < TWIN ? g_tn[0] : TWIN, over = 0; double v[TWIN];   // frame interval gets its own line (M1 baseline): frames over their hold in this window and p99
+      if (n) { for (unsigned i = 0; i < n; i++) over += nvn_slow(g_tw[0][i], g_tw0_hold[i]);   // over 1.1 × each frame's own hold (plan item 156)
+        memcpy(v, g_tw[0], n * sizeof *v); qsort(v, n, sizeof *v, dcmp);
+        LOG("[nvn] frame interval up to frame %llu: over their hold %u / %u frames, p99 %.2f ms", frame, over, n, v[(n * 99) / 100 < n ? (n * 99) / 100 : n - 1]); } }
+    { unsigned n = g_presn < TWIN ? g_presn : TWIN, k = 0, drop = 0, discard = 0; double v[TWIN];   // on-screen present: dropped = on screen over 1.5 × its hold, or discarded (nvn_dropped)
+      for (unsigned i = 0; i < n; i++) { double x = g_pres_iv[i]; if (x < 0) { drop++; discard++; } else if (x > 0) { v[k++] = x; drop += nvn_dropped(x, g_pres_exp[i]); } }
       task_vm_info_data_t vi; mach_msg_type_number_t vc = TASK_VM_INFO_COUNT; double fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &vc) == KERN_SUCCESS ? vi.phys_footprint / 1048576.0 : -1;
       double br = dm_brightness_now();   // footprint / brightness are carried on the on-screen present row: does not depend on the tick-entry observation gate (camp runs have it too)
       if (k) { qsort(v, k, sizeof *v, dcmp); LOG("[nvn] on-screen present up to frame %llu: %u frames, dropped %u (discarded %u), p99 %.2f ms; footprint %.0f MiB; brightness %.2f; thermal %d", frame, k + discard, drop, discard, v[(k * 99) / 100 < k ? (k * 99) / 100 : k - 1], fp, br, dm_thermal_now()); }
@@ -1611,11 +1615,12 @@ static double srow(uint64_t f, const char *name, double dflt) {
     if (r->f == f) for (int i = 0; i < r->n; i++) if (!strcmp(r->k[i], name)) return r->v[i];
     return dflt;
 }
-// Dropped-frame definition: on-screen present interval > 16.7×1.5 ms or −1; without a window (no on-screen present time) fall back to the present call interval
+// Dropped-frame definition: on-screen present interval over 1.5 × the frame's hold (nvn_dropped, plan item 156) or −1; without a window (no on-screen
+// present time) fall back to the present call interval against the hold now
 static void slow_emit(uint64_t f) {
     static uint64_t judged, slow;
-    double pm = srow(f, "@presented_ms", 0), fr = srow(f, "@frame_ms", 0), lim = 1000.0 / 60 * 1.5;
-    int has = mtl_has_window(), bad = has ? (pm > lim || pm < 0) : fr > lim;
+    double pm = srow(f, "@presented_ms", 0), fr = srow(f, "@frame_ms", 0);
+    int has = mtl_has_window(), bad = has ? (pm != 0 && nvn_dropped(pm, g_pres_exp_last > 0 ? g_pres_exp_last : g_hold_now)) : nvn_dropped(fr, g_hold_now);
     if (has ? pm != 0 : fr != 0) judged++;
     if (bad) {
         slow++;
@@ -1757,6 +1762,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     }
     if (prev_in) {
         double fr = (t0 - prev_in) / 1e6, wk = (t0 - prev_out) / 1e6, nv = atomic_exchange(&g_nvn_ns, 0) / 1e6;
+        { static double prev_hold = 1000.0 / 60; g_tw0_hold[g_tn[0] % TWIN] = nvn_expect_ms(prev_hold, g_hold_now); prev_hold = g_hold_now; }
         tpush(0, fr); tpush(1, wk); tpush(2, nv);
         perfline_frame(&g_perf, t0);
         trow(f, "@frame_ms", fr); trow(f, "@work_ms", wk); trow(f, "@nvn_ms", nv);
@@ -1822,6 +1828,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     mtl_set_frame(g_frame);
     // Real-device semantics: present only enqueues and returns immediately; this frame's display time is scheduled by the pacer, and the texture can be acquired again only at "display time + one period" (blocking in AcquireTexture)
     uint64_t period = present_period(o), now = dm_detclock_enabled() ? guest_ns() : now_ns();
+    g_hold_now = nvn_hold_ms(period); g_hold_ring[o->presents % 16] = g_hold_now;   // this present's hold (plan item 156)
     if (test_work_ms() > 0) atomic_store(&g_test_work_from, now_ns());
     nvn_pacer pc = {o->pace};
     uint64_t slot = now + nvn_pace(&pc, now, period);
@@ -1831,6 +1838,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     // Actual presentation interval (windowed mode): taken 8 presents late (the presented callback has arrived by then), as the difference between the n-th and the (n−1)-th; −1 = discarded
     if (o->presents > 9) { uint64_t n = o->presents - 8; double a_ = mtl_presented_time(n), b_ = mtl_presented_time(n - 1);
         if (a_ < 0) trow(f - 8, "@presented_ms", -1); else if (a_ > 0 && b_ > 0) trow(f - 8, "@presented_ms", (a_ - b_) * 1e3);
+        g_pres_exp[g_presn % TWIN] = g_pres_exp_last = nvn_expect_ms(g_hold_ring[(n - 1) % 16], g_hold_ring[n % 16]);   // judged against its own presents' holds
         g_pres_iv[g_presn++ % TWIN] = a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0);
         perfline_screen(&g_perf, a_ > 0 ? (uint64_t)(a_ * 1e9) : 0);
         { double iv_ = a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0); mtl_ub_present(iv_); }   // same-process alternating measurement (DM_NVN_UB) tallies on-screen present intervals per phase; when off it is just one atomic read

@@ -2,12 +2,14 @@
 // (MIT, as data) with TZ set per case: the calendar, weekday, day of the year and offset of instants in Shanghai, UTC, Tokyo, Kathmandu (+5:45), New
 // York and Sydney in winter and summer, and back to the same instant; New York's 01:30 on 2026-11-01 occurring twice gives both instants in order,
 // with room for one only the earlier, with none none; 02:30 on 2026-03-08, skipped, gives none; February 30 gives none with success (the SDK's
-// documented result; acnh-mobile refuses it). Standard time only (-DDM_TEST_TOPOSIX_ONE: an hour repeated gives one, summer instants do not come back): 4 fail.
+// documented result; acnh-mobile refuses it). Standard time only (-DDM_TEST_TOPOSIX_ONE: an hour repeated gives one, summer instants do not come back): 4 fail. The user clock context
+// (plan item 158): Horizon's layout, kept while both clocks move together, made again on a jump; the old layout (-DDM_TEST_CTX_OLD): 2 fail.
 #include "../hle_time.c"
 #include <stdio.h>
 struct dm_flags g_flag; uint64_t g_t0_ns;
 module_t g_mod[MAX_MOD]; int g_nmod;
-uint64_t guest_ns(void) { return 0; }
+static uint64_t g_guest;
+uint64_t guest_ns(void) { return g_guest; }
 static int n, fail;
 #define CHECK(c, ...) do { n++; if (c) printf("  ✓ "); else { fail++; printf("  ✗ "); } printf(__VA_ARGS__); printf("\n"); } while (0)
 static void zone(const char *z) { setenv("TZ", z, 1); tzset(); }
@@ -30,5 +32,16 @@ int main(void) {
     CHECK(!h_time_ToPosixTime(&cnt, NULL, 0, &fall) && cnt == 0, "... room for none: none");
     CHECK(!h_time_ToPosixTime(&cnt, out, 2, &spring) && cnt == 0, "New York 2026-03-08 02:30, skipped: none");
     CHECK(!h_time_ToPosixTime(&cnt, out, 2, &feb30) && cnt == 0, "February 30: none, with success (the SDK)");
+    // The user clock context in Horizon's layout (plan item 158): offset + steady time point = user time, the point the guest clock in seconds,
+    // source 0; the same bytes while the host and guest clocks move together; made again when the guest clock jumps 60 s against the host clock
+    {   uint8_t a[0x20], b[0x20], c[0x20]; g_guest = 100000000000ull; h_time_GetSystemClockContext(a); int64_t now = time(NULL);
+        SystemClockContext ca; memcpy(&ca, a, sizeof ca); int src0 = 1; for (int i = 0; i < 16; i++) src0 &= !ca.steady.source[i];
+        CHECK(llabs(ca.offset + ca.steady.timepoint - now) <= 1 && ca.steady.timepoint == 100 && src0, "context: offset %lld + time point %lld = the user time %lld, source 0",
+              (long long)ca.offset, (long long)ca.steady.timepoint, (long long)now);
+        g_guest += 1000000000ull; h_time_GetSystemClockContext(b);
+        CHECK(!memcmp(a, b, sizeof a), "... the same bytes a second later on both clocks (a game compares all 0x20)");
+        g_guest += 60000000000ull; h_time_GetSystemClockContext(c); SystemClockContext cc; memcpy(&cc, c, sizeof cc); now = time(NULL);
+        CHECK(memcmp(a, c, sizeof a) && cc.steady.timepoint == 161 && llabs(cc.offset + cc.steady.timepoint - now) <= 1, "... made again when the guest clock jumps 60 s (time point %lld)", (long long)cc.steady.timepoint); }
+
     printf("t_time: %d checks, %d failed\n", n, fail); return fail != 0;
 }

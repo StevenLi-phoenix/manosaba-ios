@@ -2,6 +2,7 @@
 // Layout follows the public Horizon ABI: PosixTime = int64 seconds; CalendarTime = {s16 year, s8 month/day/hour/minute/second};
 // CalendarAdditionalInfo = {u32 day of week, u32 day of year, char time zone name[8], u32 DST, s32 UTC offset in seconds}.
 #include "hle.h"
+#include <pthread.h>
 #include <stdatomic.h>
 #include <time.h>
 
@@ -20,26 +21,6 @@ HLE_FORCE("_ZN2nn4time13IsInitializedEv", "the time service is taken over: alway
 static int64_t skew(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_TEST_SDK_TIME_SKEW"); v = e && !strcmp(e, "1"); if (v) LOG("DM_TEST_SDK_TIME_SKEW=1: the user clock an hour ahead (a test)"); } return v ? 3600 : 0; }
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "user clock → host time()", Result, h_time_GetCurrentTime, int64_t *out) {
     int64_t ft = fixed_time(); *out = (ft >= 0 ? ft : time(NULL)) + skew(); return RES_OK;
-}
-// The real GetSystemClockContext asks the time service, which the host does not have, and fails. Unity's IL2CPP clock (manosaba main+0x394ba0 / +0x394c40,
-// behind DateTime.UtcNow / Now) only marks itself initialized once this succeeds and returns 0 ticks until then, so DateTime.Now was 0001-01-01 and every
-// save slot showed that date (Naninovel GameStateMap.SaveDateTime). That clock caches GetCurrentTime and extrapolates with GetSystemTick, re-reading only when
-// the context changes (SDK docs: the context changes when the clock is corrected, adjusted or reset).
-// Context: 0x20 bytes (the game compares all 0x20); only the first 8 are set, to wall-clock minus guest-clock nanoseconds. It is re-reported only after it moves
-// by more than 2 s, which happens when the guest clock stops while wall time goes on (iOS background, system keyboard) or the wall clock is changed; the game then
-// re-reads the time. Under DM_FIXED_TIME it is constant.
-HLE_FORCE_OPT("_ZN2nn4time23StandardUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE", "user clock context from the host wall clock vs the guest clock",
-              Result, h_time_GetSystemClockContext, uint8_t *out) {
-    static _Atomic int64_t reported = INT64_MIN;
-    int64_t v = 0;
-    if (fixed_time() < 0) {
-        struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
-        int64_t off = (int64_t)t.tv_sec * 1000000000ll + t.tv_nsec - (int64_t)guest_ns(), r = atomic_load(&reported);
-        if (r == INT64_MIN || llabs(off - r) > 2000000000ll) { atomic_store(&reported, off); r = off; }
-        v = r;
-    }
-    memset(out, 0, 0x20); memcpy(out, &v, sizeof v);
-    return RES_OK;
 }
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock3nowEv", "user clock → host time()", int64_t, h_time_now, void) {
     int64_t ft = fixed_time(); return ft >= 0 ? ft : time(NULL); }
@@ -145,6 +126,35 @@ static void fill_snapshot(ClockSnapshot *s, uint8_t type) {
     h_time_ToCalendarTime(&s->user_cal, &s->user_ai, &now); s->net_cal = s->user_cal; s->net_ai = s->user_ai;
     location_name(s->location, sizeof s->location);
     s->auto_correct = 1; s->type = type;
+}
+// The real GetSystemClockContext asks the time service, which the host does not have, and fails. Unity's IL2CPP clock (manosaba main+0x394ba0 / +0x394c40,
+// behind DateTime.UtcNow / Now) only marks itself initialized once this succeeds and returns 0 ticks until then, so DateTime.Now was 0001-01-01 and every
+// save slot showed that date (Naninovel GameStateMap.SaveDateTime). That clock caches GetCurrentTime and extrapolates with GetSystemTick, re-reading only when
+// the context changes (SDK docs: the context changes when the clock is corrected, adjusted or reset).
+// Context in Horizon's layout (plan item 158, after nxnative a35e964, MIT; it was wall-clock minus guest-clock nanoseconds in the first 8 bytes): the
+// offset in seconds and the steady clock time point it was made at with its source (user time = offset + a time point of that source), as the
+// snapshot below fills its user context. The game compares all 0x20 bytes, so it is made again only when the host clock moves against the guest
+// clock by more than 2 s (the guest clock stopped while wall time went on: iOS background, the system keyboard; or the wall clock set); under
+// DM_FIXED_TIME it is made once. Checked by host/tests/t_time.c
+HLE_FORCE_OPT("_ZN2nn4time23StandardUserSystemClock21GetSystemClockContextEPNS0_18SystemClockContextE", "user clock context: the host's user clock over its steady clock",
+              Result, h_time_GetSystemClockContext, uint8_t *out) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; static SystemClockContext ctx; static int64_t drift; static int made;
+    int64_t st = steady_s(), now = user_now(), d = now - st;
+    pthread_mutex_lock(&mu);
+#ifndef DM_TEST_CTX_OLD   // negative control of t_time only: the old layout
+    if (!made || (fixed_time() < 0 && llabs(d - drift) > 2)) {
+        if (made) LOG("time: the host clock moved %+lld s against the guest clock, a new user clock context", (long long)(d - drift));
+        ctx = (SystemClockContext){d, {st, {0}}}; drift = d; made = 1;
+    }
+    memcpy(out, &ctx, sizeof ctx);
+#else
+    (void)d; (void)drift; (void)made; (void)ctx; static int64_t reported = INT64_MIN; int64_t v = 0;
+    if (fixed_time() < 0) { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); int64_t off = (int64_t)t.tv_sec * 1000000000ll + t.tv_nsec - (int64_t)guest_ns();
+        if (reported == INT64_MIN || llabs(off - reported) > 2000000000ll) reported = off; v = reported; }
+    memset(out, 0, 0x20); memcpy(out, &v, 8);
+#endif
+    pthread_mutex_unlock(&mu);
+    return RES_OK;
 }
 HLE_FORCE_OPT("_ZN2nn4time13ClockSnapshot29CreateWithStandardSystemClockEPS1_", "clock snapshot from the host clocks (time service GetClockSnapshot)", Result, h_time_SnapStd, ClockSnapshot *s) {
     fill_snapshot(s, 1); return RES_OK;   // type 1: what the SDK passes the service (sdk 0x441890)

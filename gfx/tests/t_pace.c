@@ -132,6 +132,19 @@ int main(void) {
         printf("  newest: %d produced, %d shown, %d dropped; FIFO: %d / %d / %d; interval 2: %d / %d, smallest gap %d ticks; after the silent link: smallest gap %d\n",
                nw.produced, nw.shown, nw.dropped, ff.produced, ff.shown, ff.dropped, f2.produced, f2.shown, f2.min_gap, fs.min_gap);
         for (int i = 0; i < 4; i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
+    // Dropped and slow frames against each frame's hold (plan item 156); against 60 fps whatever the hold (-DDM_TEST_DROP_60HZ) fails 2
+    {   int d30 = 0, d60 = 0, dchg = 0, ddis = 0, s30 = 0; double h60 = nvn_hold_ms(16666667), h30 = nvn_hold_ms(33333333);
+        for (int i = 0; i < 300; i++) { d30 += nvn_dropped(33.4, nvn_expect_ms(h30, h30)); s30 += nvn_slow(33.4, h30); }
+        for (int i = 0; i < 300; i++) d60 += nvn_dropped(i % 60 == 7 ? 33.3 : 16.7, nvn_expect_ms(h60, h60));
+        dchg = nvn_dropped(33.3, nvn_expect_ms(h60, h30)) + nvn_dropped(16.7, nvn_expect_ms(h30, h60));
+        ddis = nvn_dropped(-1, h30);
+        struct { int ok; const char *why; } f[] = {
+            {d30 == 0 && s30 == 0, "300 frames at 30 fps (33.4 ms, hold 33.3): none dropped, none slow"},
+            {d60 == 5, "300 at 60 fps with 5 frames shown twice: 5 dropped"},
+            {dchg == 0 && ddis == 1 && nvn_hold_ms(0) == 1000.0 / 60, "the interval changing 1 -> 2 and back: not a drop; a discarded frame is; unpaced counts as 60"},
+        };
+        printf("  dropped at 30 fps %d, at 60 fps with 5 doubled %d\n", d30, d60);
+        for (int i = 0; i < 3; i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

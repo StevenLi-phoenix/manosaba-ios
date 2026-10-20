@@ -42,6 +42,7 @@ run: \
 	$(B)/t_guest_mem \
 	$(B)/t_guest_mem_heapold \
 	$(B)/t_guest_mem_physold \
+	$(B)/t_guest_mem_getinfoold \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_receipt_oneslot \
 	$(B)/t_hid_script \
@@ -62,6 +63,7 @@ run: \
 	$(B)/t_net_bsd \
 	$(B)/t_oe \
 	$(B)/t_oe_noop \
+	$(B)/t_oe_unlocked \
 	$(B)/t_movie_fps \
 	$(B)/t_movie_fps_any \
 	$(B)/t_options \
@@ -90,6 +92,7 @@ run: \
 	$(B)/t_thread_leak \
 	$(B)/t_time \
 	$(B)/t_time_one \
+	$(B)/t_time_ctxold \
 	$(B)/t_touch \
 	$(B)/t_touchpad \
 	$(B)/t_touchpad_rehit \
@@ -166,6 +169,10 @@ run: \
 	   cat $(B)/t_gate_svc_rel.log; echo "t_gate_svc_rel: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_gate_svc_rel: an svc gate passing the offset alone gives an address in no module, as expected"
 	$(B)/t_guest_mem 2>/dev/null
+	@status=0; $(B)/t_guest_mem_getinfoold > $(B)/t_guest_mem_getinfoold.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL an unknown type: InvalidEnumValue" $(B)/t_guest_mem_getinfoold.log; then \
+	   cat $(B)/t_guest_mem_getinfoold.log; echo "t_guest_mem_getinfoold: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_guest_mem_getinfoold: an unknown GetInfo type that succeeds with 0, as expected"
 	@status=0; $(B)/t_guest_mem_physold > $(B)/t_guest_mem_physold.log 2>&1 || status=$$?; \
 	 if [ "$$status" -eq 0 ] || ! grep -q "address / size not 4 KB aligned" $(B)/t_guest_mem_physold.log; then \
 	   tail -5 $(B)/t_guest_mem_physold.log; echo "t_guest_mem_physold: unexpected negative-control result ($$status)"; exit 1; \
@@ -223,6 +230,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL inactivity time extended" $(B)/t_oe_noop.log; then \
 	   cat $(B)/t_oe_noop.log; echo "t_oe_noop: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_oe_noop: the old stub never holds the frame rate, as expected"
+	@status=0; $(B)/t_oe_unlocked > $(B)/t_oe_unlocked.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL event signalled with the message pushed" $(B)/t_oe_unlocked.log; then \
+	   cat $(B)/t_oe_unlocked.log; echo "t_oe_unlocked: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_oe_unlocked: the event cleared after unlocking ends clear with a message queued, as expected"
 	$(B)/t_movie_fps
 	@status=0; $(B)/t_movie_fps_any > $(B)/t_movie_fps_any.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "main+0x770f04 .*✗" $(B)/t_movie_fps_any.log; then \
@@ -285,6 +296,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ New York 2026-11-01 01:30, twice" $(B)/t_time_one.log; then \
 	   cat $(B)/t_time_one.log; echo "t_time_one: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_time_one: local time tried as standard time only misses the repeated hour, as expected"
+	@status=0; $(B)/t_time_ctxold > $(B)/t_time_ctxold.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "t_time: 16 checks, 2 failed" $(B)/t_time_ctxold.log; then \
+	   cat $(B)/t_time_ctxold.log; echo "t_time_ctxold: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_time_ctxold: the old user clock context has no time point, as expected"
 	$(B)/t_touch
 	$(B)/t_touchpad 2>/dev/null
 	@status=0; $(B)/t_touchpad_rehit > $(B)/t_touchpad_rehit.log 2>/dev/null || status=$$?; \
@@ -418,6 +433,8 @@ $(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_time.c -framework CoreFoundation
 $(B)/t_time_one: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_TOPOSIX_ONE -I.. -o $@ t_time.c -framework CoreFoundation
+$(B)/t_time_ctxold: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_CTX_OLD -I.. -o $@ t_time.c -framework CoreFoundation
 $(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
 $(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
@@ -474,6 +491,8 @@ $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../game.c $(GEN)
 $(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
+$(B)/t_guest_mem_getinfoold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_GETINFO_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
 $(B)/t_guest_mem_heapold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HEAP_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
 $(B)/t_guest_mem_physold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
@@ -512,9 +531,11 @@ $(B)/t_net: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
 $(B)/t_net_bsd: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_NET_BSD_ERRNO -I.. -o $@ t_net.c
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_oe.c ../game.c $(GEN)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_oe_unlocked: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OE_EVENT_UNLOCKED -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_oe_noop: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game.c $(GEN)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_movie_fps: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ ../../games/totk/tests/t_movie_fps.c
 $(B)/t_movie_fps_any: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)

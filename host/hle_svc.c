@@ -624,7 +624,16 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         // forever for it). The host has no real limit besides its handle table; 128 is a generous cap of the host's own choosing
         case I_FreeThreadCount: { void thr_counts(int *, int *, int *); int nh, nl, no; thr_counts(&nh, &nl, &no); v = nl < 128 ? (uint64_t)(128 - nl) : 0; break; }
         case I_AliasExtraSize: v = 0; break;   // FW 18+: part of the alias region the kernel keeps for itself; none here
-        default: v = 0; break;
+        default:   // an unknown type: InvalidEnumValue (0xF001), as Horizon's kernel answers (Atmosphère's GetInfo; Touchable 5cab3ac, MIT; plan item 160);
+                   // it succeeded with 0. Red once per type with its caller, so a game that asks shows in the log
+#ifndef DM_TEST_GETINFO_OLD   // negative control of t_guest_mem only
+            { static uint64_t seen[8]; static int nseen; int dup = 0; for (int i = 0; i < nseen; i++) dup |= seen[i] == id;
+              if (!dup) { if (nseen < 8) seen[nseen++] = id; module_t *m = module_of((void *)orig_addr);
+                  LOG("[red] GetInfo type %llu (subtype %llu) is not one Horizon has: InvalidEnumValue, from %s+%#llx", (unsigned long long)id, (unsigned long long)regs[3], m ? m->name : "?", m ? orig_addr - (uint64_t)m->base : orig_addr); } }
+            regs[0] = 0xF001; regs[1] = 0; return 0;
+#else
+            v = 0; break;
+#endif
         }
         regs[0] = 0; regs[1] = v; return 0;
     }

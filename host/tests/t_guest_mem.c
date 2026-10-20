@@ -12,7 +12,7 @@
 // Physical memory limit (svc MapPhysicalMemory, as mesosphere KPageTableBase::MapPhysicalMemory): with an application pool of 285 MB
 //   (6) mapping up to the pool succeeds; one page more is LimitReached (0x10801) and maps nothing; pages already mapped do not count again;
 //       after an unmap the freed amount can be mapped again.
-// svc SetHeapSize and GetInfo (11): Horizon's size rules and results, memory given back reads zeros on regrowth, a shrink over a MapMemory source
+// svc SetHeapSize and GetInfo (11): Horizon's size rules and results (an unknown GetInfo type InvalidEnumValue; -DDM_TEST_GETINFO_OLD fails it), memory given back reads zeros on regrowth, a shrink over a MapMemory source
 //   refused; PriorityMask, RandomEntropy and the memory totals as Horizon reports them; MapPhysicalMemory's argument results (totk-mobile's
 //   vectors; -DDM_TEST_PHYS_OLD, as before, ends the program on the unaligned address). As before (-DDM_TEST_HEAP_OLD): SetHeapSize(1) is taken, and growing from that
 //   unaligned size leaves the page unwritable: the test dies there (SIGBUS)
@@ -266,6 +266,7 @@ int main(void) {
         GI(6, 0xffff8001u, 0); uint64_t tot = r[1]; GI(21, 0xffff8001u, 0); uint64_t totn = r[1]; GI(16, 0xffff8001u, 0); uint64_t sres = r[1];
         GI(7, 0xffff8001u, 0); uint64_t used = r[1]; GI(22, 0xffff8001u, 0); uint64_t usedn = r[1];
         CHECK(sres == dm_game.npdm_sysres && sres && tot == totn + sres && used == usedn + sres, "SystemResourceSize the NPDM's (%#llx); Total = TotalNonSystem + it, Used = UsedNonSystem + it", (unsigned long long)sres);
+        CHECK(GI(0x7fff, 0xffff8001u, 0) == 0xF001 && r[1] == 0 && GI(9999, 0, 0) == 0xF001, "an unknown type: InvalidEnumValue 0xF001 (Horizon; plan item 160), it succeeded with 0");
 #define PHYS(n, a, sz) (memset(r, 0, sizeof r), r[0] = (a), r[1] = (sz), svc_dispatch((n), r, 0), r[0])
         uint64_t al = (uint64_t)g_alias;
         CHECK(PHYS(0x2C, al + 1, 0x1000) == 0xCC01, "MapPhysicalMemory at an unaligned address: InvalidAddress 0xCC01 (it ended the program)");

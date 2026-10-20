@@ -32,6 +32,21 @@ static inline unsigned nvn_link_step(unsigned itv, unsigned hz, unsigned link_hz
 #endif
 }
 
+// Dropped and slow frames judged against each frame's own hold (plan item 156, after nxnative e7a84c7, MIT, written anew): a frame is meant to stay
+// on screen its present period × interval (hold_ms, 1/60 s when unpaced); the on-screen interval between presents n - 1 and n shows frame n - 1,
+// judged against the larger of their two holds (a change of interval between them is not a drop). Dropped: discarded (-1) or on screen over 1.5 ×
+// that; slow (the frame interval line): over 1.1 × its hold. Against a fixed 16.7 / 25 ms every frame of a 30 fps game counted (299 of 300).
+// Unit test tests/t_pace.c
+static inline double nvn_hold_ms(uint64_t period_ns) { return period_ns ? period_ns / 1e6 : 1000.0 / 60; }
+static inline double nvn_expect_ms(double hold_prev, double hold_cur) { return hold_prev > hold_cur ? hold_prev : hold_cur; }
+static inline int nvn_dropped(double iv_ms, double expect_ms) {
+#ifdef DM_TEST_DROP_60HZ   // negative control of t_pace only: against 60 fps whatever the hold, as before
+    expect_ms = 1000.0 / 60;
+#endif
+    return iv_ms < 0 || iv_ms > 1.5 * expect_ms;
+}
+static inline int nvn_slow(double iv_ms, double hold_ms) { return iv_ms > 1.1 * hold_ms; }
+
 // FIFO consumption at the display link (plan item 140; acnh-mobile c2af194 consumes FIFO at the game's period, MIT, written anew): the link shows
 // the oldest queued frame instead of the newest, for a game that steps its logic once per frame (game.json present_consume "fifo": manosaba); the
 // newest drops the frames queued before it, each a step of the game never shown (manosaba on an iPhone: 14 by tick 1,549). A frame stays at least

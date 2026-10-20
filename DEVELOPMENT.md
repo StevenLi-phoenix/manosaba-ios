@@ -1828,15 +1828,27 @@ Tier 3c, smaller items listed at the user's request (2026-10-20: every finding o
   user): the panel from the button and from three fingers, a layout edited, saved and kept across a launch
 
 Tier 3d, from the evening sync of 2026-10-20 (sources in that section; after 3c, before Tier 4). Correctness, small:
-- [ ] 155 the present viewport rounded before it is centred (Touchable: with contraction `floor((dh - ch*s)/2)` gives -1 at 2868x1320 and at
-  3456x2234, the Mac's full screen; `nvn_mtl.m` Metal 3 and `present_vp`)
-- [ ] 156 dropped frames and slow frames judged against each frame's hold (present period × interval), not 16.7 / 25 ms (nxnative e7a84c7,
-  Touchable; ours counts 299 of 300 dropped at 30 fps)
-- [ ] 157 the oe notification event set and cleared under the queue lock (nxnative ee51071; ours clears it after unlocking, so a push in between
-  leaves it clear with a message queued)
-- [ ] 158 the user clock context in Horizon's layout (nxnative a35e964: offset from the steady time point, then the point and its source)
-- [ ] 159 the Metal 4 feedback queue drains its autorelease pool per work item (lordran 6145d1d, with its test)
-- [ ] 160 GetInfo of an unknown type: Horizon's result, checked against Atmosphère first (Touchable answers 0xF001; ours succeeds with 0)
+- [x] batch 49 · 155 the present viewport rounded before it is centred (`nvn_mtl.m` `present_vp`, now also the Metal 3 path's; Touchable 5cab3ac,
+  MIT): `floor((dh - ch * s) / 2)` put the picture at -1 on 2868x1320 and 3456x2234 (the Mac's full screen), also 2796x1290 and 2556x1179.
+  `t_present_vp` (4 on 11 targets × 5 pictures: whole, scaled size, centred, fills within 1 %; centred before rounding fails 2)
+- [x] batch 49 · 156 dropped and slow frames judged against each frame's hold (`nvn_pace.h` `nvn_hold_ms` / `nvn_expect_ms` / `nvn_dropped` /
+  `nvn_slow`, after nxnative e7a84c7, MIT): each present's hold (period × interval) goes into a ring by present number and the on-screen interval
+  read 8 presents later is judged against the larger of its two presents' holds (dropped: over 1.5 × or discarded); the frame interval line counts
+  frames over 1.1 × their hold (it was > 16.7 ms: 299 of 300 at 30 fps); `[slowframe]` the same. `t_pace` (3 more: 30 fps none, 60 fps with 5
+  doubled frames 5, an interval change none and a discarded frame one; against 60 fps whatever the hold fails 2)
+- [x] batch 49 · 157 the oe notification event set and cleared under the queue lock (`hle_oe.c`, after nxnative ee51071, MIT): cleared after
+  unlocking, a push in between was signalled and then cleared, a message queued with the event clear. `t_oe` (2 more: another thread pushes between
+  an empty pop's check and its clear, the event ends signalled; popped, clear; cleared after unlocking fails 1)
+- [x] batch 49 · 158 the user clock context in Horizon's layout (`hle_time.c`, after nxnative a35e964, MIT): the offset in seconds and the steady
+  time point it was made at with its source (it held wall minus guest nanoseconds in the first 8 bytes), kept while both clocks move together and
+  made again when they part by more than 2 s, once under `DM_FIXED_TIME`. `t_time` (3 more: offset + point = user time with the point the guest
+  seconds, the same bytes a second later, a new one after a 60 s jump; the old layout fails 2)
+- [x] batch 49 · 159 the Metal 4 feedback queue drains its autorelease pool per work item (`nvn_mtl.m`, lordran-native 6145d1d, MIT): a
+  long-lived serial queue drained it only when idle. `t_feedback_pool` (lordran's check, written anew: an object autoreleased in one work item is
+  gone before the next; without the attribute fails 1; nothing on Metal 3)
+- [x] batch 49 · 160 GetInfo of an unknown type answers InvalidEnumValue 0xF001 (Atmosphère's GetInfo default; module 1, description 120;
+  Touchable the same; ours succeeded with 0), with a red line once per type and its caller: neither game asks one in its first 40 s. `t_guest_mem`
+  section 11 (1 more; succeeding with 0 fails it)
 
 Tier 3d, Tears of the Kingdom:
 - [ ] 161 sampler border colours Metal lacks: a census of (wrap mode, colour), then shader variants that return the colour outside [0, 1]

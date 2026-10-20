@@ -34,8 +34,13 @@ static void mq_push(uint32_t m) {
     if (g_mqn == MQ) die("oe notification queue overflow (the game is not fetching?)");
     g_mq[(g_mqh + g_mqn++) % MQ] = m;
     pthread_cond_broadcast(&g_mq_cond);
+#ifndef DM_TEST_OE_EVENT_UNLOCKED   // negative control of t_oe only: signalled after the lock, as before
+    oe_msg_event_signal();   // under the queue lock with the clear (plan item 157)
+    pthread_mutex_unlock(&g_mq_lock);
+#else
     pthread_mutex_unlock(&g_mq_lock);
     oe_msg_event_signal();
+#endif
 }
 void dm_set_opmode(int m) {   // front end: change the mode and push 30 / 31 as far as the game enabled them
     int old = dm_opmode(); if (old == m) return;
@@ -115,14 +120,28 @@ HLE_FORCE_OPT("_ZN2nn2oe22PopNotificationMessageEv", "notification queue, waitin
 
 // ---------- Notification message event (games that wait for messages instead of polling, e.g. Unity) ----------
 // On the console the event stays signaled while messages are pending. Here: manual clear, signaled on every push, cleared by TryPop once the queue is empty.
+// Both under the queue lock (plan item 157, after nxnative ee51071, MIT): cleared after unlocking, a push in between was signalled and then cleared,
+// leaving a message queued with the event clear, and a game waiting on it never woke. Checked by host/tests/t_oe.c
 static uint8_t g_msg_ev[0x80] __attribute__((aligned(16)));   // nn::os::SystemEvent handed to the game
 static _Atomic int g_msg_ev_bound;
 void oe_msg_event_signal(void) { if (atomic_load(&g_msg_ev_bound)) hle_signal_system_event(g_msg_ev); }
+#ifdef DM_TEST_HOOKS
+void (*g_oe_test_clear_gap)(void);   // t_oe: runs between the queue check and the clear
+#endif
 void oe_msg_event_clear_if_empty(void) {
     if (!atomic_load(&g_msg_ev_bound)) return;
-    pthread_mutex_lock(&g_mq_lock); int n = g_mqn; pthread_mutex_unlock(&g_mq_lock);
     static void (*clear)(void *); if (!clear) clear = guest_sym("_ZN2nn2os16ClearSystemEventEPNS0_15SystemEventTypeE");
+    pthread_mutex_lock(&g_mq_lock); int n = g_mqn;
+#ifdef DM_TEST_OE_EVENT_UNLOCKED
+    pthread_mutex_unlock(&g_mq_lock);
+#endif
+#ifdef DM_TEST_HOOKS
+    if (g_oe_test_clear_gap) g_oe_test_clear_gap();
+#endif
     if (!n) clear(g_msg_ev);   // TryPop runs on a guest thread
+#ifndef DM_TEST_OE_EVENT_UNLOCKED
+    pthread_mutex_unlock(&g_mq_lock);
+#endif
 }
 HLE_FORCE_OPT("_ZN2nn2oe27GetNotificationMessageEventEv", "notification event: signaled while the queue is not empty", void *, h_oe_GetMsgEv, void) {
     pthread_once(&g_oe_once, oe_script_start);
