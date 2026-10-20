@@ -1799,7 +1799,13 @@ Tier 3c, smaller items listed at the user's request (2026-10-20: every finding o
   (5, Metal 4 and Metal 3: the crop's 200 against an output of 40 dark, an output as bright not, a dark scene not flagged, a float image not
   compared, a line per present and the red line once; the whole image read fails 1), `t_hid_receipt` case 5 (two styles polled 100 times in turn:
   2 lines; one slot for all fails it)
-- [ ] 146 NCZ (solid zstd) input in the game extraction, restored to NCA with its hash checked
+- [x] batch 46 · 146 NCZ input in the game extraction (`tools/game_extract/Ncz.cs`; the layout as totk-mobile's `extract_romfs.py` reads it,
+  Apache-2.0, written anew): an .nsz's NCZ is restored to the NCA it was made from beside the output while the extraction runs (the first 0x4000
+  bytes as they are, the sections back to back from there, AES-128-CTR again for crypto types 3 and 4) and must hash to its file name, so a
+  damaged NCZ stops the extraction; block compression (NCZBLOCK) is refused with a message. Zstandard from ZstdSharp.Port 0.8.8 (MIT), pinned by
+  content hash like LibHac. Not run on a real .nsz here (none in the workspace). `t_game_extract_ncz.py` (`game_extract.sh --selftest-ncz`: a
+  synthetic NCA of three sections back byte for byte, one named after other bytes, a block-compressed one and one with a gap refused; skipped
+  without the .NET SDK; the hash check skipped fails 1)
 - [ ] 147 tests that run the game's own SDK code against the host (time, vibration, fonts; needs the game, not CI)
 - [ ] 148 an in-game settings panel and a control layout editor for the touch controls (BotWRecomp menu, lordran)
 

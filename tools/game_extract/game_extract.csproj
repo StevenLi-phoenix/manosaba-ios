@@ -1,5 +1,5 @@
 <!-- Game package (NSP / XCI) → ExeFS and RomFS, with LibHac. Usage in the header of Program.cs; tools/game_extract.sh builds and runs it.
-     packages.lock.json pins LibHac by content hash: a restore that would bring other bytes fails. -->
+     packages.lock.json pins LibHac and ZstdSharp.Port (NCZ, Ncz.cs) by content hash: a restore that would bring other bytes fails. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="LibHac" Version="[0.19.0]" />
+    <PackageReference Include="ZstdSharp.Port" Version="[0.8.8]" />
   </ItemGroup>
 </Project>

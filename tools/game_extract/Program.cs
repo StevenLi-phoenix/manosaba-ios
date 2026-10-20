@@ -1,6 +1,7 @@
 // Game package → the ExeFS and RomFS a port needs.
 // Usage: game_extract <prod.keys> <out dir> <package>... [--title-keys <title.keys>] [--program <id>]
-// Packages are .nsp and .xci files in any mix (base game, updates, add-on content), recognised by their contents, not their names. A file over
+// Packages are .nsp and .xci files in any mix (base game, updates, add-on content), recognised by their contents, not their names; an .nsz (NSP
+// of NCZ, nsz's compressed NCAs) is read too: each NCZ is restored to its NCA and checked against its content ID first (Ncz.cs). A file over
 // 4 GiB that nxdumptool wrote to the SD card is a folder holding the parts 00, 01, … (Horizon's split file): give the folder.
 // The base game comes from the packages' content meta (cnmt); when they hold several, --program <id> picks one. Its newest update is layered
 // on top: <out dir>/ExeFS is the update's, <out dir>/RomFS the merged view. <out dir> must not exist; it is written as <out dir>.part and
@@ -35,6 +36,7 @@ static class P {
     const IntegrityCheckLevel Check = IntegrityCheckLevel.ErrorOnInvalid;
 
     static int Main(string[] argv) {
+        if (argv.Length == 1 && argv[0] == "--selftest-ncz") return Ncz.SelfTest() == 0 ? 0 : 1;
         var a = new List<string>(argv);
         string titleKeys = Opt(a, "--title-keys"), program = Opt(a, "--program");
         if (a.Count < 3 || a.Any(s => s.StartsWith("--"))) {
@@ -42,8 +44,10 @@ static class P {
             return 2;
         }
         string outDir = Path.GetFullPath(a[1].TrimEnd('/')), part = outDir + ".part";
+        nczDir = outDir + ".ncz";
         bool wrote = false;
         try {
+            if (Directory.Exists(nczDir)) throw new Fail($"{nczDir} is left from an interrupted run; delete it first");
             if (Directory.Exists(outDir) || File.Exists(outDir)) throw new Fail($"{outDir} exists already; move it away to extract again");
             if (Directory.Exists(part) || File.Exists(part)) throw new Fail($"{part} is left from an interrupted run; delete it first");
             KeySet ks = Keys(a[0], titleKeys);
@@ -75,11 +79,14 @@ static class P {
             Console.WriteLine($"done: {outDir}");
             return 0;
         } catch (Exception e) {
-            Console.Error.WriteLine("game_extract: " + (e is Fail ? e.Message : $"{e.GetType().Name}: {e.Message}"));
+            Console.Error.WriteLine("game_extract: " + (e is Fail or Ncz.Bad ? e.Message : $"{e.GetType().Name}: {e.Message}"));
             if (wrote && Directory.Exists(part)) Directory.Delete(part, true);
             return 1;
+        } finally {
+            if (Directory.Exists(nczDir)) Directory.Delete(nczDir, true);   // the NCAs restored from NCZ (Open)
         }
     }
+    static string nczDir;
 
     static string Opt(List<string> a, string name) {
         int i = a.IndexOf(name);
@@ -136,13 +143,22 @@ static class P {
         int nNca = 0, nTik = 0;
         foreach (DirectoryEntryEx e in fs.EnumerateEntries("*", SearchOptions.Default)) {
             if (e.Type != DirectoryEntryType.File) continue;
-            bool tik = e.Name.EndsWith(".tik", StringComparison.OrdinalIgnoreCase), nca = e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase);
-            if (!tik && !nca) continue;
+            bool tik = e.Name.EndsWith(".tik", StringComparison.OrdinalIgnoreCase), nca = e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase),
+                 ncz = e.Name.EndsWith(".ncz", StringComparison.OrdinalIgnoreCase);
+            if (!tik && !nca && !ncz) continue;
             using var f = new UniqueRef<IFile>();
             fs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
             IStorage fst = f.Release().AsStorage();
+            string id = e.Name[..e.Name.IndexOf('.')].ToLowerInvariant();
             if (tik) { Ticket(ks, e.Name, fst, personalized); nTik++; }
-            else { ncas[e.Name[..e.Name.IndexOf('.')].ToLowerInvariant()] = new Nca(ks, fst); nNca++; }
+            else if (nca) { ncas[id] = new Nca(ks, fst); nNca++; }
+            else {   // an NSZ's NCZ: restored to the NCA it was made from, hash checked (Ncz.cs), next to the output while the extraction runs
+                Directory.CreateDirectory(nczDir);
+                string np = Path.Combine(nczDir, id + ".nca");
+                long n; using (var src = fst.AsStream()) using (var dst = File.Create(np)) n = Ncz.Restore(src, e.Name, dst);
+                Console.WriteLine($"  {e.Name}: restored to an NCA of {n} bytes, its hash matches its name");
+                ncas[id] = new Nca(ks, new LocalStorage(np, FileAccess.Read)); nNca++;
+            }
         }
         Console.WriteLine($"{Path.GetFileName(path.TrimEnd('/'))}: {kind}, {nNca} NCAs, {nTik} tickets");
     }
