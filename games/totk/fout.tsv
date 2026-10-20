@@ -1,4 +1,28 @@
 # Fragment outputs known to be integer (gfx/tools/dmsh_build.py reads this beside the capture directory's fout.tsv): <pixel key> <target> uint|sint.
+# Each key keeps its float library and gets an integer variant <key>_i (plan item 162): the host picks by the bound target's format.
 # From nxnative PR #11's games/0100F2C0115B6000/shader_fout.tsv (digitalhivehub, MIT): the BC4 encoder and the Ultrahand mask shader (R8Uint).
 0544282c162305db	0	uint
 e3fb0bb58a691e10	0	uint
+# Bound to float and to uint targets in MacNativeGames' shared list (games/totk/assets/shader_list.tsv, MIT, keys as data; 0544282c162305db and
+# e3fb0bb58a691e10 above are two more of its 23)
+05063851ca65ef51	0	uint
+1ceb535c3d73e68b	0	uint
+3e2bb86dd9836f87	0	uint
+40b97f63de4670e7	0	uint
+501c9c2364ad8202	0	uint
+598a65d3e656c835	0	uint
+59bad47931620d2b	0	uint
+60d341520978769e	0	uint
+6c9ba01c9731fcf4	0	uint
+7e578b08f7af0076	0	uint
+927a499ff244cf11	0	uint
+a1eb5188546b26af	0	uint
+a32b45ec80575593	0	uint
+a3bff8c037940330	0	uint
+a5ca71b01aab3386	0	uint
+ab8f3aba1420888b	0	uint
+b15ec267e3f91b94	0	uint
+ca7e64ce4f7de208	0	uint
+da7fda02e2234830	0	uint
+e8f2bb88e33d8709	0	uint
+f7c9f6ce9d8f5009	0	uint

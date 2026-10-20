@@ -176,7 +176,7 @@ def write_refl(key, refl):
         atomic_json(os.path.join(d, key + '_b.json'), value)
 
 def fetch_finish(key, src, refl):
-    if refl['stage'] != 'ps': return refl
+    if refl['stage'] != 'ps' or key.endswith('_i'): return refl   # (an integer-output variant has no readable-tile variant of its own)
     # Those with rewritable samples get variants as before; those without get an output-mapping-only variant, and only for keys in the list (bf_want.tsv, produced by the host planner)
     fv, fmeta = dmsh_fetch.variant(src, refl['bindings'], om_only_ok=key in BF_WANT)
     if not fv:
@@ -466,6 +466,9 @@ if os.path.exists(os.path.join(cap_dir, 'pairs.tsv')):
 # Kingdom's BC4 encoder writes RGBA16UI. Part of the shader's cache key
 # The game profile's games/<DM_GAME>/fout.tsv is read too (the same format): outputs known without a run that failed (plan item 100: Tears of the
 # Kingdom's Ultrahand mask shader, from nxnative PR #11's shader_fout.tsv), so a new workspace builds them right the first time
+# Such outputs go to a variant <key>_i beside the float library (plan item 162): one pixel shader can be bound to float targets and to integer ones
+# (MacNativeGames' shared list, MIT, keys as data: 23 of Tears of the Kingdom's keys with both; two that our fout.tsv had made integer only drew
+# nothing on float targets instead). The host takes <key>_i_b for a pipeline with an integer format where the shader writes (nvn_mtl.m fout_fn)
 FOUT = collections.defaultdict(dict)
 for _fp in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'games', GAME_ID, 'fout.tsv'), os.path.join(cap_dir, 'fout.tsv')):
     if not os.path.exists(_fp): continue
@@ -570,6 +573,9 @@ def finish(key, w, j, c1):
     return 'ok', '', refl
 
 keys = sorted(want) if want else sorted(CAP_RECS)
+FOUT_KEYS = sorted(k for k in FOUT if stage_of.get(k) == 'ps' and k in keys)   # the integer-output variants (see FOUT): the same capture as another key
+for _k in FOUT_KEYS: CAP_RECS[_k + '_i'] = CAP_RECS[_k]; stage_of[_k + '_i'] = 'ps'
+keys += [_k + '_i' for _k in FOUT_KEYS]
 NJ = int(os.environ.get('J', '8'))
 os.makedirs(out, exist_ok=True)
 w = tempfile.mkdtemp(prefix='dmsh_', dir=os.environ.get('WORK'))
@@ -592,7 +598,7 @@ def wave(wkeys):
         rec = CAP_RECS[key]
         pw = vs_pad_locs(key) if stage_of[key] == 'vs' else []
         digests[key] = shader_key(key, 'capture', rec) if not pw else hashlib.sha256((shader_key(key, 'capture', rec) + '\0pad\0' + ' '.join(map(str, pw))).encode()).hexdigest()
-        fo = FOUT.get(key) if stage_of[key] == 'ps' else None
+        fo = FOUT.get(key[:-2]) if key.endswith('_i') else None   # the float library of a FOUT key stays float; its variant <key>_i takes the integer outputs
         if fo: digests[key] = hashlib.sha256((digests[key] + '\0fout\0' + ' '.join(f'{t}:{fo[t]}' for t in sorted(fo))).encode()).hexdigest()
         rule_fps[key] = hashlib.sha256(shader_rule_source('capture')).hexdigest()
         hit, cache_reasons[key] = cache_lookup(key, digests[key], rule_fps[key], CODE_FP)

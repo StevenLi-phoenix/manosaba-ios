@@ -1862,7 +1862,14 @@ Tier 3d, Tears of the Kingdom:
   sources of the shaders seen to need it could ship). `t_border` (4, Metal 4 and 3: the colour taken as one Metal lacks and black not, a plain
   sample reads the edge, the rewritten one 0.5 outside and red inside, a 2D array call rewritten compiles; the nearest of Metal's three fails 1).
   To check in a game (the user): grass that stands up away from Link and can be cut, in a grassy area of Tears of the Kingdom
-- [ ] 162 one pixel shader bound to float and to uint targets: a second library by target kind (MacNativeGames' shared list: 23 of our keys)
+- [x] batch 51 · 162 one pixel shader bound to float and to integer targets: every key in `fout.tsv` keeps its float library and gets an
+  integer-output variant `<key>_i_b` (`dmsh_build.py`, the same capture translated with the integer outputs), and `pso_desc` takes the variant for
+  a pipeline with an integer colour format in a slot the shader writes (`fout_fn`; the colour formats are already in the pipeline key). Before,
+  `fout.tsv` made a key integer only: 0544282c162305db and e3fb0bb58a691e10 (ours) are also bound to float targets in MacNativeGames' shared list
+  (MIT, keys as data), so those draws would have failed. `games/totk/fout.tsv` now lists that list's 23 keys of ours with both kinds. Chain
+  ca5eb9623812 (23 integer variants for Tears of the Kingdom, 28,675 libraries; manosaba has none). `t_fout` (4, Metal 4 and 3: the float function on RGBA8 and
+  the variant on RGBA16Uint, both pipelines made; no variant keeps the float function; an integer slot the shader does not write does not count;
+  the float function whatever the target fails 1)
 - [ ] 163 hair and cloth at 60 / 120 fps: the four sites of MacNativeGames PR #79 with its Unicorn table (after 139)
 - [ ] 164 a mod that carries one of our RomFS overlay files: a red line, or the overlay's member patch applied to the mod's copy (MacNativeGames #73)
 - [ ] 165 decals that read their own G-buffer pass: one split per run (MacNativeGames PR #67), judged in motion against footage (with 42 / 113)

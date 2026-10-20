@@ -3554,7 +3554,8 @@ static void shmap_load(void) {
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
     id<MTLLibrary> alib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *afn;
-    NSMutableDictionary<NSString *, NvShader *> *bdv; } @end   // bdv: variants that return a sampler's border colour Metal lacks (border_variant, plan item 161)   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
+    NSMutableDictionary<NSString *, NvShader *> *bdv;
+    id<MTLFunction> ifn; int ifn_tried; } @end   // ifn: the integer-output variant <key>_i_b (fout_fn, plan item 162)   // bdv: variants that return a sampler's border colour Metal lacks (border_variant, plan item 161)   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
 @implementation NvShader @end
 #include "nvn_pso_skey.h"
 #include "nvn_warm_list.h"
@@ -4301,9 +4302,32 @@ static id<MTLFunction> alpha_fn(const pso_key *k, NvShader *fs) {
         return fn;
     }
 }
+// The pixel shader's integer-output variant (plan item 162; gfx/tools/dmsh_build.py builds <key>_i_b beside the float library for every key in
+// fout.tsv): for a pipeline with an integer colour format in a slot the shader writes. One pixel shader can be bound to float targets and to integer
+// ones (Tears of the Kingdom: 23 in MacNativeGames' list); nil when there is none (the float function then fails to link and fout_note notes it)
+static int pf_int_kind(MTLPixelFormat f);
+static id<MTLFunction> fout_fn(NvShader *fs) {
+    if (!fs->ifn_tried) {
+        fs->ifn_tried = 1;
+        NSString *base = [NSString stringWithFormat:@"%@/%.16s_i_b", g_msl_dir, fs->key]; NSError *e = nil;
+        id<MTLLibrary> lib = access([base stringByAppendingString:@".metallib"].fileSystemRepresentation, F_OK) ? nil : lib_from_file([base stringByAppendingString:@".metallib"], &e);
+        NSData *jd = lib ? [NSData dataWithContentsOfFile:[base stringByAppendingString:@".json"]] : nil;
+        NSDictionary *j = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+        fs->ifn = j ? [lib newFunctionWithName:j[@"entry"]] : nil;
+        if (lib && !fs->ifn) MLOG("[red] pixel shader %.16s: its integer-output variant has no function %s", fs->key, [[j[@"entry"] description] UTF8String]);
+    }
+    return fs->ifn;
+}
+static int pso_int_target(const pso_key *k, NvShader *fs) {   // an integer colour format where the shader writes
+    for (int i = 0; i < 8; i++) if (k->cfmt[i] && pf_int_kind((MTLPixelFormat)k->cfmt[i]) && (!fs->rf.color_known || (fs->rf.color_mask >> i & 1))) return 1;
+    return 0;
+}
 static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvShader *fs, id<MTLFunction> fsfn, int merged) {
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : alpha_fn(k, fs);
+#ifndef DM_TEST_FOUT_NO_VARIANT   // negative control of t_fout only: the float function whatever the target
+    if (fs && !fsfn && pso_int_target(k, fs) && fout_fn(fs)) d.fragmentFunction = fs->ifn;
+#endif
     // Diagnostic DM_NVN_HILITE=fragment shader key,...: these draws use a solid-color fragment instead (keys 1–6 in order magenta / green / cyan / yellow / blue / white), to see where the geometry lands
     if (fs) { static char keys[6][24]; static int nk = -1; static id<MTLLibrary> hl;
         if (nk < 0) { nk = 0; const char *e = getenv("DM_NVN_HILITE");
