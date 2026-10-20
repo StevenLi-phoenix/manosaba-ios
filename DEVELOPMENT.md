@@ -1755,7 +1755,17 @@ Tier 3c, larger:
   period fails 2), `t_linkfifo` (5, the production queue: the newest of three with two dropped, FIFO three in order one a tick, none dropped or
   marked done early, interval 2 every other tick, the link off; one a tick fails 1). On a device (the user): manosaba's log says "the display
   link shows every frame in order" and its "display link up to" lines count 0 "stale frames dropped by coalescing"
-- [ ] 141 IL2CPP class names in crash reports and memory snapshots (manosaba)
+- [x] batch 43 · 141 IL2CPP class names in crash reports and memory snapshots (`host/il2cpp_obj.h`; armyja's nxnative-aa-port reads the same
+  fields, MIT, written anew): an object starts with its Il2CppClass *, whose name and namespace pointers sit at +0x10 and +0x18; read without a
+  second fault (vm_read, strings 16 bytes at a time so one ending before an unmapped page is still read) and kept only when both look like IL2CPP
+  identifiers. The crash report of a Unity game (`game.c` `dm_engine_il2cpp`) names the object each register x0-x28 points to ("x19 → an IL2CPP
+  UnityEngine.GameObject"); another game's registers are left alone. `tools/memsnap.py`: `class` names the object at an address, `refs` places each
+  hit in the nearest object start up to 0x200 bytes before it ("near": a field holding a class pointer can look like one), and `diff` counts by
+  class the objects starting in the largest new runs: manosaba from frame 600 to 2400 grew 29,776 System.String, 12,625 Naninovel.PlaybackSpot,
+  8,930 Naninovel.RawValuePart, 7,924 Naninovel.UniTaskCompletionSource (the layout holds on its Unity). `t_il2cpp_obj` (7: a class with and
+  without a namespace, a name ending at an unmapped page, an object on it, a small integer and a binary name give nothing, the crash report of a
+  Unity game names x0 and x19 but not the binary x5 or the unmapped x7, another game's nothing; any string taken for a name fails 2),
+  `t_memsnap.py` (5 more on a synthetic snapshot)
 
 Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):
 - [ ] 142 the swapchain acquire against the frame's GPU work: count acquires that return before that image's frame is done, then wait (blade2)

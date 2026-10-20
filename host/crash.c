@@ -2,6 +2,7 @@
 // Crash state: prints the faulting address, pc, lr (converted to module-relative offsets) and the registers; dispatches page fault hooks.
 // Only signal handling itself lives here: diagnostic features (probes / UI messages / sampling) are in diag.c, and this file does not depend on them (the graphics unit tests link only this file).
 #include "dm.h"
+#include "il2cpp_obj.h"
 #include <signal.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>
@@ -188,6 +189,14 @@ static void crash_heap(ucontext_t *uc) {
         else fprintf(stderr, "[dm] DM_CRASH_HEAP: cannot parse \"%s\"\n", t);
     }
 }
+// IL2CPP class names of the objects the registers point to (plan item 141, il2cpp_obj.h), for a Unity game only (dm_engine_il2cpp, game.c): in
+// another game a register can point at something that only looks like an object. Read with vm_read: no second fault
+__attribute__((weak)) int dm_engine_il2cpp(void) { return 0; }   // game.c; the unit tests link crash.c without it
+static int crash_rd(uint64_t a, void *d, size_t n) { vm_size_t g = 0; return !vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)d, &g) && g == n; }
+void crash_objs(const uint64_t x[29]) {
+    if (!dm_engine_il2cpp()) return;
+    for (int i = 0; i < 29; i++) { char c[200]; if (il2cpp_class_of(x[i], crash_rd, c, sizeof c)) fprintf(stderr, "[dm] x%d → an IL2CPP %s\n", i, c); }
+}
 static void on_crash(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = uc_;
     if (sig == SIGTRAP && g_trap_hook && g_trap_hook(uc)) return;
@@ -215,6 +224,7 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     fprintf(stderr, " sp=%#llx\n", uc->uc_mcontext->__ss.__sp);
     for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
+    crash_objs((const uint64_t *)uc->uc_mcontext->__ss.__x);
     crash_mem(uc);
     crash_heap(uc);
     dm_backtrace(uc->uc_mcontext->__ss.__fp);

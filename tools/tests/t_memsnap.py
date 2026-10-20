@@ -2,7 +2,9 @@
 """tools/memsnap.py on two synthetic snapshots in host/memsnap.c's format (16 KB pages; heap at 0x100000000, main.data at 0x200000000):
 A has heap pages 0-2 and data page 0; B keeps heap page 0, changes page 1, drops page 2, adds pages 5-7 and data page 1. Summary bytes per range,
 diff's new / gone / changed / same per range and its largest new run, and refs: aligned words pointing into [0x100004000, +0x40) found (the bound
-excluded), an unaligned one not. Run with the workspace Python (numpy)."""
+excluded), an unaligned one not. IL2CPP class names on a third snapshot (plan item 141): objects named by their class record, a binary name and
+other words not; refs' hit placed in its object; diff's census of the objects starting in the new runs by class. Run with the workspace Python
+(numpy)."""
 import os, struct, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import memsnap
@@ -42,4 +44,26 @@ r = sorted(memsnap.refs(b, HEAP + PG, 0x40))
 want = sorted([(HEAP + 0x18, HEAP + PG + 0x3f), (HEAP + PG + 0x20, HEAP + PG + 8), (DATA, HEAP + PG)])
 check(f'refs into [heap+0x4000, +0x40): 3 aligned words; the bound and the unaligned word left out', r == want)
 check('memsnap.py diff runs from the command line', memsnap.main(['diff', A, B]) == 0)
+# IL2CPP class names (plan item 141): C has class records on heap page 0 (name / namespace strings on main.data page 0) and, on the new heap page 5,
+# three objects of UnityEngine.GameObject, one of <>c and one of a class whose name is binary; one GameObject's field at +0x18 points to heap page 1
+def bytes_page(puts):
+    b = bytearray(PG)
+    for off, v in puts: v = v if isinstance(v, bytes) else struct.pack('<Q', v); b[off:off + len(v)] = v
+    return bytes(b)
+S_GO, S_UE, S_EMPTY, S_C, S_BIN = DATA + 0x100, DATA + 0x140, DATA + 0x180, DATA + 0x1c0, DATA + 0x200
+K1, K2, K3 = HEAP + 0x1000, HEAP + 0x1040, HEAP + 0x1080
+O = HEAP + 5 * PG
+C = os.path.join(d, 'c.bin')
+write(C, 1200, {HEAP: bytes_page([(K1 - HEAP + 0x10, S_GO), (K1 - HEAP + 0x18, S_UE), (K2 - HEAP + 0x10, S_C), (K2 - HEAP + 0x18, S_EMPTY), (K3 - HEAP + 0x10, S_BIN), (K3 - HEAP + 0x18, S_EMPTY)]),
+                O: bytes_page([(0, K1), (0x40, K1), (0x58, HEAP + PG), (0x80, K1), (0x100, K2), (0x140, K3)]),
+                DATA: bytes_page([(S_GO - DATA, b'GameObject\0'), (S_UE - DATA, b'UnityEngine\0'), (S_EMPTY - DATA, b'\0'), (S_C - DATA, b'<>c\0'), (S_BIN - DATA, b'\x01\xff\0')])})
+c = memsnap.Snap(C)
+check('class of an object: UnityEngine.GameObject, <>c (empty namespace)', c.object_class(O + 0x40) == 'UnityEngine.GameObject' and c.object_class(O + 0x100) == '<>c')
+check('... a binary class name, an address outside the snapshot, a word that is no class pointer: none',
+      c.object_class(O + 0x140) is None and c.object_class(HEAP + 3 * PG) is None and c.object_class(O + 0x58) is None)
+check('refs: the hit at +0x58 lies in the GameObject at +0x40', memsnap.container(c, O + 0x58) == (O + 0x40, 'UnityEngine.GameObject'))
+_, runs_c = memsnap.diff(a, c)
+cc = memsnap.class_census(c, runs_c)
+check(f'diff A → C, objects starting in the new runs by class: 3 GameObject, 1 <>c, the binary one left out ({cc})', cc == {'UnityEngine.GameObject': 3, '<>c': 1})
+check('memsnap.py class runs from the command line', memsnap.main(['class', C, hex(O)]) == 0)
 print(f'== {total} checks, {fails} failed =='); sys.exit(fails != 0)

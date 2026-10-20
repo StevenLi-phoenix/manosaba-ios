@@ -26,6 +26,8 @@ run: \
 	$(B)/t_crash_bt \
 	$(B)/t_crash_bt_unguarded \
 	$(B)/t_crash_stderr \
+	$(B)/t_il2cpp_obj \
+	$(B)/t_il2cpp_obj_nocheck \
 	$(B)/t_envfile \
 	$(B)/t_freeze \
 	$(B)/t_freeze_none \
@@ -136,6 +138,11 @@ run: \
 	   cat $(B)/t_crash_bt_unguarded.log; echo "t_crash_bt_unguarded: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_crash_bt_unguarded: a backtrace reading frames directly faults on a corrupt frame pointer, as expected"
 	$(B)/t_crash_stderr
+	$(B)/t_il2cpp_obj
+	@status=0; $(B)/t_il2cpp_obj_nocheck > $(B)/t_il2cpp_obj_nocheck.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_il2cpp_obj_nocheck.log)" -ne 2 ]; then \
+	   cat $(B)/t_il2cpp_obj_nocheck.log; echo "t_il2cpp_obj_nocheck: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_il2cpp_obj_nocheck: any string taken for a class name names a binary one, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_envfile
 	$(B)/t_freeze
 	@status=0; $(B)/t_freeze_none > $(B)/t_freeze_none.log 2>&1 || status=$$?; \
@@ -377,6 +384,10 @@ $(B)/t_threaddump: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_threaddump_suspended: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_BT_PRINT_SUSPENDED -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_il2cpp_obj: t_il2cpp_obj.c t_altstack_stub.c ../crash.c ../il2cpp_obj.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_il2cpp_obj.c t_altstack_stub.c ../crash.c
+$(B)/t_il2cpp_obj_nocheck: t_il2cpp_obj.c t_altstack_stub.c ../crash.c ../il2cpp_obj.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_IL2CPP_NO_CHECK -I.. -o $@ t_il2cpp_obj.c t_altstack_stub.c ../crash.c
 $(B)/t_crash_bt: t_crash_bt.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../crash.c
 $(B)/t_crash_bt_unguarded: t_crash_bt.c t_altstack_stub.c ../crash.c ../dm.h | $(B)

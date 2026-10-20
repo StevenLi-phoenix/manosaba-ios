@@ -7,6 +7,8 @@ __attribute__((weak)) int dm_game_inactivity_fps(int on, uint64_t ra) { (void)on
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+int dm_engine_il2cpp(void) { return !strcmp(dm_game.engine, "unity"); }   // crash.c names the IL2CPP objects registers point to (plan item 141)
 const char *dm_game_ws_path(const char *rel, char *buf, unsigned long n) {
     const char *root = getenv("DM_ROOT");
     if (root) snprintf(buf, n, "%s/%s", root, rel); else snprintf(buf, n, "%s/dm-work/%s", getenv("HOME") ?: ".", rel);
