@@ -2,8 +2,11 @@
 """games/totk/romfs_overlay.py against the game's own RomFS (path as argument; skipped without it): the overlay archive's two
 animations show the capture panes from frame 0.0 and nothing else in the archive differs; the game over flow's Event14 ends
 its branch and nothing else differs. Negative controls: a game over flow other than the analysed one, and an archive whose
-capture keys are not (0.0 hidden, 1.0 shown), are refused. Nothing of the game data is printed."""
-import shutil, struct, sys, tempfile, subprocess
+capture keys are not (0.0 hidden, 1.0 shown), are refused. --merge (plan item 164): a mod's copy of the archive with another
+member changed comes back with both changes at -merged/<its SHA-256>/<path>; a copy that changed the capture keys itself is
+refused and nothing is written. The game's file changed instead of the mod's (DM_TEST_MERGE_ORIGINAL=1): 2 fail.
+Nothing of the game data is printed."""
+import hashlib, shutil, struct, sys, tempfile, subprocess
 from pathlib import Path
 import compression.zstd as zstd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -46,13 +49,26 @@ with tempfile.TemporaryDirectory() as td:
     (fake / ro.FLOW).parent.mkdir(parents=True); (fake / 'Pack').mkdir(parents=True); shutil.copy(romfs / 'Pack/ZsDic.pack.zs', fake / 'Pack/ZsDic.pack.zs')
     bad = bytearray(f_o); bad[-1] ^= 1
     (fake / ro.FLOW).write_bytes(zstd.compress(bytes(bad), zstd_dict=d))
-    try: ro.patch_game_over(fake, dicts); refused = False
+    try: ro.patch_game_over((fake / ro.FLOW).read_bytes(), dicts); refused = False
     except AssertionError: refused = True
     check('negative: a game over flow other than the analysed one is refused', refused)
     (fake / ro.ARCHIVE).parent.mkdir(parents=True)
     da = dicts[zstd.get_frame_info((romfs / ro.ARCHIVE).read_bytes()).dictionary_id]
     (fake / ro.ARCHIVE).write_bytes(zstd.compress(a_p, zstd_dict=da))   # already patched: keys are (0.0, 0.0)
-    try: ro.patch_layout(fake, dicts); refused = False
+    try: ro.patch_layout((fake / ro.ARCHIVE).read_bytes(), dicts); refused = False
     except AssertionError: refused = True
     check('negative: an archive whose capture keys are not (0.0 hidden, 1.0 shown) is refused', refused)
+    # --merge: a mod's copy with a byte of another member changed, as a translation changes the UI textures
+    mem = ro.sarc_members(a_o); other = next(m for m in sorted(mem) if m not in ro.MEMBERS and mem[m][1] - mem[m][0] > 64)
+    at = sum(mem[other]) // 2; mod = bytearray(a_o); mod[at] ^= 0xff
+    mods = Path(td) / 'mods'; mf = mods / '01_tr' / 'romfs' / ro.ARCHIVE; mf.parent.mkdir(parents=True); mf.write_bytes(zstd.compress(bytes(mod), zstd_dict=da))
+    merge = lambda f: subprocess.run([sys.executable, '-I', str(Path(ro.__file__)), str(romfs), str(mods), '--merge', str(f)], capture_output=True, text=True)
+    merged = lambda f: mods / '-merged' / hashlib.sha256(f.read_bytes()).hexdigest() / ro.ARCHIVE
+    r = merge(mf); got = merged(mf)
+    want = bytearray(a_p); want[at] ^= 0xff   # the overlay's change and the mod's
+    check("--merge: the mod's copy with the overlay's change too, at -merged/<its SHA-256>/<path>",
+          r.returncode == 0 and got.exists() and zstd.decompress(got.read_bytes(), zstd_dict=da) == bytes(want))
+    mf2 = mods / '02_keys' / 'romfs' / ro.ARCHIVE; mf2.parent.mkdir(parents=True); mf2.write_bytes(zstd.compress(a_p, zstd_dict=da))
+    r = merge(mf2)
+    check('--merge: a copy that changed the capture keys itself is refused, nothing written', r.returncode == 1 and not merged(mf2).exists())
 print(f'== {total} checks, {fails} failed =='); sys.exit(fails != 0)

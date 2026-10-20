@@ -11,7 +11,8 @@ files, so CI runs tools/patch_nso.py, verify/structck.py and verify/equiv.py on 
          earlier store next to a section that must stay out of it, 0x700 `mov sp, x18` after `mov x9, sp; sub x18, x9, x1` (the words of these
          three are bayonetta3-mobile's tests/test_rewriter.py, enginefuture/bayonetta3-mobile e5ce116, MIT)
   0x800  `mov w0, #7; ret`, which a second run turns into a code cave (CAVES, plan item 139): x16 borrowed through the red zone, w0 loaded from
-         the host page; run in Unicorn it must give the page's value with x16 and the flags kept, and structck must pass it
+         the host page; run in Unicorn it must give the page's value with x16 and the flags kept, and structck must pass it. A third run puts
+         the cave behind an option (plan item 163): 7 without it, the page's value with the option applied as the loader does
   and a module with `mrs x0, cntfrq_el0`, which the rewriter must refuse.
 Checked: the exact sites, both jump tables with their targets, the sections (0x300, 0x408 and 0x604 windows, 0x500 one piece [0x504, 0x520)
 entered at 0x50c), the svc gate; STRUCT OK; EQUIV OK (with its own mutation
@@ -21,7 +22,8 @@ Broken variants: DM_TEST_JT_NO_SWAP=1 (only the anchor first) stops the rewriter
 (stream decoding stops at the data word) leaves 0x400's section as plain sites: 2 fail (structck and equiv still pass then: each plain site is
 right taken alone, only the exclusive monitor breaks); DM_TEST_EQUIV_CBZ_NOP=1 (cbz status as nop): 2 fail (the 0x300 exit is missed, and the clean run differs: 0x500's forced compare-equal path
 loops back to its load until the step limit, which each side reaches at another instruction);
-DM_TEST_EQUIV_TSD_WIDE=1 (every write into the slot area dropped): 1 fail; DM_TEST_CAVE_NO_BACK=1 (a routine without its branch back): 2 fail.
+DM_TEST_EQUIV_TSD_WIDE=1 (every write into the slot area dropped): 1 fail; DM_TEST_CAVE_NO_BACK=1 (a routine without its branch back): 4 fail (both caves);
+DM_TEST_CAVE_GATE_WRITTEN=1 (a cave behind an option written into the image as well): 3 fail.
 Needs capstone, lz4, unicorn (the venv: work/build/cache/dm/venv/bin/python) and llvm-objdump (Xcode)."""
 import os, re, struct, subprocess, sys, tempfile
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
@@ -186,16 +188,17 @@ with tempfile.TemporaryDirectory() as td:
     # A code cave (CAVES): 0x800's `mov w0, #7` becomes stur x16, [sp, #-16]; adrp x16, host page; ldr w0, [x16, #0x40]; ldur x16, [sp, #-16]; b 0x804
     STUR16, LDUR16, LDRW0 = 0xF81F03F0, 0xF85F03F0, 0xB9404200
     bid = bytes(range(16)).hex()
-    def cave_run(name, routine, extra_env=None):
-        rp = os.path.join(td, name + '_rules.py'); open(rp, 'w').write(f'CAVES = {{{bid!r}: [(0x800, "528000e0", {routine!r}, "test: w0 from the host page")]}}\n')
+    def cave_run(name, routine, extra_env=None, gate=None):
+        rp = os.path.join(td, name + '_rules.py'); g = f', {gate!r}' if gate else ''
+        open(rp, 'w').write(f'CAVES = {{{bid!r}: [(0x800, "528000e0", {routine!r}, "test: w0 from the host page"{g})]}}\n')
         o = os.path.join(td, name); e = dict(env, DM_RULES=rp, **(extra_env or {}))
         return o, run('-I', PATCH, nso, o, 'm', env=e)
     co, (code, log) = cave_run('cave', [STUR16, ('adrp_host', 16), LDRW0, LDUR16])
     check('a code cave: the rewriter takes it', code == 0 and "'cave': 1" in log, log.strip().splitlines()[-1] if log.strip() else '')
-    def cave_unicorn(outdir):
+    def cave_unicorn(outdir, img=None):
         from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UcError
         from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X16, UC_ARM64_REG_SP, UC_ARM64_REG_NZCV, UC_ARM64_REG_PC
-        img = open(os.path.join(outdir, 'm.patched.bin'), 'rb').read()
+        img = bytes(img) if img is not None else open(os.path.join(outdir, 'm.patched.bin'), 'rb').read()
         hp = next(int(l.split()[2], 16) for l in open(os.path.join(outdir, 'm.fixups.tsv')) if l.startswith('# HOST_PAGE_OFF'))
         u = Uc(UC_ARCH_ARM64, UC_MODE_ARM); size = (len(img) + 0xFFFF) & ~0xFFFF
         u.mem_map(0, size); u.mem_write(0, img); u.mem_write(hp + 0x40, struct.pack('<I', 0x1234))
@@ -209,6 +212,25 @@ with tempfile.TemporaryDirectory() as td:
               f'pc {pc:#x} w0 {x0:#x} x16 {x16:#x} nzcv {nzcv:#x}')
         c2, so = run(STRUCTCK, co, 'm', nso, env=env)
         check('... structck passes it (⑬: words, branch back, exits)', c2 == 0 and 'CAVES m caves=1' in so, so.strip().splitlines()[-1])
+    # The same cave behind an option (plan item 163): the word stays, options.tsv has the branch, and the image with the option applied as the
+    # loader does (nsoimg.product_image) runs the routine
+    go, (code, log) = cave_run('cave_gated', [STUR16, ('adrp_host', 16), LDRW0, LDUR16], gate='tst')
+    check('a code cave behind an option: the rewriter takes it', code == 0 and "'cave': 1" in log, log.strip().splitlines()[-1] if log.strip() else '')
+    if code == 0:
+        sys.path.insert(0, os.path.join(ROOT, 'verify')); import nsoimg
+        st = next(int(l.split('\t')[2], 16) for l in open(os.path.join(go, 'm.caves.tsv')) if not l.startswith('#'))
+        orows = [l.rstrip('\n').split('\t')[:4] for l in open(os.path.join(go, 'm.options.tsv')) if not l.startswith('#')]
+        pimg = open(os.path.join(go, 'm.patched.bin'), 'rb').read()
+        check('... the image keeps 0x800 and options.tsv has one row of tst: the original word to b <routine>',
+              struct.unpack_from('<I', pimg, 0x800)[0] == 0x528000e0 and orows == [['tst', '0x800', struct.pack('<I', 0x528000e0).hex(), struct.pack('<I', B(0x800, st)).hex()]],
+              f'{struct.unpack_from("<I", pimg, 0x800)[0]:#x} {orows}')
+        pc, x0, x16, nzcv = cave_unicorn(go)
+        pc1, x01, x161, nzcv1 = cave_unicorn(go, nsoimg.product_image(go, 'm', ['tst']))
+        check('... run in Unicorn: w0 = 7 without the option, the host page value with it (x16 and the flags kept)',
+              pc == pc1 == 0x804 and x0 == 7 and x01 == 0x1234 and x161 == 0xAAAA and nzcv1 == 0x60000000, f'without {pc:#x} w0 {x0:#x}; with {pc1:#x} w0 {x01:#x}')
+        c2, so = run(STRUCTCK, go, 'm', nso, env=env)
+        check('... structck passes it (⑬: the original word kept, its option row, the routine\'s exits)', c2 == 0 and 'CAVES m caves=1 behind_options=1' in so,
+              so.strip().splitlines()[-1])
     _, (code, log) = cave_run('cave_pcrel', [0x10000000])   # adr x0, #0
     check('a code cave with a PC-relative word: refused', code != 0 and 'cannot run in the patch area' in log, log.strip().splitlines()[-1] if log.strip() else '')
     w2 = dict(words); w2[0x104] = 0xD53BE000   # mrs x0, cntfrq_el0

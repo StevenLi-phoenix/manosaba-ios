@@ -6,6 +6,9 @@
 // dm_overlay_file each file resolves to the first layer that has it; dm_mods_apply puts them in front of an existing DM_ROMFS_OVERLAY.
 // Paths keep each folder's own spelling (the Mac's file system ignores case, iOS's does not). Negative control: -DDM_TEST_MODS_CASE (paths built
 // with the program ID as asked) puts the upper-case spelling into 01_one's layer.
+// Files the game's own overlay changes (dm_mods_pin_overlay, plan item 164), in a second mods folder with an overlay whose manifest.tsv lists four:
+// a mod's copy that is the game's own file unchanged → the overlay's file; a changed copy with -merged/<its SHA-256>/<path> → that merge; a changed
+// copy without one → the mod's (no pin); a file no mod has → nothing. Negative control: -DDM_TEST_MODS_NO_PIN (the mod's copy always) fails 3.
 #include "../mods.c"
 #include <stdlib.h>
 const dm_game_profile dm_game = { .id = "test", .program_id = 0x0100F2C0115B6000ull };
@@ -20,6 +23,9 @@ int dm_overlay_file(const char *rel, char *out, size_t n) {
     if (n) out[0] = 0;
     return 0;
 }
+static char g_pins[4][2][1100]; static int g_npins;
+void dm_rom_pin(const char *rel, const char *host) { if (g_npins < 4) { snprintf(g_pins[g_npins][0], 1100, "%s", rel); snprintf(g_pins[g_npins][1], 1100, "%s", host); } g_npins++; }
+static const char *pin_of(const char *rel) { for (int i = 0; i < g_npins && i < 4; i++) if (!strcmp(g_pins[i][0], rel)) return g_pins[i][1]; return NULL; }
 static int n, fail;
 #define CHECK(c, ...) do { n++; if (c) printf("  ✓ "); else { fail++; printf("  ✗ "); } printf(__VA_ARGS__); printf("\n"); } while (0)
 static char g_root[1024];
@@ -66,5 +72,29 @@ int main(void) {
     unsetenv("DM_ROMFS_OVERLAY"); setenv("DM_MODS", "/nonexistent/mods", 1); dm_mods_apply();
     CHECK(!getenv("DM_ROMFS_OVERLAY"), "a missing mods folder: nothing set");
     char cmd[1100]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_root); if (system(cmd)) {}
+    // The game's own overlay and the mods' copies of its files
+    snprintf(g_root, sizeof g_root, "%s/t_mods_pin.XXXXXX", tp ? tp : "/private/tmp"); if (!mkdtemp(g_root)) return 2;
+    char own[1200], mods[1200], h[65], ha[65], hb[65], hmb[65], hmc[65]; snprintf(own, sizeof own, "%s/own", g_root); snprintf(mods, sizeof mods, "%s/mods", g_root);
+    put("orig/a", "orig-a"); put("orig/b", "orig-b"); put("orig/c", "orig-c"); put("tmp/mb", "mod-b"); put("tmp/mc", "mod-c"); put("tmp/abc", "abc");
+    char q[1300];
+    snprintf(q, sizeof q, "%s/orig/a", g_root); sha256_file(q, ha); snprintf(q, sizeof q, "%s/orig/b", g_root); sha256_file(q, hb);
+    snprintf(q, sizeof q, "%s/tmp/mb", g_root); sha256_file(q, hmb); snprintf(q, sizeof q, "%s/tmp/mc", g_root); sha256_file(q, hmc);
+    snprintf(q, sizeof q, "%s/orig/c", g_root); sha256_file(q, h);
+    char habc[65]; snprintf(q, sizeof q, "%s/tmp/abc", g_root); sha256_file(q, habc);   // FIPS 180-2's example, as `printf %s abc | shasum -a 256` gives it
+    CHECK(!strcmp(habc, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "SHA-256 of a file holding \"abc\": the standard's value (%s)", habc);
+    char m[4200];
+    snprintf(m, sizeof m, "# path\tsize\tsha256\toriginal_sha256 (games/test/overlay.py)\nUI/a.zs\t6\t00\t%s\nUI/b.zs\t6\t00\t%s\nEv/c.zs\t6\t00\t%s\nEv/d.zs\t6\t00\t%s\n", ha, hb, h, h);
+    put("own/manifest.tsv", m); put("own/UI/a.zs", "fixed-a"); put("own/UI/b.zs", "fixed-b"); put("own/Ev/c.zs", "fixed-c"); put("own/Ev/d.zs", "fixed-d");
+    put("mods/01_ui/romfs/UI/a.zs", "orig-a");                 // the game's own file unchanged
+    put("mods/02_tr/romfs/UI/b.zs", "mod-b");                  // changed, with a merge
+    char mg[1400]; snprintf(mg, sizeof mg, "mods/-merged/%s/UI/b.zs", hmb); put(mg, "merged-b");
+    put("mods/02_tr/romfs/Ev/c.zs", "mod-c");                  // changed, no merge
+    char ml[4096]; int nl2 = dm_mods_layers(mods, dm_game.program_id, NULL, ml, sizeof ml);
+    g_npins = 0; int np = dm_mods_pin_overlay(mods, ml, own);
+    char want[1500];
+    snprintf(want, sizeof want, "%s/UI/a.zs", own); CHECK(nl2 == 2 && pin_of("UI/a.zs") && !strcmp(pin_of("UI/a.zs"), want), "a mod's copy that is the game's own file: the overlay's is used");
+    snprintf(want, sizeof want, "%s/-merged/%s/UI/b.zs", mods, hmb); CHECK(pin_of("UI/b.zs") && !strcmp(pin_of("UI/b.zs"), want), "a changed copy with a merge for it: the merge is used");
+    CHECK(!pin_of("Ev/c.zs") && !pin_of("Ev/d.zs") && np == 2 && g_npins == 2, "a changed copy without a merge: the mod's (no pin); a file no mod has: nothing (%d pins)", g_npins);
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_root); if (system(cmd)) {}
     printf("== %d checks, %d failed ==\n", n, fail); return fail != 0;
 }

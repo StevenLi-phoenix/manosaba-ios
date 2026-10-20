@@ -6,6 +6,7 @@
 //   (4) DM_TEST_FS_FAIL=write:N:errno makes only the Nth save write fail, with writes before and after proceeding normally; that transaction's Commit is rejected, the committed version is unchanged, and the front end receives one notification;
 //      the next transaction commits normally, and the final save = the content of the next transaction;
 //   (5) remounting discards uncommitted content.
+// Also the RomFS overlay layers, and a pinned file (dm_rom_pin, plan item 164) winning over them; the pins ignored (-DDM_TEST_ROM_NO_PIN=1) fails 1.
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -57,6 +58,10 @@ int main(void) {
         for (int i = 2995; i < 3005; i++) { snprintf(fn, sizeof fn, "%s/f%04d", obig, i); put(fn, "ov"); } }
     setenv("DM_ROMFS", rom, 1); setenv("DM_ROMFS_OVERLAY", overlay, 1); CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "mount the RomFS with an overlay");
     CHECK(read_fs("rom:/data/same", got, sizeof got) && !strcmp(got, "overlay"), "the overlay file wins"); CHECK(read_fs("rom:/data/base", got, sizeof got) && !strcmp(got, "only-base"), "falls back to the base without an overlay file");
+    {   // A pinned file (dm_rom_pin, mods.c, plan item 164) wins over every layer; the others as before
+        char pin[1300]; snprintf(pin, sizeof pin, "%s/pinned", root); put(pin, "pinned"); dm_rom_pin("/data/same", pin);
+        CHECK(read_fs("rom:/data/same", got, sizeof got) && !strcmp(got, "pinned"), "a pinned file wins over the overlay and the base");
+        CHECK(read_fs("rom:/data/base", got, sizeof got) && !strcmp(got, "only-base"), "... the files not pinned as before"); g_npin = 0; }
     uint64_t rh; CHECK(h_fs_OpenFile(&rh, "rom:/data/same", MODE_WRITE) == RES_FAIL, "both layers refuse writes");
     {   // A file in the overlay (dm_overlay_file): layers joined by colons, searched in order, earlier ones win
         char l2[1100], two[2300], want[1300]; snprintf(l2, sizeof l2, "%s/pack", root); mkdir(l2, 0755); snprintf(two, sizeof two, "%s:%s", overlay, l2); setenv("DM_ROMFS_OVERLAY", two, 1);

@@ -1870,8 +1870,42 @@ Tier 3d, Tears of the Kingdom:
   ca5eb9623812 (23 integer variants for Tears of the Kingdom, 28,675 libraries; manosaba has none). `t_fout` (4, Metal 4 and 3: the float function on RGBA8 and
   the variant on RGBA16Uint, both pipelines made; no variant keeps the float function; an integer slot the shader does not write does not count;
   the float function whatever the target fails 1)
-- [ ] 163 hair and cloth at 60 / 120 fps: the four sites of MacNativeGames PR #79 with its Unicorn table (after 139)
-- [ ] 164 a mod that carries one of our RomFS overlay files: a red line, or the overlay's member patch applied to the mod's copy (MacNativeGames #73)
+- [x] batch 52 · 163 hair and cloth at 60 / 120 fps (MacNativeGames PR #79, merged, MIT; its sites, routine words and Unicorn table as data,
+  the code ours): Tears of the Kingdom's actor animation update has a second clock, for cloth and hair, that it builds at every frame as
+  {seconds = factor / 30, ratio = factor}, so at 120 fps it runs four seconds per second; the real-time frame step (realtime) does not reach it.
+  `games/totk/rules.py` CAVES: the two inlined copies (0x246eac, 0x345904: the fmul that makes seconds from the constant 1/30 becomes a routine
+  that stores ratio = page+0 × factor over the stored one and makes seconds = page+8 × factor) and two of the three calls to the out-of-line
+  update 0x2a0e40 (0x24944c, 0x28bc98: s2, s3 × page+0 before the call; the third, 0x2afac18, passes measured time already). Scratch x8 and s4
+  (checked: none of the three callers sets v4, 0x2a0e40's 857 instructions never name it). The PR makes those calls `bl <veneer>` ending in
+  `b 0x2a0e40`; here the routine calls it and branches back (Tears of the Kingdom has no C++ exceptions to unwind through the patch area).
+  `frame_step.c` writes seconds at host page +8 too. The fix belongs to realtime, so the rewriter gained caves behind an option
+  (`patch_nso.py`: a fifth item names the option; the routine is emitted, the site keeps its word and the branch to the routine is a row of that
+  option in options.tsv, which the loader checks and writes as any other; caves.tsv has an option column; `structck` ⑬ checks the kept word,
+  exactly one option row of the original word to `b <routine>`, and walks the routine's exits). The product: main's patch area 104 bytes longer
+  (the four routines at its end), 4 more realtime rows, every other byte and table as before. `games/totk/check_cloth_clock.py <product> <main NSO>`
+  (5 checks; the PR's 144 cases, 15-120 fps × factors 0, 0.25, 1, 2 × 4 sites: {factor / fps, factor × 30 / fps} with the ordinary clock, the
+  factor, sp, the flags and x9 kept and execution back after the site; the original main and the product without realtime give the game's own
+  4 s per s at 120 fps; the third caller untouched; +8 left at 0 fails 1 (54 cases), the product from before fails 2). `t_rewriter_synth` (+4:
+  a cave behind an option keeps its word, one options row, 7 without the option and the page value with it in Unicorn, structck passes it; the
+  branch written as well, DM_TEST_CAVE_GATE_WRITTEN, fails 3). `t_frame_step` (+1, page +8; not written fails 1). `verify/regress.sh --fuzz`
+  OK for both games (⑬: 4 caves behind options, their exits walked). The 60 fps product: `option realtime: 13 words of main`; under lldb the
+  0x246eac and 0x28bc98 routines are reached 23 s into the prologue (the other two belong to actors it does not show), 28,500 frames at 120 fps
+  without a new red line. To check in a game (the user): hair and cloth in wind at 60 and 120 fps against 30
+- [x] batch 52 · 164 a mod that carries one of our RomFS overlay files (MacNativeGames #73, open: a translation ships its own Common UI
+  archive, whose quick-menu animations the 60 fps overlay changes; there both together stop the game). Here mods sit in front of the game's
+  overlay, so the mod's copy won and the fix was lost without a word. Now at boot (`mods.c` `dm_mods_pin_overlay`) each file the overlay's
+  `manifest.tsv` lists that a mod also has is decided by the SHA-256 of the mod's copy: the game's own file unchanged → the overlay's file;
+  `<mods>/-merged/<that SHA-256>/<path>` exists → that merge; otherwise the mod's copy with a red line that names the command to merge them.
+  The choice is a pin (`hle_fs.c` `dm_rom_pin`: that one file served from the given host file whatever the layers hold). `romfs_overlay.py
+  <RomFS> <mods> --merge <the mod's file>` makes the overlay's change to the mod's copy with the same checks (capture keys hidden at 0 and shown
+  at 1, only the two animations change; the game over flow must be the analysed file) and writes the merge there; a copy that changed those
+  keys itself is refused and stays the mod's. Without --merge the overlay comes out byte for byte as before. `t_mods` (+4: SHA-256 against the
+  standard's "abc" value; unchanged copy → overlay, merged → merge, changed without a merge → no pin; the mod's copy always fails 3), `t_fs`
+  (+2: a pin wins over the layers, others as before; pins ignored fails 1), `t_romfs_overlay` (+2 with the RomFS: a copy with another member
+  changed comes back with both changes, a copy with its own capture keys refused; the game's file merged instead fails 2). In the game
+  (`DM_MODS`, `DM_FS=1`): a mod carrying the original archive → opened from the overlay; one with a texture byte changed and its merge →
+  opened from `-merged`; the same without the merge → the mod's copy and the red line. On iOS the merge is made on a Mac and copied to
+  `Documents/mods/-merged`
 - [ ] 165 decals that read their own G-buffer pass: one split per run (MacNativeGames PR #67), judged in motion against footage (with 42 / 113)
 - [ ] 166 a three-hour soak of the 60 fps product before 151 (MacNativeGames #57, #72, #74; upstream #90)
 - [ ] 167 a teleport command for fixed-point soaks and shader coverage (MacNativeGames d164868 `world_survey.c`; needs an overworld save)

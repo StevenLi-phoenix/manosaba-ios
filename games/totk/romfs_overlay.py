@@ -17,8 +17,14 @@ its dictionary and size, a decompression gives the patched bytes back).
 
 Input: the game's RomFS folder (game.json workspace.romfs). Output: <out>/<path> and <out>/manifest.tsv (path, size,
 SHA-256 of the overlay, SHA-256 of the original). Game data stays in the ignored work folder; nothing of it is printed.
+
+--merge <a mod's copy of one of these files> (plan item 164, MacNativeGames #73: translations ship their own Common UI
+archive): the same change made to the mod's copy, with the same checks (the capture keys must be hidden at 0, shown at 1,
+and only the two animations may change; the game over flow must be the analysed file), written to
+<out>/-merged/<SHA-256 of the mod's copy>/<path>, <out> being the mods folder (DM_MODS): the host then serves it in place
+of the mod's copy (host/mods.c). A copy these checks refuse stays the mod's, without the change.
 """
-import argparse, hashlib, json, struct, sys
+import argparse, hashlib, json, os, struct, sys
 from pathlib import Path
 import compression.zstd as zstd
 
@@ -81,9 +87,16 @@ def dictionaries(romfs):
     return out
 
 
+def frame_dict(raw, dicts):
+    """The dictionary a zstd frame was made with (None: none)"""
+    i = zstd.get_frame_info(raw).dictionary_id
+    assert i == 0 or i in dicts, f'a zstd frame made with dictionary {i:#x}, which the game\'s ZsDic.pack does not have'
+    return dicts[i] if i else None
+
+
 def recompress(original_raw, patched, dicts):
     info = zstd.get_frame_info(original_raw)
-    d = dicts[info.dictionary_id]
+    d = frame_dict(original_raw, dicts)
     data = zstd.compress(bytes(patched), level=19, zstd_dict=d)
     check = zstd.get_frame_info(data)
     assert check.dictionary_id == info.dictionary_id and check.decompressed_size == len(patched), 'recompressed frame differs in dictionary or size'
@@ -91,10 +104,8 @@ def recompress(original_raw, patched, dicts):
     return data
 
 
-def patch_layout(romfs, dicts):
-    raw = (romfs / ARCHIVE).read_bytes()
-    info = zstd.get_frame_info(raw)
-    original = zstd.decompress(raw, zstd_dict=dicts[info.dictionary_id])
+def patch_layout(raw, dicts):
+    original = zstd.decompress(raw, zstd_dict=frame_dict(raw, dicts))
     blarc = bytearray(original)
     members = sarc_members(blarc)
     changed = {}
@@ -114,10 +125,8 @@ def patch_layout(romfs, dicts):
     return raw, recompress(raw, blarc, dicts), {'members': changed, 'changed_bytes': len(diff)}
 
 
-def patch_game_over(romfs, dicts):
-    raw = (romfs / FLOW).read_bytes()
-    info = zstd.get_frame_info(raw)
-    flow = bytearray(zstd.decompress(raw, zstd_dict=dicts[info.dictionary_id]))
+def patch_game_over(raw, dicts):
+    flow = bytearray(zstd.decompress(raw, zstd_dict=frame_dict(raw, dicts)))
     assert hashlib.sha256(flow).hexdigest() == FLOW_SHA256, f'{FLOW} is not the analysed file'
 
     def event(i):
@@ -135,12 +144,33 @@ def patch_game_over(romfs, dicts):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('romfs', type=Path, help='the RomFS folder of 1.4.3')
-    ap.add_argument('out', type=Path, help='overlay folder to write')
+    ap.add_argument('out', type=Path, help='overlay folder to write (with --merge: the mods folder)')
+    ap.add_argument('--merge', type=Path, help="a mod's copy of one of the files: write the change made to it under <out>/-merged")
     a = ap.parse_args()
     dicts = dictionaries(a.romfs)
+    files = ((ARCHIVE, patch_layout), (FLOW, patch_game_over))
+    if a.merge:
+        mine = a.merge.resolve().as_posix()
+        hit = [(p, fn) for p, fn in files if mine.endswith('/' + p)]
+        if not hit:
+            print(f'--merge {a.merge}: not one of the files this overlay changes ({", ".join(p for p, _ in files)})', file=sys.stderr); return 2
+        path, fn = hit[0]
+        raw = a.merge.read_bytes()
+        if os.environ.get('DM_TEST_MERGE_ORIGINAL'):   # negative control of tests/t_romfs_overlay.py only: the game's file changed instead
+            raw = (a.romfs / path).read_bytes()
+        try:
+            _, data, what = fn(raw, dicts)
+        except AssertionError as e:
+            print(f'--merge {a.merge}: refused, the mod changed what this overlay changes ({e}); the mod\'s copy stays as it is', file=sys.stderr); return 1
+        target = a.out / '-merged' / hashlib.sha256(a.merge.read_bytes()).hexdigest() / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + '.tmp'); tmp.write_bytes(data); tmp.replace(target)
+        print(json.dumps(dict(status='pass', path=path, merged=str(target), size=len(data), **what)))
+        return 0
     lines = []
-    for path, fn in ((ARCHIVE, patch_layout), (FLOW, patch_game_over)):
-        raw, data, what = fn(a.romfs, dicts)
+    for path, fn in files:
+        raw = (a.romfs / path).read_bytes()
+        _, data, what = fn(raw, dicts)
         target = a.out / path
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + '.tmp'); tmp.write_bytes(data); tmp.replace(target)

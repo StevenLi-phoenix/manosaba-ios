@@ -5,7 +5,8 @@
 // Method and limits from MacNativeGames' game_patches_v143.c (runtime_frame_step_update; ly05010419/MacNativeGames, MIT): the mean of the last five
 // present intervals, each clamped to 1/120 .. 1/15 s; an interval above 0.25 s or below 1 ms (loading, a pause) restarts the mean and keeps the
 // step. Intervals are on the guest clock, the one behind the game's own system tick.
-// Host page: +0 ratio = seconds × 30, +4 ticks = seconds × 60, written with one 64-bit store so the game never reads the two from different frames.
+// Host page: +0 ratio = seconds × 30, +4 ticks = seconds × 60, written with one 64-bit store so the game never reads the two from different frames;
+// +8 seconds, for the cloth and hair clock (rules.py CAVES, plan item 163), written just before (that clock reads +0 and +8 within a few instructions).
 // DM_FRAME_STEP_MS=<ms> pins the step (diagnostics: a pinned 16.667 at 90 fps makes the game run 1.5 times too fast).
 // +16 / +20: the scene render size as floats (rules.py, plan item 52: main 0x585e48-0x585e60 store it to the renderer instead of the graphics
 // parameter's): DM_RENDER_RES=<w>x<h> (64 up to 1920x1080, the output size; 2560x1440 and 3200x1800 ran the game's texture heap out at main+0x1c2f20
@@ -45,8 +46,11 @@ static int scene_size(const char *env, int opmode, const char *max, float out[2]
     if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 64 || h < 64 || w > mw || h > mh) return -1;
     out[0] = (float)w; out[1] = (float)h; return 1;
 }
-static void frame_step_store(_Atomic uint64_t *page, double seconds) {
-    float v[2] = {(float)(seconds * 30), (float)(seconds * 60)}; uint64_t bits; memcpy(&bits, v, sizeof bits);
+static void frame_step_store(_Atomic uint64_t *page, double seconds) {   // page: at least 16 bytes
+    float v[2] = {(float)(seconds * 30), (float)(seconds * 60)}, sec = (float)seconds; uint64_t bits; memcpy(&bits, v, sizeof bits); uint32_t sb; memcpy(&sb, &sec, sizeof sb);
+#ifndef DM_TEST_CLOTH_NO_SECONDS   // negative control of t_frame_step only: +8 left as it was
+    atomic_store_explicit((_Atomic uint32_t *)(void *)((uint8_t *)page + 8), sb, memory_order_relaxed);
+#endif
     atomic_store_explicit(page, bits, memory_order_release);
 }
 

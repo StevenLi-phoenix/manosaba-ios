@@ -46,13 +46,15 @@ IMG.extend(bytes(0x4000))
 #            Asserted against the original here but not written into the image; listed in <name>.options.tsv with their final bytes. They must not
 #            overlap a cut and must stay outside the rewritten code (asserted after the rewrite: the host writes them where the original still is).
 #            A host page form gives the module the page as HOSTREFS does
-#   CAVES    {build ID: [(offset, original instruction word hex, routine, reason)]}: code caves (plan item 139; totk-mobile's routines appended to
+#   CAVES    {build ID: [(offset, original instruction word hex, routine, reason[, option])]}: code caves (plan item 139; totk-mobile's routines appended to
 #            the patch area, written anew): the word at offset (asserted) becomes `b <routine>`, the routine is emitted into the patch area and ends
 #            with `b <offset + 4>` unless its last form already leaves. Routine forms: an int (an instruction word, which must not be PC-relative: it
 #            no longer sits where it was assembled), ('orig',) (the replaced word, same rule), ('adrp_host', d) (adrp xd, host page: the module gets
 #            the page as HOSTREFS gives it), ('b', target) / ('bl', target) (to a text address). A routine may borrow registers through the red zone
 #            (stur / ldur below sp) as the rewrite blocks do. Listed in <name>.caves.tsv with the words emitted; structck checks them word by word and
-#            their exits, fnfuzz leaves their functions out (an intended change of behaviour, checked by the game's own tests)
+#            their exits, fnfuzz leaves their functions out (an intended change of behaviour, checked by the game's own tests). With an option
+#            name (plan item 163) the routine is emitted all the same but the word at offset stays: the branch to the routine is a row of that
+#            option in <name>.options.tsv, so the host writes it at load only when the option is on (and checks the original word first)
 # A module whose build ID has no entry gets the generic rewrite only.
 def rules_path():
     path = os.environ.get('DM_RULES')
@@ -849,8 +851,9 @@ def cave_word_ok(ins):   # a word that may run in the patch area as it is: not P
 busy_cave = set(kinds) | done | {o for o, *_ in obs} | {o for row in params for o in (row[0], row[2])}
 busy_cave |= {(c[0] + k) & ~3 for c in cuts for k in range(len(bytes.fromhex(c[1])))} | {(o[1] + k) & ~3 for o in opts for k in range(len(bytes.fromhex(o[2])))}
 cave_rows = []
-for off, ow, routine, why in caves:
-    w = struct.unpack_from('<I', IMG, off)[0]
+for off, ow, routine, why, *gate in caves:
+    w = struct.unpack_from('<I', IMG, off)[0]; gate = gate[0] if gate else ''
+    assert not gate or re.fullmatch(r'[A-Za-z0-9_]{1,31}', gate), f'code cave {off:#x}: option name {gate!r}'
     assert f'{w:08x}' == ow, f'code cave {off:#x}: original instruction differs ({w:08x})'
     assert off < TEXT_END and off % 4 == 0 and off not in busy_cave and why.strip(), f'code cave {off:#x}: outside text, on another change, or no reason'
     busy_cave.add(off)
@@ -868,8 +871,11 @@ for off, ow, routine, why in caves:
         else: raise AssertionError(f'code cave {off:#x}: unknown form {f}')
     if not left and not os.environ.get('DM_TEST_CAVE_NO_BACK'):   # (the env: negative control of t_rewriter_synth only)
         emit(B(here(), off + 4)); exits.add(off + 4)
-    put_branch(off, start); stat('cave')
-    cave_rows.append((off, ow, start, bytes(patch[start - PATCH_OFF:here() - PATCH_OFF]), sorted(exits), why))
+    if gate and not os.environ.get('DM_TEST_CAVE_GATE_WRITTEN'):   # (the env: negative control of t_rewriter_synth only: the branch written as well)
+        opts.append((gate, off, struct.pack('<I', w).hex(), struct.pack('<I', B(off, start)).hex(), f'{why} [code cave: b {start:#x}]'))
+    else: put_branch(off, start)
+    stat('cave')
+    cave_rows.append((off, ow, start, bytes(patch[start - PATCH_OFF:here() - PATCH_OFF]), sorted(exits), gate, why))
 
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
@@ -904,10 +910,10 @@ with open(P('options.tsv'), 'w') as f:   # columns: option, offset, original byt
 with open(P('params.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for oa, wa, ob_, wb, r, key, why in params: f.write(f'{oa:#x}\t{ob_:#x}\tx{r}\t{key}\t{why}\n')
-with open(P('caves.tsv'), 'w') as f:   # columns: offset, original word, routine start, its words, its exits back to text, reason (structck ⑬)
+with open(P('caves.tsv'), 'w') as f:   # columns: offset, original word, routine start, its words, its exits back to text, option (empty: always), reason (structck ⑬)
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
-    for off, ow, start, wb, ex, why in cave_rows:
-        f.write(f'{off:#x}\t{ow}\t{start:#x}\t' + ' '.join(f'{v:08x}' for v in struct.unpack(f'<{len(wb) // 4}I', wb)) + '\t' + ','.join(f'{e:#x}' for e in ex) + f'\t{why}\n')
+    for off, ow, start, wb, ex, gate, why in cave_rows:
+        f.write(f'{off:#x}\t{ow}\t{start:#x}\t' + ' '.join(f'{v:08x}' for v in struct.unpack(f'<{len(wb) // 4}I', wb)) + '\t' + ','.join(f'{e:#x}' for e in ex) + f'\t{gate}\t{why}\n')
 with open(P('obs.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, oid, ow, why in obs: f.write(f'{off:#x}\t{oid}\t{ow}\t{why}\n')

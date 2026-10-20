@@ -9,8 +9,14 @@
 // The program ID is matched without regard to case (iOS file systems tell cases apart; mods spell it either way); other games' folders are left out.
 // Code (exefs, exefs_patches) is not applied: the modules are rewritten for the host. The log lists each layer with its file count, files that
 // replace the game's, and files two mods both have (the earlier one is used). Checked by host/tests/t_mods.c.
+// A mod's copy of a file the game's own overlay patches (plan item 164, MacNativeGames #73: a translation ships its own copy of Tears of the Kingdom's
+// Common UI archive, whose quick-menu animations the 60 fps overlay fixes): the overlay's manifest.tsv (path, size, SHA-256, the original's SHA-256)
+// names those files. When the mod's copy is the game's own file unchanged, the overlay's file is used; when <dir>/-merged/<SHA-256 of the mod's
+// copy>/<path> exists (the overlay's tool with --merge: its fix applied to the mod's copy), that is used; otherwise the mod's copy is, with a red
+// line, as the fix is lost. (hle_fs.c dm_rom_pin; "-merged" starts with "-", so it is never a mod itself.)
 #include "dm.h"
 #include "game.h"
+#include <CommonCrypto/CommonDigest.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -100,6 +106,52 @@ int dm_mods_layers(const char *dir, uint64_t pid, const char *game, char *out, s
     for (int i = 0; i < nn; i++) free(names[i]);
     return nl;
 }
+void dm_rom_pin(const char *rel, const char *host);   // hle_fs.c
+static int sha256_file(const char *p, char hex[65]) {
+    FILE *f = fopen(p, "rb"); if (!f) return 0;
+    CC_SHA256_CTX c; CC_SHA256_Init(&c); unsigned char b[1 << 16], d[CC_SHA256_DIGEST_LENGTH]; size_t k;
+    while ((k = fread(b, 1, sizeof b, f))) CC_SHA256_Update(&c, b, (CC_LONG)k);
+    fclose(f); CC_SHA256_Final(d, &c);
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    return 1;
+}
+// The files of the overlay layers in `own` (colon-separated) whose manifest.tsv lists them and that a mod layer in `mods` also has: pinned to the
+// overlay's file or a merge, or left to the mod with a red line (see the top). dir: the mods folder. Returns the files pinned
+int dm_mods_pin_overlay(const char *dir, const char *mods, const char *own) {
+    int pinned = 0; char *roots = strdup(own ? own : ""), *save = NULL;
+    for (char *root = strtok_r(roots, ":", &save); root; root = strtok_r(NULL, ":", &save)) {
+        char mp[1400], line[2048], tool[256] = "the overlay's tool"; snprintf(mp, sizeof mp, "%s/manifest.tsv", root);
+        FILE *f = fopen(mp, "r"); if (!f) continue;
+        while (fgets(line, sizeof line, f)) {
+            if (line[0] == '#') { char *a = strchr(line, '('), *b = a ? strchr(a, ')') : NULL; if (a && b) snprintf(tool, sizeof tool, "%.*s", (int)(b - a - 1), a + 1); continue; }
+            char path[1024], size[32], sha[80], orig[80];
+            if (sscanf(line, "%1023[^\t]\t%31[^\t]\t%79[^\t]\t%79s", path, size, sha, orig) != 4) continue;
+            const char *m = mods; char mine[2048] = "", from[1400] = "";
+            while (*m && !mine[0]) {   // the first mod layer that has it
+                size_t l = strcspn(m, ":"); snprintf(mine, sizeof mine, "%.*s/%s", (int)l, m, path);
+                if (access(mine, R_OK)) mine[0] = 0; else snprintf(from, sizeof from, "%.*s", (int)l, m);
+                m += l; if (*m == ':') m++;
+            }
+            if (!mine[0]) continue;
+            char got[65];
+            if (!sha256_file(mine, got)) { LOG("[red] mods: %s: cannot read it", mine); continue; }
+#ifndef DM_TEST_MODS_NO_PIN   // negative control of t_mods only: the mod's copy always used
+            char use[2048];
+            if (!strcmp(got, orig)) {
+                snprintf(use, sizeof use, "%s/%s", root, path); dm_rom_pin(path, use); pinned++;
+                LOG("mods: %s in %s is the game's own file unchanged: the overlay's (%s) is used", path, from, root); continue;
+            }
+            snprintf(use, sizeof use, "%s/-merged/%s/%s", dir, got, path);
+            if (!access(use, R_OK)) { dm_rom_pin(path, use); pinned++; LOG("mods: %s: %s's copy with the overlay's change merged in (%s)", path, from, use); continue; }
+#endif
+            LOG("[red] mods: %s replaces %s, which the game's own overlay (%s) changes too: the mod's copy is used without that change. To merge them: "
+                "%s <the game's RomFS> %s --merge %s (it writes %s/-merged/%.12s.../%s)", from, path, root, tool, dir, mine, dir, got, path);
+        }
+        fclose(f);
+    }
+    free(roots);
+    return pinned;
+}
 // At boot (main.c, after the game's environment defaults): the mods' layers in front of DM_ROMFS_OVERLAY
 void dm_mods_apply(void) {
     const char *dir = getenv("DM_MODS");
@@ -110,7 +162,7 @@ void dm_mods_apply(void) {
     int nl = dm_mods_layers(dir, dm_game.program_id, getenv("DM_ROMFS"), layers, room);
     if (!nl) { LOG("mods: none in %s", dir); return; }
     int had = old && *old;   // (old points into the environment: setenv below may free it)
-    if (had) { strlcat(layers, ":", sizeof layers); strlcat(layers, old, sizeof layers); }
+    if (had) { dm_mods_pin_overlay(dir, layers, old); strlcat(layers, ":", sizeof layers); strlcat(layers, old, sizeof layers); }
     setenv("DM_ROMFS_OVERLAY", layers, 1);
     LOG("mods: %d in front of the game's RomFS%s", nl, had ? " and its own overlay" : "");
 }

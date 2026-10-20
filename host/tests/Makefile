@@ -32,6 +32,7 @@ run: \
 	$(B)/t_freeze \
 	$(B)/t_freeze_none \
 	$(B)/t_fs \
+	$(B)/t_fs_nopin \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
 	$(B)/t_fs_kill \
@@ -56,6 +57,7 @@ run: \
 	$(B)/t_memsnap \
 	$(B)/t_mods \
 	$(B)/t_mods_case \
+	$(B)/t_mods_nopin \
 	$(B)/t_mouse_route \
 	$(B)/t_mouse_route_swallow \
 	$(B)/t_movie \
@@ -155,6 +157,10 @@ run: \
 	   cat $(B)/t_freeze_none.log; echo "t_freeze_none: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_freeze_none: without a test watchdog no freeze is dumped, as expected"
 	$(B)/t_fs 2>/dev/null
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_fs_nopin > $(B)/t_fs_nopin.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_nopin.log)" -ne 1 ] || ! grep -q "FAIL a pinned file wins" $(B)/t_fs_nopin.log; then \
+	   cat $(B)/t_fs_nopin.log; echo "t_fs_nopin: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_fs_nopin: with the pins ignored the overlay's file is served, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_kill
@@ -214,6 +220,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ 01_one's layer" $(B)/t_mods_case.log; then \
 	   cat $(B)/t_mods_case.log; echo "t_mods_case: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_mods_case: paths built with the program ID as asked break on a file system that tells cases apart, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_mods_nopin > $(B)/t_mods_nopin.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_mods_nopin.log)" -ne 3 ]; then \
+	   cat $(B)/t_mods_nopin.log; echo "t_mods_nopin: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_mods_nopin: with the mod's copy always used the overlay's change is lost, as expected"
 	$(B)/t_mouse_route
 	@status=0; $(B)/t_mouse_route_swallow > $(B)/t_mouse_route_swallow.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "press on the title bar .*✗" $(B)/t_mouse_route_swallow.log; then \
@@ -463,6 +473,8 @@ $(B)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mods.c
 $(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MODS_CASE -I.. -o $@ t_mods.c
+$(B)/t_mods_nopin: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_MODS_NO_PIN -I.. -o $@ t_mods.c
 $(B)/t_logstamp: t_logstamp.c ../logstamp.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_logstamp.c
 $(B)/t_logstamp_every: t_logstamp.c ../logstamp.h | $(B)
@@ -481,6 +493,8 @@ $(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
+$(B)/t_fs_nopin: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_ROM_NO_PIN=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_kill: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_kill_inplace: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)

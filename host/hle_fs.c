@@ -235,7 +235,24 @@ int dm_overlay_file(const char *rel, char *out, size_t n) {
     if (n) out[0] = 0;
     return 0;
 }
+// RomFS files one host file serves whatever the layers hold (mods.c, plan item 164: a mod's copy of a file the game's own overlay patches, when the
+// overlay's file or a merge of the two is the one to use). Set at boot, before the game runs; the path as the RomFS spells it, without a leading /
+#ifndef DM_TEST_ROM_NO_PIN
+#define DM_TEST_ROM_NO_PIN 0
+#endif
+static struct { char rel[512], host[1024]; } g_pin[16];
+static int g_npin;
+void dm_rom_pin(const char *rel, const char *host) {
+    while (*rel == '/') rel++;
+    for (int i = 0; i < g_npin; i++) if (!strcmp(g_pin[i].rel, rel)) { strlcpy(g_pin[i].host, host, sizeof g_pin[i].host); return; }
+    if (g_npin == 16) { LOG("[red] rom pin: more than 16 files, %s left to the layers", rel); return; }
+    strlcpy(g_pin[g_npin].rel, rel, sizeof g_pin[0].rel); strlcpy(g_pin[g_npin].host, host, sizeof g_pin[0].host); g_npin++;
+}
 static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_t n) {
+    if (g_npin && !DM_TEST_ROM_NO_PIN) {   // (the macro: negative control of t_fs only, the pins ignored)
+        const char *r = rest; while (*r == '/') r++;
+        for (int i = 0; i < g_npin; i++) if (!strcmp(g_pin[i].rel, r)) { strlcpy(out, g_pin[i].host, n); return 1; }
+    }
     char *roots = strdup(m->overlay);
     if (!roots) die("rom overlay: path allocation failed");
     char *save = NULL;

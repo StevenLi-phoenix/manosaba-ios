@@ -164,15 +164,23 @@ if os.path.exists(par_p):
         if not why.strip(): bad(f'parameter gate {a}: empty reason')
         params.append((int(a, 16), int(b, 16), int(r.lstrip('x')), k))
 par_words = {o for a, b, r, k in params for o in (a, b)}
-caves = {}                                                           # Code caves (caves.tsv, plan item 139): offset → (original word, routine start, its words, its exits, reason)
+caves = {}                                                           # Code caves (caves.tsv, plan item 139): offset → (original word, routine start, its words, its exits, option, reason)
 cav_p = f'{out_dir}/{mod}.caves.tsv'
 if os.path.exists(cav_p):
     for l in open(cav_p, encoding='utf-8'):
         if l.startswith('# BUILD_ID'):
             if l.split()[-1] != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad('caves.tsv build ID does not match the NSO')
             continue
-        off, ow, st, ws, ex, why = l.rstrip('\n').split('\t', 5)
-        caves[int(off, 16)] = (int(ow, 16), int(st, 16), [int(x, 16) for x in ws.split()], {int(e, 16) for e in ex.split(',') if e}, why)
+        off, ow, st, ws, ex, gate, why = l.rstrip('\n').split('\t', 6)
+        caves[int(off, 16)] = (int(ow, 16), int(st, 16), [int(x, 16) for x in ws.split()], {int(e, 16) for e in ex.split(',') if e}, gate, why)
+gated = {a for a, c in caves.items() if c[4]}                        # caves behind an option (plan item 163): the word stays, options.tsv has the branch
+opt_rows = {}                                                        # options.tsv: offset → [(option, original bytes, new bytes)]
+opt_p = f'{out_dir}/{mod}.options.tsv'
+if os.path.exists(opt_p):
+    for l in open(opt_p, encoding='utf-8'):
+        if l.startswith('#'): continue
+        name, off, ob, nb = l.rstrip('\n').split('\t')[:4]
+        opt_rows.setdefault(int(off, 16), []).append((name, bytes.fromhex(ob), bytes.fromhex(nb)))
 
 # ① Non-text segments: compare whole blocks first, then byte by byte where blocks differ; differences may only fall inside cuts (cut bytes were already checked against their expected values in ⓪)
 nd = []
@@ -189,7 +197,7 @@ for blk in range(0, TE & ~3, 4096):                    # Compare whole blocks fi
     if orig[blk:e] != pat[blk:e]: diff |= {o for o in range(blk, e, 4) if W(orig, o) != W(pat, o)}
 heads = set(sites)
 cutw = {o & ~3 for o in cutb if o < TE}
-_exp = (heads | obs_heads | par_words | set(caves)) - cutw; _got = diff - cutw                # Host-call gate heads inside cuts are within the cut bytes and are checked as cuts
+_exp = (heads | obs_heads | par_words | (set(caves) - gated)) - cutw; _got = diff - cutw                # Host-call gate heads inside cuts are within the cut bytes and are checked as cuts
 if _got != _exp: bad(f'text changes do not match rewrite sites: {len(_got - _exp)} extra, {len(_exp - _got)} missing, e.g. {[hex(x) for x in sorted(_got ^ _exp)[:5]]}')
 def btarget(o):
     w = W(pat, o)
@@ -197,7 +205,7 @@ def btarget(o):
     imm = w & 0x3FFFFFF
     if imm & 0x2000000: imm -= 0x4000000
     return o + 4 * imm
-nb = [a for a in heads | obs_heads | set(caves) if sites.get(a) != 'ctr' and not (btarget(a) is not None and PO <= btarget(a) < len(pat))]
+nb = [a for a in heads | obs_heads | (set(caves) - gated) if sites.get(a) != 'ctr' and not (btarget(a) is not None and PO <= btarget(a) < len(pat))]
 # ⑫ ctr sites: replaced in place by a constant
 _ctr = [a for a, k in sites.items() if k == 'ctr']
 for a in _ctr:
@@ -536,20 +544,31 @@ for a in sorted(_heads):
         nexit += 1
         if t not in legal and a in _cutoff: _cutex.append(f'{a:#x}→{t:#x}'); continue   # Registered cuts (with a reason, deliberately changing control flow): let through and listed
         if t not in legal: bad(f'trampoline exit {a:#x} → {t:#x}: neither {a + 4:#x} / end of the absorbed span / end of the window, nor a branch target of an original instruction in the span (skips unmodified original instructions or another trampoline head)')
+for a in sorted(gated):   # a cave behind an option is walked from its routine (the branch to it is written at load)
+    for t in _exits(caves[a][1]):
+        nexit += 1
+        if t not in caves[a][3]: bad(f'code cave {a:#x}: exit to {t:#x}, which caves.tsv does not list')
 print(f'EXITS {mod} tramp_heads={len(_heads)} exits={nexit} cut_exits={_cutex}')
 
 # ⑬ Code caves (CAVES, plan item 139): the original word at the offset is the listed one, the image has `b <routine start>` there, the patch area holds
 #   the listed words, the routine's last word is an unconditional branch back to text (offset + 4 or a listed exit), every exit is in text and
-#   listed, the reason is not empty, and no cave sits on a rewrite site, window, gate or cut. What a routine does is the game's tests' to check
-for a, (ow, st, ws, ex, why) in sorted(caves.items()):
+#   listed, the reason is not empty, and no cave sits on a rewrite site, window, gate or cut. A cave behind an option (plan item 163) keeps the
+#   original word in the image and options.tsv has exactly one row there, of that option: the original word to `b <routine start>`. What a
+#   routine does is the game's tests' to check
+for a, (ow, st, ws, ex, gate, why) in sorted(caves.items()):
     if W(orig, a) != ow: bad(f'code cave {a:#x}: original word {W(orig, a):#010x}, caves.tsv says {ow:#010x}')
-    if btarget(a) != st: bad(f'code cave {a:#x}: not a branch to its routine {st:#x}')
+    if gate:
+        if W(pat, a) != ow: bad(f'code cave {a:#x} (option {gate}): the image does not hold the original word')
+        rows = opt_rows.get(a, [])
+        if rows != [(gate, struct.pack('<I', ow), struct.pack('<I', 0x14000000 | (((st - a) >> 2) & 0x3FFFFFF)))]:
+            bad(f'code cave {a:#x} (option {gate}): options.tsv has not exactly its one row, the original word to b {st:#x} ({rows})')
+    elif btarget(a) != st: bad(f'code cave {a:#x}: not a branch to its routine {st:#x}')
     if st < PO or [W(pat, st + 4 * k) for k in range(len(ws))] != ws: bad(f'code cave {a:#x}: the patch area does not hold the listed routine')
     last = ws[-1] if ws else 0
     if not (last & 0xFC000000 == 0x14000000 and _bt(last, st + 4 * (len(ws) - 1)) in ex): bad(f'code cave {a:#x}: the routine does not end in a branch back to a listed exit')
     if any(e >= TE or e % 4 for e in ex) or not why.strip(): bad(f'code cave {a:#x}: an exit outside text, or no reason')
     if a in sites or a in inwin or a in obs_heads or a in par_words or a in cutw: bad(f'code cave {a:#x}: on another change')
-print(f'CAVES {mod} caves={len(caves)}')
+print(f'CAVES {mod} caves={len(caves)} behind_options={len(gated)}')
 
 # ⑪ Exclusive sections (W / R rows) and jump tables with explicit targets (JT rows), word by word
 def STRX_(t, n): return 0xF9000000 | (n << 5) | t                                  # str xt, [xn]

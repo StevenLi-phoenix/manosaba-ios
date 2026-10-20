@@ -1,6 +1,7 @@
 // The host half of the real-time frame step (games/totk/frame_step.c): the mean of the present intervals and the page layout; the scene size the
 // page carries at +16 (DM_RENDER_RES or the game's own for the operation mode, plan item 52). Built and run by
-// games/totk/check_frame_rate.py (clang -DFRAME_STEP_TEST -I host). The heap overlay's note ignored (-DDM_TEST_SCENE_NO_HEAP) fails 1.
+// games/totk/check_frame_rate.py (clang -DFRAME_STEP_TEST -I host). The heap overlay's note ignored (-DDM_TEST_SCENE_NO_HEAP) fails 1; +8 not
+// written (-DDM_TEST_CLOTH_NO_SECONDS) fails 1.
 #include <stdio.h>
 #include <math.h>
 #define FRAME_STEP_TEST 1
@@ -26,10 +27,11 @@ int main(void) {
     expect("an interval above 1/15 s counts as 1/15", (2 / 30.0 + 1 / 60.0 + 1 / 120.0 + 1 / 15.0) / 5, s, 1e-6);
     expect("a pause above 0.25 s keeps the step", 0, frame_mean_add(&m, t += 400000000), 0);
     expect("... and restarts the mean", 1.0 / 60, frame_mean_add(&m, t += 16666667), 1e-6);
-    _Atomic uint64_t page = 0; frame_step_store(&page, 1.0 / 90);
-    uint64_t bits = atomic_load(&page); float v[2]; memcpy(v, &bits, sizeof v);
+    _Atomic uint64_t page[2] = {0}; frame_step_store(page, 1.0 / 90);
+    uint64_t bits = atomic_load(&page[0]), b2 = atomic_load(&page[1]); float v[3]; memcpy(v, &bits, 8); memcpy(&v[2], &b2, 4);
     expect("page +0: ratio = seconds x 30", 1.0 / 3, v[0], 1e-6);
     expect("page +4: ticks = seconds x 60", 2.0 / 3, v[1], 1e-6);
+    expect("page +8: seconds (the cloth and hair clock, plan item 163)", 1.0 / 90, v[2], 1e-6);
     float sz[2]; int r;
     r = scene_size(NULL, 1, NULL, sz); expect("scene size unset, docked: the game's 1600 ...", 1600, sz[0], 0); expect("... x 900, its own (0)", 900 * 10 + 0, sz[1] * 10 + r, 0);
     r = scene_size("", 0, NULL, sz); expect("unset, handheld: 1280 ...", 1280, sz[0], 0); expect("... x 720, its own (0)", 720 * 10 + 0, sz[1] * 10 + r, 0);

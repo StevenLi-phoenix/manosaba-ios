@@ -4,12 +4,35 @@
 # Tears of the Kingdom's changes are options (plan item 57: one product for 30 and 60 fps), applied at load when DM_OPTIONS or the product's
 # options.default names them; with none the code is the game's as shipped (the 30 fps product):
 #   fps60     the frame-rate controller's minimum interval 1, also in shrines and after a fixed interval
-#   realtime  the real-time frame step (host page +0 / +4, games/totk/frame_step.c)
+#   realtime  the real-time frame step (host page +0 / +4, games/totk/frame_step.c), and the cloth and hair clock from it (CAVES, host page +8)
 #   scene     the scene render size from the host page +16 (DM_RENDER_RES)
 CUTS = {}
 OBS = {}
 PARAMS = {}
 HOSTREFS = {}
+# Cloth and hair (plan item 163, after MacNativeGames PR #79, merged, MIT; ly05010419/MacNativeGames): the actor animation update has a second clock,
+# for cloth and hair, that it builds as {seconds = factor / 30, ratio = factor} at every frame (factor: the time factor, 0 when paused, below 1 in
+# slow motion), so at 60 fps it runs twice as fast and at 120 four times. Ordinary animation already gets the real-time step (realtime above). With
+# realtime on, these four make it {measured seconds × factor, measured ratio × factor} (host page +0 ratio, +8 seconds; frame_step.c), the
+# factor kept. Two inlined copies build it (0x246eac, 0x345904: the original fmul gives seconds from the constant 1/30, after the ratio was stored);
+# two calls pass it to the out-of-line update 0x2a0e40 as s2 = factor / 30, s3 = factor (0x24944c, 0x28bc98), whose third caller (0x2afac18)
+# already passes measured time and is left alone. Scratch: x8 (loaded again after both inlined sites; 0x2a0e40 loads it first) and s4 (none of
+# the three callers sets v4 and 0x2a0e40 never names it: no argument). The PR makes the call sites `bl <veneer>` that ends in `b 0x2a0e40`; here
+# the routine calls it and branches back (the update's return address is in the patch area: Tears of the Kingdom has no C++ exceptions to unwind).
+# games/totk/tests/check_cloth_clock.py runs the four in Unicorn after the PR's table.
+_HOST_X8 = ('adrp_host', 8)
+CAVES = {
+    '277178b7dba1b6d4949a84778d4abc58': [   # main 1.4.3
+        (0x246eac, '1e200940', [_HOST_X8, 0xbd400100, 0x1e200940, 0xbd0367e0, 0xbd400900, 0x1e200940],
+         'cloth clock (inlined): fmul s0, s10, s0 → ratio = page+0 × s10 stored at sp+0x364, s0 = page+8 × s10 (seconds)', 'realtime'),
+        (0x345904, '1e210801', [_HOST_X8, 0xbd400101, 0x1e210801, 0xbd0117e1, 0xbd400901, 0x1e210801],
+         'cloth clock (inlined): fmul s1, s0, s1 → ratio = page+0 × s0 stored at sp+0x114, s1 = page+8 × s0 (seconds)', 'realtime'),
+        (0x24944c, '94015e7d', [_HOST_X8, 0xbd400104, 0x1e240842, 0x1e240863, ('bl', 0x2a0e40)],
+         'cloth clock (call): s2, s3 × page+0 (the measured ratio) before bl 0x2a0e40', 'realtime'),
+        (0x28bc98, '9400546a', [_HOST_X8, 0xbd400104, 0x1e240842, 0x1e240863, ('bl', 0x2a0e40)],
+         'cloth clock (call): s2, s3 × page+0 (the measured ratio) before bl 0x2a0e40', 'realtime'),
+    ],
+}
 OPTIONS = {
     '277178b7dba1b6d4949a84778d4abc58': {   # main 1.4.3
         # 60 fps: the seven controller words of MacNativeGames' game_patches_v143.c (ly05010419/MacNativeGames, MIT, reviewed at
