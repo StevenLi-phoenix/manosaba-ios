@@ -3553,7 +3553,8 @@ static void shmap_load(void) {
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
-    id<MTLLibrary> alib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *afn; } @end   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
+    id<MTLLibrary> alib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *afn;
+    NSMutableDictionary<NSString *, NvShader *> *bdv; } @end   // bdv: variants that return a sampler's border colour Metal lacks (border_variant, plan item 161)   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
 @implementation NvShader @end
 #include "nvn_pso_skey.h"
 #include "nvn_warm_list.h"
@@ -3844,6 +3845,13 @@ static void treg_drop_views(const uint64_t *serials, int n) {   // fin_drain, n 
     }
     pthread_mutex_unlock(&g_rmu);
 }
+// A sampler that clamps to a border colour Metal does not have (it has transparent black, opaque black and opaque white only; plan item 161)
+static int samp_border_custom(const samp_par *p) {
+    if (!(p->ws == 4 || p->ws == 5 || p->wt == 4 || p->wt == 5 || p->wr == 4 || p->wr == 5)) return 0;
+    const float *c = p->border;
+    return !((c[0] == 0 && c[1] == 0 && c[2] == 0 && (c[3] == 0 || c[3] == 1)) || (c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 1));
+}
+static int g_border_any;              // such a sampler has been registered (until then nothing below is checked)
 void mtl_reg_samp(int sid, const samp_par *sp) { @autoreleasepool {
     int id_ = sid; if (id_ < 0) return;
     pthread_mutex_lock(&g_rmu);
@@ -3851,7 +3859,8 @@ void mtl_reg_samp(int sid, const samp_par *sp) { @autoreleasepool {
         memset(g_sreg_ok + g_nsreg, 0, n - g_nsreg); memset(g_sview + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview); memset(g_srid + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid); g_nsreg = n; }
     if (g_sview[id_]) { CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
     g_reg_gen++;
-    g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
+    g_sreg[id_] = *sp; g_sreg_ok[id_] = samp_border_custom(sp) ? 2 : 1;   // 2: a border colour Metal lacks (plan item 161)
+    if (g_sreg_ok[id_] == 2) g_border_any = 1;
     pthread_mutex_unlock(&g_rmu);
 } }
 static MTLTextureType ttype(int target, int fallback) {
@@ -4020,6 +4029,25 @@ static MTLSamplerAddressMode wrapm(int w) {
     return MTLSamplerAddressModeRepeat;
 }
 static int g_samp_old_once;
+// Border colours Metal does not have (plan item 161, the census before shader variants; MacNativeGames b6231e6 / 874a32d, #49: the grass map's
+// border 0.5 read as transparent black): Metal clamps to transparent black, opaque black or opaque white only. Each other colour of a sampler that
+// clamps to its border is logged once with what it is drawn as; the samplers with border wrap modes and those of them off the three are counted
+// (mtl_border_census, the power line)
+static uint64_t g_border_samp, g_border_off;
+static void border_census(const samp_par *p, MTLSamplerBorderColor drawn) {
+    if (!(p->ws == 4 || p->ws == 5 || p->wt == 4 || p->wt == 5 || p->wr == 4 || p->wr == 5)) return;
+    g_border_samp++;
+    if (!samp_border_custom(p)) return;
+    g_border_off++; const float *c = p->border;
+    static float seen[16][4]; static int nseen; int dup = 0;
+    for (int i = 0; i < nseen; i++) dup |= !memcmp(seen[i], c, sizeof seen[i]);
+    if (dup || nseen == 16) return;
+    memcpy(seen[nseen++], c, sizeof seen[0]);
+    MLOG("sampler border colour (%g, %g, %g, %g) with wrap modes %d / %d / %d: Metal has no such border; clamped to the edge, the shaders that sample through it return the colour outside the texture (border_variant; the edge texel without one, %s before) (sampler census: %llu with border wrap, %llu off Metal's three)",
+         c[0], c[1], c[2], c[3], p->ws, p->wt, p->wr, drawn == MTLSamplerBorderColorOpaqueWhite ? "opaque white" : drawn == MTLSamplerBorderColorOpaqueBlack ? "opaque black" : "transparent black",
+         (unsigned long long)g_border_samp, (unsigned long long)g_border_off);
+}
+void mtl_border_census(uint64_t *with_border, uint64_t *off) { *with_border = g_border_samp; *off = g_border_off; }
 static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     if (sid < 0 || sid >= g_nsreg || !g_sreg_ok[sid]) { RED_ONCE(12, "sampler ID %d not registered", sid); return nil; }
     if (g_sview[sid]) return (__bridge id<MTLSamplerState>)g_sview[sid];
@@ -4038,6 +4066,14 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     if (@available(macOS 26.0, iOS 26.0, *)) { d.lodBias = p.lod_bias < -16.f ? -16.f : p.lod_bias > 15.999f ? 15.999f : p.lod_bias; d.reductionMode = (MTLSamplerReductionMode)p.reduction; }
     else if ((p.reduction || p.lod_bias != 0.f) && !g_samp_old_once++) MLOG("[red] sampler LOD bias %g / reduction %d need macOS / iOS 26: ignored", p.lod_bias, (int)p.reduction);
     d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
+    border_census(&p, d.borderColor);
+#ifndef DM_TEST_BORDER_OFF   // negative control of t_border only: the nearest of Metal's three, as before
+    if (g_sreg_ok[sid] == 2) {   // the shader returns the colour outside the texture (border_variant); inside it the edge texels must not blend with a wrong border
+        if (d.sAddressMode == MTLSamplerAddressModeClampToBorderColor) d.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        if (d.tAddressMode == MTLSamplerAddressModeClampToBorderColor) d.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        if (d.rAddressMode == MTLSamplerAddressModeClampToBorderColor) d.rAddressMode = MTLSamplerAddressModeClampToEdge;
+    }
+#endif
     d.supportArgumentBuffers = YES;
     id<MTLSamplerState> s = [g_dev newSamplerStateWithDescriptor:d];
     if (s) { g_sview[sid] = (void *)CFBridgingRetain(s); g_srid[sid] = s.gpuResourceID._impl; }
@@ -4080,6 +4116,7 @@ static struct {
     p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp; int depth_clamp;
     int restart_set, restart_en; uint32_t restart_idx;   // SetPrimitiveRestart (restart_set: the game has set it; its default is not documented)
     float blend_color[4], alpha_ref; int64_t copy_stride, copy_image_stride;
+    uint8_t border_bound[2];   // the vertex / fragment stage has a sampler bound whose border colour Metal lacks (border_rebind, plan item 161)
 } S;
 static void state_vp_ms(float vp[4], int ms[3]) { for (int k = 0; k < 4; k++) vp[k] = S.has_vp ? S.vp[0][k] : 0; ms[0] = S.ms.enable; ms[1] = S.ms.samples; ms[2] = S.ms.raster_samples; }
 static uint32_t cur_chmask(void) { return S.chmask.mask; }
@@ -4459,10 +4496,101 @@ static void pair_note(NvShader *vs, NvShader *fs) {
     }
     pthread_mutex_unlock(&mu);
 }
+// ---------- Sampler border colours Metal lacks, in the shader (plan item 161; MacNativeGames b6231e6 / 874a32d, #49, MIT, written anew) ----------
+// Such a sampler clamps to its edge (samp_by_id), and a shader stage that samples through it gets a variant whose samples return the colour when the
+// coordinate is outside [0, 1]: its MSL with each `X.sample(spvDescriptorSet0.<sampler>, ` made `dm_border_sample(colour, X, spvDescriptorSet0.<sampler>, `
+// (2D, 2D array and 3D textures; cubes have no border; depth gives the colour's red), compiled as dmsh_build.py compiles (safe math, invariance kept).
+// The variant is another NvShader with the same reflection, so its pipelines have keys of their own while the warm-up list records the plain ones.
+// The source is the shader's .metal beside its library: the Mac's workspace has it, an iOS app does not (a red line once: drawn with the edge colour).
+// Tears of the Kingdom's grass interaction map samples with border (0.5, 0.5, 0.5, 0.5): drawn as transparent black, the grass lay flat and could not
+// be cut. Checked by gfx/tests/t_border.m
+static NSString *const BORDER_HELPER =
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texture2d<T> t, sampler s, float2 uv, A... a)\n"
+    @"{ return any(uv < 0.0) || any(uv > 1.0) ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texture2d_array<T> t, sampler s, float2 uv, A... a)\n"
+    @"{ return any(uv < 0.0) || any(uv > 1.0) ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texture3d<T> t, sampler s, float3 uv, A... a)\n"
+    @"{ return any(uv < 0.0) || any(uv > 1.0) ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texturecube<T> t, sampler s, float3 uv, A... a) { return t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline T dm_border_sample(float4 b, depth2d<T> t, sampler s, float2 uv, A... a)\n"
+    @"{ return any(uv < 0.0) || any(uv > 1.0) ? T(b.x) : t.sample(s, uv, a...); }\n";
+// The MSL with the samples through each named sampler member returning its colour outside the texture; *count the calls rewritten
+static NSString *border_src(NSString *src, NSArray<NSString *> *names, const float (*col)[4], int *count) {
+    NSMutableString *m = [src mutableCopy]; *count = 0;
+    for (NSUInteger i = 0; i < names.count; i++) {
+        NSString *pat = [NSString stringWithFormat:@"([A-Za-z_][A-Za-z0-9_\\.]*)\\.sample\\(\\s*(spvDescriptorSet0\\.%@)\\s*,", [NSRegularExpression escapedPatternForString:names[i]]];
+        NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pat options:0 error:nil];
+        NSString *tpl = [NSString stringWithFormat:@"dm_border_sample(float4(%a, %a, %a, %a), $1, $2,", col[i][0], col[i][1], col[i][2], col[i][3]];
+        *count += (int)[re replaceMatchesInString:m options:0 range:NSMakeRange(0, m.length) withTemplate:tpl];
+    }
+    NSRange u = [m rangeOfString:@"using namespace metal;"];
+    if (u.location == NSNotFound) { *count = 0; return m; }
+    [m insertString:[@"\n" stringByAppendingString:BORDER_HELPER] atIndex:NSMaxRange(u)];
+    return m;
+}
+// Texture / sampler handles h[0..n) were just bound to stage st (0 vertex, 1 fragment; g_border_any set): has the stage such a sampler bound now. Only
+// the new handles are looked at, and the whole stage only while one was bound (to see it go): a full scan at every bind cost 7 % of the replay
+static void border_rebind(int st, const uint64_t *h, int n) {
+    int has = 0;
+    pthread_mutex_lock(&g_rmu);
+    for (int k = 0; k < n && !has; k++) { int sid = (int)(h[k] >> 20); has = sid > 0 && sid < g_nsreg && g_sreg_ok[sid] == 2; }
+    for (int r = 0; r < 128 && !has && S.border_bound[st]; r++) {
+        int a = (int)(S.tex[st][r] >> 20), b = (int)(S.samp[st][r] >> 20);
+        has = (a > 0 && a < g_nsreg && g_sreg_ok[a] == 2) || (b > 0 && b < g_nsreg && g_sreg_ok[b] == 2);
+    }
+    pthread_mutex_unlock(&g_rmu);
+    if (has || S.border_bound[st]) g_pso_dirty = 1;   // the pipeline is chosen again while such a sampler is (or was) bound
+    S.border_bound[st] = (uint8_t)has;
+}
+static uint64_t g_border_variants, g_border_fallback;
+// The shader of stage st (0 vertex, 1 fragment) for the samplers bound now: sh itself, or its variant returning the border colours Metal lacks
+static NvShader *border_variant(NvShader *sh, int st) {
+    float col[16][4]; int aid[16], n = 0;
+    pthread_mutex_lock(&g_rmu);
+    for (int i = 0; i < sh->rf.nb && n < 16; i++) {
+        const nvn_rbind *b = &sh->rf.b[i]; if (b->kind != NVN_RB_SAMP && b->kind != NVN_RB_SAMPT) continue;
+        int reg = b->reg, sid = reg < 128 ? (int)((b->kind == NVN_RB_SAMPT ? S.tex[st][reg] : S.samp[st][reg]) >> 20) : 0;
+        if (sid > 0 && sid < g_nsreg && g_sreg_ok[sid] == 2) { memcpy(col[n], g_sreg[sid].border, sizeof col[n]); aid[n++] = b->aid; }
+    }
+    pthread_mutex_unlock(&g_rmu);
+    if (!n) return sh;
+    NSMutableString *key = [NSMutableString string];
+    for (int i = 0; i < n; i++) [key appendFormat:@"%d:%a,%a,%a,%a;", aid[i], col[i][0], col[i][1], col[i][2], col[i][3]];
+    NvShader *v = sh->bdv[key];
+    if (v) return v;
+    if (!sh->bdv) sh->bdv = [NSMutableDictionary dictionary];
+    v = sh;   // a failure is kept as the plain shader: not tried again
+    NSString *base = [NSString stringWithFormat:@"%@/%s", g_msl_dir, sh->key];
+    NSString *src = [NSString stringWithContentsOfFile:[base stringByAppendingString:@".metal"] encoding:NSUTF8StringEncoding error:nil];
+    NSData *jd = [NSData dataWithContentsOfFile:[base stringByAppendingString:@".json"]];
+    NSDictionary *j = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (int i = 0; i < n; i++) for (NSDictionary *b in j[@"bindings"]) if ([b[@"arg_id"] intValue] == aid[i] && [b[@"msl_name"] isKindOfClass:NSString.class]) { [names addObject:b[@"msl_name"]]; break; }
+    int cnt = 0; NSString *msl = src && names.count == (NSUInteger)n ? border_src(src, names, (const float (*)[4])col, &cnt) : nil;
+    id<MTLLibrary> lib = nil; NSError *e = nil;
+    if (msl && cnt) { MTLCompileOptions *o = [MTLCompileOptions new]; o.mathMode = MTLMathModeSafe; o.preserveInvariance = YES; lib = [g_dev newLibraryWithSource:msl options:o error:&e]; }
+    id<MTLFunction> fn = lib ? (st == 1 && sh->alib ? alpha_plain(lib, j[@"entry"]) : [lib newFunctionWithName:j[@"entry"]]) : nil;
+    if (fn) {
+        v = [NvShader new]; v->fn = fn; v->rf = sh->rf; v->ae = sh->ae; v->arg_len = sh->arg_len; v->stage = sh->stage; v->range_ro = sh->range_ro;
+        memcpy(v->key, sh->key, sizeof v->key); v->c1buf = sh->c1buf; v->c1_gpu = sh->c1_gpu; v->c1off = sh->c1off;
+        if (sh->vi_lib) { v->vi_lib = lib; v->vi_entry = sh->vi_entry; v->vi_mask = sh->vi_mask; }
+        if (sh->alib) v->alib = lib;
+        g_border_variants++;
+        MLOG("%s shader %s: sampler border colour (%g, %g, %g, %g)%s returned outside the texture in %d sample call%s (Metal has no such border)", st ? "fragment" : "vertex", sh->key,
+             col[0][0], col[0][1], col[0][2], col[0][3], n > 1 ? " and others" : "", cnt, cnt == 1 ? "" : "s");
+    } else {
+        g_border_fallback++;
+        RED_ONCE(100, "%s shader %s samples through a sampler whose border colour Metal lacks, and %s: drawn with the edge colour instead", st ? "fragment" : "vertex", sh->key,
+                 !src ? "its MSL source is not here (iOS apps carry only the libraries)" : !cnt ? "no sample call through it was found" : e ? e.localizedDescription.UTF8String : "it did not compile");
+    }
+    sh->bdv[key] = v;
+    return v;
+}
 static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRenderPassDescriptor *unused) {
     (void)unused;
     __unsafe_unretained NvShader *vs = pr->sh[0], *fs = pr->sh[1];
     if (!vs) { RED_ONCE(13, "program has no vertex shader (or it is not mapped)"); return nil; }
+    if (g_border_any) { if (S.border_bound[0]) vs = border_variant(vs, 0); if (S.border_bound[1] && fs) fs = border_variant(fs, 1); }   // plan item 161
     pso_key k; pso_key_fill(&k, vs, fs, g_pass.cfmt, g_pass.dfmt, g_pass.sfmt, g_pass.samples, g_pso_lmap != NULL);
     if (g_pso_lmap) { memcpy(k.lmap, g_pso_lmap, 8); k.fsfn = (__bridge void *)g_pso_fsfn; }
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
@@ -5291,8 +5419,8 @@ static int state_op(uint32_t op, const void *a) {
         case OP_BIND_VBUF: { const p_bind_vbuf *b = a; memcpy(&S.vbuf[b->first], b->r, sizeof *b->r * b->n); break; }
         case OP_BIND_UBO: { const p_bind_buf *b = a; gw_note(b, 0); PD("b bind_ub st%d r%d addr=%#llx size=%llu", b->stage, b->index, (unsigned long long)b->addr, (unsigned long long)b->size); if (b->stage < 6 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
         case OP_BIND_SSBO: { const p_bind_buf *b = a; gw_note(b, 1); if (b->stage < 6 && b->index < 16 && memcmp(&S.ssbo[b->stage][b->index], b, sizeof *b)) { S.ssbo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
-        case OP_BIND_TEX: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.tex[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.tex[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } break; }
-        case OP_BIND_SAMP: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.samp[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.samp[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } break; }
+        case OP_BIND_TEX: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.tex[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.tex[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; if (g_border_any && b->stage < 2) border_rebind(b->stage, b->h, b->n); } break; }
+        case OP_BIND_SAMP: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.samp[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.samp[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; if (g_border_any && b->stage < 2) border_rebind(b->stage, b->h, b->n); } break; }
         case OP_BIND_IMG: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first >= 0 && b->first + b->n <= 32) { if (memcmp(&S.img[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.img[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } } else RED_ONCE(31, "image slot out of range stage %d first %d count %d", b->stage, b->first, b->n); break; }
         case OP_STENCIL: {
             const p_stencil *b = a;

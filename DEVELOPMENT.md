@@ -1851,9 +1851,17 @@ Tier 3d, from the evening sync of 2026-10-20 (sources in that section; after 3c,
   section 11 (1 more; succeeding with 0 fails it)
 
 Tier 3d, Tears of the Kingdom:
-- [ ] 161 sampler border colours Metal lacks: a census of (wrap mode, colour), then shader variants that return the colour outside [0, 1]
-  (MacNativeGames b6231e6 / 874a32d, #49: the grass interaction map's border 0.5 read as transparent black, grass flat and uncuttable; ours maps
-  every colour to black or white, checked here); before 94a
+- [x] batch 50 · 161 sampler border colours Metal lacks (after MacNativeGames b6231e6 / 874a32d, #49, MIT, written anew). The census (a line per
+  colour, the count in the timing summary): Tears of the Kingdom's prologue 4 border samplers, none off Metal's three; the cliff save 6, one
+  (0.5, 0.5, 0.5, 0.5), the grass interaction map's, which was drawn as transparent black. Such a sampler now clamps to its edge, and a vertex or
+  fragment stage that samples through it gets a variant (`border_variant`): its MSL with those `.sample(` calls made `dm_border_sample(colour, ...)`
+  (2D, 2D array, 3D; depth the red; cubes have no border), compiled as `dmsh_build.py` compiles, another NvShader with the same reflection so its
+  pipelines have keys of their own while the warm-up list records the plain ones; a stage is looked at again only when a bind brings such a sampler
+  in or one was bound (a scan at every bind cost 7 % of the replay; now 0.6-0.9 %). The cliff save: one fragment and one vertex shader made so. The
+  source is the `.metal` beside the library: an iOS app has none, so there such samples read the edge colour (a red line once; for 62 the
+  sources of the shaders seen to need it could ship). `t_border` (4, Metal 4 and 3: the colour taken as one Metal lacks and black not, a plain
+  sample reads the edge, the rewritten one 0.5 outside and red inside, a 2D array call rewritten compiles; the nearest of Metal's three fails 1).
+  To check in a game (the user): grass that stands up away from Link and can be cut, in a grassy area of Tears of the Kingdom
 - [ ] 162 one pixel shader bound to float and to uint targets: a second library by target kind (MacNativeGames' shared list: 23 of our keys)
 - [ ] 163 hair and cloth at 60 / 120 fps: the four sites of MacNativeGames PR #79 with its Unicorn table (after 139)
 - [ ] 164 a mod that carries one of our RomFS overlay files: a red line, or the overlay's member patch applied to the mod's copy (MacNativeGames #73)

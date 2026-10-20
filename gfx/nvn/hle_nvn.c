@@ -1569,6 +1569,8 @@ static void tsummary(uint64_t frame) {
       if (acq_gpu_wait() && g_acq_gpu_ns > pw) LOG("[nvn] ... waited %.2f ms for it in all", (g_acq_gpu_ns - pw) / 1e6);
       pn = g_acq_n; pe = g_acq_early; pw = g_acq_gpu_ns; }
     { char pl[128]; dm_perf_line(pl, sizeof pl); LOG("[nvn] fps / GPU line at frame %llu: %s", frame, pl); }   // what the iOS overlay / Mac title show
+    { static uint64_t pb = UINT64_MAX; uint64_t b, off; void mtl_border_census(uint64_t *, uint64_t *); mtl_border_census(&b, &off);   // plan item 161's census
+      if (b != pb) { pb = b; LOG("[nvn] samplers up to frame %llu: %llu clamp to their border colour, %llu of them a colour Metal does not have", frame, (unsigned long long)b, (unsigned long long)off); } }
     power_line(frame);
     { unsigned n = g_tn[0] < TWIN ? g_tn[0] : TWIN, over = 0; double v[TWIN];   // frame interval gets its own line (M1 baseline): frames over their hold in this window and p99
       if (n) { for (unsigned i = 0; i < n; i++) over += nvn_slow(g_tw[0][i], g_tw0_hold[i]);   // over 1.1 × each frame's own hold (plan item 156)

@@ -121,6 +121,8 @@ t_present_vp: t_present_vp.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_vp.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_feedback_pool: t_feedback_pool.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback_pool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_border: t_border.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_border.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pluma: t_pluma.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pluma.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pairs: t_pairs.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -179,6 +181,7 @@ run: \
 	t_alpha \
 	t_aniso \
 	t_attless \
+	t_border \
 	t_chunk \
 	t_copy_pitch \
 	t_cover \
@@ -303,6 +306,7 @@ run: \
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_pluma
 	./t_present_vp
 	./t_feedback_pool
+	MTL_DEBUG_LAYER=1 ./t_border
 	MTL_DEBUG_LAYER=1 ./t_rtheap
 	./t_linkfifo
 	python3 -I t_alpha_src.py 1 > t_alpha_1.metal && python3 -I t_alpha_src.py 0 > t_alpha_0.metal && ./t_alpha t_alpha_1.metal t_alpha_0.metal
