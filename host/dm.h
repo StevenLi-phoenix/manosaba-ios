@@ -87,6 +87,10 @@ const uint64_t *dm_hstack_record(uint64_t tsd, uint64_t top);
 extern char dm_hcall_ret[];
 #define DM_GUEST_RA() ((uint64_t)__builtin_return_address(0) == (uint64_t)dm_hcall_ret \
                        ? ((const uint64_t *)*(const uint64_t *)__builtin_frame_address(0))[1] : (uint64_t)__builtin_return_address(0))
+// The guest return address in unimpl_c, called from an unimplemented import's stub (entry.S): the stub's body keeps a frame record whose saved lr is
+// dm_hcall_ret when it ran on the host stack (the guest's x29 / x30 are then in dm_hcall's record) or the guest's own with DM_HSTACK=0 (t_hstack 4)
+#define DM_UNIMPL_GUEST_RA() ({ const uint64_t *b_ = (const uint64_t *)*(const uint64_t *)__builtin_frame_address(0); \
+                                b_[1] == (uint64_t)dm_hcall_ret ? ((const uint64_t *)b_[0])[1] : b_[1]; })
 // Frame pointer walks (crash.c, diag.c, hle_thread.c): frames go up the stack, except once, where a host call's record links the host stack to
 // the guest's
 static inline int dm_fp_step_ok(uint64_t fp, uint64_t nfp, int *jumps) { return nfp > fp || (nfp && !(*jumps)++); }

@@ -77,6 +77,8 @@ t_ppred: t_ppred.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ppred.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -145,6 +147,7 @@ run: \
 	t_esfilter \
 	t_extent \
 	t_findrain \
+	t_fmt_swz \
 	t_fbx \
 	t_fuse_check \
 	t_gputime \
@@ -263,6 +266,7 @@ run: \
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
 	./t_pso_skey
 	MTL_DEBUG_LAYER=1 ./t_samp
+	MTL_DEBUG_LAYER=1 ./t_fmt_swz
 	./t_refl
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view

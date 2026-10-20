@@ -12,6 +12,7 @@
 #include "nvn_protos.h"
 #include "nvn_count.h"
 #include "nvn_tex.h"
+#include "../tex/nvn_fmt_mtl.h"
 #include "nvn_mtl.h"
 #include "nvn_pace.h"
 #include "../../host/front.h"
@@ -336,7 +337,9 @@ NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, p
 NVN(nvnTextureBuilderSetPackagedTextureData, void, NVNtextureBuilder *b, const void *data) { (void)b; (void)data; }
 NVN(nvnTextureBuilderSetPackagedTextureLayout, void, NVNtextureBuilder *b, const NVNpackagedTextureLayout *l) {
     TB(b)->has_layout = l != NULL; if (l) memcpy(TB(b)->layout, l->layout, 8);
-    TB(b)->d.pkg_block_h = l ? l->layout[0] + 1 : 0;
+    // Only byte 0 is understood (block height / depth, nvn_tex.c); byte 1 was 0 in all 2,134 layouts logged here (bayonetta3-mobile reads it). Red once
+    if (l && l->layout[1]) { static int red; if (!red++) LOG("[red] SetPackagedTextureLayout: byte 1 is %#x, not modelled (layout %02x %02x %02x %02x ...; first case)", l->layout[1], l->layout[0], l->layout[1], l->layout[2], l->layout[3]); }
+    TB(b)->d.pkg_layout = l ? 0x100 | l->layout[0] : 0;
 }
 NVN(nvnTextureBuilderGetFlags, NVNtextureFlags, const NVNtextureBuilder *b) { return (NVNtextureFlags)((const tex_builder_t *)b)->d.flags; }
 #define CTB(b) (&((const tex_builder_t *)(b))->d)
@@ -384,6 +387,40 @@ NVN(nvnTextureBuilderGetStorageAlignment, size_t, const NVNtextureBuilder *b) {
 #define TX(t) ((tex_t *)(t))
 #define CTX(t) ((const tex_t *)(t))
 #define tex_snap(t) mtl_tex_snap(CTX(t))   // recorded commands point at a host copy of the texture (nvn_mtl.m)
+// DM_NVN_TEXCENSUS=1 (items 82 / 83): textures of the kinds whose layout or sampling rules are not checked against the driver, one line per
+// distinct shape (up to 16 per kind) with the running count of that kind: cube arrays, LINEAR_RENDER_TARGET without LINEAR, MINIMAL_LAYOUT,
+// packaged 3D, linear block-compressed, and formats with their own swizzle (nvn_fmt_to_mtl: R/B or alpha 1), sampled or as render targets
+static void tex_census(const tex_t *o, int rt) {   // rt: o is a colour target of SetRenderTargets (only the swizzle kind is counted then)
+    static int on = -1; if (on < 0) on = getenv("DM_NVN_TEXCENSUS") && strcmp(getenv("DM_NVN_TEXCENSUS"), "0");
+    if (!on) return;
+    enum { K_CUBEARR, K_LINRT, K_MINIMAL, K_PKG3D, K_LINBC, K_SWZ, K_SWZRT, KN };
+    static const char *const kn[KN] = {"cube array", "linear render target without LINEAR", "minimal layout", "packaged 3D", "linear block-compressed",
+                                       "format with its own swizzle", "render target in a format with its own swizzle"};
+    static uint64_t cnt[KN]; static struct { nvn_texdesc d; uint8_t b0, b1; } seen[KN][16]; static int nseen[KN]; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    const nvn_texdesc *d = &o->d; int bw = 1, bh = 1; nvn_fmt_bpb(d->format, &bw, &bh); uint8_t swz[4]; uint32_t pf = 0; nvn_fmt_to_mtl(d->format, &pf, swz);
+    int own = swz[0] != NVN_SWZ_R || swz[2] != NVN_SWZ_B || swz[3] != NVN_SWZ_A;
+    int hit[KN] = {
+        !rt && d->target == NVN_TEXTURE_TARGET_CUBEMAP_ARRAY,
+        !rt && (d->flags & 0x40) && !(d->flags & 0x10),
+        !rt && (d->flags & 0x200) != 0,
+        !rt && o->has_layout && d->target == NVN_TEXTURE_TARGET_3D,
+        !rt && (d->flags & 0x50) && (bw > 1 || bh > 1),
+        !rt && own,
+        rt && own,
+    };
+    pthread_mutex_lock(&mu);
+    for (int k = 0; k < KN; k++) {
+        if (!hit[k]) continue;
+        cnt[k]++; int dup = 0;
+        for (int i = 0; i < nseen[k] && !dup; i++) dup = !memcmp(&seen[k][i].d, d, sizeof *d) && seen[k][i].b0 == o->layout[0] && seen[k][i].b1 == o->layout[1];
+        if (dup || nseen[k] >= 16) continue;
+        seen[k][nseen[k]].d = *d; seen[k][nseen[k]].b0 = o->layout[0]; seen[k][nseen[k]].b1 = o->layout[1]; nseen[k]++;
+        LOG("[nvn] texture census, %s #%llu: target %d format %#x flags %#x %ux%ux%u levels %u samples %d stride %u packaged %d (%02x %02x), size %#x",
+            kn[k], (unsigned long long)cnt[k], d->target, d->format, d->flags, d->width, d->height, d->depth, d->levels, d->samples, d->stride,
+            o->has_layout, o->layout[0], o->layout[1], o->size);
+    }
+    pthread_mutex_unlock(&mu);
+}
 NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
     OLOG("TextureInitialize t=%p b=%p builder.off=%#llx", (void *)t, (const void *)b, (long long)s->off);
@@ -396,6 +433,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     o->serial = nvn_new_serial();
     mtl_tex_live(o);   // the texture now at this storage (a registration of a finalized one there follows it: nvn_mtl.m tex_by_id)
     { const char *why = !o->d.format ? "format 0" : nvn_texdesc_metal_check(&o->d); if (why) tex_diag("TextureInitialize", -1, o, why, DM_GUEST_RA()); }
+    tex_census(o, 0);
     if (g_log && o->d.width == 1920 && o->d.height == 1080) { const uint8_t *q = (const uint8_t *)t; char hx[0xC0 * 2 + 1]; for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] Texture %p 0xC0 bytes: %s", (void *)t, hx); }
     OLOG("Texture %p ser %llu %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx mem=%p", (void *)t, o->serial, o->d.width, o->d.height, o->d.depth,
          o->d.levels, o->d.format, o->d.target, o->d.flags, (unsigned long long)o->size, (void *)o->mem);
@@ -876,6 +914,10 @@ NVN(nvnCommandBufferSetRenderTargets, void, NVNcommandBuffer *c, int n, const NV
         if (n > 0 && ct && ct[0] && !((const tex_t *)ct[0])->serial) { static int dumped; if (!dumped++) { const uint8_t *q = (const uint8_t *)ct[0]; char hx[0xC0 * 2 + 1];
             for (int i = 0; i < 0xC0; i++) snprintf(hx + 2 * i, 3, "%02x", q[i]); LOG("[nvn] SetRT color object at index 0, 0xC0 bytes: %s", hx); } } } }
 
+    for (int i = 0; i < n && ct; i++) if (ct[i]) {
+        const tex_t *t = (const tex_t *)ct[i]; uint8_t swz[4]; uint32_t pf = 0; tex_census(t, 1);
+        if (nvn_fmt_to_mtl(t->d.format, &pf, swz) && swz[0] != NVN_SWZ_R) { static int red; if (!red++) LOG("[red] SetRenderTargets: format %#x as a render target, which is sampled with R and B swapped (nvn_mtl.m tex_by_id): what the GPU renders into it reads crossed (first case)", t->d.format); }
+    }
     p_set_rt *r = REC(c, OP_SET_RT, p_set_rt); r->n = n;
     for (int i = 0; i < n; i++) { r->color[i] = ct ? tex_snap(ct[i]) : NULL; copy_view(&r->cview[i], &r->has_cview[i], cv ? cv[i] : NULL); }
     r->depth = tex_snap(dt); copy_view(&r->dview, &r->has_dview, dv);
@@ -1021,8 +1063,16 @@ NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, in
     *REC(c, OP_DISPATCH, p_dispatch) = (p_dispatch){x, y, z, DM_GUEST_RA()};
 }
 NVN(nvnCommandBufferBarrier, void, NVNcommandBuffer *c, int bits) { *(int32_t *)rec(c, OP_BARRIER, 8) = bits; }
-NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { REC(c, OP_SET_TEX_POOL, p_set_pool)->pool = (const dpool_t *)p; }
-NVN(nvnCommandBufferSetSamplerPool, void, NVNcommandBuffer *c, const NVNsamplerPool *p) { REC(c, OP_SET_SAMP_POOL, p_set_pool)->pool = (const dpool_t *)p; }
+// The replay keeps one texture ID space and one sampler ID space (registrations go by ID, the pool set here is not used): a second pool of either
+// kind would read the first's objects under the same IDs (Dark Souls switches between 12 sampler pools within a frame, lordran b826e34). Red once
+static void pool_second(const char *what, const void *p) {
+    static _Atomic(const void *) first[2]; static _Atomic int red[2]; int k = what[0] == 's';
+    const void *none = NULL; if (!p || atomic_compare_exchange_strong(&first[k], &none, p) || atomic_load(&first[k]) == p) return;
+    if (!atomic_exchange(&red[k], 1)) LOG("[red] Set%sPool: a second %s pool (%p after %p): the host keeps one ID space, the second pool's IDs read the first's objects (first case)",
+                                          k ? "Sampler" : "Texture", what, p, atomic_load(&first[k]));
+}
+NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { pool_second("texture", p); REC(c, OP_SET_TEX_POOL, p_set_pool)->pool = (const dpool_t *)p; }
+NVN(nvnCommandBufferSetSamplerPool, void, NVNcommandBuffer *c, const NVNsamplerPool *p) { pool_second("sampler", p); REC(c, OP_SET_SAMP_POOL, p_set_pool)->pool = (const dpool_t *)p; }
 
 NVN(nvnCommandBufferCopyBufferToTexture, void, NVNcommandBuffer *c, NVNbufferAddress src, const NVNtexture *t, const NVNtextureView *v,
     const NVNcopyRegion *r, int flags) {
@@ -1054,6 +1104,10 @@ NVN(nvnBlendStateSetDefaults, void, NVNblendState *s) { *ST(blend_st, s) = (blen
 NVN(nvnBlendStateSetBlendTarget, void, NVNblendState *s, int t) { ST(blend_st, s)->target = t; }
 NVN(nvnBlendStateSetBlendFunc, void, NVNblendState *s, NVNblendFunc sr, NVNblendFunc dr, NVNblendFunc sa, NVNblendFunc da) {
     blend_st *o = ST(blend_st, s); o->src_rgb = sr; o->dst_rgb = dr; o->src_a = sa; o->dst_a = da;
+    // Dual-source factors (SRC1_COLOR ... ONE_MINUS_SRC1_ALPHA, 0x10-0x13): the translator is never asked for a second output (dualSourceBlendEnable
+    // false), so Metal blends with a source 1 nobody writes. Red once (item 102 turns it on if a game uses them)
+    { static int red; int f[4] = {sr, dr, sa, da}; for (int i = 0; i < 4 && !red; i++) if (f[i] >= NVN_BLEND_FUNC_SRC1_COLOR && f[i] <= NVN_BLEND_FUNC_ONE_MINUS_SRC1_ALPHA)
+          { red = 1; LOG("[red] BlendStateSetBlendFunc: dual-source factor %#x (%#x %#x %#x %#x): the shaders have no second colour output, the blend reads garbage (first case)", f[i], sr, dr, sa, da); } }
 }
 NVN(nvnBlendStateSetBlendEquation, void, NVNblendState *s, NVNblendEquation er, NVNblendEquation ea) { ST(blend_st, s)->eq_rgb = er; ST(blend_st, s)->eq_a = ea; }
 NVN(nvnColorStateSetDefaults, void, NVNcolorState *s) { *ST(color_st, s) = (color_st){0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS}; }

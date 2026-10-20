@@ -130,8 +130,8 @@ static uint64_t h_block(void) { CLOBBER_CALLEE(); block_here(); return 0x600d; }
 static tg_t g_nsvc = {.fn = 0x81};
 static uint64_t h_nest(void) { tg_svc(&g_nsvc); return g_nsvc.ret == 0x600d ? 0x600d : 1; }
 static uint64_t h_nop(uint64_t x) { return x + 1; }
-static unsigned g_uidx; static uint64_t g_usp, g_uargs;
-uint64_t unimpl_c(unsigned idx, uint64_t *regs) { g_uidx = idx; g_usp = cur_sp(); g_uargs = regs[0] == 1 && regs[7] == 8; return 0x777; }
+static unsigned g_uidx; static uint64_t g_usp, g_uargs, g_ura;
+uint64_t unimpl_c(unsigned idx, uint64_t *regs) { g_uidx = idx; g_usp = cur_sp(); g_uargs = regs[0] == 1 && regs[7] == 8; g_ura = DM_UNIMPL_GUEST_RA(); return 0x777; }
 
 // The test gate: 0x80 an svc that checks where it runs, 0x81 the same blocking until released, 0x82 returns at once; others go to svc_thread
 static uint64_t g_gsp; static int g_gregs;
@@ -323,6 +323,7 @@ int main(int argc, char **argv) {
               "3: the inner call stayed on the host stack below the outer one, the slot empty inside and back after");
         CHECK(g_t3b.ret == 0x600d, "3: the next call takes the host stack again (%#llx)", (unsigned long long)g_t3b.ret);
         CHECK(g_t4.ret == 0x777 && g_uidx == 3 && g_uargs && (g_on ? !on_guest(g_usp) : on_guest(g_usp)), "4: unimplemented import stub 3: number, arguments, stack");
+        CHECK(g_ura == g_t4.ra, "4: its caller found (DM_UNIMPL_GUEST_RA, the red line's call site)");
         CHECK(g_td.ret == 0x600d && g_te.ret == 0x600d && g_tf.ret == 0x600d, "5: the paused calls finished");
         if (g_on) {
             uint64_t top, low, bot; int said; thr_stack_info(h, &top, &low, &bot, &said);

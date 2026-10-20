@@ -163,27 +163,50 @@ static int never_synced(NSString *statef) {
     NSString *t = [NSString stringWithContentsOfFile:statef encoding:NSUTF8StringEncoding error:nil];
     return !t || [t rangeOfString:@"\t"].location == NSNotFound;
 }
+// The cloud listing (NSMetadataQuery, which needs a thread with a run loop): *n packs listed, *pr of them on this device; returns whether the query
+// finished gathering within left seconds. The iOS shell calls dm_cloud_boot on a boot thread and the query goes to the main queue; the Mac app calls
+// it on the main thread before its run loop (main.c), where a block sent to the main queue never ran while this waited: every launch waited the whole
+// limit and skipped the first sync ("not gathered"). On the main thread the query starts in place and a local run loop drives it (upstream 1ceaa6b,
+// jhaizhou-ops/d2r-mobile PR #88, MIT). Unit test tests/t_cloudlist.m
+static _Atomic int g_listing_started;   // queries started (the test reads it when listing_query returns)
+static int listing_query(double left, int *n_out, int *pr_out) {
+    __block int g = 0, n = 0, pr = 0; dispatch_semaphore_t sem = dispatch_semaphore_create(0); __block NSMetadataQuery *q = nil; __block id obs = nil;
+    void (^startq)(void) = ^{
+        atomic_fetch_add(&g_listing_started, 1);
+        q = [NSMetadataQuery new]; q.searchScopes = @[NSMetadataQueryUbiquitousDocumentsScope];
+        q.predicate = [NSPredicate predicateWithFormat:@"%K LIKE '*.pack'", NSMetadataItemFSNameKey];
+        obs = [NSNotificationCenter.defaultCenter addObserverForName:NSMetadataQueryDidFinishGatheringNotification object:q queue:nil usingBlock:^(NSNotification *note) { (void)note;
+            [q disableUpdates]; n = (int)q.resultCount; NSFileManager *fm = NSFileManager.defaultManager;
+            for (NSUInteger i = 0; i < q.resultCount; i++) {
+                NSURL *u = [[q resultAtIndex:i] valueForAttribute:NSMetadataItemURLKey]; if (!u) continue;
+                NSString *ph = [u.path.stringByDeletingLastPathComponent stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.icloud", u.lastPathComponent]];
+                if ([fm fileExistsAtPath:u.path] || [fm fileExistsAtPath:ph]) pr++;
+            }
+            g = 1; [q stopQuery]; [NSNotificationCenter.defaultCenter removeObserver:obs]; dispatch_semaphore_signal(sem); }];
+        if (![q startQuery]) { [NSNotificationCenter.defaultCenter removeObserver:obs]; obs = nil; g = -1; dispatch_semaphore_signal(sem); } };
+#ifndef DM_TEST_CLOUD_ALWAYS_DISPATCH   // negative control of t_cloudlist only: the main queue even from the main thread
+    if (NSThread.isMainThread) {
+        startq();
+        NSDate *until = [NSDate dateWithTimeIntervalSinceNow:left];
+        while (!g && until.timeIntervalSinceNow > 0)
+            [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:MIN(0.05, until.timeIntervalSinceNow)]];
+        if (!g) { [q stopQuery]; if (obs) [NSNotificationCenter.defaultCenter removeObserver:obs]; }
+    } else
+#endif
+    {
+        dispatch_async(dispatch_get_main_queue(), startq);
+        if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(left * NSEC_PER_SEC))))
+            dispatch_async(dispatch_get_main_queue(), ^{ if (q) { [q stopQuery]; if (obs) [NSNotificationCenter.defaultCenter removeObserver:obs]; } });
+    }
+    *n_out = n; *pr_out = pr;
+    return g == 1;
+}
 static int first_listing_ok(double deadline) {
     int got = 0, listed = 0, present = 0, net = 0; const char *e = getenv("DM_TEST_ICLOUD_FIRST");
     if (e) sscanf(e, "%d,%d,%d,%d", &got, &listed, &present, &net);
     else {
-        __block int g = 0, n = 0, pr = 0; dispatch_semaphore_t sem = dispatch_semaphore_create(0); __block NSMetadataQuery *q = nil; __block id obs = nil;
-        dispatch_async(dispatch_get_main_queue(), ^{   // a metadata query needs a thread with a run loop
-            q = [NSMetadataQuery new]; q.searchScopes = @[NSMetadataQueryUbiquitousDocumentsScope];
-            q.predicate = [NSPredicate predicateWithFormat:@"%K LIKE '*.pack'", NSMetadataItemFSNameKey];
-            obs = [NSNotificationCenter.defaultCenter addObserverForName:NSMetadataQueryDidFinishGatheringNotification object:q queue:nil usingBlock:^(NSNotification *note) { (void)note;
-                [q disableUpdates]; n = (int)q.resultCount; NSFileManager *fm = NSFileManager.defaultManager;
-                for (NSUInteger i = 0; i < q.resultCount; i++) {
-                    NSURL *u = [[q resultAtIndex:i] valueForAttribute:NSMetadataItemURLKey]; if (!u) continue;
-                    NSString *ph = [u.path.stringByDeletingLastPathComponent stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.icloud", u.lastPathComponent]];
-                    if ([fm fileExistsAtPath:u.path] || [fm fileExistsAtPath:ph]) pr++;
-                }
-                g = 1; [q stopQuery]; [NSNotificationCenter.defaultCenter removeObserver:obs]; dispatch_semaphore_signal(sem); }];
-            if (![q startQuery]) { [NSNotificationCenter.defaultCenter removeObserver:obs]; dispatch_semaphore_signal(sem); } });
         double left = deadline - CFAbsoluteTimeGetCurrent(); if (left < 0.5) left = 0.5;
-        if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(left * NSEC_PER_SEC))))
-            dispatch_async(dispatch_get_main_queue(), ^{ if (q) { [q stopQuery]; if (obs) [NSNotificationCenter.defaultCenter removeObserver:obs]; } });
-        got = g; listed = n; present = pr;
+        got = listing_query(left, &listed, &present);
         __block int ns = 0; dispatch_semaphore_t ps = dispatch_semaphore_create(0); nw_path_monitor_t m = nw_path_monitor_create();
         nw_path_monitor_set_queue(m, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
         nw_path_monitor_set_update_handler(m, ^(nw_path_t path) { if (!ns) { ns = nw_path_get_status(path) == nw_path_status_satisfied ? 1 : 2; dispatch_semaphore_signal(ps); } });

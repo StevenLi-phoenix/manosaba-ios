@@ -141,8 +141,15 @@ HLE_FORCE_OPT("_ZN2nn2oe15SetCpuBoostModeENS0_12CpuBoostModeE", "the host does n
 HLE_FORCE_OPT("_ZN2nn2oe27SetPerformanceConfigurationEi", "the host does not change clocks", void, h_oe_SetPerfCfg1, int cfg) { (void)cfg; }
 HLE_FORCE_OPT("_ZN2nn2oe17EnableCrashReportEv", "no system crash reports", void, h_oe_EnableCrash, void) {}
 HLE_FORCE_OPT("_ZN2nn2oe18DisableCrashReportEv", "no system crash reports", void, h_oe_DisableCrash, void) {}
-HLE_FORCE_OPT("_ZN2nn2oe31EnterExitRequestHandlingSectionEv", "the host exits its own way", void, h_oe_EnterExitSec, void) {}
-HLE_FORCE_OPT("_ZN2nn2oe31LeaveExitRequestHandlingSectionEv", "the host exits its own way", void, h_oe_LeaveExitSec, void) {}
+// The exit-request section: the game brackets what an exit must not cut (manosaba its saves); a quit waits while it is inside one (hle_lifecycle.c,
+// after GirlNet 291a9cc, which counts the depth the same way). Unit test tests/t_quitwait.c
+static _Atomic int g_exit_sec;
+int dm_oe_exit_section(void) { return atomic_load(&g_exit_sec) > 0; }
+HLE_FORCE_OPT("_ZN2nn2oe31EnterExitRequestHandlingSectionEv", "exit-request section: counted, a quit waits for it", void, h_oe_EnterExitSec, void) { atomic_fetch_add(&g_exit_sec, 1); }
+HLE_FORCE_OPT("_ZN2nn2oe31LeaveExitRequestHandlingSectionEv", "exit-request section: counted, a quit waits for it", void, h_oe_LeaveExitSec, void) {
+    int d = atomic_load(&g_exit_sec);
+    while (d > 0 && !atomic_compare_exchange_weak(&g_exit_sec, &d, d - 1)) ;   // never below 0 (a Leave without an Enter)
+}
 HLE_FORCE_OPT("_ZN2nn2oe27GetDefaultDisplayResolutionEPiS1_", "default display resolution: handheld 1280x720 / console 1920x1080", void, h_oe_DefRes, int *w, int *h) {
     if (dm_opmode()) { *w = 1920; *h = 1080; } else { *w = 1280; *h = 720; }
 }

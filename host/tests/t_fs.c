@@ -180,17 +180,14 @@ int main(void) {
     CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "without the injection the remount is transactional again: a=ok3 commits");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "committed a = ok3");
 
-    // Quitting while the game saves (dm_fs_save_wait): nothing pending returns at once; a transaction with writes and no commit is waited for until
-    // it commits (here 150 ms later, from another thread) or until the limit, then reported as still pending
-    { int still = 9; double w = dm_fs_save_wait(15, &still);
-      CHECK(w < 0.05 && still == 0, "no save in progress: returns at once (%.3f s), nothing pending", w);
+    // Quitting while the game saves (dm_fs_save_pending, waited for by hle_lifecycle.c quit_wait, t_quitwait): nothing pending at first; a save write
+    // opens a transaction that stays pending until its commit (here 150 ms later, from another thread)
+    { CHECK(!dm_fs_save_pending(), "no save in progress: nothing pending");
       CHECK(write_save("save:/a", "ok4") == RES_OK, "a save write opens a transaction");
-      w = dm_fs_save_wait(0.3, &still);
-      CHECK(w >= 0.29 && w < 0.5 && still == 1, "never committed: waits the 0.3 s limit (%.3f s) and reports it pending", w);
-      pthread_t ct; pthread_create(&ct, NULL, commit_later, NULL);
-      w = dm_fs_save_wait(15, &still); pthread_join(ct, NULL);
-      CHECK(w >= 0.12 && w < 1.0 && still == 0, "committed 150 ms later: the wait ends then (%.3f s), nothing pending", w);
-      snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok4"), "the waited-for save is committed: a = ok4"); }
+      CHECK(dm_fs_save_pending(), "written, not committed: pending");
+      pthread_t ct; pthread_create(&ct, NULL, commit_later, NULL); pthread_join(ct, NULL);
+      CHECK(!dm_fs_save_pending(), "committed: nothing pending");
+      snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok4"), "the committed save: a = ok4"); }
 
     // Language switch rewriting the settings file (settings_lang_apply): expected values computed by hand from the rule -- only when it "does not match the switch" are Language / VoiceLanguage changed to 0 (English) or 8 (Simplified Chinese); other keys and other languages are untouched
 

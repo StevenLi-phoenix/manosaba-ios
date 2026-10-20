@@ -16,8 +16,10 @@ static uint8_t g_stub_seen[MAX_STUB];
 extern uint64_t unimpl_stubs[MAX_STUB];   // 8 bytes per stub
 
 uint64_t unimpl_c(unsigned idx, uint64_t *regs) {
-    if (!g_stub_seen[idx]++)
-        LOG("UNIMPL %s (x0=%#llx x1=%#llx x2=%#llx)", g_stub_name[idx], regs[0], regs[1], regs[2]);
+    if (!g_stub_seen[idx]++) {   // red with its caller: what the next game would otherwise hit silently (bayonetta3-mobile's DM_UNIMPL_ABORT shows the call site too)
+        uint64_t ra = DM_UNIMPL_GUEST_RA(); module_t *m = module_of((void *)ra);
+        LOG("[red] UNIMPL %s (x0=%#llx x1=%#llx x2=%#llx), called from %s+%#llx: returns 0", g_stub_name[idx], regs[0], regs[1], regs[2], m ? m->name : "?", m ? ra - (uint64_t)m->base : ra);
+    }
     return 0;
 }
 

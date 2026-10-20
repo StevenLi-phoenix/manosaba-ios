@@ -4,6 +4,7 @@
 #include "hle.h"
 #include "dm_input.h"
 #include "front.h"
+#include <math.h>
 #include <stdatomic.h>
 #include <unistd.h>
 
@@ -157,8 +158,21 @@ int hle_hid_last(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32
     *lx = (int16_t)ax; *ly = (int16_t)(ax >> 16); *rx = (int16_t)(ax >> 32); *ry = (int16_t)(ax >> 48);
     return atomic_load(&g_last_have);
 }
+// Stick input lies inside the circle of radius AnalogStickMax (0x7fff) around (0, 0), boundary included (the SDK's hid documents; the console
+// clamps the outer edge round). The sources that clamp each axis (the Mac keyboard, the script keys, a controller) gave diagonals of length 46,340
+// (SkyRecomp issue #16: Link "SUPER fast" on diagonals): scaled onto the circle, the direction kept
+static void stick_circle(int32_t *x, int32_t *y) {
+#ifndef DM_TEST_HID_NO_CIRCLE   // negative control of t_hid_script only: the axes as each source clamped them
+    double r2 = (double)*x * *x + (double)*y * *y;
+    if (r2 <= 32767.0 * 32767.0) return;
+    double k = 32767.0 / sqrt(r2);
+    *x = (int32_t)(*x * k); *y = (int32_t)(*y * k);
+#else
+    (void)x; (void)y;
+#endif
+}
 // Controller state = front end + on-screen controls + script + game controller: buttons ORed; each stick from the first of the front end, the
-// on-screen controls and the controller that pushes it
+// on-screen controls and the controller that pushes it, then onto the circle
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     pthread_once(&g_receipt_once, receipt_init);
     uint64_t read_start_ns = g_receipt_file ? now_ns() : 0;
@@ -176,6 +190,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
       if (!(s->lx || s->ly) && (plx || ply)) { s->lx = plx; s->ly = ply; } if (!(s->rx || s->ry) && (prx || pry)) { s->rx = prx; s->ry = pry; } }
     if (km & PK_LSL) s->lx = -32767; if (km & PK_LSR) s->lx = 32767;   // script stick pseudo-keys (up is positive)
     if (km & PK_LSU) s->ly = 32767;  if (km & PK_LSD) s->ly = -32767;
+    stick_circle(&s->lx, &s->ly); stick_circle(&s->rx, &s->ry);
     s->attributes = ATTR_CONNECTED;
     atomic_store(&g_last_btn, s->buttons);
     atomic_store(&g_last_axes, (uint64_t)(uint16_t)s->lx | (uint64_t)(uint16_t)s->ly << 16 | (uint64_t)(uint16_t)s->rx << 32 | (uint64_t)(uint16_t)s->ry << 48);

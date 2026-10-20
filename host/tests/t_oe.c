@@ -94,5 +94,11 @@ int main(void) {
     dm_focus_set(1); dm_set_opmode(0); dm_focus_set(3); dm_set_opmode(1);
     CHECK(pop_is(15) && pop_is(30) && pop_is(31) && empty(), "after wrapping the 32 slots: still deduplicated, first order 15,30,31 kept");
     CHECK(child_burst(3), "a change between the pop and the query is not lost: final focus 1 / mode 0");
+    // The exit-request section's depth (a quit waits while it is above 0): nested, and a Leave without an Enter does not go below 0
+    CHECK(!dm_oe_exit_section(), "exit-request section: outside at first");
+    h_oe_EnterExitSec(); h_oe_EnterExitSec(); h_oe_LeaveExitSec(); CHECK(dm_oe_exit_section(), "entered twice, left once: still inside");
+    h_oe_LeaveExitSec(); CHECK(!dm_oe_exit_section(), "left twice: outside");
+    h_oe_LeaveExitSec(); h_oe_EnterExitSec(); CHECK(dm_oe_exit_section(), "a Leave too many is ignored: one Enter is inside again");
+    h_oe_LeaveExitSec();
     printf("t_oe: %d checks, %d failed\n", checks, fails); return fails != 0;
 }

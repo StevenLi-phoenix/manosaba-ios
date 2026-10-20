@@ -9,6 +9,8 @@ run: \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
 	$(B)/t_audren \
+	$(B)/t_cloudlist \
+	$(B)/t_cloudlist_old \
 	$(B)/t_cloudsync \
 	$(B)/t_cmdchan \
 	$(B)/t_cmdchan_partial \
@@ -26,6 +28,7 @@ run: \
 	$(B)/t_guest_mem \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_script \
+	$(B)/t_hid_script_nocircle \
 	$(B)/t_hstack \
 	$(B)/t_hstack_old \
 	$(B)/t_ktrace \
@@ -34,10 +37,14 @@ run: \
 	$(B)/t_mods \
 	$(B)/t_mods_case \
 	$(B)/t_movie \
+	$(B)/t_net \
+	$(B)/t_net_bsd \
 	$(B)/t_oe \
 	$(B)/t_options \
 	$(B)/t_options_nocheck \
 	$(B)/t_padmap \
+	$(B)/t_quitwait \
+	$(B)/t_quitwait_old \
 	$(B)/t_romfs_validate \
 	$(B)/t_sead \
 	$(B)/t_sead_broken \
@@ -58,6 +65,11 @@ run: \
 	$(B)/t_audio
 	$(B)/t_audio_spsc
 	$(B)/t_audren 2>/dev/null
+	$(B)/t_cloudlist 2>/dev/null
+	@status=0; $(B)/t_cloudlist_old > $(B)/t_cloudlist_old.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "before the call returned *✗" $(B)/t_cloudlist_old.log; then \
+	   cat $(B)/t_cloudlist_old.log; echo "t_cloudlist_old: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_cloudlist_old: a listing sent to the main queue from the main thread never starts, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_cloudsync 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_cmdchan 2>/dev/null
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_cmdchan_partial > $(B)/t_cmdchan_partial.log 2>/dev/null || status=$$?; \
@@ -81,6 +93,10 @@ run: \
 	$(B)/t_guest_mem 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
 	$(B)/t_hid_script 2>/dev/null
+	@status=0; $(B)/t_hid_script_nocircle > $(B)/t_hid_script_nocircle.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL LSL and LSU overlap" $(B)/t_hid_script_nocircle.log; then \
+	   cat $(B)/t_hid_script_nocircle.log; echo "t_hid_script_nocircle: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_hid_script_nocircle: sticks clamped per axis leave the circle on diagonals, as expected"
 	$(B)/t_hstack 2>/dev/null
 	DM_HSTACK=0 $(B)/t_hstack 2>/dev/null
 	@status=0; DM_HSTACK=0 $(B)/t_hstack deep > $(B)/t_hstack_deep.log 2>&1 || status=$$?; \
@@ -100,6 +116,11 @@ run: \
 	   cat $(B)/t_mods_case.log; echo "t_mods_case: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_mods_case: paths built with the program ID as asked break on a file system that tells cases apart, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
+	$(B)/t_net
+	@status=0; $(B)/t_net_bsd > $(B)/t_net_bsd.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "ENetDown 100 *✗" $(B)/t_net_bsd.log; then \
+	   cat $(B)/t_net_bsd.log; echo "t_net_bsd: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_net_bsd: the FreeBSD errno numbers are not nn::socket's, as expected"
 	$(B)/t_oe 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_options 2>/dev/null
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_options_nocheck > $(B)/t_options_nocheck.log 2>/dev/null || status=$$?; \
@@ -107,6 +128,11 @@ run: \
 	   cat $(B)/t_options_nocheck.log; echo "t_options_nocheck: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_options_nocheck: an option written without checking its originals is half applied, as expected"
 	$(B)/t_padmap
+	$(B)/t_quitwait
+	@status=0; $(B)/t_quitwait_old > $(B)/t_quitwait_old.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "waits until the game leaves it *✗" $(B)/t_quitwait_old.log; then \
+	   cat $(B)/t_quitwait_old.log; echo "t_quitwait_old: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_quitwait_old: a quit that waits for the save alone leaves inside the exit-request section, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
 	$(B)/t_sead 2>/dev/null
 	@status=0; $(B)/t_sead_broken > $(B)/t_sead_broken.log 2>/dev/null || status=$$?; \
@@ -149,6 +175,10 @@ $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -g -fsanitize=thread -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
+$(B)/t_cloudlist: t_cloudlist.m ../cloud.m ../cloudsync.c ../cloud.h ../game.c $(GEN) ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -fobjc-arc -o $@ t_cloudlist.m ../cloudsync.c ../game.c $(GEN) -framework Foundation -framework Network
+$(B)/t_cloudlist_old: t_cloudlist.m ../cloud.m ../cloudsync.c ../cloud.h ../game.c $(GEN) ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CLOUD_ALWAYS_DISPATCH -I.. -fobjc-arc -o $@ t_cloudlist.m ../cloudsync.c ../game.c $(GEN) -framework Foundation -framework Network
 $(B)/t_cloudsync: t_cloudsync.c ../cloudsync.c ../cloud.h ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../cloudsync.c
 $(B)/t_cmdchan: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
@@ -211,6 +241,8 @@ $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h 
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
 $(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c ../touchpad.c
+$(B)/t_hid_script_nocircle: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_CIRCLE -I.. -o $@ t_hid_script.c ../touchpad.c
 # VP9 movies need libvpx (brew install libvpx), as the host build does (host/Makefile VPX)
 VPX ?= /opt/homebrew/opt/libvpx
 $(B)/t_movie: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
@@ -224,8 +256,16 @@ $(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
 $(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_OPTIONS_NO_CHECK -I.. -o $@ t_options.c
+$(B)/t_net: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_net.c
+$(B)/t_net_bsd: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_NET_BSD_ERRNO -I.. -o $@ t_net.c
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_quitwait: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_quitwait.c
+$(B)/t_quitwait_old: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_QUIT_NO_SECTION -I.. -o $@ t_quitwait.c
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h | $(B)

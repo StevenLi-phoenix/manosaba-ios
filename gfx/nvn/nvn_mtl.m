@@ -1532,7 +1532,7 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
         case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
         case 8: d.textureType = MTLTextureTypeCube; break;
-        case 9: d.textureType = MTLTextureTypeCubeArray; d.arrayLength = t->d.depth; break;
+        case 9: d.textureType = MTLTextureTypeCubeArray; d.arrayLength = MAX(t->d.depth / 6, 1u); break;   // NVN's depth counts faces, Metal's array length cubes
         case 10: RED_ONCE(1, "buffer texture (TARGET_BUFFER) not implemented"); return nil;
         default: d.textureType = MTLTextureType2D; break;
     }
@@ -1856,8 +1856,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     if (!pkg_hashed(t)) nvn_dirty_protect(t->mem, t->size);
     *stamp = nvn_dirty_now();
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-    unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;
-    if (t->d.target == 9) layers *= 6;
+    unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;   // a cube array's depth is its faces
     uint32_t upf; int ubpp = 0, unp = bc_unpack(t->d.format, &upf, &ubpp);   // No BC: decompress on the CPU after deswizzling, with the staging area sized for the decompressed data
     size_t total = 0;
     for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
@@ -3697,6 +3696,18 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
     // Metal swizzle enums have the same numeric values)
     uint8_t esw[4] = {r.t.d.swz[0], r.t.d.swz[1], r.t.d.swz[2], r.t.d.swz[3]}; int tswz = r.t.d.swz_set;
     if (r.has_v && r.v.set_swz) { esw[0] = r.v.swz_r; esw[1] = r.v.swz_g; esw[2] = r.v.swz_b; esw[3] = r.v.swz_a; tswz = !(esw[0] == 2 && esw[1] == 3 && esw[2] == 4 && esw[3] == 5); }
+    // The format's own components (nvn_fmt_to_mtl): the RGB 16-bit family sits R/B swapped in its Metal format, the X formats and RGB DXT1 read alpha
+    // 1. The guest's selectors name NVN's components, so each that names one goes through the format's (totk-mobile d3dd76c, Apache-2.0, reimplemented:
+    // Tears of the Kingdom samples RGB5A1 / RGB565 terrain textures; none is a render target in either game, which the swap would read crossed: red
+    // in hle_nvn.c SetRenderTargets)
+#ifndef DM_TEST_FMT_SWZ_DROP   // negative control of t_fmt_swz only: the format's swizzle dropped, as before
+    { uint8_t nat[4]; uint32_t npf = 0; nvn_fmt_to_mtl(r.has_v && r.v.set_format ? r.v.format : r.t.d.format, &npf, nat);
+      if (!(nat[0] == 2 && nat[1] == 3 && nat[2] == 4 && nat[3] == 5)) {
+          if (!tswz) { esw[0] = 2; esw[1] = 3; esw[2] = 4; esw[3] = 5; }
+          for (int i = 0; i < 4; i++) if (esw[i] >= 2 && esw[i] <= 5) esw[i] = nat[esw[i] - 2];
+          tswz = !(esw[0] == 2 && esw[1] == 3 && esw[2] == 4 && esw[3] == 5);
+      } }
+#endif
     if ((r.has_v && (r.v.set_format || r.v.set_levels || r.v.set_layers || r.v.set_target || r.v.set_swz)) || tswz) {
         uint32_t pf = (uint32_t)base.pixelFormat; uint8_t swz[4];
         if (r.v.set_format && !(nvn_fmt_to_mtl(r.v.format, &pf, swz) && pf)) pf = (uint32_t)base.pixelFormat;
@@ -6237,7 +6248,7 @@ static int lay_decide(int clear_only, int *first) {
         if (oh.op == OP_DRAW || oh.op == OP_DRAW_IDX) { if (!lay_prim_ok(oh.op == OP_DRAW ? ((const p_draw *)oa)->prim : ((const p_draw_idx *)oa)->prim)) break; continue; }
         if (!lay_op_safe(oh.op)) break;
     }
-    int layers = t->d.target == NVN_TEXTURE_TARGET_CUBEMAP ? 6 : t->d.target == NVN_TEXTURE_TARGET_CUBEMAP_ARRAY ? (int)t->d.depth * 6 : (int)t->d.depth;
+    int layers = t->d.target == NVN_TEXTURE_TARGET_CUBEMAP ? 6 : (int)t->d.depth;   // a cube array's depth counts faces
     if (hi <= lo || hi >= layers) return 0;
     g_lay.ser = t->serial; g_lay.v = *v; g_lay.first = lo; g_lay.count = hi - lo + 1;
     if (lay_reads_target(S.prog ? prog_get(S.prog) : nil)) return 0;   // the draw opening the pass is checked as the later ones are (draw)

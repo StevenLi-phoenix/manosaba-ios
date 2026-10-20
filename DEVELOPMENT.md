@@ -1361,17 +1361,42 @@ Tier 3b, from the wider review of 2026-10-20 (sources and evidence in that secti
 - [x] batch 22 · 81 a sync's fence stored before its flag, release / acquire (`nvn_obj.h` `sync_fence_store` / `sync_fence_load`; GirlNet
   f2faa5f): `nvnQueueFenceSync`, the acquire sync and `nvnSyncWait`. `t_sync_order`: a million fences against a poller on another thread, none
   seen with a fence other than its own; the old order (`-DDM_TEST_SYNC_FLAG_FIRST`) is seen with fence 0 in 15,547-19,636 of them
-- [ ] 82 NVN texture layout per the SDK: a census of cube arrays, LINEAR_RENDER_TARGET alone, MINIMAL_LAYOUT and packaged 3D in both games first;
-  then the rules with driver vectors (`t_tex_auto`; totk-mobile's eight TotK SDK sizes, see the deep review)
-- [ ] 83 the format's own swizzle (R/B of the RGB 16-bit family, alpha 1 of the X formats): which formats the games sample first
-- [ ] 84 socket errno ENetDown = 100
-- [ ] 85 sticks inside the circle (a radial clamp for every source)
-- [ ] 86 the Mac app's first iCloud listing on the main thread
-- [ ] 87 quit waits while the game is inside its exit-request section
-- [ ] 88 SleepThread under 20 µs as a yield
-- [ ] 89 a resting six-axis state written (0x60 layout, newest-first sampling numbers)
-- [ ] 90 red lines for a second sampler pool, packaged layout byte 1, SRC1 blend factors, an unimplemented svc or import with its caller
-
+- [x] batch 23 · 82 NVN texture layout per the SDK. The census first (`DM_NVN_TEXCENSUS=1`, kept: one line per new shape of each kind): Tears of
+  the Kingdom has a cube array (RGBA8 4x4 depth 6, the size of six cubes here), 734 and more LINEAR_RENDER_TARGET textures without LINEAR (1x1 to
+  260x260, the grass height maps among them), 117 and more MINIMAL_LAYOUT ones on the Great Sky Island (the RG8 260x260 terrain normal maps with 9
+  levels, RGB5A1 / RGB565 320x320) and a packaged 3D BC6H 64³ (byte 0 0x40); manosaba one cube array (1x1 depth 6); no linear block-compressed
+  texture in either. Then the rules (`nvn_tex.c`, after nxnative PR #11, digitalhivehub bacf2cb, MIT): a cube array's depth counts faces (Metal's
+  array length = depth / 6), 0x40 alone is linear and a linear size counts pixel rows, MINIMAL_LAYOUT keeps the automatic block only when it pads
+  no level, else one GOB, and the packaged byte 0's high nibble is a 3D texture's block depth (`pkg_layout` replaces `pkg_block_h`). `t_tex_auto`:
+  the 15 vectors PR #11 took from the SDK's TextureBuilder in emulation (12 of them differed before) and totk-mobile's eight TotK 1.4.3 SDK sizes
+  plus its grass height map (Apache-2.0, numbers only; 6 and the map differed before), 0 differ now; MINIMAL_LAYOUT ignored
+  (`-DDM_TEST_TEX_NO_MINIMAL`) fails 25 checks. The prologue and the cliff save look the same as before (shots within run-to-run noise)
+- [x] batch 23 · 83 the format's own swizzle in the texture views (`tex_by_id`: the guest's selectors go through the format's components;
+  totk-mobile d3dd76c, Apache-2.0, reimplemented). Sampled with one: Tears of the Kingdom's RGB5A1 / RGB565 terrain textures (packaged 210x210,
+  minimal-layout 320x320); none is ever a render target in either game (census), which the R / B swap would read crossed: red in
+  `SetRenderTargets` if one is. No X format in these runs. `t_fmt_swz`: RGB565 / RGB5A1 texels in NVN's order (red in the low bits) read where
+  they were written, RGBX8 alpha 1, a guest swizzle composed, through a compute kernel (9 checks); the swizzle dropped
+  (`-DDM_TEST_FMT_SWZ_DROP`) fails 6
+- [x] batch 23 · 84 socket errno from nn::socket's own values (the SDK's Errno: ENetDown 100, EAfNoSupport 97; 50 is its ENoCsi). `t_net`: 5
+  checks; the FreeBSD numbers (`-DDM_TEST_NET_BSD_ERRNO`) fail 4
+- [x] batch 23 · 85 sticks inside the circle of radius AnalogStickMax (the SDK's hid documents), for every source (`hle_hid.c` `stick_circle`): the
+  keyboard diagonal (32767, -32767) reads (23169, -23169). `t_hid_script`: 3 more checks; per-axis clamping (`-DDM_TEST_HID_NO_CIRCLE`) fails 3;
+  `t_hid_receipt` records that diagonal on the circle
+- [x] batch 23 · 86 the Mac app's first iCloud listing: from the main thread the query starts in place and a local run loop drives it
+  (`cloud.m` `listing_query`, upstream 1ceaa6b, MIT); before, the block it sent to the main queue never ran while it waited the whole limit.
+  `t_cloudlist`: the query started before the call returned (0.07 s here, without an iCloud account); sent to the main queue it never starts (1
+  fails)
+- [x] batch 23 · 87 quit waits while the game is inside its exit-request section (`hle_oe.c` counts Enter / Leave, never below 0;
+  `hle_lifecycle.c` `quit_wait` waits for the pending save and the section, at most 15 s / 3 s; GirlNet 291a9cc). `t_quitwait`: 5 checks, the save
+  alone (`-DDM_TEST_QUIT_NO_SECTION`) fails 3; `t_oe` 4 more, `t_fs` checks the pending flag the wait reads
+- [-] batch 23 · 88 measured: SleepThread under 20 µs is rare here. Tears of the Kingdom: 677 in a minute of the prologue (989 ns, threads 0x1001
+  and 0x1033), against 1.4 million yields; manosaba none. Nothing to win, left as it is. Seen on the way: manosaba sleeps between 20 µs and 1 ms
+  about 24,000 times a second (1.45 million in 60 s), each one leaving and retaking its virtual core (98 / later)
+- [-] batch 23 · 89 measured: neither game reads the six-axis state. Tears of the Kingdom asks for its handles (`GetSixAxisSensorHandles` in 280 of
+  325 logs here), gets 0 and never calls `GetSixAxisSensorState(s)`; manosaba does not ask. A resting state belongs with the gyro (67)
+- [x] batch 23 · 90 red lines: a second texture or sampler pool (the replay keeps one ID space), packaged layout byte 1 not 0, a dual-source
+  blend factor (the shaders have no second output), an unimplemented import (`UNIMPL`, now with its caller: `DM_UNIMPL_GUEST_RA`, `t_hstack` 4)
+  and an unknown svc (with the svc's module and offset). None fires in Tears of the Kingdom's prologue or the cliff save, nor in manosaba
 Tier 3b, Tears of the Kingdom:
 - [ ] 91 shrines at 60 fps: the five words of nxnative PR #11 as part of `fps60`, checked in Unicorn, then a shrine
 - [ ] 92 the two BNSH files inside `main` in the offline extraction

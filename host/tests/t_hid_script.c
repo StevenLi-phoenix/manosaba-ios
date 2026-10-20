@@ -1,5 +1,6 @@
 // hle_hid.c: DM_KEYS timed script, merging with the front end, the on-screen controls and the game controller, press latches, touch items. A fake clock; the real parser
-// and the real GetNpadState path. Expectations are written by hand from the rules in hle_hid.c.
+// and the real GetNpadState path. Expectations are written by hand from the rules in hle_hid.c. Sticks per axis, not onto the circle
+// (-DDM_TEST_HID_NO_CIRCLE), fail 3.
 #ifndef HLE_HID_SOURCE
 #define HLE_HID_SOURCE "../hle_hid.c"
 #endif
@@ -36,7 +37,7 @@ int main(void) {
     at(2.1); CHECK(rd().buttons == DM_BTN_B, "B with the default hold of 0.2 s");
     at(2.2); CHECK(rd().buttons == 0, "B released at 2.2 s");
     at(3.05); { NpadState s = rd(); CHECK(s.lx == -32767 && s.ly == 0 && s.buttons == 0, "LSL pushes the left stick left, not a button"); }
-    at(3.15); { NpadState s = rd(); CHECK(s.lx == -32767 && s.ly == 32767, "LSL and LSU overlap: both axes"); }
+    at(3.15); { NpadState s = rd(); CHECK(s.lx == -23169 && s.ly == 23169, "LSL and LSU overlap: the diagonal on the stick's circle (-23169, 23169)"); }
     at(4.05); rd(); CHECK(g_tn == 1 && g_t[0].id == 0 && g_t[0].x == 0.25f && g_t[0].y == 0.5f, "touch item: one finger at (0.25, 0.5)");
     int calls = g_tcalls; at(4.06); rd(); CHECK(g_tcalls == calls, "unchanged touch set: not pushed again");
     at(4.2); rd(); CHECK(g_tn == 0, "touch item over: all lifted");
@@ -74,6 +75,10 @@ int main(void) {
       CHECK(s.buttons == (DM_BTN_A | DM_BTN_B) && s.lx == 0 && s.ly == 32767, "with a controller: buttons ORed, the on-screen stick before the controller's");
       CHECK(hle_hid_last(&lb, &la[0], &la[1], &la[2], &la[3]) && lb == (DM_BTN_A | DM_BTN_B) && la[1] == 32767, "hle_hid_last: that state");
       dm_input_set(0, -5, 6, 0, 0); at(20.1); s = rd(); CHECK(s.lx == -5 && s.ly == 6, "the front end's stick before the on-screen one");
+      dm_input_set(0, 32767, -32767, -32768, 0); s = rd();
+      CHECK(s.lx == 23169 && s.ly == -23169 && s.rx == -32767 && s.ry == 0, "a keyboard diagonal onto the circle, an axis at -32768 to -32767");
+      { double r = sqrt((double)s.lx * s.lx + (double)s.ly * s.ly); CHECK(r <= 32767 && r > 32765 && s.lx == -s.ly, "... its length within 2 of 32,767, the direction kept"); }
+      dm_input_set(0, 20000, 20000, 0, 0); s = rd(); CHECK(s.lx == 20000 && s.ly == 20000, "a stick inside the circle stays as it is");
       dm_input_set(0, 0, 0, 0, 0); tp_touch(1, TP_UP, 0, 0); tp_touch(2, TP_UP, 0, 0); at(20.15); s = rd();
       CHECK(s.buttons == DM_BTN_B && s.lx == 1000 && s.ly == 0, "fingers lifted: the controller's again");
       dm_pad_set(0, 0, 0, 0, 0); tp_enable(0); rd(); }

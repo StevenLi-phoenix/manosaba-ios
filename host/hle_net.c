@@ -16,7 +16,15 @@ HLE_FORCE("nnsslFinalize", "pairs with nnsslInitialize (cut)", Result, h_ssl_Fin
 
 // ---------- socket: offline, all calls that contact the service return -1 in BSD convention, error code ENETDOWN ----------
 // Not cut: Inet* / nnsocketInet* byte order and address text conversion (pure computation).
-#define SK_ENETDOWN 50                  // Horizon sockets use FreeBSD error codes
+// nn::socket's own errno values (the SDK's nn::socket::Errno: ENetDown 100, EAfNoSupport 97; 50 there is ENoCsi, the FreeBSD ENETDOWN number
+// used before; dr3-mobile fixes the same). Unit test tests/t_net.c
+#ifndef DM_TEST_NET_BSD_ERRNO   // negative control of t_net only: the FreeBSD numbers
+#define SK_ENETDOWN 100
+#define SK_EAFNOSUPPORT 97
+#else
+#define SK_ENETDOWN 50
+#define SK_EAFNOSUPPORT 47
+#endif
 static __thread int t_skerr = SK_ENETDOWN;
 static int sk_fail(void) { t_skerr = SK_ENETDOWN; return -1; }
 #define SKF(m, cname, ...) HLE_FORCE(m, "bsd socket service (cut): -1 / ENETDOWN", int, cname, __VA_ARGS__)
@@ -111,7 +119,7 @@ HLE_FORCE_OPT("_ZN2nn6socket8ShutdownEiNS0_14ShutdownMethodE", "bsd socket servi
 // u16 argument: Switch callers do not extend it
 HLE_FORCE_OPT("_ZN2nn6socket9InetHtonsEt", "pure computation: host to network byte order", unsigned, h_sk_Htons, unsigned v) { return htons((uint16_t)v); }
 HLE_FORCE_OPT("_ZN2nn6socket8InetPtonENS0_6FamilyEPKcPv", "pure computation: text address → binary (IPv4 only; Family 2 equals the host AF_INET)", int, h_sk_Pton, int fam, const char *src, void *dst) {
-    if (fam != 2) { t_skerr = 47; return -1; }   // EAFNOSUPPORT (FreeBSD)
+    if (fam != 2) { t_skerr = SK_EAFNOSUPPORT; return -1; }
     return inet_pton(AF_INET, src, dst);
 }
 HLE_FORCE_OPT("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr", "offline: no IP (in_addr overload)", Result, h_nifm_GetIp2, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }

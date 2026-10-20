@@ -1,8 +1,12 @@
 // Storage size / alignment / per-level offsets of NVN textures (Tegra X1 block-linear layout).
 // The algorithm is ported from deko3d source/dk_image.cpp (zlib license, Copyright (C) 2018-2020 fincs):
 //   one GOB = 64 bytes × 8 rows = 512 bytes; the block height (tileH, in GOBs) is picked by 'height×1.5'; levels are accumulated with block alignment.
-// The game's packaged textures (SetPackagedTextureLayout) carry 8 bytes of layout parameters: byte 0 = log2 of the block height (derived by comparing 16 cases from the real game,
-// 4 of which differ from the automatic algorithm); when present it takes precedence.
+// The game's packaged textures (SetPackagedTextureLayout) carry 8 bytes of layout parameters: byte 0 = log2 of the block height in its low nibble (derived by comparing 16 cases from
+// the real game, 4 of which differ from the automatic algorithm) and of the block depth in its high nibble (a 3D texture's); when present it takes precedence.
+// Rules beyond deko3d, from the SDK's own TextureBuilder run in emulation (nxnative PR #11, digitalhivehub bacf2cb, nvn_layout_diff.py, MIT; its 15 driver
+// vectors are in tests/t_tex_auto.c): a cube array's depth counts faces (the NVN guide: a multiple of 6), LINEAR_RENDER_TARGET alone is linear too (the
+// enum documents: either bit means a 2D array of texels) and a linear size counts pixel rows, also for compressed formats, and MINIMAL_LAYOUT keeps the
+// automatic block only if no level is padded by it, else one GOB.
 #include "nvn_tex.h"
 #include <stddef.h>
 
@@ -49,7 +53,7 @@ static void shape(const nvn_texdesc *d, unsigned *dpl, int *layered, uint32_t *w
         case 2: *dpl = 3; break;                                        // 3D
         case 4: case 6: *dpl = 2; *layered = 1; break;                  // 2D_ARRAY / MS_ARRAY
         case 8: *dpl = 2; *z = 6; *layered = 1; break;                  // CUBEMAP
-        case 9: *dpl = 2; *z = d->depth * 6; *layered = 1; break;       // CUBEMAP_ARRAY
+        case 9: *dpl = 2; *layered = 1; break;                          // CUBEMAP_ARRAY (depth = faces)
         default: *dpl = 2; *z = 1; break;                               // 2D / MS / RECTANGLE
     }
     if (*z == 0) *z = 1;
@@ -77,6 +81,19 @@ static uint64_t level_offset(const nvn_texdesc *d, unsigned level, unsigned dpl,
     return off;
 }
 
+// Bytes of one layer (all levels); a layered texture's layer is aligned to the block
+static uint64_t layer_bytes(const nvn_texdesc *d, unsigned dpl, int layered, uint32_t w, uint32_t h, uint32_t z, unsigned tileH, unsigned tileD, fmt_t t) {
+    uint64_t ls = level_offset(d, d->levels ? d->levels : 1, dpl, w, h, z, tileH, tileD, t);
+    if (layered) {
+        uint32_t hh = blk(h, t.bh); unsigned th = tileH, td = tileD;
+        while (th && hh <= (8u << (th - 1))) th--;
+        while (td && z <= (1u << (td - 1))) td--;
+        unsigned sh = th + td + 9; uint64_t g = ls >> sh;
+        if (ls != g << sh) ls = (g + 1) << sh;
+    }
+    return ls;
+}
+
 void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
     fmt_t t = fmt_of(d->format);
     unsigned dpl; int layered; uint32_t w, h, z;
@@ -88,28 +105,27 @@ void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
         o->layer_size = o->size = (uint64_t)t.bpb * d->width;
         o->align = t.bpb == 12 ? 4 : t.bpb; return;
     }
-    if (d->flags & 0x10) {                                            // LINEAR: row pitch = stride or aligned to 32
+    if (d->flags & 0x50) {                                            // LINEAR / LINEAR_RENDER_TARGET: row pitch = stride or aligned to 32 / 128
         o->align = (d->flags & 0x40) ? 128 : 32;
         uint32_t stride = d->stride ? d->stride : (t.bpb * blk(w, t.bw) + o->align - 1) & ~(o->align - 1);
-        o->layer_size = o->size = (uint64_t)stride * blk(h, t.bh);
+        o->layer_size = o->size = (uint64_t)stride * h;               // pixel rows, also for block-compressed formats (the driver's size)
         return;
     }
     unsigned tileH = 0, tileD = 0;
     // NVN truncates the height in blocks × 1.5 to whole GOB rows before it picks the power of two (deko3d rounds up): the original SDK's sizes and block
     // heights for 40 boundary cases, as MacNativeGames recorded them (cd85f5b, MIT), differ in 16 with rounding up, among them Tears of the Kingdom's
     // 160×160 BC3 shrine warp pad, half of which read padding (t_tex_auto)
-    if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = d->pkg_block_h ? (unsigned)d->pkg_block_h - 1 : pick_tile((ah + ah / 2) / 8); }
+    if (d->pkg_layout) { tileH = d->pkg_layout & 0xf; if (dpl == 3) tileD = d->pkg_layout >> 4 & 0xf; }
+    else if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = pick_tile((ah + ah / 2) / 8); }
     else if (dpl == 3) tileD = pick_tile(z + z / 2);
-    o->tileH = tileH; o->tileD = tileD;
-    unsigned levels = d->levels ? d->levels : 1;
-    uint64_t ls = level_offset(d, levels, dpl, w, h, z, tileH, tileD, t);
-    if (layered) {                                                    // Layer size is aligned to the block
-        uint32_t hh = blk(h, t.bh); unsigned th = tileH, td = tileD;
-        while (th && hh <= (8u << (th - 1))) th--;
-        while (td && z <= (1u << (td - 1))) td--;
-        unsigned sh = th + td + 9; uint64_t g = ls >> sh;
-        if (ls != g << sh) ls = (g + 1) << sh;
+    uint64_t ls = layer_bytes(d, dpl, layered, w, h, z, tileH, tileD, t);
+#ifndef DM_TEST_TEX_NO_MINIMAL   // negative control of t_tex_auto only: MINIMAL_LAYOUT ignored
+    if ((d->flags & 0x200) && !d->pkg_layout && (tileH || tileD)) {   // MINIMAL_LAYOUT: one GOB when the automatic block pads any level
+        uint64_t one = layer_bytes(d, dpl, layered, w, h, z, 0, 0, t);
+        if (one != ls) { tileH = tileD = 0; ls = one; }
     }
+#endif
+    o->tileH = tileH; o->tileD = tileD;
     o->layer_size = ls;
     o->size = layered ? ls * z : ls;
     o->align = 512;
@@ -119,7 +135,7 @@ uint64_t nvn_tex_level_offset(const nvn_texdesc *d, unsigned level) {
     fmt_t t = fmt_of(d->format);
     unsigned dpl; int layered; uint32_t w, h, z;
     shape(d, &dpl, &layered, &w, &h, &z);
-    if (!t.bpb || (d->flags & 0x10) || d->target == 10) return 0;
+    if (!t.bpb || (d->flags & 0x50) || d->target == 10) return 0;
     nvn_texlayout L; nvn_tex_layout(d, &L);
     return level_offset(d, level, dpl, w, h, z, L.tileH, L.tileD, t);
 }

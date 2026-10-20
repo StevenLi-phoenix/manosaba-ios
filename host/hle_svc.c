@@ -585,8 +585,9 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         }
         regs[0] = 0; regs[1] = v; return 0;
     }
-    default:
-        if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; LOG("SVC %#x x0=%#llx x1=%#llx x2=%#llx (placeholder, returns success)", num, regs[0], regs[1], regs[2]); }
+    default:   // red with its caller (the svc instruction's module and offset): no game here reaches it
+        if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; module_t *m = module_of((void *)orig_addr);
+            LOG("[red] SVC %#x x0=%#llx x1=%#llx x2=%#llx from %s+%#llx: not implemented, returns success", num, regs[0], regs[1], regs[2], m ? m->name : "?", m ? orig_addr - (uint64_t)m->base : orig_addr); }
         regs[0] = 0; return 0;
     }
 }
