@@ -6,6 +6,7 @@
 #   fps60     the frame-rate controller's minimum interval 1, also in shrines and after a fixed interval
 #   realtime  the real-time frame step (host page +0 / +4, games/totk/frame_step.c), and the cloth and hair clock from it (CAVES, host page +8)
 #   scene     the scene render size from the host page +16 (DM_RENDER_RES)
+#   output    the swapchain and canvas size from the host page +24 / +32 (DM_OUTPUT_RES)
 CUTS = {}
 OBS = {}
 PARAMS = {}
@@ -31,6 +32,18 @@ CAVES = {
          'cloth clock (call): s2, s3 × page+0 (the measured ratio) before bl 0x2a0e40', 'realtime'),
         (0x28bc98, '9400546a', [_HOST_X8, 0xbd400104, 0x1e240842, 0x1e240863, ('bl', 0x2a0e40)],
          'cloth clock (call): s2, s3 × page+0 (the measured ratio) before bl 0x2a0e40', 'realtime'),
+        # The canvas (plan item 63, after MacNativeGames' game_patches_v143.c patch_output_res, MIT, see OPTIONS): the display configuration
+        # object x19 (0x3dc9a8) keeps display 0's canvas size at +0x10, the active crop at +0x508, and lays them out again when bit 21 of +8 is set
+        # (a pending output change, as at boot). Every such path reaches 0x3dcb28 with the new size in x3 (+0x10, or +0x274 of the selected
+        # mode for bit 20), stores the crop at 0x3dcb2c and calls 0x3de5a8 (x3 = size, x4 = height) to rebuild the canvas targets. Here x3 and +0x10
+        # become the host page's +32 (width | height << 32) when that is not 0, so the UI and every canvas target are sized to it; 0 leaves both as
+        # they were (the game's own canvas, handheld's included). MacNativeGames stores its size unconditionally. Scratch: x9-x11 and the flags,
+        # read by none of 0x3dcb2c-0x3dcb40 and clobbered by the call at 0x3dcb44, which every path from here reaches. 0x3dcd5c's branch to 0x3dcb2c
+        # (bit 4: the crop from +0x518, scaled against the canvas) does not come through here, as in MacNativeGames.
+        # games/totk/check_output_res.py runs it in Unicorn.
+        (0x3dcb28, 'd360fc64', [('adrp_host', 9), 0xf940112a, 0xf9400a6b, 0xf100015f, 0x9a831143, 0x9a8b114b, 0xf9000a6b, ('orig',)],
+         'canvas: lsr x4, x3, #32 → x10 = page+32; if x10: x3 = x10, canvas +0x10 = x10 (ldr x10, [x9, #32]; ldr x11, [x19, #0x10]; cmp x10, #0; '
+         'csel x3, x10, x3, ne; csel x11, x10, x11, ne; str x11, [x19, #0x10]); then lsr x4, x3, #32', 'output'),
     ],
 }
 OPTIONS = {
@@ -93,6 +106,18 @@ OPTIONS = {
             (0x585e50, '60c60cbd', '2006422d', 'scene size: str s0, [x19, #0xcc4] → ldp s0, s1, [x17, #16] (host page +16: width, height)'),
             (0x585e54, '4001221e', '60c60cbd', 'scene size: scvtf s0, w10 → str s0, [x19, #0xcc4] (width)'),
             (0x585e60, '60ca0cbd', '61ca0cbd', 'scene size: str s0, [x19, #0xcc8] → str s1, [x19, #0xcc8] (height)'),
+        ],
+        # Output size (plan item 63, "native 2K": after MacNativeGames' game_patches_v143.c patch_output_res, ly05010419/MacNativeGames, MIT, reviewed
+        # at 41e1e0caf43d58c4af3c478ca2d1bafd9dba7093). The game composes its frame (the UI, the scene's final upscale) in a canvas the size of
+        # its output, 1920x1080 docked, and presents the swapchain's crop of it. Two parts: the swapchain size, a constant built at 0xbdb578 /
+        # 0xbdb584 and stored at 0xbdb588 (stur x8, [x20, #0x14]), from the host page +24 here (x8 is loaded again at 0xbdb58c; the adrp / add
+        # of x9 between stay), and the canvas, a code cave at 0x3dcb28 (CAVES above). MacNativeGames writes the size into the two movs at load;
+        # their note: changing only the crop leaves every UI and composition target at 1080p. The host writes the page (games/totk/frame_step.c):
+        # +24 the swapchain, 1920x1080 unless DM_OUTPUT_RES; +32 the canvas, 0 (the game's own) unless DM_OUTPUT_RES. The scene's render size
+        # is the option scene's; above 1920x1080 the canvas targets need the heap overlay of games/totk/heapdef.py.
+        'output': [
+            (0xbdb578, 'd280f008', ('adrp', 8), 'swapchain size: mov x8, #0x780 → adrp x8, host page'),
+            (0xbdb584, '0887c0f2', '080d40f9', 'swapchain size: movk x8, #0x438, lsl #32 → ldr x8, [x8, #24] (host page +24: width | height << 32)'),
         ],
     },
 }

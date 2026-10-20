@@ -2,8 +2,11 @@
 """games/totk/heapdef.py: the heap growth for a scene size (0 up to the game's 1600x900; 1920x1080 gives totk-mobile's 163,840 / 251,904 KiB) and
 the patch of a synthetic HeapDef BYML (v7, Heaps -> DynamicTextureAllocatorMem / Graphics -> Size): only the two sizes' eight bytes change, by
 the same amount, found by name wherever they sit; other sizes than 1.4.3's are refused. 1.4.3's fixed offsets (2732 / 2920, totk-mobile's) in place
-of the lookup by name (by hand) end the test in an error. Run with Python 3.14 (compression.zstd)."""
-import os, struct, sys
+of the lookup by name (by hand) end the test in an error. The output size (--output, plan item 63): its growth against the game's 1920x1080, the
+larger of the two taken, the notes .dm_scene / .dm_output written (and an earlier .dm_output removed without --output), through main() on a
+synthetic RomFS; the output's growth left out of main() (by hand) fails 1. Run with Python 3.14 (compression.zstd)."""
+import os, struct, sys, tempfile
+import compression.zstd as zstd
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'games', 'totk'))
 import heapdef as hd
 fails = total = 0
@@ -44,4 +47,22 @@ for other in (False, True):
 try: hd.patch(byml(100000, 201728), 50176); refused = False
 except ValueError: refused = True
 check('another version\'s sizes: refused', refused)
+check('output 1920x1080 (the game\'s own): no growth', hd.extra_output_kib(1920, 1080) == 0)
+check('output 2560x1440: +89,088 KiB (MacNativeGames\' formula: 113,664 KiB scaled by 2560x1440 / 1920x1080)', hd.extra_output_kib(2560, 1440) == 89088)
+with tempfile.TemporaryDirectory() as td:
+    romfs, out = os.path.join(td, 'romfs'), os.path.join(td, 'overlay')
+    os.makedirs(os.path.dirname(os.path.join(romfs, hd.HEAPDEF)))
+    with open(os.path.join(romfs, hd.HEAPDEF), 'wb') as f: f.write(zstd.compress(byml(113664, 201728)))
+    stem = os.path.join(out, hd.HEAPDEF)[:-len('.byml.zs')]
+    def run(*argv):
+        sys.argv = ['heapdef.py', romfs, out, *argv]; hd.main()
+        b = zstd.decompress(open(os.path.join(out, hd.HEAPDEF), 'rb').read()); a, g = hd.size_fields(b)
+        note = lambda e: open(stem + e).read().strip() if os.path.exists(stem + e) else None
+        return struct.unpack_from('<i', b, a)[0], struct.unpack_from('<i', b, g)[0], note('.dm_scene'), note('.dm_output')
+    r = run('1600x900', '--output', '2560x1440')
+    check('scene 1600x900, output 2560x1440: the output\'s growth, notes 1600x900 / 2560x1440', r == (113664 + 89088, 201728 + 89088, '1600x900', '2560x1440'))
+    r = run('2560x1440', '--output', '2560x1440')
+    check('scene and output 2560x1440: the larger growth (the scene\'s, +178,176 KiB)', r == (113664 + 178176, 201728 + 178176, '2560x1440', '2560x1440'))
+    r = run('1920x1080')
+    check('scene 1920x1080 alone: its growth, the earlier .dm_output removed', r == (163840, 251904, '1920x1080', None))
 print(f'== {total} checks, {fails} failed =='); sys.exit(fails != 0)

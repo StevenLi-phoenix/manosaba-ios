@@ -133,6 +133,8 @@ NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
     if (!dm_game.nvn_c2.ntex) die("game profile %s has no nvn_c2 (c[2] handle table layout of its shaders)", dm_game.id);
     void mtl_set_c2_layout(int tex, int ntex, int samp, int nsamp); mtl_set_c2_layout(dm_game.nvn_c2.tex, dm_game.nvn_c2.ntex, dm_game.nvn_c2.samp, dm_game.nvn_c2.nsamp);
     void mtl_set_depth_mode(int m); mtl_set_depth_mode(dm_game.nvn_depth_mode);
+    void mtl_set_upscale_pass(const char *fs, int color, const char *compose_fs, int compose_color);   // (plan item 63)
+    mtl_set_upscale_pass(dm_game.upscale_fs, dm_game.upscale_color, dm_game.compose_fs, dm_game.compose_color);
     OLOG("DeviceInitialize %p flags=%#x", (void *)d, o->flags);
     return 1;
 }

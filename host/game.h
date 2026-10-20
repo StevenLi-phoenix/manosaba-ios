@@ -35,6 +35,11 @@ typedef struct {
     const char *const *save_sync; int save_sync_n;              // save paths (glob, relative to the save root) kept in iCloud sync
     const int *aoc; int aoc_n;                                  // owned add-on content indices reported by nn::aoc (none = no DLC)
     struct { const char *romfs, *sysfont, *product, *shader_map, *msl; } ws;   // workspace paths relative to DM_ROOT (game.json "workspace"), 0 = none
+    const char *upscale_fs; int upscale_color;  // the game's own upscale of the finished scene into its canvas (game.json upscale_pass: "fs" its fragment
+                                                //    shader key, "color" perceptual / linear / hdr, MetalFX's colour processing for it): with MetalFX
+                                                //    upscaling on, MetalFX writes the canvas in its place (gfx/nvn/nvn_mtl.m fxp_dock, plan item 63); 0 = none
+    const char *compose_fs; int compose_color;  // the draw that samples the scene at texture slot 0 into the canvas (game.json compose_pass, the same form):
+                                                //    with MetalFX upscaling on and the scene smaller, MetalFX upscales it first (fxp_scene); 0 = none
 } dm_game_profile;
 extern const dm_game_profile dm_game;
 

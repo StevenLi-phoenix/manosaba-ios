@@ -24,6 +24,10 @@ def load(path):
     if g.get('window_unfocused', 'out_of_focus') not in ('out_of_focus', 'in_focus'): sys.exit(f'{path}: window_unfocused must be "out_of_focus" or "in_focus"')
     if not isinstance(g.get('virtual_cores', False), bool): sys.exit(f'{path}: virtual_cores must be true or false')
     if g.get('touch', 'screen') not in ('screen', 'pad'): sys.exit(f'{path}: touch must be "screen" or "pad"')
+    for k in ('upscale_pass', 'compose_pass'):   # the game's own upscale of the scene into its canvas / the draw that samples the scene into it (plan item 63)
+        up = g.get(k)
+        if up is not None and not (isinstance(up, dict) and sorted(up) == ['color', 'fs'] and re.fullmatch(r'[0-9a-f]{16}', str(up['fs'])) and up['color'] in UPSCALE_COLOR):
+            sys.exit(f'{path}: {k} must be {{"fs": "<16 hex digits: the fragment shader key>", "color": "perceptual" | "linear" | "hdr"}}')
     langs = g.get('languages', [g['language']])   # the game's own (plan item 170): nn::settings language codes; the device's language is taken among them
     if not isinstance(langs, list) or not langs or any(l not in LANG_CODES for l in langs) or g['language'] not in langs:
         sys.exit(f'{path}: languages must list nn::settings language codes ({" ".join(LANG_CODES)}), the profile\'s language among them')
@@ -38,6 +42,9 @@ LANG_CODES = ('ja', 'en-US', 'fr', 'de', 'it', 'es', 'zh-CN', 'ko', 'nl', 'pt', 
 # Apple's localization for each (CFBundleLocalizations, ios/tools/project_lang.py): the per-app language setting offers these
 APPLE_LOC = {'ja': 'ja', 'en-US': 'en', 'fr': 'fr', 'de': 'de', 'it': 'it', 'es': 'es', 'zh-CN': 'zh-Hans', 'ko': 'ko', 'nl': 'nl', 'pt': 'pt', 'ru': 'ru',
              'zh-TW': 'zh-Hant', 'en-GB': 'en-GB', 'fr-CA': 'fr-CA', 'es-419': 'es-419', 'zh-Hans': 'zh-Hans', 'zh-Hant': 'zh-Hant'}
+
+# MTLFXSpatialScalerColorProcessingMode for game.json upscale_pass "color"
+UPSCALE_COLOR = {'perceptual': 0, 'linear': 1, 'hdr': 2}
 
 def cstr(s): return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
@@ -72,6 +79,7 @@ def write_c(g, out):
           f'    .save_sync = save_sync, .save_sync_n = {len(sync)},',
           f'    .aoc = aoc, .aoc_n = {len(aoc)},',
           '    .ws = {' + ', '.join(f'.{f} = {cstr(ws[k]) if ws.get(k) else "0"}' for f, k in WS_FIELDS) + '},',
+          *[('    .%s_fs = %s, .%s_color = %d,' % (f, cstr(g[k]['fs']), f, UPSCALE_COLOR[g[k]['color']])) if g.get(k) else f'    .{f}_fs = 0,' for k, f in (('upscale_pass', 'upscale'), ('compose_pass', 'compose'))],
           '};', '']
     open(out, 'w', encoding='utf-8').write('\n'.join(L))
 

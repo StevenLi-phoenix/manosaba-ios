@@ -18,6 +18,8 @@
   "window_unfocused": "in_focus",
   "virtual_cores": true,
   "touch": "pad",
+  "upscale_pass": {"fs": "ac58fc18eda5f387", "color": "hdr"},
+  "compose_pass": {"fs": "0ac9a54938974396", "color": "hdr"},
   "ios_mode": "handheld",
   "nvn_c2": {"tex": ["0x20", 32], "samp": ["0x568", 128], "img": ["0x120", 8]},
   "romfs": {

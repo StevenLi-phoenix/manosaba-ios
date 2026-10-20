@@ -13,6 +13,10 @@
 // in its first seconds), else the parameter's own size for the operation mode, which a probe at main 0x585e4c read once at boot (docked 1600x900,
 // handheld 1280x720), so the game looks as before unless asked. Above 1920x1080 with the RomFS overlay games/totk/heapdef.py writes (plan item 95):
 // its HeapDef grows the heap for a scene size it notes beside it (.dm_scene), up to which DM_RENDER_RES is then taken.
+// +24 / +32: the swapchain and the canvas size, each width | height << 32 (rules.py option output, plan item 63: main 0xbdb578 / 0xbdb584 read the
+// swapchain's, the code cave at 0x3dcb28 the canvas's, which the game composes its UI and the scene's final upscale in). DM_OUTPUT_RES=<w>x<h>
+// (640x360 up to 1920x1080, or up to the size the heap overlay notes, .dm_output: games/totk/heapdef.py --output) makes both that size; else the
+// swapchain 1920x1080 (the game's constant) and the canvas 0, which the cave leaves as the game laid it out, so the game looks as before.
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +50,20 @@ static int scene_size(const char *env, int opmode, const char *max, float out[2]
     if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 64 || h < 64 || w > mw || h > mh) return -1;
     out[0] = (float)w; out[1] = (float)h; return 1;
 }
+// The output size for the page; returns 1 when it comes from env (DM_OUTPUT_RES), 0 for the game's own, -1 for a value it refused (the game's own).
+// max: the largest the heap allows, "<w>x<h>" (the overlay's .dm_output note), NULL for the game's own 1920x1080. out: {swapchain, canvas} packed
+static int output_size(const char *env, const char *max, uint64_t out[2]) {
+    out[0] = (uint64_t)1080 << 32 | 1920; out[1] = 0;
+    if (!env || !*env || !strcmp(env, "0")) return 0;
+    unsigned w, h, mw = 1920, mh = 1080; char extra;
+    if (max && (sscanf(max, "%ux%u%c", &mw, &mh, &extra) != 2 || mw < 1920 || mh < 1080 || mw > 3840 || mh > 2160)) { mw = 1920; mh = 1080; }
+    if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 640 || h < 360 || w > mw || h > mh) return -1;
+    out[0] = (uint64_t)h << 32 | w;
+#ifndef DM_TEST_OUTPUT_NO_CANVAS   // negative control of t_frame_step only: the canvas left to the game (only the swapchain grows)
+    out[1] = out[0];
+#endif
+    return 1;
+}
 static void frame_step_store(_Atomic uint64_t *page, double seconds) {   // page: at least 16 bytes
     float v[2] = {(float)(seconds * 30), (float)(seconds * 60)}, sec = (float)seconds; uint64_t bits; memcpy(&bits, v, sizeof bits); uint32_t sb; memcpy(&sb, &sec, sizeof sb);
 #ifndef DM_TEST_CLOTH_NO_SECONDS   // negative control of t_frame_step only: +8 left as it was
@@ -73,6 +91,16 @@ void dm_game_boot(void) {
         else if (max[0]) LOG("[scene size] the RomFS overlay's heap allows up to %s", max);
         LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? "DM_RENDER_RES" : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
     } else if (getenv("DM_RENDER_RES")) LOG("[red] DM_RENDER_RES needs the option scene (DM_OPTIONS)");
+    if (dm_option_on("output")) {
+        char note[1024], max[32] = ""; FILE *f = dm_overlay_file("System/HeapSize/Product.Nin_NX_NVN.HeapDef.dm_output", note, sizeof note) ? fopen(note, "r") : NULL;
+        if (f) { if (!fgets(max, sizeof max, f)) max[0] = 0; fclose(f); max[strcspn(max, "\r\n")] = 0; }
+        uint64_t sz[2]; int from = output_size(getenv("DM_OUTPUT_RES"), max[0] ? max : NULL, sz); memcpy((uint8_t *)g_page + 24, sz, sizeof sz);
+        if (from < 0) LOG("[red] DM_OUTPUT_RES=%s: expected <width>x<height>, from 640x360 up to %s; the game's own", getenv("DM_OUTPUT_RES"),
+                          max[0] ? max : "1920x1080 (more needs the heap overlay of games/totk/heapdef.py --output)");
+        else if (max[0]) LOG("[output size] the RomFS overlay's heap allows up to %s", max);
+        if (from > 0) LOG("[output size] swapchain and canvas %ux%u (DM_OUTPUT_RES)", (unsigned)sz[0], (unsigned)(sz[0] >> 32));
+        else LOG("[output size] the game's own (swapchain 1920x1080, the canvas as the game lays it out)");
+    } else if (getenv("DM_OUTPUT_RES")) LOG("[red] DM_OUTPUT_RES needs the option output (DM_OPTIONS)");
     if (!(g_realtime = dm_option_on("realtime"))) { LOG("[frame step] the game's own (option realtime not on: DM_OPTIONS or the product's options.default)"); return; }
     if (g_pin > 0) LOG("[frame step] pinned at %.3f ms (DM_FRAME_STEP_MS, diagnostics)", g_pin * 1000);
     else LOG("[frame step] real time: the mean of the last five present intervals (1/120 .. 1/15 s each)");

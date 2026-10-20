@@ -89,7 +89,8 @@ it signed with every entitlement of its profile (increased memory limit included
   `boot.interrupted.txt` until another such session replaces it.
 - **Graphics settings** (Settings app → this app → Graphics): frame rate 60 / 30 fps (`DM_FPS`; the display link and ProMotion follow), render
   resolution (`DM_RENDER_HEIGHT`, only for games whose hooks apply it — manosaba: `games/manosaba/graphics.c`; read at startup) and MetalFX
-  spatial upscaling of the presented picture (`DM_UPSCALE=metalfx`, `gfx/nvn/nvn_mtl.m` `fx_apply`). Frame rate and MetalFX follow a change on
+  spatial upscaling of the presented picture (`DM_UPSCALE=metalfx`, `gfx/nvn/nvn_mtl.m` `fx_apply`; for a game whose profile names its own upscale
+  or compose pass, that pass too: `fxp_dock` / `fxp_scene`, plan item 63). Frame rate and MetalFX follow a change on
   returning to the game; a variable set at launch wins until the setting is changed. iOS has no V-Sync switch: `CAMetalLayer.displaySyncEnabled`
   is macOS-only, a layer always presents in step with the display.
 - **Lifecycle**: in the background the guest clock, audio and graphics are suspended and pending iCloud uploads are flushed.

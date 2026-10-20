@@ -307,7 +307,8 @@ in our rules and host:
   3 on 40 ms and back, sys+0x250 = 60 / interval; the original main never picks 1 (negative control); both producers read the page (the original
   computes 60 / 30 and ignores it); `tests/t_frame_step.c` (the mean, the clamps, the page layout). `verify/regress.sh` OK (main cuts 16).
 - The product with these rules is `work/build/totk/product60` (`host/dmhost work/build/totk/product60`; `DM_RENDER_RES=<w>x<h>` sets its scene
-  render size, item 52 below; since item 57 its changes are code options, `options.default` turning on all three and `DM_OPTIONS=none` none);
+  render size, item 52 below, `DM_OUTPUT_RES=<w>x<h>` its output (swapchain and canvas), item 63; since item 57 its changes are code options,
+  `options.default` turning on all of them (`fps60,realtime,scene,output`) and `DM_OPTIONS=none` none);
   the default product was left at 30 fps
   while the blood moon crash below is open. A 75 s prologue run: interval 1, frame time p50 16.8 ms.
 - RomFS overlay for 60 fps and up (601258f): `work/build/cache/dm/venv/bin/python -I games/totk/romfs_overlay.py work/data/switch/totk-1.4.3/RomFS
@@ -2160,10 +2161,55 @@ Tier 4, large:
   - [ ] 62h render targets of virtual pools in a heap on for iOS (`DM_NVN_RT_HEAP=1`, item 138: 140-190 MB less GPU memory on the cliff save)
     after screenshot comparisons over more scenes; with the TBDR rewrites on it needs them alias-aware (pass merges and content facts by heap
     range) or stays off
-- [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
+- [x] batch 56 · 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
   - [-] 63a MetalFX's docked guard against the scene's content size, not the allocated texture (MacNativeGames ff092e3): their fix is in the
     docked replacement of the game's own upscaling pass (mfxup_dock), which is 63 itself and not ours yet; our MetalFX (present-time,
-    `fx_apply`) already compares the crop rectangle, the content size, with the size on screen. To keep in mind when 63 comes
+    `fx_apply`) already compares the crop rectangle, the content size, with the size on screen. To keep in mind when 63 comes (done in 63c: the
+    valid region from the pass's constants)
+  - [x] 63b the output size ("native 2K", after MacNativeGames' game_patches_v143.c patch_output_res, MIT, reviewed at 41e1e0c): a new code
+    option `output` (rules.py). The swapchain size, a constant built at main 0xbdb578 / 0xbdb584 (`mov x8, #0x780; movk x8, #0x438, lsl #32`,
+    stored at 0xbdb588 to x20 +0x14), becomes `adrp x8, host page; ldr x8, [x8, #24]` (x9's adrp / add between them untouched, x8 loaded again
+    at 0xbdb58c). The canvas: the display configuration (x19 in 0x3dc9a8) keeps display 0's canvas at +0x10 and the crop at +0x508 and lays them
+    out again when bit 21 of +8 is set; every such path reaches 0x3dcb28 (`lsr x4, x3, #32`) with the new size in x3 and calls 0x3de5a8 at
+    0x3dcb44. A code cave there (CAVES, gated by the option) makes x3 and +0x10 the host page's +32 when that is not 0 (two `csel`s; MacNativeGames
+    stores unconditionally); scratch x9-x11 and the flags, all clobbered by that call and read by none of 0x3dcb2c-0x3dcb40 (checked: the only
+    branches in are 0x3dca70's to 0x3dcb28 and 0x3dcd5c's to 0x3dcb2c, the latter not through the cave, as in MacNativeGames).
+    `games/totk/frame_step.c` writes +24 (the swapchain: `DM_OUTPUT_RES` or 1920x1080) and +32 (the canvas: `DM_OUTPUT_RES` or 0, the game's
+    own, handheld's 1280x720 included), 640x360 up to 1920x1080 or up to the heap overlay's `.dm_output` note. `games/totk/heapdef.py ... --output
+    <w>x<h>` grows the heaps by MacNativeGames' formula (113,664 KiB × output pixels / 1920x1080, whole MiB: 2560x1440 +89,088 KiB), the larger
+    of the scene's and the output's growth when both are given. The application pool: the Mac's +512 MiB covers the growth up to 3840x2160
+    (+333 MiB); on iOS Tears of the Kingdom keeps the console's pool (62a), so the growth comes out of its other heaps unless
+    `DM_APP_POOL_ADD_MB` adds it (device check). Tests: `games/totk/check_output_res.py <product> <main NSO>` (11 checks in Unicorn: the page's
+    swapchain size at x20 +0x14, x9 as the original's; the canvas, x3 / x4 and the crop the page's +32, and with 0 there all as the original,
+    also for a 1280x720 x3; the other registers as the original; the original main ignores the page), with MacNativeGames' unconditional store 2
+    fail; `t_frame_step` +12 (the canvas left to the game: 3 fail); `tools/tests/t_heapdef.py` +5 (the output's growth left out of main(): 1
+    fails). `work/build/totk/product60` rebuilt (main: the earlier bytes the same, 9 words of the cave appended, 3 option rows; the previous one
+    is `product60.prev63`), `options.default` = `fps60,realtime,scene,output`; check_frame_rate / render_size / cloth_clock pass on it. Measured
+    (prologue from an empty save, 100 s): the default as before (swapchain and crop 1920x1080); `DM_OUTPUT_RES=2560x1440` with the overlay: the
+    swapchain and crop 2560x1440, the UI drawn at that size (its text visibly sharper in a crop than the 1080p picture scaled up), the same
+    picture otherwise, no crash; GPU p50 6.2 against 4.7 ms. The game's post-processing size follows the canvas: the upscale pass's source is
+    1600x896 for 1920x1080 and 2128x1200 for 2560x1440 (canvas / 1.2, a multiple of 16), the option scene's 1600x900 notwithstanding.
+  - [x] 63c MetalFX in place of the game's own upscale pass (after MacNativeGames' mfxup_dock, MIT; `gfx/nvn/nvn_mtl.m` `fxp_dock`): with MetalFX
+    upscaling on (`DM_UPSCALE=metalfx`, the iOS setting), the draw of the profile's `upscale_pass` (game.json; Tears of the Kingdom's ac58fc18, an
+    FSR 1 EASU-style filter, HDR colour processing: its source keeps highlights above 1, as MacNativeGames found) is left out and MetalFX's spatial
+    scaler writes the canvas from the valid region its constants give (c[0].xy region / output, c[0].zw = 0.5 c[0].xy - 0.5, c[4].xy the output
+    as integers; MacNativeGames' layout, the same in our translation of ac58fc18). Only when the draw would write the whole canvas alone (one
+    target at level 0 / layer 0, no blending, full mask, no depth / stencil test, full viewport and scissor), the scene is a smaller 2D texture and
+    no TBDR rewrite holds draws back; a pending clear of the canvas is dropped. Metal 4: a fence after the earlier work that the scaler waits on.
+    New profile field (`tools/gen_game.py`: `upscale_pass` {fs, color}; `DeviceInitialize` passes it on, `mtl_set_upscale_pass`). Measured: every
+    frame replaced (1600x896 → 1920x1080, 2128x1200 → 2560x1440; the scaler made once in 3-48 ms), mean RGB of the same frame within 0.2 of the
+    game's own, edges a little sharper; GPU p50 6.30 against 6.20 ms at 2560x1440.
+  - [x] 63d MetalFX before the game's compose pass (after MacNativeGames' mfxup_draw, the "iOS handheld" case; `fxp_scene` / `fxp_sub`): in
+    handheld there is no upscale pass; the compose shader 0ac9a549 (the profile's `compose_pass`, HDR) tone maps the scene into the canvas,
+    sampling it bilinearly when `DM_RENDER_RES` makes it smaller. With MetalFX on, MetalFX first upscales the scene at its slot 0 to the canvas
+    size into a texture of its own, which that draw alone samples instead (substituted at the argument encoding, by texture ID, cleared at the next
+    draw). Measured handheld with 960x540: every frame (960x536 → 1280x720), also with the TBDR rewrites on (`DM_NVN_TBDR=1`: the compose pass
+    bound to the upscaled scene every time), the same brightness, smoother edges; GPU p50 4.25 against 3.36 ms bilinear (the pass split and the
+    scaler, on the Mac). Tests: `gfx/tests/t_fxp.m` (8, both Metal 4 and 3): the upscale pass replaced, its valid region only (short of the last 2
+    texels' worth, where MetalFX's filter reads past the region as the game's does), off / other constants leave the game's draw, a pending
+    clear dropped; the compose pass samples a canvas-sized texture holding the scene, the draw after it the scene, off the scene. Broken variants:
+    the draw encoded as well 3 fail, the whole texture upscaled 1, the clear kept 1, the constants unchecked 1, the compose pass not bound 1, the
+    substitute kept 2. `tools/tests/t_upscale_pass.py` (8: the profile fields, malformed ones refused; the check left out: 4 fail).
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN (the list of 2026-10-20 too)
   - [x] batch 54 · 64a the 47 NVN functions bayonetta3-mobile has and we lack (deferred binds, ClearBuffer, indirect draws, getters, ZCull, subtiles):
     43 by name against its table; 27 now: the getters of colour state, vertex attribute / stream state, sampler builder (LOD clamp and bias,
@@ -2304,7 +2350,14 @@ Tier 4, large:
   memory (ours sums the visibility slots on the CPU at completion), the conditional draws made indirect and the clears predicated quads
   (totk-mobile's nvn_query_gpu / nvn_conditional_draw, several hundred lines): not worth it on the Mac. The same line on an iPhone, whose GPU
   finishes later, decides again (added to the device checks)
-- [ ] 113 framebuffer fetch for in-pass reads of the current pixel (after 42)
+- [-] batch 56 · 113 framebuffer fetch for in-pass reads of the current pixel (after 42): measured, not done. In Tears of the Kingdom's prologue
+  16 fragment shaders sample what their own pass draws (`DM_NVN_COUNTS=1`), all but one before any texture barrier, where the replay reads memory
+  as the console does (item 42: reading the tile instead put the shots outside the console's brightness ranges), so framebuffer fetch must not
+  stand in for them. The one after a barrier (new log line: `attachment copies: fragment shader ... before a texture barrier`, each shader once)
+  is fcd1a8d9, draw 2 of a 1600x896 pass, 2 draws and 6 copies a frame (attachments 1, 3 and 7): it samples them through a sampler at a
+  screen-space coordinate it divides out of its varyings, not at the fragment's own position, and framebuffer fetch reads only the fragment's
+  own pixel; standing in would need a proof the coordinate is that pixel. The copies cost was within run-to-run timing on the Mac (42); what
+  they cost on an iPhone (three 1600x896 copies twice a frame docked) is a device check
 - [ ] 114 an iOS Simulator build for the touch controls, safe areas and lifecycle
 
 Tier 5, needs the user's devices, controller or account:

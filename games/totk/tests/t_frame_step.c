@@ -1,7 +1,8 @@
 // The host half of the real-time frame step (games/totk/frame_step.c): the mean of the present intervals and the page layout; the scene size the
 // page carries at +16 (DM_RENDER_RES or the game's own for the operation mode, plan item 52). Built and run by
 // games/totk/check_frame_rate.py (clang -DFRAME_STEP_TEST -I host). The heap overlay's note ignored (-DDM_TEST_SCENE_NO_HEAP) fails 1; +8 not
-// written (-DDM_TEST_CLOTH_NO_SECONDS) fails 1.
+// written (-DDM_TEST_CLOTH_NO_SECONDS) fails 1. The output size at +24 / +32 (DM_OUTPUT_RES, plan item 63); the canvas left to the game
+// (-DDM_TEST_OUTPUT_NO_CANVAS) fails 3.
 #include <stdio.h>
 #include <math.h>
 #define FRAME_STEP_TEST 1
@@ -47,6 +48,18 @@ int main(void) {
     r = scene_size("3200x1800", 1, "2560x1440", sz); expect("3200x1800 above the overlay's 2560x1440: refused (-1)", 1600 * 10 - 1, sz[0] * 10 + r, 0);
     r = scene_size("2560x1440", 1, "9999x9999", sz); expect("a note above 3840x2160 is ignored: 2560x1440 refused (-1)", 1600 * 10 - 1, sz[0] * 10 + r, 0);
     r = scene_size("1920x1080", 1, "junk", sz); expect("a note that is not a size: the output size still allowed (1)", 1080 * 10 + 1, sz[1] * 10 + r, 0);
+    // The output size: {swapchain, canvas}, width | height << 32; the canvas 0 (the game's own) unless DM_OUTPUT_RES
+    uint64_t o[2]; const uint64_t hd = (uint64_t)1080 << 32 | 1920, qhd = (uint64_t)1440 << 32 | 2560, hd7 = (uint64_t)720 << 32 | 1280;
+    r = output_size(NULL, NULL, o); expect("output unset: the swapchain the game's 1920x1080, the canvas 0 (its own) (0)", 1, o[0] == hd && !o[1] && !r, 0);
+    r = output_size("0", "2560x1440", o); expect("DM_OUTPUT_RES=0: the game's own (0)", 1, o[0] == hd && !o[1] && !r, 0);
+    r = output_size("1280x720", NULL, o); expect("1280x720: swapchain and canvas 1280x720 (1)", 1, o[0] == hd7 && o[1] == hd7 && r == 1, 0);
+    r = output_size("1920x1080", NULL, o); expect("1920x1080 (the largest without the overlay): the canvas 1920x1080 too (1)", 1, o[0] == hd && o[1] == hd && r == 1, 0);
+    r = output_size("2560x1440", "2560x1440", o); expect("2560x1440 with an overlay for 2560x1440: both 2560x1440 (1)", 1, o[0] == qhd && o[1] == qhd && r == 1, 0);
+    const char *obad[] = {"2560x1440", "639x360", "640x359", "1920x", "1920x1080x"};
+    for (int i = 0; i < 5; i++) { char what[96]; r = output_size(obad[i], NULL, o); snprintf(what, sizeof what, "output %s without an overlay: refused (-1), the game's own", obad[i]);
+        expect(what, 1, o[0] == hd && !o[1] && r == -1, 0); }
+    r = output_size("2560x1440", "1920x1080", o); expect("2560x1440 with an overlay for 1920x1080: refused (-1)", 1, o[0] == hd && !o[1] && r == -1, 0);
+    r = output_size("3840x2160", "9999x9999", o); expect("a note above 3840x2160 is ignored: 3840x2160 refused (-1)", 1, !o[1] && r == -1, 0);
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }
