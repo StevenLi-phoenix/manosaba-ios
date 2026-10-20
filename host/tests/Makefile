@@ -52,6 +52,8 @@ run: \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_receipt_oneslot \
 	$(B)/t_hid_applet \
+	$(B)/t_totk_defaults \
+	$(B)/t_totk_defaults_noxlat \
 	$(B)/t_hid_applet_silent \
 	$(B)/t_hid_script \
 	$(B)/t_hid_script_nocircle \
@@ -241,6 +243,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_hid_applet_silent.log)" -ne 2 ]; then \
 	   cat $(B)/t_hid_applet_silent.log; echo "t_hid_applet_silent: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_hid_applet_silent: the applet's result not written, as expected"
+	env -u DM_NVN_XLAT -u DM_NVN_TBDR $(B)/t_totk_defaults
+	@status=0; env -u DM_NVN_XLAT -u DM_NVN_TBDR $(B)/t_totk_defaults_noxlat > $(B)/t_totk_defaults_noxlat.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_totk_defaults_noxlat.log)" -ne 1 ]; then \
+	   cat $(B)/t_totk_defaults_noxlat.log; echo "t_totk_defaults_noxlat: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_totk_defaults_noxlat: the translation thread off by default, as expected"
 	$(B)/t_hid_script 2>/dev/null
 	@status=0; $(B)/t_hid_script_nocircle > $(B)/t_hid_script_nocircle.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL LSL and LSU overlap" $(B)/t_hid_script_nocircle.log; then \
@@ -656,6 +663,10 @@ $(B)/t_coremask: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_totk_defaults: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_totk_defaults.c
+$(B)/t_totk_defaults_noxlat: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
+	clang -O1 -Wall -DDM_TEST_TOTK_NO_XLAT -I.. -o $@ t_totk_defaults.c
 $(B)/t_hid_applet: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_hid_applet.c
 $(B)/t_hid_applet_silent: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)

@@ -116,6 +116,16 @@ static inline int sync_fence_load(const sync_t *s, uint64_t *fence) {   // 0: ne
     if (!__atomic_load_n(&s->fenced, __ATOMIC_ACQUIRE)) return 0;
     *fence = __atomic_load_n(&s->fence, __ATOMIC_RELAXED); return 1;
 }
+// With a translation thread (plan item 61, DM_NVN_XLAT=1) a sync can be fenced to a submission still in its queue: the fence is then that submission's
+// number with SYNC_TOKEN set (one 64-bit value, so a waiter never pairs a token's flag with a Metal fence stored meanwhile by the replay); a wait
+// first waits for the submission's translation, then for the Metal fence it ended with (hle_nvn.c x_token_fence). Metal fences never reach bit 63
+#define SYNC_TOKEN (1ull << 63)
+static inline void sync_token_store(sync_t *s, uint64_t sub) { sync_fence_store(s, sub | SYNC_TOKEN); }
+// The submit call's view of a submission for the translation thread (nvn_mtl.m): taken on the game's thread, installed by the replay, freed after its commit
+typedef struct mtl_cap mtl_cap;
+mtl_cap *mtl_sub_capture(const uint64_t *h, int n, uint64_t token);
+void mtl_sub_install(mtl_cap *c);
+void mtl_cap_free(mtl_cap *c);
 typedef struct { const pool_t *pool; int64_t off; } ev_builder_t;                             FITS(ev_builder_t, NVNeventBuilder);
 typedef struct { uint32_t magic; volatile uint32_t *val; } ev_t;                              FITS(ev_t, NVNevent);
 

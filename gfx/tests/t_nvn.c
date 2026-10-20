@@ -1,6 +1,8 @@
 // NVN null device unit tests: look up addresses from nvnBootstrapLoader the way the game does and go all the way to present; all expected values are hand-calculated, without calling the implementation under test.
 // For build and run see gfx/tests/Makefile (make -C gfx/tests).
 #include "../nvn/hle_nvn.c"
+// The newest submission's Metal fence; with the translation thread (DM_NVN_XLAT=1, plan item 61, where t_nvn also runs) once it has been translated
+static uint64_t sub_fence(void) { if (!xlat_on()) return mtl_last_fence(); uint64_t m = 0; return x_token_fence(x_token(), 5000000000ull, &m) ? m : 0; }
 const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15, .nvn_c2 = {0x168, 128, 0x568, 128, 0x120, 8}, .nvn_depth_mode = 1 };   // hle_nvn.c reports the NVN API version and sets the c[2] layout from the profile
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void dm_touch_screen(int w, int h) { (void)w; (void)h; }   // touch coordinate space from host hle_touch.c (called by hle_nvn WindowSetCrop); unit test stub
@@ -329,8 +331,9 @@ int main(void) {
         NVNsync sb; P(nvnSyncInitialize)(&sb, &dev);
         uint64_t t0 = now_ns();
         P(nvnQueueSubmitCommands)(&q, 1, &hb2); P(nvnQueueFenceSync)(&q, &sb, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
+        int w00 = xlat_on() ? P(nvnSyncWait)(&sb, 0) : -1; (void)sub_fence();   // with the thread: replayed (the counter half written), the GPU still busy
         uint64_t ts_early = tsr[1], cnt_early = tsr[0];
-        int w0 = P(nvnSyncWait)(&sb, 0);
+        int w0 = w00 >= 0 ? w00 : P(nvnSyncWait)(&sb, 0);
         int w1 = P(nvnSyncWait)(&sb, 10000000000ull);
         double ms = (now_ns() - t0) / 1e6;
         memset(bsrc, 0xC3, big);                                       // rewrite only after the wait is released
@@ -762,7 +765,7 @@ int main(void) {
         for (int i = 0; i < 24; i++) P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)heap, (NVNbufferAddress)(heap + big), big, 0);
         NVNcommandHandle hbusy = P(nvnCommandBufferEndRecording)(&cb);
         P(nvnQueueSubmitCommands)(&q, 1, &hbusy);
-        uint64_t f = mtl_last_fence();
+        uint64_t f = sub_fence();
         int busy_before = !mtl_wait(f, 0);
         dm_gfx_suspend(1);
         EXPECT("GPU really busy before suspend (zero-timeout wait not complete)", 1, busy_before);
@@ -831,13 +834,13 @@ int main(void) {
         NVNtexture *sc2[2] = {&sc[0], &sc[1]};
         P(nvnWindowBuilderSetTextures)(&wb4, 2, sc2); P(nvnWindowInitialize)(&w4, &wb4);
         for (int mode = 0; mode < 2; mode++) {
-            g_acq_gpu = mode; mtl_present_flush(); mtl_wait(mtl_last_fence(), 5000000000ull);
+            g_acq_gpu = mode; x_drain(); mtl_present_flush(); mtl_wait(sub_fence(), 5000000000ull);
             int ix; uint64_t e0 = g_acq_early;
             P(nvnWindowAcquireTexture)(&w4, NULL, &ix);
             mtl_test_done_hold(1);
             P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferBarrier)(&cb, 0); NVNcommandHandle hf = P(nvnCommandBufferEndRecording)(&cb);
             P(nvnQueueSubmitCommands)(&q, 1, &hf);   // the frame's work
-            uint64_t rf = mtl_last_fence();
+            uint64_t rf = sub_fence();
             P(nvnQueuePresentTexture)(&q, &w4, ix);
             P(nvnWindowAcquireTexture)(&w4, NULL, &ix); P(nvnQueuePresentTexture)(&q, &w4, ix);   // the other image
             pthread_t th; if (mode) pthread_create(&th, NULL, release_later, NULL);
@@ -856,13 +859,13 @@ int main(void) {
     //     counted as such; the same wait once it has completed is counted only as a wait. Counted done too (-DDM_TEST_SYNCWAIT_DONE_TOO): 1 fails
     {
         void mtl_test_done_hold(int on); void nvn_syncwait_stats(uint64_t out[3]);
-        mtl_wait(mtl_last_fence(), 5000000000ull);
+        mtl_wait(sub_fence(), 5000000000ull);
         NVNsync s9; P(nvnSyncInitialize)(&s9, &dev); uint64_t w0[3], w1[3], w2[3]; nvn_syncwait_stats(w0);
         mtl_test_done_hold(1);
         P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferBarrier)(&cb, 0); NVNcommandHandle h9 = P(nvnCommandBufferEndRecording)(&cb);
         P(nvnQueueSubmitCommands)(&q, 1, &h9); P(nvnQueueFenceSync)(&q, &s9, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0); P(nvnQueueFlush)(&q);
         P(nvnSyncWait)(&s9, 0); nvn_syncwait_stats(w1);
-        mtl_test_done_hold(0); mtl_wait(mtl_last_fence(), 5000000000ull); P(nvnSyncWait)(&s9, 5000000000ull); P(nvnSyncWait)(&s9, 0); nvn_syncwait_stats(w2);
+        mtl_test_done_hold(0); mtl_wait(sub_fence(), 5000000000ull); P(nvnSyncWait)(&s9, 5000000000ull); P(nvnSyncWait)(&s9, 0); nvn_syncwait_stats(w2);
         EXPECT("6i. a wait on the newest submission still on the GPU: counted as such", 1, w1[0] - w0[0] == 1 && w1[1] - w0[1] == 1);
         EXPECT("6i. ... the same waits once it is done: waits only", 1, w2[0] - w1[0] == 2 && w2[1] == w1[1]);
     }

@@ -127,6 +127,10 @@ t_nvn64d: t_nvn64d.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_
 	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64d.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_pools: t_pools.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pools.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_blkunp: t_blkunp.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_blkunp.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_xlat: t_xlat.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_xlat.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_mtlguard: t_mtlguard.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mtlguard.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_bindfreeze: t_bindfreeze.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
@@ -247,6 +251,8 @@ run: \
 	t_dbounds \
 	t_nvn64d \
 	t_pools \
+	t_blkunp \
+	t_xlat \
 	t_mtlguard \
 	t_fuse_check \
 	t_gputime \
@@ -376,6 +382,10 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_dbounds
 	MTL_DEBUG_LAYER=1 ./t_nvn64d
 	./t_pools
+	MTL_DEBUG_LAYER=1 ./t_xlat
+	MTL_DEBUG_LAYER=1 ./t_blkunp
+	DM_NVN_XLAT=1 ./t_rqueue   # the render-queue cases with the translation thread (plan item 61)
+	DM_NVN_XLAT=1 ./t_nvn > t_nvn_xlat.log 2>&1 && tail -1 t_nvn_xlat.log || { grep "✗" t_nvn_xlat.log; tail -1 t_nvn_xlat.log; exit 1; }
 	MTL_DEBUG_LAYER=1 ./t_mtlguard
 	MTL_DEBUG_LAYER=1 ./t_flushtexels
 	MTL_DEBUG_LAYER=1 ./t_fout

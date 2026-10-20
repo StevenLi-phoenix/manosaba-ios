@@ -38,6 +38,10 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 
+// The translation thread (plan item 61, with nvnQueueSubmitCommands below)
+static int xlat_on(void); static void x_drain(void); static uint64_t x_token(void);
+static int x_token_fence(uint64_t k, uint64_t timeout_ns, uint64_t *fence);
+
 // ---------- Slot table, thunks, unimplemented stubs ----------
 typedef struct { _Atomic uint64_t cnt; void *fn; } nvn_slot_t;
 nvn_slot_t nvn_slot[NVN_NFUNC];                 // The thunk accesses it by i*16; the layout must not change
@@ -211,6 +215,7 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
     return 1;
 }
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
+    x_drain();   // a queued replay may still use it (plan item 61)
     pool_t *o = (pool_t *)p;
     if (o->mem && !(o->flags & 0x200)) { nvn_dirty_remove_range(o->mem); mtl_pool_del(o->mem); }   // a virtual pool's storage belongs to a physical pool (MapVirtual)
     o->magic = 0;
@@ -245,7 +250,7 @@ NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { r
 // Pool memory is the real memory given by the game (same address for CPU and GPU), so mapping returns the original pointer; cache maintenance has nothing to do
 NVN(nvnMemoryPoolMap, void *, const NVNmemoryPool *p) { return ((const pool_t *)p)->mem; }
 void mtl_pool_invalidate(const pool_t *p, uint64_t off, uint64_t n);   // the CPU is about to read what the GPU wrote: GPU results of this range are written back (nvn_mtl.m)
-NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { if (off >= 0) mtl_pool_invalidate((const pool_t *)p, (uint64_t)off, n); }
+NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { x_drain(); if (off >= 0) mtl_pool_invalidate((const pool_t *)p, (uint64_t)off, n); }
 NVN(nvnMemoryPoolGetSize, size_t, const NVNmemoryPool *p) { return ((const pool_t *)p)->size; }
 NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { return (NVNmemoryPoolFlags)((const pool_t *)p)->flags; }
 NVN(nvnMemoryPoolBuilderGetSize, size_t, const NVNmemoryPoolBuilder *b) { return ((const pool_builder_t *)b)->size; }
@@ -449,6 +454,7 @@ static void tex_census(const tex_t *o, int rt) {   // rt: o is a colour target o
 }
 NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
+    if (o->magic == MAGIC('T', 'E', 'X', 0) && o->serial) x_drain();   // a live object initialized again: a queued replay may still read it (plan item 61)
     OLOG("TextureInitialize t=%p b=%p builder.off=%#llx", (void *)t, (const void *)b, (long long)s->off);
     { static int red; if (s->d.ds_mode && !red++) LOG("[red] TextureInitialize: depth-stencil texture sampled as stencil (ds_mode=%d): Metal stencil view not implemented, still sampling depth", s->d.ds_mode); }
     memset(o, 0, sizeof *o);
@@ -465,7 +471,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
          o->d.levels, o->d.format, o->d.target, o->d.flags, (unsigned long long)o->size, (void *)o->mem);
     return 1;
 }
-NVN(nvnTextureFinalize, void, NVNtexture *t) { OLOG("TextureFinalize %p ser %llu", (void *)t, TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
+NVN(nvnTextureFinalize, void, NVNtexture *t) { x_drain(); OLOG("TextureFinalize %p ser %llu", (void *)t, TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->d.flags; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->d.width; }
 NVN(nvnTextureGetHeight, int, const NVNtexture *t) { return (int)CTX(t)->d.height; }
@@ -566,10 +572,10 @@ static void gfx_mt_enter(const char *what) {
 }
 static void gfx_mt_leave(void) { pthread_mutex_unlock(&g_gfx_mu); }
 NVN(nvnTextureReadTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, void *dst) {
-    gfx_mt_enter("ReadTexels"); read_texels(CTX(t), (const view_t *)v, r, dst, 0, 0); gfx_mt_leave();
+    x_drain(); gfx_mt_enter("ReadTexels"); read_texels(CTX(t), (const view_t *)v, r, dst, 0, 0); gfx_mt_leave();
 }
 NVN(nvnTextureReadTexelsStrided, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, void *dst, ptrdiff_t row, ptrdiff_t img) {
-    gfx_mt_enter("ReadTexelsStrided"); read_texels(CTX(t), (const view_t *)v, r, dst, row, img); gfx_mt_leave();
+    x_drain(); gfx_mt_enter("ReadTexelsStrided"); read_texels(CTX(t), (const view_t *)v, r, dst, row, img); gfx_mt_leave();
 }
 NVN(nvnTextureInvalidateTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }
 // CPU texture write (NVN WriteTexels): stride 0 = tightly packed (same as ReadTexels)
@@ -637,7 +643,7 @@ NVN(nvnSamplerFinalize, void, NVNsampler *s) { ((samp_t *)s)->magic = 0; }
 NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
     (void)d; memset(p, 0, sizeof(prog_t)); ((prog_t *)p)->magic = MAGIC('P', 'R', 'O', 'G'); return 1;
 }
-NVN(nvnProgramFinalize, void, NVNprogram *p) { mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; }
+NVN(nvnProgramFinalize, void, NVNprogram *p) { x_drain(); mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; }
 // Shader key = the first 8 bytes of sha256(the 0x880-byte control section + the code area), the code area being the length at control +0x704 read
 // from data. The replay layer looks libraries up by it (16 hex digits); the offline tools name captures by it (shmap_from_capture.py, dmsh_build.py,
 // engines/unity/shader_extract.py). The control section alone does not identify a shader: it holds sizes and resource counts but no hash of the
@@ -729,6 +735,7 @@ static uint8_t shader_stage(const NVNshaderData *sd) {
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *sd) {
     NVN_BLOCKING();   // loads / builds shader libraries
     prog_t *o = (prog_t *)p;
+    if (o->serial) x_drain();   // its old shaders may still be in a queued replay (plan item 61)
     if (n < 0 || n > 6) { LOG("[red] ProgramSetShaders: stage count %d", n); return 0; }
     for (int i = 0; i < n; i++) shdump(&sd[i]);
     mtl_prog_release(o); o->nstage = n; o->serial = nvn_new_serial();
@@ -770,7 +777,9 @@ NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t
 NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) {
-    (void)q; (void)c; (void)f; uint64_t fe = mtl_last_fence(); sync_fence_store((sync_t *)s, fe); trace_end(TR_FENCE, trace_now(), fe, 0);
+    (void)q; (void)c; (void)f;
+    if (xlat_on()) { uint64_t k = x_token(); sync_token_store((sync_t *)s, k); trace_end(TR_FENCE, trace_now(), k | SYNC_TOKEN, 0); return; }   // the submissions queued so far (plan item 61)
+    uint64_t fe = mtl_last_fence(); sync_fence_store((sync_t *)s, fe); trace_end(TR_FENCE, trace_now(), fe, 0);
 }
 // A sync object that was never fenced: FAILED, as the SDK's NVNsyncWaitResult says (plan item 116; it was TIMEOUT_EXPIRED; dr3-mobile follows the
 // SDK too). Counted and logged: neither game does it (the prologue, the cliff save, manosaba: 0). A fenced one is released only after the GPU has
@@ -786,6 +795,7 @@ static _Atomic uint64_t g_sw_n, g_sw_newest, g_sw_ns;
 void nvn_syncwait_stats(uint64_t out[3]) { out[0] = atomic_load(&g_sw_n); out[1] = atomic_load(&g_sw_newest); out[2] = atomic_load(&g_sw_ns); }
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     uint64_t f0 = 0, t0 = now_ns(), tr = trace_now(); int newest = s && sync_fence_load((const sync_t *)s, &f0) && f0 && f0 == mtl_last_fence() && mtl_done_fence() < f0;
+    if (s && (f0 & SYNC_TOKEN)) { uint64_t k = f0 & ~SYNC_TOKEN, fk; newest = k && k == x_token() && !(x_token_fence(k, 0, &fk) && mtl_done_fence() >= fk); }
 #ifdef DM_TEST_SYNCWAIT_DONE_TOO   // negative control of t_nvn only: a wait on the newest fence counted even when it is done
     newest = s && f0 && f0 == mtl_last_fence();
 #endif
@@ -806,6 +816,13 @@ static NVNsyncWaitResult sync_wait(const NVNsync *s, uint64_t timeout) {
 #else
         return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 #endif
+    }
+    if (fence & SYNC_TOKEN) {   // a submission in the translation thread's queue when it was fenced (plan item 61): its translation, then its Metal fence
+        uint64_t f, t0 = now_ns();
+        if (x_token_fence(fence & ~SYNC_TOKEN, 0, &f) && mtl_wait(f, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
+        if (!x_token_fence(fence & ~SYNC_TOKEN, timeout, &f)) return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+        uint64_t used = now_ns() - t0;
+        return mtl_wait(f, timeout > used ? timeout - used : 0) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
     }
     if (mtl_wait(fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
     return mtl_wait(fence, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
@@ -844,7 +861,7 @@ NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) {
     *(queue_t *)q = (queue_t){MAGIC('Q', 'U', 'E', 'U'), ((const queue_builder_t *)b)->dev, 0};
     OLOG("QueueInitialize %p", (void *)q); return 1;
 }
-NVN(nvnQueueFinalize, void, NVNqueue *q) { ((queue_t *)q)->magic = 0; }
+NVN(nvnQueueFinalize, void, NVNqueue *q) { x_drain(); ((queue_t *)q)->magic = 0; }
 NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *info) {
     (void)q; if (info) memset(info, 0, sizeof *info); return NVN_QUEUE_GET_ERROR_RESULT_GPU_NO_ERROR;
 }
@@ -854,7 +871,7 @@ NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
 // false, as the SDK (dr3-mobile read it there; GirlNet's P5R branch the same; plan item 64d)
 NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) { (void)q; uint64_t f; return s && sync_fence_load((const sync_t *)s, &f); }
 NVN(nvnQueueFinish, void, NVNqueue *q) {
-    NVN_BLOCKING(); (void)q; gfx_mt_enter("QueueFinish"); mtl_finish(); gfx_mt_leave(); }
+    NVN_BLOCKING(); (void)q; x_drain(); gfx_mt_enter("QueueFinish"); mtl_finish(); gfx_mt_leave(); }
 
 // ---------- Command buffer: record into the game's command memory, perform CPU-visible side effects at submit ----------
 #define CB(c) ((cmd_t *)(c))
@@ -1416,33 +1433,167 @@ void dm_gfx_suspend(int on) {
     if (on) while (g_inflight_api) pthread_cond_wait(&g_susp_cv, &g_susp_mu);
     else pthread_cond_broadcast(&g_susp_cv);
     pthread_mutex_unlock(&g_susp_mu);
-    if (on) { mtl_drain(); LOG("[nvn] graphics suspended: in-flight GPU work drained"); } else LOG("[nvn] graphics resumed");
+    if (on) { x_drain(); mtl_drain(); LOG("[nvn] graphics suspended: in-flight GPU work drained"); } else LOG("[nvn] graphics resumed");
 }
 // DM_TEST_WORK_MS=<ms> (a test of the pacing, plan item 53): the frame's first submission waits until <ms> after the previous present, as a game whose
 // own work takes that long; Tears of the Kingdom's frame-rate controller counts it (a wait in the present would not be: it measures to before it)
 static void sleep_until_ns(uint64_t dl);
 static _Atomic uint64_t g_test_work_from;   // the last present's time; taken by the frame's first submission
 static int test_work_ms(void) { static int ms = -1; if (ms < 0) { const char *e = getenv("DM_TEST_WORK_MS"); ms = e ? atoi(e) : 0; if (ms > 0) LOG("[nvn] DM_TEST_WORK_MS=%d: each frame's work made to take that long (a test)", ms); } return ms; }
-NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
-    if (test_work_ms() > 0) { uint64_t from = atomic_exchange(&g_test_work_from, 0); if (from) sleep_until_ns(from + (uint64_t)test_work_ms() * 1000000ull); }
-    NVN_BLOCKING();
-    uint64_t tr = trace_now();
-    gfx_enter(); gfx_mt_enter("SubmitCommands");
+// The replay of one submission into Metal: on the calling thread, or the translation thread's (below) with the submit call's capture
+static uint64_t sub_exec(int n, const uint64_t *h, mtl_cap *cap) {
+    gfx_mt_enter("SubmitCommands");
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
-    ((queue_t *)q)->submits++;
     mtl_sub_begin();
-    mtl_sub_index((const uint64_t *)h, n);
-    mtl_sub_snapshot((const uint64_t *)h, n);
-    for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
+    mtl_sub_install(cap);
+    mtl_sub_index(h, n);
+    mtl_sub_snapshot(h, n);
+    for (int i = 0; i < n; i++) { mtl_exec_rest(h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
     mtl_exec_rest(NULL, 0);
-    mtl_sub_commit();
+    uint64_t f = mtl_sub_commit();
     uint64_t dw = now_ns() - t0;
     atomic_fetch_add(&g_nvn_ns, dw); atomic_fetch_add(&g_sub_wall_ns, dw);
     uint64_t i1, y1; thr_counts(&i1, &y1); uint64_t dc = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - c0, di = i1 - i0;
     atomic_fetch_add(&g_cum_sub_cyc, y1 - y0); atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0); atomic_fetch_add(&g_cum_sub_wall_ns, dw);
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
-    gfx_mt_leave(); gfx_leave();
+    gfx_mt_leave();
+    return f;
+}
+// ---------- The translation thread (plan item 61, DM_NVN_XLAT=1; D2R Mobile b94670c and MacNativeGames' TOTK_ASYNC_REPLAY, MIT, written anew) ----------
+// Submissions and presents go in order to one thread that replays them into Metal. The game's thread takes what the console reads at the submit
+// call (mtl_sub_capture: the deferred handles, the uniform bytes, the FenceSync records' tokens) and returns, so the game's next frame overlaps this
+// one's translation (61c: at 120 Hz 16 % of Tears of the Kingdom's frames waited on it). A fence the game takes (QueueFenceSync, the acquire's) is a
+// token, the number of submissions queued so far; a wait on it waits until the thread has replayed that submission, then for the Metal fence it ended
+// with, so a passed fence still means "translated and done on the GPU", and command memory or objects the game reuses after it have been read.
+// A present is a job after the frame's submissions, and so is the frame number; the acquire of an image waits for the job of its last present, then
+// for its ticket as before. What reads or ends Metal state from the game's side waits until the queue is empty (x_drain): Finish, texel reads,
+// finalizing textures, programs, pools and the queue, a texture initialized again, shaders set again, a pool's invalidate, suspension. The thread runs
+// at USER_INTERACTIVE and declares a time constraint of half the present period (MacNativeGames measured its replay 6.6 → 13 ms without one on an
+// iPhone, preempted by the game's workers; DM_NVN_XLAT_RT=0 leaves it out, 61d). DM_NVN_XLAT=0 (the default for now): the calling thread, as before
+enum { XJ_SUBMIT = 1, XJ_PRESENT, XJ_FRAME };
+typedef struct { int kind, n; uint64_t *h; mtl_cap *cap; uint64_t sub, frame; const tex_t *tex; double period; int crop[4]; } xjob;
+#define XQ 32
+#define XF 4096
+static xjob g_xq[XQ];
+static uint64_t g_xq_in, g_xq_done, g_xsub_in, g_xsub_done, g_xsub_fence[XF];   // jobs queued / run; submissions queued / run, the Metal fence each ended with
+static struct { uint64_t job, tk; } g_xtk[XF];                                   // a present job's present-thread ticket
+static pthread_mutex_t g_xq_mu = PTHREAD_MUTEX_INITIALIZER, g_xord_mu = PTHREAD_MUTEX_INITIALIZER;   // g_xord_mu: a submission's number, capture and queueing in one order
+static pthread_cond_t g_xq_cv = PTHREAD_COND_INITIALIZER;
+static int g_xlat = -1, g_xleft = -1;   // g_xleft: jobs the thread may still take before it waits (-1: any; tests: nvn_xlat_hold / nvn_xlat_step)
+static _Atomic uint64_t g_x_drains, g_x_drain_ns;
+static int xlat_on(void) {
+    if (g_xlat < 0) { const char *e = getenv("DM_NVN_XLAT"); g_xlat = e && atoi(e) > 0; if (g_xlat) LOG("[nvn] DM_NVN_XLAT=1: submissions and presents replayed in order on a translation thread"); }
+    return g_xlat;
+}
+static void xlat_rt(uint64_t period_ns) {   // the translation thread's time constraint (61d's switch)
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_XLAT_RT"); on = !(e && !strcmp(e, "0")); }
+    static uint64_t set; if (!on || !period_ns || dm_detclock_enabled() || set == period_ns) return;
+    static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    thread_time_constraint_policy_data_t p = {.period = (uint32_t)(period_ns * tb.denom / tb.numer), .computation = (uint32_t)(period_ns / 2 * tb.denom / tb.numer),
+                                              .constraint = (uint32_t)(period_ns * tb.denom / tb.numer), .preemptible = 1};
+    kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    set = period_ns; LOG("[nvn] translation thread time constraint (period %.3f ms, computation %.3f ms) %s", period_ns / 1e6, period_ns / 2e6, kr == KERN_SUCCESS ? "set" : "not set");
+}
+static void x_run(xjob *j, uint64_t job) {
+    if (j->kind == XJ_SUBMIT) {
+        uint64_t tr = trace_now(), f = sub_exec(j->n, j->h, j->cap); mtl_cap_free(j->cap); free(j->h);
+        trace_end(TR_SUBMIT, tr, (uint64_t)j->n, f);   // the replay itself, with its Metal fence (the game thread's span is the queueing, with the token)
+        pthread_mutex_lock(&g_xq_mu); g_xsub_fence[j->sub % XF] = f; g_xsub_done = j->sub; pthread_mutex_unlock(&g_xq_mu);
+    } else if (j->kind == XJ_PRESENT) {
+        gfx_mt_enter("PresentTexture"); uint64_t tk = mtl_present(j->tex, j->period, j->crop); gfx_mt_leave();
+        pthread_mutex_lock(&g_xq_mu); g_xtk[job % XF].job = job; g_xtk[job % XF].tk = tk; pthread_mutex_unlock(&g_xq_mu);
+    } else { mtl_set_frame(j->frame); xlat_rt((uint64_t)(j->period * 1e9)); }
+}
+static void *x_thread(void *unused) {
+    (void)unused; pthread_setname_np("nvn-translate");
+    for (;;) {
+        pthread_mutex_lock(&g_xq_mu);
+        while (g_xq_done == g_xq_in || !g_xleft) pthread_cond_wait(&g_xq_cv, &g_xq_mu);
+        uint64_t job = g_xq_done + 1; xjob j = g_xq[job % XQ]; if (g_xleft > 0) g_xleft--;
+        pthread_mutex_unlock(&g_xq_mu);
+        x_run(&j, job);
+        pthread_mutex_lock(&g_xq_mu); g_xq_done = job; pthread_cond_broadcast(&g_xq_cv); pthread_mutex_unlock(&g_xq_mu);
+    }
+    return NULL;
+}
+static void x_start(void) {
+    pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8u << 20); pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
+    pthread_t t; if (pthread_create(&t, &a, x_thread, NULL)) die("NVN translation thread");
+    pthread_attr_destroy(&a); pthread_detach(t);
+}
+static uint64_t x_push(xjob *j) {   // the job's number (from 1); a submission's number in j->sub is the caller's (under g_xord_mu)
+    static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, x_start);
+    pthread_mutex_lock(&g_xq_mu);
+    while (g_xq_in - g_xq_done >= XQ) pthread_cond_wait(&g_xq_cv, &g_xq_mu);
+    uint64_t job = ++g_xq_in; g_xq[job % XQ] = *j;
+    if (j->kind == XJ_SUBMIT) g_xsub_in = j->sub;
+    pthread_cond_broadcast(&g_xq_cv); pthread_mutex_unlock(&g_xq_mu);
+    return job;
+}
+static void x_wait_job(uint64_t job) {
+    pthread_mutex_lock(&g_xq_mu); int done = g_xq_done >= job; pthread_mutex_unlock(&g_xq_mu);
+    if (done) return;
+    NVN_BLOCKING();   // a guest thread gives its virtual core back while it waits
+    pthread_mutex_lock(&g_xq_mu); while (g_xq_done < job) pthread_cond_wait(&g_xq_cv, &g_xq_mu); pthread_mutex_unlock(&g_xq_mu);
+}
+static void x_drain(void) {   // everything queued so far has run (nothing to do without the thread, or when it is idle)
+    if (!xlat_on()) return;
+#ifdef DM_TEST_XLAT_NO_DRAIN   // negative control of t_xlat only: nothing waits for the queue
+    return;
+#endif
+    pthread_mutex_lock(&g_xq_mu); uint64_t want = g_xq_in, have = g_xq_done; pthread_mutex_unlock(&g_xq_mu);
+    if (have >= want) return;
+    uint64_t t0 = now_ns(); x_wait_job(want);
+    atomic_fetch_add(&g_x_drains, 1); atomic_fetch_add(&g_x_drain_ns, now_ns() - t0);
+}
+static uint64_t x_token(void) { pthread_mutex_lock(&g_xq_mu); uint64_t k = g_xsub_in; pthread_mutex_unlock(&g_xq_mu); return k; }
+// Submission k translated within timeout_ns: its Metal fence in *fence (a later fence when its entry was overwritten: conservative); 1 = translated
+static int x_token_fence(uint64_t k, uint64_t timeout_ns, uint64_t *fence) {
+    pthread_mutex_lock(&g_xq_mu);
+    int ok = g_xsub_done >= k;
+    if (ok) *fence = !k ? 0 : g_xsub_done - k < XF ? g_xsub_fence[k % XF] : mtl_last_fence();
+    pthread_mutex_unlock(&g_xq_mu);
+    if (ok || !timeout_ns) return ok;
+    NVN_BLOCKING();   // the core given back before the lock is taken and taken back after it is released (at return): never waited for while holding it
+    struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl);
+    uint64_t ns = (uint64_t)dl.tv_nsec + (timeout_ns > 3600000000000ull ? 3600000000000ull : timeout_ns);
+    dl.tv_sec += (time_t)(ns / 1000000000ull); dl.tv_nsec = (long)(ns % 1000000000ull);
+    pthread_mutex_lock(&g_xq_mu);
+    while (g_xsub_done < k) if (pthread_cond_timedwait(&g_xq_cv, &g_xq_mu, &dl)) break;
+    ok = g_xsub_done >= k;
+    if (ok) *fence = g_xsub_done - k < XF ? g_xsub_fence[k % XF] : mtl_last_fence();
+    pthread_mutex_unlock(&g_xq_mu);
+    return ok;
+}
+static uint64_t x_present_ticket(uint64_t job) {   // the present-thread ticket a present job got (0: none to wait for)
+    x_wait_job(job);
+    pthread_mutex_lock(&g_xq_mu); uint64_t tk = g_xtk[job % XF].job == job ? g_xtk[job % XF].tk : 0; pthread_mutex_unlock(&g_xq_mu);
+    return tk;
+}
+// Tests (t_xlat): the thread holds its next job while on, or takes n more and holds; the jobs not run yet
+void nvn_xlat_hold(int on) { pthread_mutex_lock(&g_xq_mu); g_xleft = on ? 0 : -1; pthread_cond_broadcast(&g_xq_cv); pthread_mutex_unlock(&g_xq_mu); }
+void nvn_xlat_step(int n) { pthread_mutex_lock(&g_xq_mu); g_xleft = n; pthread_cond_broadcast(&g_xq_cv); pthread_mutex_unlock(&g_xq_mu); }
+uint64_t nvn_xlat_pending(void) { pthread_mutex_lock(&g_xq_mu); uint64_t n = g_xq_in - g_xq_done; pthread_mutex_unlock(&g_xq_mu); return n; }
+NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
+    if (test_work_ms() > 0) { uint64_t from = atomic_exchange(&g_test_work_from, 0); if (from) sleep_until_ns(from + (uint64_t)test_work_ms() * 1000000ull); }
+    NVN_BLOCKING();
+    uint64_t tr = trace_now();
+    gfx_enter();
+    ((queue_t *)q)->submits++;
+    if (xlat_on()) {
+        xjob j = {.kind = XJ_SUBMIT, .n = n, .h = malloc(sizeof(uint64_t) * (size_t)(n > 0 ? n : 1))};
+        if (!j.h) die("NVN translation queue");
+        memcpy(j.h, h, sizeof(uint64_t) * (size_t)(n > 0 ? n : 0));
+        pthread_mutex_lock(&g_xord_mu);
+        j.sub = x_token() + 1; j.cap = mtl_sub_capture(j.h, n, j.sub); x_push(&j);
+        pthread_mutex_unlock(&g_xord_mu);
+        gfx_leave();
+        trace_end(TR_SUBMIT, tr, (uint64_t)n, j.sub | SYNC_TOKEN);
+        return;
+    }
+    sub_exec(n, (const uint64_t *)h, NULL);
+    gfx_leave();
     trace_end(TR_SUBMIT, tr, (uint64_t)n, mtl_last_fence());
 }
 
@@ -1606,9 +1757,12 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     g_acq_wait_ns += wait; trow(g_frame, "@late_ms", wait ? (now_ns() - at) / 1e6 : 0);
     // The previous present of this texture has not yet been processed by the present thread (display cannot keep up, a whole swapchain round behind): wait for it to be returned, then hand it to the game to draw
     uint64_t tk = *idx < 4 ? o->ticket[*idx] : 0;
+    if (tk && xlat_on()) tk = x_present_ticket(tk);   // the image's last present job has run: its present-thread ticket (plan item 61)
     if (tk) { uint64_t w0 = now_ns(); mtl_present_wait(tk); g_pq_wait_ns += now_ns() - w0; }
     { uint64_t rf = *idx < 4 ? o->rfence[*idx] : 0; g_acq_n++;   // the frame last drawn into this image (see g_acq_early)
 #ifndef DM_TEST_ACQ_GPU_NO_WAIT   // negative control of t_nvn only: never waits
+      if (rf & SYNC_TOKEN) { uint64_t f;   // a token: its fence once translated (the wait waits for that too); not translated yet counts as early
+          if (x_token_fence(rf & ~SYNC_TOKEN, acq_gpu_wait() ? 5000000000ull : 0, &f)) rf = f; else { g_acq_early++; rf = 0; } }
       if (rf && mtl_done_fence() < rf) { g_acq_early++; if (acq_gpu_wait()) { uint64_t w0 = now_ns(); mtl_wait(rf, 5000000000ull); g_acq_gpu_ns += now_ns() - w0; } }
 #endif
     }
@@ -1618,7 +1772,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // CPU here until the whole previous frame had run, so the replay of a frame and the GPU work of the one before never overlapped (MacNativeGames,
     // MIT: TOTK_ACQ_SYNC). DM_NVN_ACQ_SYNC=newest restores that (A/B)
     if (s) { static int newest = -1; if (newest < 0) { const char *e = getenv("DM_NVN_ACQ_SYNC"); newest = e && !strcmp(e, "newest"); if (newest) LOG("[nvn] DM_NVN_ACQ_SYNC=newest: the acquire sync waits for the newest submission"); }
-             sync_fence_store((sync_t *)s, newest ? mtl_last_fence() : 0); }
+             if (newest && xlat_on()) sync_token_store((sync_t *)s, x_token()); else sync_fence_store((sync_t *)s, newest ? mtl_last_fence() : 0); }
     if (!g_fs_started) { g_fs_started = 1; g_fs_prev_start = g_fs_start; g_fs_start = now_ns(); }   // a frame starts when its first acquire returns (nvn_fstep.h)
     trace_end(TR_ACQUIRE, tr, (uint64_t)*idx, wait);
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
@@ -1964,9 +2118,14 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
       if (ha > 0 && g_frame == (uint64_t)hb) nvn_fps_hold(0); }   // a freeze on purpose (host/crash.c's frames-stopped watch)
     gfx_enter();
     uint64_t t0 = now_ns();
+    if (xlat_on()) {   // a job after the frame's submissions (plan item 61): ticket[idx] holds the job, rfence[idx] the token of the frame's last submission
+        if (idx >= 0 && idx < o->ntex && idx < 4) { xjob j = {.kind = XJ_PRESENT, .tex = CTX(o->tex[idx]), .period = present_period(o) / 1e9}; memcpy(j.crop, o->crop, sizeof j.crop);
+            pthread_mutex_lock(&g_xord_mu); o->ticket[idx] = x_push(&j); o->rfence[idx] = x_token() | SYNC_TOKEN; pthread_mutex_unlock(&g_xord_mu); }
+    } else {
     gfx_mt_enter("PresentTexture");
     if (idx >= 0 && idx < o->ntex && idx < 4) { o->ticket[idx] = mtl_present(CTX(o->tex[idx]), present_period(o) / 1e9, o->crop); o->rfence[idx] = mtl_last_fence(); }   // enqueue only, return immediately; the frame's work is committed (QueueSubmitCommands replays and commits at once)
     gfx_mt_leave();
+    }
     gfx_leave();
     atomic_fetch_add(&g_nvn_ns, now_ns() - t0);
     trace_end(TR_PRESENT, tr, (uint64_t)idx, g_frame);
@@ -2051,7 +2210,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     prev_in = t0; prev_pass = ps; prev_draw = dr;
     dump_frame();
     if (g_frame % TWIN == 0) tsummary(g_frame);
-    mtl_set_frame(g_frame);
+    if (xlat_on()) { xjob j = {.kind = XJ_FRAME, .frame = g_frame, .period = present_period(o) / 1e9}; pthread_mutex_lock(&g_xord_mu); x_push(&j); pthread_mutex_unlock(&g_xord_mu); }   // in order with the replays (plan item 61)
+    else mtl_set_frame(g_frame);
     // Real-device semantics: present only enqueues and returns immediately; this frame's display time is scheduled by the pacer, and the texture can be acquired again only at "display time + one period" (blocking in AcquireTexture)
     uint64_t period = present_period(o), now = dm_detclock_enabled() ? guest_ns() : now_ns();
     g_hold_now = nvn_hold_ms(period); g_hold_ring[o->presents % 16] = g_hold_now;   // this present's hold (plan item 156)

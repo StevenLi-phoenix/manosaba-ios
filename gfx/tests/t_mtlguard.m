@@ -7,7 +7,8 @@
 //   on a GPU without BC (DM_TEST_NO_BC=1: BC4 kept as R8), an 8x8 BC4 texture as a render target through an RGBA16UI view (Tears of the
 //   Kingdom's BC encoders), drawn into, then cleared through the same view: the submission completes (the attachment and the clear left out)
 // Any format attached as depth (-DDM_TEST_DEPTH_ANY_FORMAT): 1 fails (Metal's validation aborts the child); the cube type kept
-// (-DDM_TEST_CUBE_VIEW_KEPT): 2 fail; the views of the unpacked BC texture made (-DDM_TEST_UNPACKED_VIEW): 1 fails.
+// (-DDM_TEST_CUBE_VIEW_KEPT): 2 fail; the views of the unpacked BC texture made (-DDM_TEST_UNPACKED_VIEW): 2 fail.
+//   the same with a 3D BC4 texture (Tears of the Kingdom's encoders write 3D ones; decoded since 62c3): completes
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/hle_nvn.c"
 #include <spawn.h>
@@ -67,15 +68,15 @@ static int cube_case(int layers) {   // 0: the view made as 2D (one face) or a 2
     MTLTextureType want = layers == 1 ? MTLTextureType2D : MTLTextureType2DArray;
     return t.textureType == want && t.parentRelativeSlice == 2 && (layers == 1 || t.arrayLength == (NSUInteger)layers) ? 0 : 3;
 }
-static int unpacked_case(int arg) {   // 0: completed without a command buffer error
-    (void)arg; setenv("DM_TEST_NO_BC", "1", 1); setup();
+static int unpacked_case(int is3d) {   // 0: completed without a command buffer error
+    setenv("DM_TEST_NO_BC", "1", 1); setup();
     NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nconstant float2 P[3] = {float2(-1,-1), float2(3,-1), float2(-1,3)};\n"
         "vertex float4 v(uint n [[vertex_id]]) { return float4(P[n], 0.5, 1); }\nfragment uint4 blocks() { return uint4(1, 2, 3, 4); }\n" options:nil error:&e];
     if (!lib) { printf("library: %s\n", e.localizedDescription.UTF8String); return 2; }
     static prog_t pg = {.serial = 2500101}; NvProg *p = [NvProg new];
     p->sh[0] = [NvShader new]; p->sh[0]->fn = [lib newFunctionWithName:@"v"]; p->sh[1] = [NvShader new]; p->sh[1]->fn = [lib newFunctionWithName:@"blocks"]; p->sh[1]->stage = 1; p->sh[1]->rf.color_mask = 1;
     serial_put(pg.serial, p);
-    tex_t bc = {.serial = 2500110}; bc.d = (nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGTC1_UNORM, .width = 8, .height = 8, .depth = 1, .levels = 1, .samples = 1};
+    tex_t bc = {.serial = 2500110}; bc.d = (nvn_texdesc){.target = is3d ? NVN_TEXTURE_TARGET_3D : NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGTC1_UNORM, .width = 8, .height = 8, .depth = is3d ? 4 : 1, .levels = 1, .samples = 1};
     if (!tex_mtl(&bc)) return 3;
     NVNtextureView vw; h_nvnTextureViewSetDefaults(&vw); h_nvnTextureViewSetFormat(&vw, NVN_FORMAT_RGBA16UI);
     NVNcommandBuffer c; h_nvnCommandBufferInitialize(&c, NULL); h_nvnCommandBufferAddCommandMemory(&c, (const NVNmemoryPool *)&g_g_pool, 0, 16384); h_nvnCommandBufferBeginRecording(&c);
@@ -95,12 +96,13 @@ static int in_child(int which) {   // the case run in a fresh process (posix_spa
 }
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); g_self = argv[0];
-    if (argc == 3 && !strcmp(argv[1], "--case")) { int r; @autoreleasepool { switch (atoi(argv[2])) { case 0: r = depth_case(); break; case 1: r = cube_case(1); break; case 2: r = cube_case(3); break; default: r = unpacked_case(0); } } return r; }
+    if (argc == 3 && !strcmp(argv[1], "--case")) { int r; @autoreleasepool { switch (atoi(argv[2])) { case 0: r = depth_case(); break; case 1: r = cube_case(1); break; case 2: r = cube_case(3); break; case 3: r = unpacked_case(0); break; default: r = unpacked_case(1); } } return r; }
     int r = in_child(0);
     char line[160]; snprintf(line, sizeof line, "an R11G11B10F depth target: the submission completes, the colour red (child status %d)", r); check(line, r == 0);
     r = in_child(1); snprintf(line, sizeof line, "a cube's one-face view with the cube's type: made, as a 2D view of face 2 (child status %d)", r); check(line, r == 0);
     r = in_child(2); snprintf(line, sizeof line, "... a view of three faces: a 2D array of three (child status %d)", r); check(line, r == 0);
-    r = in_child(3); snprintf(line, sizeof line, "no BC: a BC4 render target and clear through an RGBA16UI view: completes, both left out (child status %d)", r); check(line, r == 0);
+    r = in_child(3); snprintf(line, sizeof line, "no BC: a BC4 render target and clear through an RGBA16UI view: completes (child status %d)", r); check(line, r == 0);
+    r = in_child(4); snprintf(line, sizeof line, "... a 3D BC4 texture the same: completes (child status %d)", r); check(line, r == 0);
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

@@ -12,6 +12,7 @@
 //   the four wait results: ALREADY_SIGNALED 0, CONDITION_SATISFIED 1 (a wait released by another thread), TIMEOUT_EXPIRED 2, FAILED 3
 //   an old fence past a ring: after 4,097 later submissions (MacNativeGames' fence ring has 4,096 entries) the first queue fence is still
 //   ALREADY_SIGNALED, and the same sync fenced again on a held submission holds the new fence and times out
+// Also run with the translation thread (DM_NVN_XLAT=1): fences read through fence_of / last_fence, which resolve a submission's token
 // Completion is held only after QueueFinish: the submit waits for one of the four occlusion-count buffers (nvn_mtl.m g_vis_ring), so five
 // submissions not done stop the fifth. Built as t_nvn (make -C gfx/tests t_rqueue). The nested fence given the last submission's fence (-DDM_TEST_FENCE_SYNC_LAST): 5 fail.
 #include "../nvn/hle_nvn.c"
@@ -39,7 +40,14 @@ static void begin(NVNcommandBuffer *c, ptrdiff_t off, size_t n) {   // a fresh c
     P(nvnCommandBufferInitialize)(c, &dev); P(nvnCommandBufferAddCommandMemory)(c, &pool, off, n); P(nvnCommandBufferBeginRecording)(c);
 }
 static void add(NVNcommandBuffer *c, uint32_t v) { P(nvnCommandBufferSignalEvent)(c, &ev, NVN_EVENT_SIGNAL_MODE_ADD, NVN_EVENT_SIGNAL_LOCATION_BOTTOM, 0, v); }
-static uint64_t fence_of(const NVNsync *s) { uint64_t f = 0; return sync_fence_load((const sync_t *)s, &f) ? f : 0; }
+// A sync's Metal fence: with the translation thread (DM_NVN_XLAT=1, plan item 61) a token is the number of a queued submission, resolved once
+// that submission has been translated; the newest submission's Metal fence likewise
+static uint64_t fence_of(const NVNsync *s) {
+    uint64_t f = 0; if (!sync_fence_load((const sync_t *)s, &f)) return 0;
+    if (f & SYNC_TOKEN) { uint64_t m = 0; return x_token_fence(f & ~SYNC_TOKEN, 5000000000ull, &m) ? m : 0; }
+    return f;
+}
+static uint64_t last_fence(void) { if (!xlat_on()) return mtl_last_fence(); uint64_t m = 0; return x_token_fence(x_token(), 5000000000ull, &m) ? m : 0; }
 static int wait_held(uint64_t f) {   // until the GPU has completed up to f (completion held: the done fence stays)
     for (int i = 0; i < 5000; i++) { if (mtl_test_done_to(0) >= f) return 1; usleep(1000); }
     return 0;
@@ -82,11 +90,11 @@ int main(void) {
     EXPECT("a fence in a nested list, before any submit: FAILED (3)", 3, P(nvnSyncWait)(&sA, 0));
     EXPECT("a sync never fenced: FAILED (3)", 3, P(nvnSyncWait)(&fresh, 0));
     mtl_test_done_hold(1);
-    P(nvnQueueSubmitCommands)(&q, 1, &parent); uint64_t f1 = mtl_last_fence();
+    P(nvnQueueSubmitCommands)(&q, 1, &parent); uint64_t f1 = last_fence();
     P(nvnQueueFenceSync)(&q, &s1, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
     EXPECT("right after the first submit the nested fence holds that submission's fence", 1, f1 && fence_of(&sA) == f1);
     EXPECT("... and a wait on it times out while the submission is held: TIMEOUT_EXPIRED (2)", 2, P(nvnSyncWait)(&sA, 0));
-    P(nvnQueueSubmitCommands)(&q, 1, &parent); uint64_t f2 = mtl_last_fence();
+    P(nvnQueueSubmitCommands)(&q, 1, &parent); uint64_t f2 = last_fence();
     EXPECT("after the second submit, the second's", 1, f2 == f1 + 1 && fence_of(&sA) == f2);
 
     waiter_t wa = {&s1}, wb = {&sA}; pthread_t ta, tb;
@@ -112,7 +120,7 @@ int main(void) {
     EXPECT("4,097 submissions later the first queue fence is still ALREADY_SIGNALED (0)", 0, P(nvnSyncWait)(&s1, 0));
     P(nvnQueueFinish)(&q); mtl_test_done_hold(1); P(nvnQueueSubmitCommands)(&q, 1, &empty);
     P(nvnQueueFenceSync)(&q, &s1, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
-    EXPECT("the same sync fenced again holds the newest fence", 1, fence_of(&s1) == mtl_last_fence() && mtl_last_fence() == f2 + 4099);
+    EXPECT("the same sync fenced again holds the newest fence", 1, fence_of(&s1) == last_fence() && last_fence() == f2 + 4099);
     EXPECT("... and times out while that submission is held: TIMEOUT_EXPIRED (2)", 2, P(nvnSyncWait)(&s1, 0));
     mtl_test_done_hold(0);
     int last = P(nvnSyncWait)(&s1, 5000000000ull);

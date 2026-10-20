@@ -2023,7 +2023,28 @@ Tier 3d, iOS, Mac and tooling:
   both goals' rules, a loop against a fake host, no key; each rule's first condition alone fails 4)
 
 Tier 4, large:
-- [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)
+- [x] batch 55 · 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first).
+  DM_NVN_XLAT=1 (hle_nvn.c; D2R Mobile b94670c and MacNativeGames' TOTK_ASYNC_REPLAY, MIT, written anew): submissions, presents and the frame
+  number go in order to one translation thread; the submit call takes what the console reads there (nvn_mtl.m `mtl_sub_capture`: the deferred
+  handles, the bound uniform bytes, FenceSync records' syncs given the submission's token) and returns. A fence the game takes is a token (the
+  submissions queued; one 64-bit value with SYNC_TOKEN, so a waiter never pairs a token's flag with a Metal fence stored meanwhile); a wait waits
+  for that submission's translation, then its Metal fence; the replay's FenceSync replaces the token only if it is still its own (a later
+  submission's FenceSync stays). A captured uniform range that a GPU write of a submission not complete at the capture reaches is not used (its
+  bytes may predate the write). The acquire waits for its image's last present job; Finish, texel reads, finalizing textures / programs / pools /
+  the queue, a texture initialized again, shaders set again, a pool's invalidate and suspension wait for the queue; the thread is USER_INTERACTIVE
+  with a time constraint of half the present period (DM_NVN_XLAT_RT=0 drops it: 61d). `gfx/tests/t_xlat.m` (6: the token, a wait of 0 times out
+  rather than FAILED and is satisfied once the thread goes on; QueueFenceSync's token; deferred handles and uniform bytes of the submit call; no
+  stale captured copy under an earlier submission's write, with that write complete; ReadTexels drains); FenceSync not tokened
+  (DM_TEST_XLAT_NO_TOKEN): 2 fail, nothing captured (DM_TEST_XLAT_NO_CAPTURE): 2, the capture's stale bytes taken (DM_TEST_XLAT_CAP_STALE): 1, no
+  drain (DM_TEST_XLAT_NO_DRAIN): 1; t_rqueue (18) and t_nvn (152) also run with the thread (they read a submission's fence
+  through helpers that wait for its translation and resolve tokens). Measured (61c's trace, Mac M5): Tears of the
+  Kingdom's prologue at 30 fps, frame p95 46.3 → 33.9 ms (every frame on time; the presenting thread's submit 6.7 → 0.6 ms, the replay 4.7 /
+  p95 18 ms on the thread, GPU latency 2.2 → 1.2 ms); the 60 fps product at 120 Hz p95 15.6 → 11.0 ms; shots within their spread, the same red
+  lines. manosaba, which waits for its newest submission every frame (177), gets worse: p95 17.8 → 20.5 ms, 70-79 of 300 frames over their
+  hold against 11; and one of 16 runs froze at frame 1800 (Metal committed 1802, completed 1799, its submission thread inside the driver's
+  submitCommandBuffers; not seen again in 15 runs). An hour's soak of the 60 fps product on the cliff save with the thread (the walk of 166) ran
+  clean: 60.1 min, no freeze, frame p50 8.74 → 8.82 ms, the one red line kind of 112. So the thread is Tears of the Kingdom's default
+  (games/totk/defaults.c, DM_NVN_XLAT=0 turns it off; `host/tests/t_totk_defaults.c` 3, without the line 1 fails) and stays off for manosaba
   - [x] batch 54 · 61a LASRecomp's render-queue cases as a test first (nested lists kept, a fence in a nested list published, two waiters, the
     four wait results, a fence whose ring slot was reused). `gfx/tests/t_rqueue.c` (18) against the submit as it is now, so a translation thread
     has to keep them: a parent calling a child in game memory and one that overflows into a host segment, both command buffer objects finalized
@@ -2054,8 +2075,17 @@ Tier 4, large:
     acquire 5.9 ms, GPU 3.8 ms: 229 frames wait for the display, 47 (16 %) for translation, 23 for the game. So 61 does not raise 30 fps, and
     at high rates a sixth of the frames miss a vsync on translation (more on an iPhone's CPU: 61d). `gfx/tests/t_trace.c` (10;
     DM_TEST_TRACE_KEEP_UNSTARTED: 3 fail), `tools/tests/t_trace_report.py` (7; T_TRACE_SUM_GPU, the GPU busy summed instead of united: 1 fails)
-  - [ ] 61d the translation thread's time-constraint policy (re-declared at most every 200 ms) against none, on the iPhone
-  - [ ] 61e full-screen single-draw passes as compute, measured; idle gaps between encoders from a Metal System Trace
+  - [ ] 61d the translation thread's time-constraint policy (re-declared at most every 200 ms) against none, on the iPhone (with 61e's
+    DM_NVN_PASSGPU count there: the single-draw passes' cost on a tile GPU)
+  - [-] 61e full-screen single-draw passes as compute, measured; idle gaps between encoders from a Metal System Trace. Measured with
+    DM_NVN_PASSGPU's per-pass GPU timestamps (item 49: Metal 4 timestamps around each render encoder and dispatch, the same intervals a Metal System
+    Trace shows) on Tears of the Kingdom's prologue, frames 1500-2699 on an M5 (10 GPU cores): 126 passes and dispatches a frame, GPU busy 6.73 ms;
+    84 of them single-draw render passes, 2.76 ms together, nearly all small targets of the downsample chains (8x8 9.4 a frame, 120x67 7, 16x16
+    6, 32x32 4.7 …, about 11 µs each); idle gaps between encoders 0.19 ms a frame (139 of them, median 0.5 µs, p90 1 µs), and 0.84 ms a frame in
+    2.45 gaps of 0.2 ms or more, the GPU waiting for the CPU to commit the next part (61's matter). Compute versions would need the translator to
+    turn those pixel shaders into kernels, to save at most the passes' own cost (under 0.9 ms a frame) on a GPU busy 6.7 of 33 ms (30 fps) or 3.8
+    of 8.3 ms (120 Hz): not done on the Mac. On an iPhone's tile GPU a dependent pass costs more (totk-mobile: 38-57 µs on an M4), so the same
+    DM_NVN_PASSGPU count joins 61d's device run
 - [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
   - [x] batch 54 · 62a guest memory: reserved in `main()` before UIKit and Metal, a gap log on failure, the base checked against 2^39, `guest_heap_mb`
     at least 2,176 and no pool add on iOS. `host/guest_as.h`: the lowest free gap from 4 GiB that holds the most, 2 MiB aligned and ending at or
@@ -2094,9 +2124,18 @@ Tier 4, large:
     `nvn_bctc.metal`: decoded and encoded again, lossy); now decompressed (4x and 2x their size). After a run of Tears of the Kingdom on a GPU
     without BC shows what its memory comes to (62's census under the limit): lossy, and only those devices gain. With BC1 as ASTC the prologue
     still takes 330 MB more than with BC (2,314 against 1,984 MB at frame 3840): what the other formats cost
-  - [ ] 62c3 BC textures the GPU writes, on GPUs without BC: TotK's encoders render blocks through a one-texel-per-block integer view; with BC
-    an auxiliary texture takes them and is copied in (blk_view_fmt / blk_writeback); without BC the blocks need decoding into the decompressed (or
-    ASTC) texture after the pass. Until then those draws and clears are left out (64m), so the textures they make keep what they had
+  - [x] batch 55 · 62c3 BC textures the GPU writes, on GPUs without BC. Which GPUs those are (Apple's Metal Feature Set Tables of 2026-05-21: BC
+    pixel formats from Apple9 on; Apple7 / Apple8 "varies", some iPadOS devices only, `supportsBCTextureCompression` tells): every iPhone with an
+    A14, A15 or A16 (iPhone 12 to 15 but the 15 Pro), where MacNativeGames ran Tears of the Kingdom. Its encoders draw blocks through a
+    one-texel-per-block integer view (an RGBA16UI view of BC4); without BC that view of the kept R8 texture aborted the process (64m left those
+    draws out). Now such a draw goes into the auxiliary block texture as with BC, which stays the texture's compressed content (zero blocks when
+    made), and after the pass its blocks are decoded into the texture (`blk_decode`): BC1-5 by the upload's kernel bcd through a 2D view, BC1 kept
+    as ASTC by b1a into ASTC blocks copied in, and a 3D texture's depth plane by bcd3 (the same decoding, written through a 3D view: the encoders
+    of Tears of the Kingdom's prologue draw 3D BC4 textures only, which the first version aborted on); BC6H / BC7 (decoded on the CPU) are still
+    left out, red once. `gfx/tests/t_blkunp.m` (4, DM_TEST_NO_BC=1: a BC4 block of endpoints 200 / 100 → every texel 200; a BC1 red / blue block
+    → each ASTC block the C transcoder's; the BC4 drawn again → 50; a 3D BC4 at depth plane 2 → that plane 200); left out as before
+    (DM_TEST_BLKUNP_OFF): 4 fail; every plane into plane 0 (DM_TEST_BLKUNP_3D_PLANE0): 1 fails. t_mtlguard +1 (5: a 3D BC4 render target and
+    clear complete; DM_TEST_UNPACKED_VIEW now 2 fail)
   - [x] batch 54 · 62d handheld mode by default on iOS (1280x720): game.json `ios_mode` "handheld" (Tears of the Kingdom; manosaba stays docked,
     as it runs on the phones now) makes `dm_opmode` start at 0 on iOS: the game renders 1280x720 and the handheld controller is the connected
     one; `DM_OPMODE` still decides when set. `host/tests/t_oe.c` +3 (40); the profile's iOS mode not read (DM_TEST_OPMODE_NO_IOS): 1 fails
@@ -2258,7 +2297,13 @@ Tier 4, large:
     the wrong way round (T_NEW_GAME_PRIO_SWAPPED=1): 1 fails, 2 with the dumps
   - [ ] 64n2 LDN as dr3 (Bonjour, an HMAC-signed control protocol, a two-process test): neither game imports any `nn::ldn` function; with the next
     game that has local play
-- [ ] 112 conditional rendering on the GPU (a kernel writing indirect draw arguments)
+- [-] batch 55 · 112 conditional rendering on the GPU (a kernel writing indirect draw arguments). Measured first (a line every 300 frames now:
+  conditionals, those on a samples-passed result still on the GPU, and the draws and clears under those): Tears of the Kingdom's prologue with
+  the translation thread makes 11,000-19,000 conditionals per 300 frames, 0-396 of them on a pending result (0-2 %), so at most about 1.3 draws
+  a frame are drawn that the console might have skipped. Doing it on the GPU needs the samples-passed results written by the GPU into guest
+  memory (ours sums the visibility slots on the CPU at completion), the conditional draws made indirect and the clears predicated quads
+  (totk-mobile's nvn_query_gpu / nvn_conditional_draw, several hundred lines): not worth it on the Mac. The same line on an iPhone, whose GPU
+  finishes later, decides again (added to the device checks)
 - [ ] 113 framebuffer fetch for in-pass reads of the current pixel (after 42)
 - [ ] 114 an iOS Simulator build for the touch controls, safe areas and lifecycle
 
