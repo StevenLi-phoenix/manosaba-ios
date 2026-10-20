@@ -1,0 +1,27 @@
+{
+  "first_dialogue": {
+    "about": "From boot to the first line of the story after New Game (the title menu: Load Game is locked without a save; no item is highlighted until a direction is pressed, then the highlighted one is pink with a Chinese caption). Trial 2026-10-20: the first story line at 19.2 s (RIGHT showed Gallery, LEFT New Game, A). The fixed script: RIGHT at 8 s, then A every 2 s.",
+    "done_streak": 2,
+    "questions": {
+      "screen": {"type": "choice", "instructions": "What is shown in `screen`, a frame of a visual novel game?",
+                 "criteria": {"loading": "A black or nearly black screen, a fade, a logo or a loading indicator",
+                              "title": "The title screen with its menu (Load Game, New Game, Gallery, Options)",
+                              "notice": "A notice, warning or confirmation box waiting for a button press",
+                              "story": "A story scene with a line of dialogue or narration text at the bottom",
+                              "other": "None of the above"}},
+      "selected": {"type": "choice", "instructions": "On the title menu in `screen` (Load Game, New Game, Gallery, Options along the bottom left), which item is highlighted? A highlighted item is drawn in pink with a small Chinese caption under it; the others are plain white with no caption. Without a save Load Game shows a padlock: the padlock is not a highlight.",
+                   "criteria": {"load_game": "Load Game is highlighted", "new_game": "New Game is highlighted", "gallery": "Gallery is highlighted",
+                                "options": "Options is highlighted", "none": "No title menu, or every item is plain white (none highlighted)"}},
+      "story_text": {"type": "noul", "instructions": "Is a line of story dialogue or narration text shown at the bottom of `screen`?"}
+    },
+    "rules": [
+      {"when": [{"q": "story_text", "noul_ge": 0.8}, {"q": "screen", "choice": "story"}], "do": "done"},
+      {"when": [{"q": "screen", "choice": "title"}, {"q": "selected", "choice": "new_game", "p_ge": 0.5}], "do": {"key": "A", "ms": 200, "settle": 1.5}},
+      {"when": [{"q": "screen", "choice": "title"}, {"q": "selected", "choice": "load_game", "p_ge": 0.5}], "do": {"key": "RIGHT", "ms": 200, "settle": 0.8}},
+      {"when": [{"q": "screen", "choice": "title"}, {"q": "selected", "choice": "gallery", "p_ge": 0.5}], "do": {"key": "LEFT", "ms": 200, "settle": 0.8}},
+      {"when": [{"q": "screen", "choice": "title"}, {"q": "selected", "choice": "options", "p_ge": 0.5}], "do": {"key": "LEFT", "ms": 200, "settle": 0.8}},
+      {"when": [{"q": "screen", "choice": "title"}, {"q": "selected", "choice": "none", "p_ge": 0.6}], "do": {"key": "RIGHT", "ms": 200, "settle": 0.8}},
+      {"when": [{"q": "screen", "choice": "notice", "p_ge": 0.6}], "do": {"key": "A", "ms": 200, "settle": 1.5}}
+    ]
+  }
+}

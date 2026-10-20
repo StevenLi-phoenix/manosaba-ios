@@ -1,0 +1,25 @@
+{
+  "load_save": {
+    "about": "From boot to Link in control of the save the game continues (title menu: Continue; the load confirmation: Load). Trial 2026-10-20: the cliff save's hearts at 24.5-24.9 s in two runs, five presses each; the fixed A@26.5,A@31,A@35 needs about 50 s. On the cliff A dives off it once the HUD is up, so no rule presses A then.",
+    "done_streak": 2,
+    "questions": {
+      "screen": {"type": "choice", "instructions": "What is shown in `screen`, a frame of the video game The Legend of Zelda: Tears of the Kingdom?",
+                 "criteria": {"loading": "A black or nearly black screen, possibly with only a small loading indicator or a fade",
+                              "title": "The title screen (the game logo over a scene), with or without its menu",
+                              "menu": "A menu or a list of save files to choose from",
+                              "dialog": "A message or confirmation box waiting for a button press",
+                              "cutscene": "A scene playing without player control",
+                              "gameplay": "Link in the world with the game HUD (hearts, map or button icons) visible: the player can move",
+                              "other": "None of the above"}},
+      "action": {"type": "choice", "instructions": "The goal is to load the saved game and reach the point where the player controls Link. Looking at `screen`, which single input should a player give now?",
+                 "criteria": {"press_a": "Press A: a title screen, a menu, a save list or a message box is waiting and A confirms the highlighted item",
+                              "wait": "Give no input: loading (also a loading screen that shows game tips with a \"Next tip\" button), black, fading, a logo or a scene that will continue by itself",
+                              "done": "Nothing more is needed: Link is in the world with the HUD and the player can move"}},
+      "hud": {"type": "noul", "instructions": "Are Link's heart containers (small red hearts) shown in the top-left corner of `screen`?"}
+    },
+    "rules": [
+      {"when": [{"q": "hud", "noul_ge": 0.8}], "do": "done"},
+      {"when": [{"q": "action", "choice": "press_a", "p_ge": 0.6}, {"q": "hud", "noul_lt": 0.5}], "do": {"key": "A", "ms": 200, "settle": 1.0}}
+    ]
+  }
+}

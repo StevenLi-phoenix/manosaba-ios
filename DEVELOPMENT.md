@@ -1748,10 +1748,15 @@ Tier 3d, iOS, Mac and tooling:
 - [ ] 178 the diagnostics export redacted (lordran 40a9a72); memory sampled every 60 frames with the command allocators (lordran 24740d4; 62f)
 - [ ] 179 tests to take: overlapping `UpdateUniformBuffer` writes (Touchable), a 512 re-upload soak (lordran), the pass-continuation cases
   (GirlNet `t_p5r_rt_continue_gpu.m`)
-- [ ] 180 screens judged by TypeSafe's Jev model in the test runs (the d2r-mobile author's method: which key to press on each screen; the user
-  agreed to send screenshots, the key stays outside the repository): a trial took Tears of the Kingdom from boot to the cliff save's HUD in about
-  25 s with the same five presses in two runs, against about 50 s for the fixed `A@26.5,A@31,A@35` (about 2,000 input tokens and 350 ms a
-  decision, prompts in English); a tool for the smoke runs, gameplay checks and later the iPhone, with fixed keys kept as the fallback
+- [x] batch 34 · 180 screens judged by TypeSafe's Jev model drive the test runs (the d2r-mobile author's method; the user agreed to send
+  screenshots, the key stays outside the repository in `~/.config/typesafe/api_key`): `tools/jevdrive.py` follows a running host's command
+  channel (`DM_CMD`, `DM_NVN_SHOT_OUT=960x540`: `shot`, ask, `key`) until a goal's done condition holds on two frames in a row; goals in
+  `games/<id>/jev.json` (questions in English, as the user advised; ordered rules with guards such as "never A while the HUD is up": on the
+  cliff A dives off it). Tears of the Kingdom `load_save`: the cliff save's HUD at 24.5-25.5 s in three runs with four or five presses, against
+  about 50 s for the fixed `A@26.5,A@31,A@35`; manosaba `first_dialogue`: the first story line at 16.9-19.2 s in three runs (the highlight
+  described as pink with a Chinese caption, the padlock as no highlight: confidence 0.4-0.5 → 0.95-1.0, one press). About 2,000 input tokens
+  and 350-470 ms a judged frame. Without a key it exits 2 and the fixed keys stay the fallback. `tools/tests/t_jevdrive.py` (15, no network:
+  both goals' rules, a loop against a fake host, no key; each rule's first condition alone fails 4)
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)
