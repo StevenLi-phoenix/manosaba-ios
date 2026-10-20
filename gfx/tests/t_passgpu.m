@@ -2,7 +2,8 @@
 // through the production replay. One submission: a light pass (one triangle on 64x64), a heavy pass (a fragment loop on 512x512), the light one
 // again and a dispatch. Each gets a row, R R R C, with its index in the frame, its pass number and size; its start is at or before its end; the
 // heavy pass's increment is over four times each other one's and 90 % of their sum (spans overlap: on Metal 3 the light pass after the heavy one
-// spans 13 ms, its increment is 0); the increments add up to no more than the span from the first start to the last end.
+// spans it, its increment is 0; the heavy loop is about 18 ms so the first pass's GPU start, up to 3 ms, stays under a quarter: at 10 ms it failed
+// 2 runs in 20 on Metal 3); the increments add up to no more than the span from the first start to the last end.
 // A second submission writes its own rows (the ring's next heap, nothing left over from the first). Negative control: -DDM_TEST_PG_NO_END (no
 // end timestamp written) leaves no row.
 #include "../nvn/nvn_mtl.m"
@@ -49,7 +50,7 @@ int main(void) { @autoreleasepool {
     id<MTLLibrary> l = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
         "vertex float4 v(uint n [[vertex_id]]) { float2 p[3] = {float2(-1,-1), float2(3,-1), float2(-1,3)}; return float4(p[n], 0, 1); }\n"
         "fragment float4 light() { return float4(0.5); }\n"
-        "fragment float4 heavy(float4 pos [[position]]) { float a = pos.x * 0.001; for (int i = 0; i < 3000; i++) a = sin(a) * 1.0001 + 0.0001; return float4(a); }\n"
+        "fragment float4 heavy(float4 pos [[position]]) { float a = pos.x * 0.001; for (int i = 0; i < 12000; i++) a = sin(a) * 1.0001 + 0.0001; return float4(a); }\n"
         "struct A { device uint4 *cp_s0 [[id(0)]]; };\n"
         "kernel void k(constant A &a [[buffer(0)]], uint g [[thread_position_in_grid]]) { a.cp_s0[g] = uint4(g); }\n" options:nil error:&e];
     if (!l) { printf("%s\n", e.localizedDescription.UTF8String); return 2; }

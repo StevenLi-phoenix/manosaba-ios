@@ -2214,6 +2214,80 @@ static int stor_key_of(const tex_t *t, stor_key *k) {   // a GPU-only texture (n
     k->samples = t->d.samples; k->fmt = (uint32_t)t->d.format;
     return 1;
 }
+// ---------- Render targets of virtual pools in a heap (plan item 138; totk-mobile nvn_texture_alias.inc, Apache-2.0, written anew) ----------
+#include "nvn_rtheap.h"
+// Tears of the Kingdom places its transient render targets at overlapping offsets of one virtual, CPU-inaccessible pool (111 MiB), and each
+// layout got a Metal texture of its own: the cliff save makes 320 of them, 317 MB. With DM_NVN_RT_HEAP=1 such a pool gets a placement heap of
+// RT_HEAP_SCALE times its size and a target goes at its guest offset × the scale when it fits there (nvn_rtheap.h): memory is shared where the game
+// shares it and the heap bounds what the pool costs (the cliff save: a 139 MiB heap holds 263 of the 320, 57 others keep 6 MB of their own).
+// Metal 4 only: every encoder starts behind a queue barrier (enc_r_begin and the others), which orders a target's last use before an overlapping
+// one's writes; Apple does not say whether Metal 3's hazard tracking orders two textures of one heap. Off while the TBDR rewrites run: they merge
+// passes and keep content facts (zero-source set, attachment ledger) by texture, and two textures in one heap range would break both. The game never
+// writes these pools from the CPU, so nothing is uploaded into them
+static struct { const pool_t *pool; uint64_t size; __strong id<MTLHeap> heap; } g_rth[8];
+static uint64_t g_rth_placed, g_rth_placed_b, g_rth_out, g_rth_out_b, g_rtv_made;   // census: placed / not fitting (bytes), virtual-pool targets made
+static NSHashTable *g_rtv_own; static pthread_mutex_t g_rtv_mu = PTHREAD_MUTEX_INITIALIZER;   // virtual-pool targets with a texture of their own (weak)
+static double g_rth_scale = RT_HEAP_SCALE;
+static int rt_heap_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("DM_NVN_RT_HEAP"), *s = getenv("DM_NVN_RT_HEAP_SCALE");   // scale: experiments only
+        v = e && !strcmp(e, "1");
+        if (s && atof(s) >= 1) g_rth_scale = atof(s);
+#if DM_NVN_M3
+        if (v) MLOG("DM_NVN_RT_HEAP=1: not on Metal 3 (its hazard tracking is not known to order two textures of one heap): render targets keep textures of their own");
+        v = 0;
+#else
+        if (v && tbdr_on()) { MLOG("DM_NVN_RT_HEAP=1: off while the TBDR rewrites run (DM_NVN_TBDR=0 turns them off)"); v = 0; }
+        if (v) MLOG("render targets of virtual pools in heaps of %.3g times the pool", g_rth_scale);
+#endif
+    }
+    return v;
+}
+static int rt_virtual(const tex_t *t, MTLTextureDescriptor *d) {   // a render target of a virtual, CPU-inaccessible pool, within it
+    const uint32_t vf = NVN_MEMORY_POOL_FLAGS_VIRTUAL | NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS;
+    return t->pool && (t->pool->flags & vf) == vf && !(t->d.flags & NVN_TEXTURE_FLAGS_DISPLAY) && (d.usage & MTLTextureUsageRenderTarget)
+        && d.storageMode == MTLStorageModePrivate && t->size && t->off >= 0 && (uint64_t)t->off + t->size <= t->pool->size;
+}
+static id<MTLTexture> rt_heap_texture(const tex_t *t, MTLTextureDescriptor *d) {   // nil: not placed (no heap, or it does not fit)
+    int slot = -1;
+    for (int i = 0; i < 8 && slot < 0; i++) if (g_rth[i].pool == t->pool && g_rth[i].size == t->pool->size) slot = i;
+    if (slot < 0) {
+        for (int i = 0; i < 8 && slot < 0; i++) if (!g_rth[i].heap) slot = i;
+        if (slot < 0) { RED_ONCE(98, "render-target heaps: more than 8 virtual pools, the rest keep textures of their own"); return nil; }
+        MTLHeapDescriptor *hd = [MTLHeapDescriptor new];
+        hd.type = MTLHeapTypePlacement; hd.storageMode = MTLStorageModePrivate; hd.hazardTrackingMode = MTLHazardTrackingModeUntracked;
+        hd.size = rt_heap_size(t->pool->size, g_rth_scale);
+        id<MTLHeap> h = [g_dev newHeapWithDescriptor:hd];
+        if (!h) { RED_ONCE(99, "render-target heap of %.1f MiB not made: textures of their own", hd.size / 1048576.0); return nil; }
+        res_add((id<MTLResource>)h);   // resident as a whole: its textures are not added one by one
+        g_rth[slot].pool = t->pool; g_rth[slot].size = t->pool->size; g_rth[slot].heap = h;   // a heap replaced (pool finalized, address reused) lives on in its textures
+        MLOG("render-target heap: virtual pool %p of %.1f MiB → a heap of %.1f MiB", (const void *)t->pool, t->pool->size / 1048576.0, hd.size / 1048576.0);
+    }
+    id<MTLHeap> h = g_rth[slot].heap;
+    MTLSizeAndAlign need = [g_dev heapTextureSizeAndAlignWithDescriptor:d]; uint64_t at;
+    if (!rt_heap_place((uint64_t)t->off, t->size, g_rth_scale, need.size, need.align, h.size, &at)) { g_rth_out++; g_rth_out_b += need.size; return nil; }
+    id<MTLTexture> mt = [h newTextureWithDescriptor:d offset:at];
+    if (!mt) { g_rth_out++; g_rth_out_b += need.size; return nil; }
+    g_rth_placed++; g_rth_placed_b += need.size;
+    return mt;
+}
+static void rt_census_note(id<MTLTexture> mt, int placed) {
+    g_rtv_made++;
+    if (placed) return;
+    pthread_mutex_lock(&g_rtv_mu); if (!g_rtv_own) g_rtv_own = [NSHashTable weakObjectsHashTable]; [g_rtv_own addObject:mt]; pthread_mutex_unlock(&g_rtv_mu);
+}
+static void rt_census_line(char *out, size_t n) {   // for the memory line: empty until a virtual-pool target was made
+    out[0] = 0;
+    if (!g_rtv_made) return;
+    unsigned long long own = 0, heaps = 0; unsigned long nown = 0; int nh = 0;
+    pthread_mutex_lock(&g_rtv_mu); NSArray *all = g_rtv_own.allObjects; pthread_mutex_unlock(&g_rtv_mu);
+    for (id<MTLTexture> x in all) { own += x.allocatedSize; nown++; }
+    for (int i = 0; i < 8; i++) if (g_rth[i].heap) { heaps += g_rth[i].heap.size; nh++; }
+    size_t o = (size_t)snprintf(out, n, "; render targets of virtual pools: %llu made, %lu live with textures of their own (%llu MB)", (unsigned long long)g_rtv_made, nown, own >> 20);
+    if (nh && o < n) snprintf(out + o, n - o, ", %d heap%s of %llu MB (placed %llu, %llu MB; not fitting %llu, %llu MB)", nh, nh == 1 ? "" : "s", heaps >> 20,
+                              (unsigned long long)g_rth_placed, (unsigned long long)(g_rth_placed_b >> 20), (unsigned long long)g_rth_out, (unsigned long long)(g_rth_out_b >> 20));
+}
 static id<MTLTexture> tex_mtl(const tex_t *ct) {
     tex_t *t = (tex_t *)ct;
     if (!t || !t->serial) return nil;
@@ -2302,9 +2376,12 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
             serial_put(t->serial, st); return st; }
         if (st) g_stor_usage_miss++;   // it lacks a usage this one needs: a texture of its own, as before
     }
-    id<MTLTexture> mt = [g_dev newTextureWithDescriptor:d];
+    int rtv = rt_virtual(t, d);
+    id<MTLTexture> mt = rtv && rt_heap_on() ? rt_heap_texture(t, d) : nil; int placed = mt != nil;
+    if (!mt) mt = [g_dev newTextureWithDescriptor:d];
     if (!mt) { RED_ONCE(2, "failed to create MTLTexture %ux%u format %#x target %d", t->d.width, t->d.height, t->d.format, t->d.target); return nil; }
-    res_add(mt);
+    if (!placed) res_add(mt);   // a placed texture is resident with its heap
+    if (rtv) rt_census_note(mt, placed);
     if (share) {
         pthread_mutex_lock(&g_smu);
         if (!nvn_hm_get(&g_stor, &sk)) { stor_ent *e = calloc(1, sizeof *e); if (!e) MDIE("storage entry"); e->k = sk; e->tex = (void *)CFBridgingRetain(mt);
@@ -2345,6 +2422,7 @@ void mtl_mem_census(char *out, size_t n) { @autoreleasepool {
         unsigned long long b = (unsigned long long)[(id<MTLResource>)o allocatedSize]; int k;
         if ([o conformsToProtocol:@protocol(MTLTexture)]) { id<MTLTexture> t = o; int rt = (t.usage & MTLTextureUsageRenderTarget) != 0, ds = pf_is_depth_stencil(t.pixelFormat); k = rt ? (ds ? 4 : 0) : 1;
             for (int i = 0; i < 5; i++) if (b > top[i].b) { memmove(&top[i + 1], &top[i], (4 - i) * sizeof top[0]); top[i].b = b; top[i].w = (unsigned)t.width; top[i].h = (unsigned)t.height; top[i].f = (unsigned)t.pixelFormat; top[i].rt = rt; break; } }
+        else if ([o conformsToProtocol:@protocol(MTLHeap)]) k = 0;   // a render-target heap (rt_heap_texture): its textures are not in the set
         else k = [pools containsObject:o] ? 2 : 3;
         cnt[k]++; mb[k] += b;
     }
@@ -2370,8 +2448,9 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
     size_t am, ah; dm_alias_stat(&am, &ah);
-    MLOG("memory up to frame %llu: RSS %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, memory pools %d (peak %d / tracking table capacity %d), texture re-uploads %llu in total; game heap %llu MB, free %llu MB, largest allocatable block %llu KB%s; alias region mapped %zu MB in %zu MB of host pages; headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, live, peak, cap, (unsigned long long)g_pkg_reuploads,
-        heap_mb, heap_free_mb, heap_maxblk_kb, heap_ok ? "" : " (not read)", am, ah, avail);
+    char rtv[256]; rt_census_line(rtv, sizeof rtv);
+    MLOG("memory up to frame %llu: RSS %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, memory pools %d (peak %d / tracking table capacity %d), texture re-uploads %llu in total; game heap %llu MB, free %llu MB, largest allocatable block %llu KB%s; alias region mapped %zu MB in %zu MB of host pages; headroom to the system memory limit %s%s", frame, rss_mb, gpu, nd, nr, live, peak, cap, (unsigned long long)g_pkg_reuploads,
+        heap_mb, heap_free_mb, heap_maxblk_kb, heap_ok ? "" : " (not read)", am, ah, avail, rtv);
 }
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads) { *uploads = g_pkg_uploads; *reuploads = g_pkg_reuploads; }
 uint64_t mtl_pkg_miss(void) { return g_pkg_miss; }

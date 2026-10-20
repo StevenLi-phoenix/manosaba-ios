@@ -1721,7 +1721,21 @@ Tier 3c, larger:
   prologue (2,648) and the cliff save (4,038) are all in the capture's pairs.tsv already. So the union-interface library [-] here, moved to 62g.
   `t_pairs` (4: a pair that links written once, under another colour format not again, one reading a location the vertex shader does not
   write fails and is written; not noted fails 3)
-- [ ] 138 render targets of virtual pools in a heap (memory for 62)
+- [x] batch 41 · 138 render targets of virtual pools in a heap, a switch (`DM_NVN_RT_HEAP=1`; the placement rule is totk-mobile's
+  `nvn_texture_alias.inc`, Apache-2.0, written anew in `gfx/nvn/nvn_rtheap.h`): a virtual, CPU-inaccessible pool gets a placement heap of 1.25 ×
+  its size and a render target of it goes at its guest offset × 1.25 when its Metal texture fits inside its guest range × 1.25, so targets
+  disjoint in guest memory stay disjoint and those the game overlaps share memory; one that does not fit keeps a texture of its own. Metal 4 only
+  (every encoder starts behind a queue barrier; Apple does not say whether Metal 3's tracking orders two textures of one heap) and only with the
+  TBDR rewrites off (pass merges, the zero-source set and the attachment ledger go by texture). The memory line counts these targets. Tears of the
+  Kingdom's 111 MiB pool on the cliff save: 320 targets, 317 MB of textures of their own → a 139 MiB heap holding 263 and 57 outside (6 MB); three
+  runs each way: GPU allocated 2,111-2,132 → 1,941-1,975 MB, RSS 3,549-3,561 → 3,362-3,423 MB, submit p50 6.6-7.6 ms both ways, GPU p50 7.3-8.4
+  against 6.7-8.6 ms, screenshots on against off 6-21 % apart and off against off 5-20 % (the same scene, animation timing); the prologue (182
+  targets, 201 MB → 159 in the heap, 23 outside with 3 MB; GPU allocated 2,026 → 1,967 MB) draws s800 0.056 % apart from a run without it, as two
+  runs without it are (0.057 %). Default off: a target the game still reads after part of its range was reused could lose other texels than on the
+  console (Metal's layout is not Maxwell's), so 62h turns it on for iOS after more scenes. `t_rtheap` (10: on 20,000 random pairs none disjoint in
+  guest memory overlaps in the heap, a target too large for its scaled range refused, the heap size; on the GPU two targets at one offset share
+  memory and one 1 MiB on does not, cleared in turn the disjoint one keeps its colour, no command buffer error, the census; Metal 3: 7, every
+  target its own texture; a target allowed past its scaled range fails 4, on Metal 3 2)
 - [x] batch 38 · 139 code caves in the rewriter (`CAVES` in a game's rules.py; totk-mobile's routines appended to the patch area, written anew):
   one instruction (asserted) becomes `b <routine>`, the routine is emitted into the patch area from instruction words and forms (`('orig',)`,
   `('adrp_host', d)`, `('b' | 'bl', target)`) and branches back to the next instruction unless it leaves itself; words that cannot run elsewhere
@@ -1820,6 +1834,9 @@ Tier 4, large:
   - [ ] 62f `maxBufferLength` and the reservation base logged at boot; a cooldown between A/B runs on the phone
   - [ ] 62g one varying interface as a fallback library (bayonetta3: every vertex shader exports the union of the pixel inputs) if a device's log
     shows a "not written by vertex shader" failure (item 137: none on the Mac since chain bab8d4746968; the red line names both keys)
+  - [ ] 62h render targets of virtual pools in a heap on for iOS (`DM_NVN_RT_HEAP=1`, item 138: 140-190 MB less GPU memory on the cliff save)
+    after screenshot comparisons over more scenes; with the TBDR rewrites on it needs them alias-aware (pass merges and content facts by heap
+    range) or stays off
 - [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
   - [ ] 63a MetalFX's docked guard against the scene's content size, not the allocated texture (MacNativeGames ff092e3)
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN (the list of 2026-10-20 too)

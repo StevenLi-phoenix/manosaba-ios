@@ -113,6 +113,8 @@ t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ubren: t_ubren.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ubren.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_rtheap: t_rtheap.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rtheap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pairs: t_pairs.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pairs.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_alpha: t_alpha.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -199,6 +201,7 @@ run: \
 	t_nvn \
 	t_pace \
 	t_pairs \
+	t_rtheap \
 	t_passgpu \
 	t_ts \
 	t_fstep \
@@ -285,6 +288,7 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_extent
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_passgpu
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_pairs
+	MTL_DEBUG_LAYER=1 ./t_rtheap
 	python3 -I t_alpha_src.py 1 > t_alpha_1.metal && python3 -I t_alpha_src.py 0 > t_alpha_0.metal && ./t_alpha t_alpha_1.metal t_alpha_0.metal
 	DM_ROOT=$${DM_ROOT:-$(HOME)/dm-work} python3 -I t_xlate_ops.py
 	MTL_DEBUG_LAYER=1 ./t_vfmt
