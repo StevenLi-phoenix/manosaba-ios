@@ -53,6 +53,8 @@
 #include "nvn_dirty.h"
 #include "nvn_refl.h"
 #include "nvn_cover.h"
+#include "nvn_ts.h"
+#include <mach/mach_time.h>
 #include "nvn_copy_pitch.h"
 #include "nvn_pool_find.h"
 #include "nvn_tex_fit.h"
@@ -508,7 +510,7 @@ int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_
 
 // ---------- Submission ----------
 static void defer_reset(void); static void defer_fallback(void);
-typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; void *vis; } post_op;   // vis: the visibility slot table for kind 3
+typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; void *vis; uint32_t pos; } post_op;   // vis: the visibility slot table for kind 3; pos: work before a report (nvn_ts.h)
 // ---------- Occlusion queries (NVN_COUNTER_TYPE_SAMPLES_PASSED) ----------
 // NVN semantics: samples passed is a cumulative counter on the queue - ResetCounter zeroes it, every draw afterwards adds to it, and ReportCounter writes out the cumulative value at that moment (+ timestamp) when the GPU completes.
 // Metal: every render pass attaches a visibility result buffer; draws during counting use counting mode, with a new slot per pass (no reliance on accumulation across passes); a reset empties the 'slot table since the reset',
@@ -813,6 +815,15 @@ static void up_owner_check(const char *where) {
 // wait for the upload to complete after flushing it, and only then can the old queue read the upload result (mtl_read_texels waited first and flushed afterwards, the readback beat the upload, 4 failures on t_nvn upload content)
 static id<MTLCommandBuffer> q_cb(void) { if (on_sub_thread()) { up_flush(); up_wait_zero(&g_up_pending); } return [g_q commandBuffer]; }
 static post_op *g_post; static int g_npost, g_postcap;
+static uint32_t g_sub_work;   // draws, dispatches, copies and clears replayed in this submission so far (counter timestamps, nvn_ts.h)
+// The parts of a submission committed before its end (mid-submission commits): their work boundaries and GPU start / end on the guest clock, filled
+// by each part's feedback, read by the last part's (nvn_ts.h ts_place). Allocated at the first part; the submission and every part hold a reference
+#define SUBCLK_N 128
+typedef struct { _Atomic int refs; int n; uint32_t w[SUBCLK_N + 1]; _Atomic uint64_t s[SUBCLK_N], e[SUBCLK_N]; } sub_clk;
+static sub_clk *g_sclk;
+static void sclk_put(sub_clk *c) { if (c && atomic_fetch_sub(&c->refs, 1) == 1) free(c); }
+uint64_t guest_ns(void);
+static void ts_now(uint64_t *host_ns, uint64_t *guest) { static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb); *host_ns = mach_absolute_time() * tb.numer / tb.denom; *guest = guest_ns(); }
 // One autorelease pool per submission: submissions run on a guest thread (long-lived, no run loop, never drains the implicit pool), so objects autoreleased in the Metal replay
 // (command buffers, encoders, pass descriptors, etc.) are never released unless put in a pool. Measured on the character select screen of a real iOS device: the host heap grows by about 47 objects per frame, 0.22 MiB/s.
 void *objc_autoreleasePoolPush(void); void objc_autoreleasePoolPop(void *);
@@ -864,7 +875,7 @@ void mtl_sub_begin(void) {
     id<MTLBuffer> vis_prev = g_vis;   // the previous submission's: an overflow buffer is retired below
     g_cnt_sub_ts = 0;
     if (g_cnt_on > 0 && g_sub_serial % 300 == 0) pkg_census();
-    g_npost = 0; g_vis = nil; g_vis_n = 0; g_vis_cur = -1; pend_begin(mtl_done_fence());
+    g_npost = 0; g_sub_work = 0; g_sclk = NULL; g_vis = nil; g_vis_n = 0; g_vis_cur = -1; pend_begin(mtl_done_fence());
     zskip_clear(); g_zskip_count = 0; chunk_reset();
     int pick = -1;
     for (int i = 0; i < g_vis_ring_n; i++) if (g_vis_ring[i].fence <= g_done) { pick = i; break; }
@@ -1037,7 +1048,7 @@ static void post(post_op o) {
     g_post[g_npost++] = o;
 }
 void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v) { post((post_op){1, val, mode, v, 0, 0, NULL}); }
-void mtl_sub_counter(uint64_t addr, uint32_t type) { post((post_op){2, NULL, 0, 0, addr, type, NULL}); }
+void mtl_sub_counter(uint64_t addr, uint32_t type) { post((post_op){2, NULL, 0, 0, addr, type, NULL, g_sub_work}); }
 void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]) { memcpy(rep, g_cnt_report, sizeof g_cnt_report); memcpy(rst, g_cnt_reset, sizeof g_cnt_reset); }
 void mtl_vis_state(int *open, uint64_t *folded) { *open = g_nvs; *folded = g_vis_folded; }   // samples-passed slots since the last reset, slots folded so far (power line)
 
@@ -1047,9 +1058,15 @@ void mtl_vis_state(int *open, uint64_t *folded) { *open = g_nvs; *folded = g_vis
 // (main 0x2b3cff8). CLOCK_MONOTONIC counts the Mac's sleep too, mach_absolute_time does not: after 25 hours of sleep the "GPU time" came out as
 // 25 hours, and the controller held the game at present interval 3 (20 fps) with CPU and GPU idle most of the frame
 uint64_t guest_ns(void);
-static uint64_t gpu_ticks(void) {   // DM_NVN_TS_LATE_US=<n>: reports n µs later (the game sees a slower GPU: what does it do then)
+static uint64_t gpu_late_ns(void) {   // DM_NVN_TS_LATE_US=<n>: reports n µs later (the game sees a slower GPU: what does it do then)
     static int64_t late = -1; if (late < 0) { const char *e = getenv("DM_NVN_TS_LATE_US"); late = e ? atoll(e) * 1000 : 0; if (late) MLOG("DM_NVN_TS_LATE_US: counter timestamps %lld µs late", (long long)(late / 1000)); }
-    return (guest_ns() + (uint64_t)late) * 12 / 625; }
+    return (uint64_t)late; }
+static uint64_t gpu_ticks(void) { return (guest_ns() + gpu_late_ns()) * 12 / 625; }
+// DM_NVN_TS_SCALE=<x>: report times spread x times further from their submission's GPU start (the game sees a GPU x times slower: does its dynamic
+// resolution react), 1 = off
+static double ts_scale(void) { static double v = -1; if (v < 0) { const char *e = getenv("DM_NVN_TS_SCALE"); v = e ? atof(e) : 1; if (v <= 0) v = 1; if (v != 1) MLOG("DM_NVN_TS_SCALE=%g: counter report times %g times further apart", v, v); } return v; }
+// DM_NVN_GPU_TS=completion: every report of a submission at its completion, as before plan item 131 (A/B)
+static int ts_inside(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_GPU_TS"); v = !(e && !strcmp(e, "completion")); if (!v) MLOG("DM_NVN_GPU_TS=completion: counter reports at their submission's completion"); } return v; }
 
 // ---------- Boot instrumentation (DM_BOOTPROF=1): metallib loading, pipeline creation (both happen synchronously during replay on the submit thread), texture upload, first-frame present ----------
 static uint64_t bp_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
@@ -1320,18 +1337,29 @@ uint64_t mtl_sub_commit(void) {
     pg_commit(FB_ON(o, g_cb));
     uint64_t gpu_f = atomic_load(&g_cur_frame); gpu_tag_begin(gpu_f);
     NSString *cctx = @(cctx_snap());
+    uint32_t work = g_sub_work; sub_clk *sclk = g_sclk; g_sclk = NULL;   // the parts committed before this one (mid-submission commits), or none
     [FB_ON(o, g_cb) FB_SEL:^(FB_ARG cb) {
         gpu_tag_done(gpu_f, cb.GPUStartTime, cb.GPUEndTime);
+        // each report's place among the parts' GPU start / end on the guest clock (nvn_ts.h ts_place): parts committed earlier, then this one
+        int parts = 1, inside = n && ts_inside(); uint32_t pw[SUBCLK_N + 2] = {0}; uint64_t ps[SUBCLK_N + 1], pe[SUBCLK_N + 1], late = 0;
+        if (inside) { uint64_t hn, gn; ts_now(&hn, &gn); late = gpu_late_ns();
+            if (sclk) for (int k = 0; k < sclk->n; k++) { pw[k + 1] = sclk->w[k + 1]; ps[k] = atomic_load(&sclk->s[k]); pe[k] = atomic_load(&sclk->e[k]); parts++; }
+            pw[parts] = work; ps[parts - 1] = ts_guest_ns(cb.GPUStartTime, hn, gn); pe[parts - 1] = ts_guest_ns(cb.GPUEndTime, hn, gn); }
+        sclk_put(sclk);
+        double tsk = ts_scale();
+        #define REPORT_TICKS(o_) ({ uint64_t ns_ = inside ? ts_place(pw, ps, pe, parts, (o_).pos, (o_).type == NVN_COUNTER_TYPE_TIMESTAMP_TOP) : 0; \
+            if (ns_ && tsk != 1 && ps[0] && ns_ > ps[0]) ns_ = ps[0] + (uint64_t)((ns_ - ps[0]) * tsk); ns_ ? (ns_ + late) * 12 / 625 : gpu_ticks(); })
         if (cb.error) { atomic_store(&g_last_commit_error, 1); static int n, nv; int victim = [cb.error.description containsString:@"InnocentVictim"]; if (victim ? nv++ < 1 : n++ < 8) MLOG("[red] command buffer error details fence=%llu: %s | GPU %.3f→%.3f", (unsigned long long)fence, cb.error.description.UTF8String, cb.GPUStartTime, cb.GPUEndTime); if (!victim) MLOG("[red] context of the failing submit fence=%llu: %s", (unsigned long long)fence, cctx.UTF8String); MLOG("[red] command buffer execution error: %s", cb.error.localizedDescription.UTF8String); }
         for (int i = 0; i < n; i++) {
             if (ops[i].kind == 1) { if (ops[i].mode == 1) *ops[i].val += ops[i].v; else *ops[i].val = ops[i].v; }
             else if (ops[i].kind == 3) {   // Samples passed: the sum of all slots since the reset
                 vis_list *l = ops[i].vis; uint64_t sum = l->base;
                 for (int k = 0; k < l->n; k++) { sum += ((const uint64_t *)((__bridge id<MTLBuffer>)l->s[k].buf).contents)[l->s[k].slot]; CFRelease(l->s[k].buf); }
-                free(l); uint64_t rec[2] = {sum, gpu_ticks()}; memcpy((void *)ops[i].addr, rec, sizeof rec);
+                free(l); uint64_t rec[2] = {sum, REPORT_TICKS(ops[i])}; memcpy((void *)ops[i].addr, rec, sizeof rec);
             }
-            else { uint64_t t = gpu_ticks(); memcpy((uint8_t *)(uintptr_t)ops[i].addr + 8, &t, 8); }   // the timestamp half only: the counter half was written in command order at replay (see OP_REPORT_COUNTER)
+            else { uint64_t t = REPORT_TICKS(ops[i]); memcpy((uint8_t *)(uintptr_t)ops[i].addr + 8, &t, 8); }   // the timestamp half only: the counter half was written in command order at replay (see OP_REPORT_COUNTER)
         }
+        #undef REPORT_TICKS
         free(ops);
         pthread_mutex_lock(&g_mu); if (fence > g_done) g_done = fence; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
         if (atomic_fetch_sub(&g_inflight, 1) == 1 && g_ka_idle) dispatch_semaphore_signal(g_ka_idle);
@@ -2705,9 +2733,14 @@ static void mtl_sub_split(void) {
     up_flush(); res_commit(); rs_sync();
     uint64_t gpu_f = atomic_load(&g_cur_frame), fence_next = g_fence + 1; gpu_tag_begin(gpu_f);
     atomic_fetch_add(&g_inflight, 1);
+    // this part's place for the counter timestamps (nvn_ts.h): its work ends here, its feedback gives its GPU start / end
+    if (!g_sclk && (g_sclk = calloc(1, sizeof *g_sclk))) atomic_store(&g_sclk->refs, 1);
+    sub_clk *sc = g_sclk && g_sclk->n < SUBCLK_N ? g_sclk : NULL; int part = sc ? sc->n++ : 0;
+    if (sc) { sc->w[part + 1] = g_sub_work; atomic_fetch_add(&sc->refs, 1); }
+#define PART_CLOCK(st_, en_) do { if (sc) { uint64_t hn, gn; ts_now(&hn, &gn); atomic_store(&sc->s[part], ts_guest_ns(st_, hn, gn)); atomic_store(&sc->e[part], ts_guest_ns(en_, hn, gn)); sclk_put(sc); } } while (0)
 #if DM_NVN_M3
     [g_cb addCompletedHandler:^(id<MTLCommandBuffer> cb) {
-        gpu_tag_done(gpu_f, cb.GPUStartTime, cb.GPUEndTime);
+        gpu_tag_done(gpu_f, cb.GPUStartTime, cb.GPUEndTime); PART_CLOCK(cb.GPUStartTime, cb.GPUEndTime);
         if (cb.error) { atomic_store(&g_last_commit_error, 1); static int n; if (n++ < 8) MLOG("[red] command buffer error in a part of submission %llu: %s", (unsigned long long)fence_next, cb.error.description.UTF8String); }
         if (atomic_fetch_sub(&g_inflight, 1) == 1 && g_ka_idle) dispatch_semaphore_signal(g_ka_idle); }];
     [g_cb commit]; cb_committed();
@@ -2715,13 +2748,14 @@ static void mtl_sub_split(void) {
 #else
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
-        gpu_tag_done(gpu_f, f.GPUStartTime, f.GPUEndTime);
+        gpu_tag_done(gpu_f, f.GPUStartTime, f.GPUEndTime); PART_CLOCK(f.GPUStartTime, f.GPUEndTime);
         if (f.error) { atomic_store(&g_last_commit_error, 1); static int n; if (n++ < 8) MLOG("[red] command buffer error in a part of submission %llu: %s", (unsigned long long)fence_next, f.error.description.UTF8String); }
         if (atomic_fetch_sub(&g_inflight, 1) == 1 && g_ka_idle) dispatch_semaphore_signal(g_ka_idle); }];
     [g_cb endCommandBuffer];
     CBUF buffers[] = {g_cb}; [g_q4 commit:buffers count:1 options:o]; cb_committed();
     g_cb = [g_dev newCommandBuffer]; [g_cb beginCommandBufferWithAllocator:g_alloc4[g_alloc_cur]];
 #endif
+#undef PART_CLOCK
     g_sub_chunks++; g_chunk_commits++; g_chunk_mark = g_stat_draw;
 }
 static void chunk_maybe_split(void) {   // where a new encoder is about to open and none is open
@@ -7029,6 +7063,11 @@ void mtl_exec(const uint8_t *p) {
         if (trace) PD("o cmd=%p pass=%llu op=%u size=%u", p, g_stat_pass, (unsigned)h.op, (unsigned)h.size);
         if (g_hoist_n && hoist_take(p)) { if (g_fz.active && p == g_fz.rt2_op) { g_fz.phase = 2; g_rt_merged = 0; PD("F %llu merged pass enters the later pass's draws", g_stat_pass); } p += h.size; continue; }   // A pure-clear render pass already executed early / the start of a later pass already merged in   // Entering the later pass: the same-target continuation of the earlier pass ends here; the later pass reading the earlier pass's attachment is proven to be same-pixel by fz_p2_draw, and is no longer split by the continuation rule
         const void *a = p + 8;
+        switch (h.op) {   // work for the counter timestamps' position (nvn_ts.h)
+            case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: case OP_COPY_B2B: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T:
+            case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_CLEAR_TEX: g_sub_work++; break;
+            default: break;
+        }
         switch (h.op) {
             case OP_END: g_exec_cur = NULL;
                 if (g_hoist_n && !g_ret_n && !g_nrest) {
@@ -7045,7 +7084,7 @@ void mtl_exec(const uint8_t *p) {
                 PD("Y signal_event cmd=%p dst=%p mode=%u value=%u", p, val, m, v); mtl_sub_event(val, m, v); break; }
             case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, (const uint8_t *)a + 8, 8); g_cnt_report[t & 31]++;
                 PD("Q report type=%llu cmd=%p dst=%#llx", (unsigned long long)t, p, (unsigned long long)ad);
-                if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot()}); g_vis_cur = -1;
+                if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot(), g_sub_work}); g_vis_cur = -1;
                     occ_note(ad, g_fence + 1); }   // this submission commits with fence g_fence + 1
                 else {   // counter half now, in command order (0: TIMESTAMP / TIMESTAMP_TOP report only a timestamp, the other counters are not emulated: conditional
                          // rendering at replay compares it); the timestamp half only when the GPU has run the submission. Written at replay as well, it told the game

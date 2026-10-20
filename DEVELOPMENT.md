@@ -1656,7 +1656,22 @@ Tier 3c, Tears of the Kingdom:
   a movie (60 fps product: frame time p50 33.5 ms during the hold, 8.3 outside). Tests: `t_pace` (9 hold cases; the game's interval alone fails 4),
   `t_oe` (8; the old stub fails 8), `t_movie_fps` (6; every cutscene held fails 3). `host/tests`' profile rule now depends on game.json and
   `gen_game.py` (it kept a profile from before a new field)
-- [ ] 131 dynamic resolution's time budget from the frame rate (evening sync: probe its GPU-time input first; it may read 0 with our timestamps)
+- [x] batch 33 · 131 the game's GPU time is measured again: Tears of the Kingdom times its frame as the difference of two TIMESTAMP reports of one
+  submission (main 0xa1a50, called by the frame-rate controller's path: a report near the start, heap ring +0x10, against the last, +0x20; ns →
+  µs at 0xa1b94, a share of 16,666.666 µs) and every report of a submission took its completion time, so it read 0 to 0.06 ms (p50 0.003 ms
+  over 1,761 frames, probe at 0xa1b90). Now each report takes its place inside the submission (`gfx/nvn/nvn_ts.h`): within the part of the
+  submission that holds it (mid-submission commits give each part its own GPU start / end, as nxnative's segments do) at the share of the
+  work (draws, dispatches, copies, clears) recorded before it; between two parts a TIMESTAMP is the earlier part's end, a TIMESTAMP_TOP the
+  later part's start. The game now reads p50 6.33 ms (our GPU line 5.9-7.1 ms); the last report stays at the end, so the controller's view
+  is unchanged (30 fps product 33.4-33.7 ms; 60 fps product p50 8.3 ms and 7 interval changes in 75 s, both as before). `DM_NVN_GPU_TS=completion`
+  restores the old timing, `DM_NVN_TS_SCALE=<x>` spreads the reports x times (x = 3: the controller changed interval 9 times instead of 1).
+  Measured, not done: the dynamic resolution itself never runs here: its multiplier (main 0xd5d80, nxnative's site) is only read when the
+  view code's object (heap+0x234f3630) has bit 0 of +0x1c, and main 0x8c4ed0 sets that word to 0x804 at boot and nothing writes it again
+  (watchpoint, 70-80 s on the sky island, docked and handheld, also with x = 3); so the 0xA1B94 budget factor has nothing to act on yet (131a).
+  Probes: `DM_PROBE_FP=1` adds s0..s7, and x4..x7 are printed. Tests: `t_ts` (17; every report at the end fails 7), `t_nvn` (a report before
+  24 busy copies is 37.7 ms earlier than the one after them; 0.00 with the old timing)
+- [ ] 131a what sets the dynamic resolution's enable bit (the object at heap+0x234f3630, +0x1c bit 0; T5eng saw TotK's scene size change on an
+  iPhone Air), then its time budget from the frame rate (FPSLocker's factor at main 0xA1B94: target / 30000)
 - [ ] 132 the wave program's wide lines
 - [ ] 133 FPSLocker's frame step measured against ours; double buffering and the world clock probed (71c); evening sync: nxnative's host-decided
   whole-vsync step as the candidate
@@ -1733,6 +1748,10 @@ Tier 3d, iOS, Mac and tooling:
 - [ ] 178 the diagnostics export redacted (lordran 40a9a72); memory sampled every 60 frames with the command allocators (lordran 24740d4; 62f)
 - [ ] 179 tests to take: overlapping `UpdateUniformBuffer` writes (Touchable), a 512 re-upload soak (lordran), the pass-continuation cases
   (GirlNet `t_p5r_rt_continue_gpu.m`)
+- [ ] 180 screens judged by TypeSafe's Jev model in the test runs (the d2r-mobile author's method: which key to press on each screen; the user
+  agreed to send screenshots, the key stays outside the repository): a trial took Tears of the Kingdom from boot to the cliff save's HUD in about
+  25 s with the same five presses in two runs, against about 50 s for the fixed `A@26.5,A@31,A@35` (about 2,000 input tokens and 350 ms a
+  decision, prompts in English); a tool for the smoke runs, gameplay checks and later the iPhone, with fixed keys kept as the fallback
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)

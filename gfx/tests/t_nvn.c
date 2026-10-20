@@ -280,6 +280,8 @@ int main(void) {
         NVNmemoryPoolBuilder hb; NVNmemoryPool hp; P(nvnMemoryPoolBuilderSetDefaults)(&hb); P(nvnMemoryPoolBuilderSetStorage)(&hb, heap, 4 * big);
         P(nvnMemoryPoolInitialize)(&hp, &hb);
         P(nvnCommandBufferBeginRecording)(&cb);
+        uint64_t *tsr0 = (uint64_t *)(busy_a + 8192); tsr0[0] = tsr0[1] = 0;   // a TIMESTAMP report before the busy copies (plan item 131)
+        P(nvnCommandBufferReportCounter)(&cb, NVN_COUNTER_TYPE_TIMESTAMP, (NVNbufferAddress)tsr0);
         for (int i = 0; i < 24; i++) P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)busy_a, (NVNbufferAddress)busy_b, big, 0);
         P(nvnCommandBufferCopyBufferToBuffer)(&cb, (NVNbufferAddress)bsrc, (NVNbufferAddress)bdst, big, 0);
         uint64_t *tsr = (uint64_t *)(busy_a + 4096); tsr[0] = tsr[1] = 0x1111111111111111ull;   // a TIMESTAMP report after the busy copies (inside the pool, not copied over)
@@ -302,6 +304,12 @@ int main(void) {
         // this point" and its frames alternated); its counter half is written in command order (conditional rendering compares it at replay)
         EXPECT("TIMESTAMP report while the GPU is busy: counter half 0, timestamp half not written yet", 1, cnt_early == 0 && ts_early == 0x1111111111111111ull);
         EXPECT("TIMESTAMP report after the wait: timestamp written", 1, tsr[1] != 0x1111111111111111ull);
+        {   // Two reports of one submission bracket its GPU work (nvn_ts.h): Tears of the Kingdom's dynamic resolution and frame-rate controller
+            // subtract them, and read 0 to 60 µs of a 5 to 7 ms GPU frame while every report took the submission's completion
+            double gap = (double)(tsr[1] - tsr0[1]) * 625 / 12 / 1e6;
+            printf("(the two reports %.2f ms apart, %.2f ms from submit to the wait's return)\n", gap, ms);
+            EXPECT("a report before the busy copies is earlier than the one after them by over a third of the wait", 1, tsr0[1] && tsr[1] > tsr0[1] && gap > ms / 3);
+        }
         P(nvnMemoryPoolFinalize)(&hp); free(heap);
     }
 
