@@ -21,7 +21,7 @@ int crash_set_trap_hook(int (*fn)(ucontext_t *uc));
 // @off prints 16 bytes at x0+off, @*off at *(x0+off). The trampoline borrows x16: probe only at function entries or where x16 is dead, and not on
 // PC-relative instructions (adr / adrp / b / bl / ldr literal / cbz ...).
 // DM_PROBE_DUMP=module:offset:length[:file] writes that guest memory to a file on the first probe hit. DM_THROWLOG=1 probes the SDK's __cxa_throw.
-// DM_PROBE_FP=1 adds s0..s7 (the low 32 bits of v0..v7) as floats.
+// DM_PROBE_FP=1 adds s0..s15 (the low 32 bits of v0..v15) as floats.
 #if !TARGET_OS_IPHONE
 #define MAX_PROBE 16
 typedef void (*probe_fn)(ucontext_t *uc);
@@ -188,8 +188,8 @@ static int probe_hit(ucontext_t *uc) {   // SIGTRAP hook of crash.c
         for (int r = 19; r < 24; r++) fprintf(stderr, " x%d=%#llx", r, uc->uc_mcontext->__ss.__x[r]);
         { uint64_t x8 = uc->uc_mcontext->__ss.__x[8]; Dl_info di; fprintf(stderr, " x8=%#llx", x8);   // indirect call targets often sit in x8
           if (dladdr((void *)x8, &di) && di.dli_sname) fprintf(stderr, " (%s+%#lx)", di.dli_sname, (unsigned long)(x8 - (uint64_t)di.dli_saddr)); }
-        { static int fp = -1; if (fp < 0) fp = getenv("DM_PROBE_FP") != NULL;   // DM_PROBE_FP=1: s0..s7 as floats too (float code: sizes, scales)
-          if (fp) for (int r = 0; r < 8; r++) { float f; uint32_t u = (uint32_t)uc->uc_mcontext->__ns.__v[r]; memcpy(&f, &u, 4); fprintf(stderr, " s%d=%g", r, f); } }
+        { static int fp = -1; if (fp < 0) fp = getenv("DM_PROBE_FP") != NULL;   // DM_PROBE_FP=1: s0..s15 as floats too (float code: sizes, scales)
+          if (fp) for (int r = 0; r < 16; r++) { float f; uint32_t u = (uint32_t)uc->uc_mcontext->__ns.__v[r]; memcpy(&f, &u, 4); fprintf(stderr, " s%d=%g", r, f); } }
         if (g_probe[i].dump >= 0) {
             uint8_t b[16]; vm_size_t got = 0;
             uint64_t at = uc->uc_mcontext->__ss.__x[0] + (g_probe[i].dump & 0xffffff);

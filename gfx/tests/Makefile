@@ -29,6 +29,8 @@ t_pace: t_pace.c ../nvn/nvn_pace.h
 	clang -O1 -Wall -o $@ t_pace.c
 t_ts: t_ts.c ../nvn/nvn_ts.h
 	clang -O1 -Wall -o $@ t_ts.c
+t_fstep: t_fstep.c ../nvn/nvn_fstep.h
+	clang -O1 -Wall -o $@ t_fstep.c
 t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
 	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c
 t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
@@ -196,6 +198,7 @@ run: \
 	t_pace \
 	t_passgpu \
 	t_ts \
+	t_fstep \
 	t_pend \
 	t_perfline \
 	t_pfv \
@@ -246,6 +249,7 @@ run: \
 	./t_deswz_gpu
 	./t_pace
 	./t_ts
+	./t_fstep
 	./t_hmap
 	./t_cover
 	./t_copy_pitch

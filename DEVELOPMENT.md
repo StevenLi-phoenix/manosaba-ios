@@ -1672,9 +1672,21 @@ Tier 3c, Tears of the Kingdom:
   24 busy copies is 37.7 ms earlier than the one after them; 0.00 with the old timing)
 - [ ] 131a what sets the dynamic resolution's enable bit (the object at heap+0x234f3630, +0x1c bit 0; T5eng saw TotK's scene size change on an
   iPhone Air), then its time budget from the frame rate (FPSLocker's factor at main 0xA1B94: target / 30000)
-- [ ] 132 the wave program's wide lines
-- [ ] 133 FPSLocker's frame step measured against ours; double buffering and the world clock probed (71c); evening sync: nxnative's host-decided
-  whole-vsync step as the candidate
+- [ ] 132 the wave program's wide lines (2026-10-20: not reached: no `SetLineWidth` other than 1 in the prologue, on the cliff save or in the five
+  other saves of `save_play` in 75 s each, all early game; the wave program's shaders 0cd9edc0a623c237 / e04d541253557805 are not in our capture;
+  totk-mobile expands them by editing those shaders' source, so it needs both: a save where the game draws them, from the user)
+- [x] batch 35 · 133 a frame step in whole vsyncs decided by the host, as a switch (`DM_FRAME_STEP=vsync`; `gfx/nvn/nvn_fstep.h`, nxnative's
+  design and numbers written anew, MIT): each frame stays on screen k vsyncs of 60 Hz and the game steps k (k + 1 while it pays back lost
+  time, at most 15 vsyncs: the rest of a load is dropped); three late frames step up to the cost, 30 frames that fit 0.85 × (k − 1) try k − 1,
+  a failed trial doubles the wait (1 s up to 8 s); item 130's movie hold is its kmin. The 60 fps product's prologue: k = 1 after boot, frame
+  time p50 16.7 ms, two steps up and two down (both at boot), game time / real time 0.990 with the load's 32 vsyncs dropped; against the mean
+  step with uncapped pacing (the default, unchanged): 6,900 frames in 60 s (about 115 fps on a 60 Hz panel, half never shown) for 62.2 s of
+  CPU, the vsync step 3,000 frames for 40.2 s of CPU (35 % less). Measured, not needed: FPSLocker's three swapchain textures (main 0xbe14a8):
+  TotK makes two, and with the vsync step 0 of 2,101 frames waited on the display path (max 0.01 ms; 3 of 6,690 with the mean step).
+  Not measured: the day clock (main 0x68c15c, totk-mobile's day-rate site): its function (0x68c098) runs about 20 times a second on the cliff
+  save but leaves before the increment (0x68c14c never reached), so it needs a later save (71c). FPSLocker's own step (the last frame's time,
+  clamped) was not built: the vsync step is the candidate. `t_fstep` (9: 10 / 22 / 18.7 ms frames, a hitch, a stall, heavy then light, the
+  movie hold, jitter; never paying back fails 3, no margin flaps 19 times in 2,000 frames and fails 1); `DM_PROBE_FP` prints s0..s15
 
 Tier 3c, iOS:
 - [ ] 134 the audio session's sample rate and I/O buffer, an underrun counter, the unit rebuilt after a media services reset (evening sync:

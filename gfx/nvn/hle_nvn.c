@@ -15,6 +15,7 @@
 #include "../tex/nvn_fmt_mtl.h"
 #include "nvn_mtl.h"
 #include "nvn_pace.h"
+#include "nvn_fstep.h"
 #include "../../host/front.h"
 #include "../../host/game.h"
 #include "nvn_dirty.h"
@@ -1363,7 +1364,18 @@ void nvn_fps_hold(int fps) {
     int old = atomic_exchange(&g_fps_hold, fps);
     if (old != fps) { if (fps) LOG("[nvn] frame rate held at %d fps (the game extends the user inactivity time)", fps); else LOG("[nvn] frame rate hold released"); }
 }
-static int win_interval(const win_t *o) { return nvn_hold_interval(g_display_mode ? 1 : o->interval, g_hz, atomic_load(&g_fps_hold)); }
+// The frame step in whole vsyncs (plan item 133, nvn_fstep.h): DM_FRAME_STEP=vsync for a game whose step the host sets (dm_game_realtime_step):
+// each frame stays on screen k vsyncs of 60 Hz, the game gets k (k + 1 while it pays back lost time) through nvn_fstep_step(), the game's own
+// present interval is not used for pacing and uncapped pacing is off. Off by default: the realtime step follows the measured frame time (frame_step.c)
+static nvn_fstep g_fs; static int g_fs_step; static uint64_t g_fs_start, g_fs_prev_start; static int g_fs_started; static double g_fs_game, g_fs_real;
+int dm_game_realtime_step(void);   // (its weak default is below)
+static int fstep_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_FRAME_STEP"); v = e && !strcmp(e, "vsync") && dm_game_realtime_step();
+    if (e && !strcmp(e, "vsync") && !v) LOG("[nvn] [red] DM_FRAME_STEP=vsync needs a game whose step the host sets (Tears of the Kingdom's option realtime)");
+    if (v) LOG("[nvn] frame step in whole vsyncs: each frame shown k vsyncs of 60 Hz, the game steps k (DM_FRAME_STEP=vsync)"); } return v; }
+int nvn_fstep_step(void) { return fstep_on() ? g_fs_step : 0; }   // the step for the frame the game is about to make, in vsyncs (0 = not in this mode)
+static int win_interval(const win_t *o) {
+    if (fstep_on()) return g_fs.k > 0 ? g_fs.k : 1;
+    return nvn_hold_interval(g_display_mode ? 1 : o->interval, g_hz, atomic_load(&g_fps_hold)); }
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     NVN_BLOCKING();
     win_t *o = (win_t *)w;
@@ -1394,6 +1406,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // MIT: TOTK_ACQ_SYNC). DM_NVN_ACQ_SYNC=newest restores that (A/B)
     if (s) { static int newest = -1; if (newest < 0) { const char *e = getenv("DM_NVN_ACQ_SYNC"); newest = e && !strcmp(e, "newest"); if (newest) LOG("[nvn] DM_NVN_ACQ_SYNC=newest: the acquire sync waits for the newest submission"); }
              sync_fence_store((sync_t *)s, newest ? mtl_last_fence() : 0); }
+    if (!g_fs_started) { g_fs_started = 1; g_fs_prev_start = g_fs_start; g_fs_start = now_ns(); }   // a frame starts when its first acquire returns (nvn_fstep.h)
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
 
@@ -1635,10 +1648,10 @@ static void present_cfg(const win_t *o) {
     if (g_hz >= 0) return;
     // With a window the default is still display interval mode; without a window the default is game mode. Environment variables can override the fixed 60 Hz.
     int scr = mtl_display_hz();
-    const char *e = getenv("DM_PRESENT_HZ"); g_hz = e ? atoi(e) : 60;
+    const char *e = getenv("DM_PRESENT_HZ"); g_hz = e && !fstep_on() ? atoi(e) : 60;   // (the vsync step counts 60 Hz vsyncs)
     if (g_hz > 0 && (g_hz < 30 || g_hz > 120)) { LOG("[nvn] [red] DM_PRESENT_HZ=%d outside 30..120: 60", g_hz); g_hz = 60; }
     if (g_hz > 0) { void mtl_link_set_rate(int hz); mtl_link_set_rate(g_hz); }
-    { int uc = nvn_uncapped_hz(dm_game_realtime_step(), e, getenv("DM_UNCAPPED"), getenv("DM_UNCAPPED_HZ"), scr);
+    if (!fstep_on()) { int uc = nvn_uncapped_hz(dm_game_realtime_step(), e, getenv("DM_UNCAPPED"), getenv("DM_UNCAPPED_HZ"), scr);
       if (uc) { g_uncapped = 1; g_hz = uc; void mtl_link_set_rate(int hz); mtl_link_set_rate(scr > 0 ? scr : 60);
           LOG("[nvn] uncapped pacing (DM_UNCAPPED=0 turns it off): the game does not wait for the display, our clock paces it at up to %d fps (DM_UNCAPPED_HZ); "
               "the display (%d Hz) shows the newest finished frame at each refresh", uc, scr); } }
@@ -1663,6 +1676,17 @@ __attribute__((weak)) void dm_movie_tick(void) {}   // host hle_movie.c: hands p
 __attribute__((weak)) void dm_game_present(void) {}   // game hook (host/game.h): every present, on the game's thread; none in the graphics unit tests
 __attribute__((weak)) int dm_game_realtime_step(void) { return 0; }   // game hook (host/game.h): the game's step follows the measured frame time
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
+    if (fstep_on()) {   // the step for the next frame from this one's time on screen and cost (nvn_fstep.h), before the game's hook stores it
+        const double vs = 1e9 / 60; uint64_t now = now_ns();
+        double shown = g_fs_prev_start && g_fs_start > g_fs_prev_start ? (g_fs_start - g_fs_prev_start) / vs : 0, cpu = g_fs_start && now > g_fs_start ? (now - g_fs_start) / vs : 0;
+        double gpu = g_frame >= 8 ? mtl_gpu_ms(g_frame - 8) : -1, cost = gpu * 1e6 / vs > cpu ? gpu * 1e6 / vs : cpu;
+        if (shown > 0) { g_fs_game += g_fs_step; g_fs_real += shown; }
+        g_fs_step = nvn_fstep_next(&g_fs, shown, cost, nvn_hold_interval(1, 60, atomic_load(&g_fps_hold)), FSTEP_MAX);
+        g_fs_started = 0;
+        if (g_fs.frames % 300 == 0) LOG("[frame step] vsync step at frame %llu: k %d, step %d; %llu late, %llu up, %llu down (%llu failed), %llu paid back, %.0f vsyncs dropped; game time / real time %.4f",
+            (unsigned long long)g_fs.frames, g_fs.k, g_fs_step, (unsigned long long)g_fs.late, (unsigned long long)g_fs.ups, (unsigned long long)g_fs.downs, (unsigned long long)g_fs.failed,
+            (unsigned long long)g_fs.paid, g_fs.dropped, g_fs_real > 0 ? g_fs_game / g_fs_real : 0);
+    }
     dm_game_present();
     dm_movie_tick();   // before the core is given away: it signals the game's movie events (guest code)
     NVN_BLOCKING();

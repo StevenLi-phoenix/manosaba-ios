@@ -74,8 +74,10 @@ void dm_game_boot(void) {
     else LOG("[frame step] real time: the mean of the last five present intervals (1/120 .. 1/15 s each)");
 }
 int dm_game_realtime_step(void) { return g_realtime && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
+int nvn_fstep_step(void);   // gfx/nvn/hle_nvn.c: DM_FRAME_STEP=vsync, the host's step in vsyncs of 60 Hz (plan item 133), 0 otherwise
 void dm_game_present(void) {
     if (!g_realtime || g_pin > 0) return;
+    int k = nvn_fstep_step(); if (k > 0) { frame_step_store(g_page, k / 60.0); return; }
     double s = frame_mean_add(&g_mean, guest_ns());
     if (s > 0) frame_step_store(g_page, s);
 }
