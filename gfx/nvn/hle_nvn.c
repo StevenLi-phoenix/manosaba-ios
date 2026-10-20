@@ -655,7 +655,8 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     for (int i = 0; i < n; i++) { shader_key(&sd[i], o->key[i]); o->kstage[i] = shader_stage(&sd[i]); }
     // DM_SHDUMP also records which vertex and pixel shaders the game puts in one program (<dir>/pairs.tsv, one "vertex key<TAB>pixel key" line per
     // new pair): the offline build pads a vertex shader with the outputs its paired pixel shaders read but it does not write (dmsh_build.py vs_pad;
-    // Metal refuses to link such a pair). Duplicates are filtered here as long as the process runs; the build deduplicates the file anyway
+    // Metal refuses to link such a pair). Duplicates are filtered here as long as the process runs; the build deduplicates the file anyway. The pairs
+    // pipelines are built for are written too (nvn_mtl.m pair_note), among them those BindProgram makes from two programs' stages
     { static const char *dir; static int init; static nvn_hmap seen; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
       if (!init) { dir = getenv("DM_SHDUMP"); init = 1; }
       int vs = -1, ps = -1; for (int i = 0; i < n; i++) { if (o->kstage[i] == 0) vs = i; else if (o->kstage[i] == 1) ps = i; }

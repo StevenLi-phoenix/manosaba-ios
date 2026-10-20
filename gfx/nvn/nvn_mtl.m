@@ -4344,6 +4344,29 @@ static void fout_note(NvShader *fs, const uint32_t cfmt[8]) {
              f ? "noted in DM_SHDUMP's fout.tsv for the next shader build" : "add it to the capture directory's fout.tsv and rebuild the shaders (or run with DM_SHDUMP)");
     }
 }
+// A pipeline about to be built: its vertex / pixel pair goes to <DM_SHDUMP>/pairs.tsv ("vertex key<TAB>pixel key", the format ProgramSetShaders
+// writes), so the next shader build pads the vertex shader for it (dmsh_build.py vs_pad). ProgramSetShaders alone sees only the pairs of one
+// program; a pair made by BindProgram's stage bits from two programs (Unity binds vertex and pixel in two calls: manosaba's capture has no pair) was
+// never written, and a pair whose pixel shader reads an output the vertex shader does not write fails to link. Each pair once per process (plan
+// item 137)
+static uint64_t g_pair_bind_new;   // pairs written here (t_pairs reads it)
+static void pair_note(NvShader *vs, NvShader *fs) {
+#ifdef DM_TEST_PAIRS_NO_BIND   // negative control of t_pairs only: pairs are not noted at bind time
+    return;
+#endif
+    static const char *dir; static int init; static nvn_hmap seen; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    if (!init) { dir = getenv("DM_SHDUMP"); init = 1; }
+    if (!dir || !fs || strlen(vs->key) < 16 || strlen(fs->key) < 16) return;
+    char k[32]; memcpy(k, vs->key, 16); memcpy(k + 16, fs->key, 16);
+    pthread_mutex_lock(&mu);
+    if (!seen.klen) nvn_hm_init(&seen, sizeof k);
+    if (!nvn_hm_get(&seen, k)) {
+        nvn_hm_put(&seen, k, (void *)1);
+        char path[1200]; snprintf(path, sizeof path, "%s/pairs.tsv", dir); FILE *f = fopen(path, "a");
+        if (f) { fprintf(f, "%.16s\t%.16s\n", vs->key, fs->key); fclose(f); g_pair_bind_new++; }
+    }
+    pthread_mutex_unlock(&mu);
+}
 static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRenderPassDescriptor *unused) {
     (void)unused;
     __unsafe_unretained NvShader *vs = pr->sh[0], *fs = pr->sh[1];
@@ -4353,6 +4376,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRen
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
     if (cached) return cached;
     if (hm_get_id(&g_pso_fail, &k)) return nil;
+    pair_note(vs, fs);
     id<MTLRenderPipelineState> ps;
     NSError *e = nil; uint64_t bt = bp_now();
     ps = g_pso_lmap ? nil : pso_pend_take(&k);

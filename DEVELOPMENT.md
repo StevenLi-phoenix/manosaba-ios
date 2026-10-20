@@ -1713,7 +1713,14 @@ Tier 3c, iOS:
   is unchanged. `t_gen_embed.py` (7; options not written fails 3), `t_options` (1 more; embedded options ignored fails 1)
 
 Tier 3c, larger:
-- [ ] 137 one varying interface as a fallback library, pairs noted at bind time (a chain rebuild)
+- [x] batch 40 · 137 pairs noted at bind time: `pso_get` writes each vertex / pixel pair it is about to build a pipeline for to
+  `<DM_SHDUMP>/pairs.tsv` (`nvn_mtl.m` `pair_note`, once per pair and process, the format ProgramSetShaders writes), so a pair BindProgram makes
+  from two programs' stages, and a pair that fails to link, reaches the next shader build's padding (manosaba binds vertex and pixel in two calls:
+  its capture had no pair; a 45 s title run now writes 20). Measured for the fallback library: no "not written by vertex shader" failure in any of
+  the 208 run logs since chain bab8d4746968 (the last ones, 19-45 a run, are from 2026-10-18 under the old shader keys); the pairs written in the
+  prologue (2,648) and the cliff save (4,038) are all in the capture's pairs.tsv already. So the union-interface library [-] here, moved to 62g.
+  `t_pairs` (4: a pair that links written once, under another colour format not again, one reading a location the vertex shader does not
+  write fails and is written; not noted fails 3)
 - [ ] 138 render targets of virtual pools in a heap (memory for 62)
 - [x] batch 38 · 139 code caves in the rewriter (`CAVES` in a game's rules.py; totk-mobile's routines appended to the patch area, written anew):
   one instruction (asserted) becomes `b <routine>`, the routine is emitted into the patch area from instruction words and forms (`('orig',)`,
@@ -1811,6 +1818,8 @@ Tier 4, large:
   - [ ] 62d handheld mode by default on iOS (1280x720)
   - [ ] 62e RomFS as one image or 1 GiB parts with an index; a ready marker instead of the tree walk at every launch
   - [ ] 62f `maxBufferLength` and the reservation base logged at boot; a cooldown between A/B runs on the phone
+  - [ ] 62g one varying interface as a fallback library (bayonetta3: every vertex shader exports the union of the pixel inputs) if a device's log
+    shows a "not written by vertex shader" failure (item 137: none on the Mac since chain bab8d4746968; the red line names both keys)
 - [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
   - [ ] 63a MetalFX's docked guard against the scene's content size, not the allocated texture (MacNativeGames ff092e3)
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN (the list of 2026-10-20 too)
