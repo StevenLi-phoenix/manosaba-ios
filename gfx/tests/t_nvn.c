@@ -270,6 +270,8 @@ int main(void) {
         uint64_t cur = P(nvnDeviceGetCurrentTimestampInNanoseconds)(&dev);
         EXPECT("TIMESTAMP report on the guest clock: written in the last 5 s, current timestamp on the same clock", 1,
                tns <= now + 1000 && now - tns < 5000000000ull && cur + 1000 >= now && cur - now < 1000000000ull);
+        if (!(tns <= now + 1000 && now - tns < 5000000000ull && cur + 1000 >= now && cur - now < 1000000000ull))
+            printf("    report %llu ns, now %llu, current %llu (report - now %lld ns)\n", (unsigned long long)tns, (unsigned long long)now, (unsigned long long)cur, (long long)(tns - now));
     }
 
     {   // 5a. Command memory the way Tears of the Kingdom uses it: callback off, one 512-byte window per recording at slot + used of the previous one,
@@ -388,6 +390,23 @@ int main(void) {
         shdump_to(dir, &sd, 0); struct stat sc, sdt;
         EXPECT("then written whole: .ctl of 0x880 bytes and .data of 0x30 + 0x40 + 0x100", 1, !stat(pc, &sc) && sc.st_size == 0x880 && !stat(pd, &sdt) && sdt.st_size == 0x170);
         unlink(pc); unlink(pd); rmdir(dir); }
+    // 5b2. The control section's own length (hle_nvn.c ctl_len, plan item 64l): a version 1.14 control section of 0x848 bytes gives the same key
+    //      whatever follows it, and its capture's .ctl is 0x880 bytes with zeros past 0x848; a 1.16 one of 0x880 still hashes all of it. Always 0x880
+    //      (-DDM_TEST_CTL_FIXED): 2 fail
+    {   static uint8_t c14[0x880], code[0x30 + 0x40 + 0x100]; uint32_t w;
+        w = 0x98761234u; memcpy(c14, &w, 4); w = 1; memcpy(c14 + 4, &w, 4); w = 14; memcpy(c14 + 8, &w, 4); w = 0x848; memcpy(c14 + 0x20, &w, 4); w = 0x40; memcpy(c14 + 0x704, &w, 4);
+        NVNshaderData sd = {.data = (NVNbufferAddress)(uintptr_t)code, .control = c14}; uint8_t k1[8], k2[8], k3[8], k4[8];
+        memset(c14 + 0x848, 0x11, 0x38); shader_key(&sd, k1); memset(c14 + 0x848, 0x22, 0x38); shader_key(&sd, k2);
+        EXPECT("1.14 control section of 0x848 bytes: the same key whatever follows it", 1, !memcmp(k1, k2, 8));
+        char dir[512]; const char *td = getenv("TMPDIR"); snprintf(dir, sizeof dir, "%s/t_nvn_ctl14_%d", td ? td : "/private/tmp", (int)getpid()); mkdir(dir, 0755);
+        char key[17], pc[600], pd[600]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", k2[i]);
+        snprintf(pc, sizeof pc, "%s/%s.ctl", dir, key); snprintf(pd, sizeof pd, "%s/%s.data", dir, key); shdump_to(dir, &sd, 0);
+        uint8_t back[0x880] = {0}; FILE *f = fopen(pc, "rb"); size_t got = f ? fread(back, 1, sizeof back, f) : 0; if (f) fclose(f);
+        int zeros = 1; for (int i = 0x848; i < 0x880; i++) zeros &= back[i] == 0;
+        EXPECT("... its capture's .ctl: 0x880 bytes, the first 0x848 its own, zeros after", 1, got == 0x880 && !memcmp(back, c14, 0x848) && zeros);
+        unlink(pc); unlink(pd); rmdir(dir);
+        w = 16; memcpy(c14 + 8, &w, 4); w = 0x880; memcpy(c14 + 0x20, &w, 4); shader_key(&sd, k3); c14[0x87f] ^= 1; shader_key(&sd, k4);
+        EXPECT("a 1.16 control section of 0x880 bytes: all of it hashed", 1, memcmp(k3, k4, 8) != 0); }
     // 5c. The functional key (hle_nvn.c shader_fkey, plan item 169) against gfx/tools/shmap_from_capture.py's for the same bytes (tools/tests/
     //     t_shmap_fkey.py: code byte i = i * 7, the pixel shader with the code area marker and its first SPH word written over it):
     //     a pixel shader (stage 1, code from 0x30, constants from 0x80, end 0x100) and a compute one (stage 5 from 0, workgroup 8 x 4 x 1); other
@@ -899,14 +918,16 @@ int main(void) {
     EXPECT("unimplemented function count 2", 2, nvn_slot[ui].cnt);
 
     // 7b. Functions that used to be silent no-ops report on first call now, and so do the other indirect draws (plan item 60: implemented when a game
-    // calls them; none has in the logs so far, and this line is how a game that does shows up); depth bounds report only when enabled
+    // calls them; none has in the logs so far, and this line is how a game that does shows up); depth bounds are a record now (plan item 64c)
     { static const char *const red[] = {"nvnCommandBufferSetPatchSize", "nvnCommandBufferMultiDrawArraysIndirectCount", "nvnCommandBufferMultiDrawElementsIndirectCount",
                                         "nvnCommandBufferDispatchComputeIndirect", "nvnCommandBufferDownsampleTextureView",
                                         "nvnCommandBufferDrawArraysIndirect", "nvnCommandBufferDrawElementsIndirect"};
       int wired = 0; for (unsigned k = 0; k < sizeof red / sizeof *red; k++) { unsigned i = 0; while (i < NVN_NFUNC && strcmp(nvn_names[i], red[k])) i++; wired += i < NVN_NFUNC && nvn_slot[i].fn == (void *)nvn_unimpl_entry; }
       EXPECT("7b. the five former silent no-ops and the two indirect draws go to the red-reporting stub", 7, wired);
-      P(nvnCommandBufferSetDepthBounds)(NULL, 0, 0.f, 1.f); EXPECT("7b. depth bounds disabled: no report", 0, g_depth_bounds_red);
-      P(nvnCommandBufferSetDepthBounds)(NULL, 1, 0.25f, 0.75f); EXPECT("7b. depth bounds enabled: reported", 1, g_depth_bounds_red > 0); }
+      NVNcommandBuffer db; P(nvnCommandBufferInitialize)(&db, &dev); P(nvnCommandBufferAddCommandMemory)(&db, &g_cmdpool, (ptrdiff_t)g_cmdoff, 256); g_cmdoff += 256;
+      P(nvnCommandBufferBeginRecording)(&db); P(nvnCommandBufferSetDepthBounds)(&db, 1, 0.25f, 0.75f); NVNcommandHandle dh = P(nvnCommandBufferEndRecording)(&db);
+      op_hdr x; p_depth_bounds pb; memcpy(&x, (const uint8_t *)(uintptr_t)dh + 8, sizeof x); memcpy(&pb, (const uint8_t *)(uintptr_t)dh + 16, sizeof pb);
+      EXPECT("7b. depth bounds: a record (enabled, 0.25..0.75) for the replay", 1, x.op == OP_DEPTH_BOUNDS && pb.enable == 1 && pb.lo == 0.25f && pb.hi == 0.75f); }
 
     printf("== %d checks, %d failed ==\n", g_n, g_fail);
     return g_fail != 0;

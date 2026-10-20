@@ -31,6 +31,8 @@
 #include "game.h"
 #include "lang.h"
 #include "romfs_validate.h"
+#include "romfs_parts.h"
+#include "coolstart.h"
 #include "nvn_pace.h"   // nvn_fps_policy (plan item 135)
 
 int dm_main(int argc, char **argv);   // host/main.c, compiled with -Dmain=dm_main
@@ -159,7 +161,13 @@ static NSString *support_dir(void) { return NSSearchPathForDirectoriesInDomains(
 static NSString *docs_dir(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]; }
 static NSString *bundle_dir(void) { return NSBundle.mainBundle.resourcePath; }   // read-only; holds the data only when packaged with it
 // The first RomFS that passes the profile's check; why = the reason of the last one tried
+static void parts_line(const char *s) { plog("boot: %s", s); }
 static NSString *romfs_locate(char *why, size_t n) {
+    // RomFS parts copied into Documents (plan item 62e, tools/romfs_parts.py: a few 1 GiB files instead of tens of thousands): unpacked into
+    // Application Support/romfs first, each part checked, then deleted (host/romfs_parts.c)
+    { char pw[512]; [NSFileManager.defaultManager createDirectoryAtPath:support_dir() withIntermediateDirectories:YES attributes:nil error:nil];
+      int pr = dm_romfs_parts_unpack(docs_dir().fileSystemRepresentation, [support_dir() stringByAppendingPathComponent:@"romfs"].fileSystemRepresentation, pw, sizeof pw, parts_line);
+      if (pr >= 0) plog("%sboot: RomFS parts: %s", pr ? "" : "[red] ", pw); }
     NSArray<NSString *> *cand = @[[support_dir() stringByAppendingPathComponent:@"romfs"], [docs_dir() stringByAppendingPathComponent:@"RomFS"],
                                   [bundle_dir() stringByAppendingPathComponent:@"RomFS"]];
     snprintf(why, n, "no RomFS folder");
@@ -224,8 +232,13 @@ static void boot_prepare(NSString *romfs) {
     for (char *sv, *m = strtok_r(mods, " ", &sv); m && g_argc < 15; m = strtok_r(NULL, " ", &sv)) g_argv[g_argc++] = m;
     plog("boot: RomFS %s, fonts %s, save %s", romfs.fileSystemRepresentation, font ? font.fileSystemRepresentation : "(none)", getenv("DM_SAVE"));
 }
+static int thermal_now(void) { return (int)NSProcessInfo.processInfo.thermalState; }
+static void sleep_for(double s) { usleep((useconds_t)(s * 1e6)); }
 static void *boot_thread(void *arg) {
     (void)arg;
+    { int lv = cool_level(getenv("DM_COOL_START")), at;   // an A/B run on the phone starts cool (coolstart.h, plan item 62f)
+      if (lv >= 0) { int was = thermal_now(); double w = cool_wait(lv, thermal_now, sleep_for, 5, 600, &at);
+          plog("%sboot: DM_COOL_START=%s: thermal state %d → %d after %.0f s", at > lv ? "[red] " : "", getenv("DM_COOL_START"), was, at, w); } }
     dm_cloud_boot();   // iCloud: newer cloud saves are swapped in before the save is mounted (waits up to 5 s)
     int rc = dm_main(g_argc, g_argv);
     plog("boot: dm_main returned %d", rc);
@@ -432,6 +445,9 @@ int main(int argc, char *argv[]) {
       int nb = dm_env_file_apply(b.fileSystemRepresentation, env_said), nd = dm_env_file_apply(d.fileSystemRepresentation, env_said);
       if (nb >= 0 || nd >= 0) plog("boot: env.txt: %d switch(es) from the bundle, %d from Documents", nb > 0 ? nb : 0, nd > 0 ? nd : 0); }
     logstamp_stderr();   // UTC milliseconds on every line from here on (after env.txt, which can say DM_LOG_TIME=0)
+    // The guest address space before UIKit and Metal map theirs (plan item 62a: the largest free gap shrinks once they have; after env.txt, which can
+    // say DM_GUEST_AS_GB)
+    { void svc_reserve_early(void); svc_reserve_early(); }
     if (intr) {
         snprintf(g_launch_note, sizeof g_launch_note, intr > 0 ? "the last session (%s) ended in the foreground without an orderly exit (killed for memory, a crash, or a "
                  "hang the system ended): its log is kept as " RUNDIAG_KEPT : "the last session ended in the foreground without an orderly exit, but its log was not kept: %s", last);

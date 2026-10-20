@@ -311,8 +311,19 @@ HID_STUB("_ZN2nn3hid20StopLrAssignmentModeEv", h_hid_stub15, "nn::hid::StopLrAss
 HID_STUB("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", h_hid_stub16, "nn::hid::GetSixAxisSensorState(nn::hid::SixAxisSensorState*, nn::hid::SixAxisSensorHandle const&)")
 HID_STUB("_ZN2nn3hid21InitializeTouchScreenEii", h_hid_stub17, "nn::hid::InitializeTouchScreen(int, int)")
 HID_STUB("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", h_hid_stub18, "nn::hid::IsSixAxisSensorAtRest(nn::hid::SixAxisSensorHandle const&)")
-HID_STUB("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", h_hid_stub19, "nn::hid::ShowControllerSupport(nn::hid::ControllerSupportResultInfo*, nn::hid::ControllerSupportArg const&)")
-HID_STUB("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", h_hid_stub20, "nn::hid::ShowControllerSupport(nn::hid::ControllerSupportArg const&)")
+// The controller support applet (plan item 64k; ha7rock's blade2-mobile answers 1P, MIT, written anew): the host has one player, on the Npad its
+// operation mode connects. ControllerSupportResultInfo (SDK reference): int8 playerCount at +0, NpadIdType selectedId at +4 (the one-player mode's
+// choice). The stubs wrote nothing, so a game read whatever its stack held
+HLE_FORCE_OPT("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", "controller support applet: one player, the connected Npad",
+              Result, h_hid_CtlSupport, uint8_t *info, const void *arg) {
+    (void)arg;
+#ifndef DM_TEST_CTLSUPPORT_SILENT   // negative control of t_hid_applet only: nothing written, as the stub
+    if (info) { uint32_t id = connected_id(); info[0] = 1; memcpy(info + 4, &id, 4); }
+#endif
+    static int once; if (!once++) LOG("hid::ShowControllerSupport: one player, Npad %#x", connected_id());
+    return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", "controller support applet: one player connected", Result, h_hid_CtlSupport0, const void *arg) { (void)arg; return RES_OK; }
 HID_STUB("_ZN2nn3hid21StartLrAssignmentModeEv", h_hid_stub21, "nn::hid::StartLrAssignmentMode()")
 HID_STUB("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", h_hid_stub22, "nn::hid::GetSixAxisSensorStates(nn::hid::SixAxisSensorState*, int, nn::hid::SixAxisSensorHandle const&)")
 HID_STUB("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", h_hid_stub23, "nn::hid::GetVibrationDeviceInfo(nn::hid::VibrationDeviceInfo*, nn::hid::VibrationDeviceHandle const&)")

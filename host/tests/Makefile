@@ -8,6 +8,9 @@ run: \
 	$(B)/t_arbiter \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
+	$(B)/t_audio_extras \
+	$(B)/t_audio_extras_vol \
+	$(B)/t_audio_extras_kept \
 	$(B)/t_audren \
 	$(B)/t_audren_pace \
 	$(B)/t_audren_pace_out \
@@ -33,6 +36,8 @@ run: \
 	$(B)/t_freeze_none \
 	$(B)/t_fs \
 	$(B)/t_fs_nopin \
+	$(B)/t_fs_saveyes \
+	$(B)/t_fs_strict \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
 	$(B)/t_fs_kill \
@@ -46,6 +51,8 @@ run: \
 	$(B)/t_guest_mem_getinfoold \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_receipt_oneslot \
+	$(B)/t_hid_applet \
+	$(B)/t_hid_applet_silent \
 	$(B)/t_hid_script \
 	$(B)/t_hid_script_nocircle \
 	$(B)/t_hstack \
@@ -61,16 +68,30 @@ run: \
 	$(B)/t_mouse_route \
 	$(B)/t_mouse_route_swallow \
 	$(B)/t_movie \
+	$(B)/t_movie_evcopy \
 	$(B)/t_net \
 	$(B)/t_net_bsd \
 	$(B)/t_oe \
 	$(B)/t_oe_noop \
 	$(B)/t_oe_unlocked \
+	$(B)/t_oe_noios \
 	$(B)/t_movie_fps \
 	$(B)/t_movie_fps_any \
 	$(B)/t_survey \
 	$(B)/t_lang \
 	$(B)/t_lang_region \
+	$(B)/t_guest_as \
+	$(B)/t_romfs_parts \
+	$(B)/t_coolstart \
+	$(B)/t_rtld \
+	$(B)/t_rng_font \
+	$(B)/t_rng_font_rev \
+	$(B)/t_rtld_order \
+	$(B)/t_rtld_ours \
+	$(B)/t_coolstart_onelook \
+	$(B)/t_romfs_parts_nosha \
+	$(B)/t_romfs_parts_anypath \
+	$(B)/t_guest_as_nolimit \
 	$(B)/t_survey_cols \
 	$(B)/t_options \
 	$(B)/t_options_nocheck \
@@ -101,6 +122,8 @@ run: \
 	$(B)/t_time \
 	$(B)/t_time_one \
 	$(B)/t_time_ctxold \
+	$(B)/t_tzrule \
+	$(B)/t_tzrule_dev \
 	$(B)/t_touch \
 	$(B)/t_touchpad \
 	$(B)/t_touchpad_rehit \
@@ -114,6 +137,11 @@ run: \
 	$(B)/t_arbiter
 	$(B)/t_audio
 	$(B)/t_audio_spsc
+	$(B)/t_audio_extras
+	@for v in vol:3 kept:1; do t=$${v%%:*}; want=$${v##*:}; status=0; $(B)/t_audio_extras_$$t > $(B)/t_audio_extras_$$t.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_audio_extras_$$t.log)" -ne "$$want" ]; then \
+	   cat $(B)/t_audio_extras_$$t.log; echo "t_audio_extras_$$t: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_audio_extras_$$t: $$want fail, as expected"; done
 	$(B)/t_audren 2>/dev/null
 	$(B)/t_audren_pace
 	@status=0; $(B)/t_audren_pace_out > $(B)/t_audren_pace_out.log 2>/dev/null || status=$$?; \
@@ -169,6 +197,14 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_nopin.log)" -ne 1 ] || ! grep -q "FAIL a pinned file wins" $(B)/t_fs_nopin.log; then \
 	   cat $(B)/t_fs_nopin.log; echo "t_fs_nopin: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_fs_nopin: with the pins ignored the overlay's file is served, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_fs_saveyes > $(B)/t_fs_saveyes.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_saveyes.log)" -ne 1 ] || ! grep -q "FAIL IsSaveDataExisting" $(B)/t_fs_saveyes.log; then \
+	   cat $(B)/t_fs_saveyes.log; echo "t_fs_saveyes: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_fs_saveyes: a save that is not there reported as existing, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_fs_strict > $(B)/t_fs_strict.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_strict.log)" -ne 2 ]; then \
+	   cat $(B)/t_fs_strict.log; echo "t_fs_strict: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_fs_strict: \"/rom:/\" and backslashes refused, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_kill
@@ -200,6 +236,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "HID_RECEIPT FAIL cases=6 failures=1" $(B)/t_hid_receipt_oneslot.log; then \
 	   cat $(B)/t_hid_receipt_oneslot.log; echo "t_hid_receipt_oneslot: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_hid_receipt_oneslot: one slot for all styles logs every poll of a game polling two, as expected"
+	$(B)/t_hid_applet 2>/dev/null
+	@status=0; $(B)/t_hid_applet_silent > $(B)/t_hid_applet_silent.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_hid_applet_silent.log)" -ne 2 ]; then \
+	   cat $(B)/t_hid_applet_silent.log; echo "t_hid_applet_silent: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_hid_applet_silent: the applet's result not written, as expected"
 	$(B)/t_hid_script 2>/dev/null
 	@status=0; $(B)/t_hid_script_nocircle > $(B)/t_hid_script_nocircle.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL LSL and LSU overlap" $(B)/t_hid_script_nocircle.log; then \
@@ -238,6 +279,10 @@ run: \
 	   cat $(B)/t_mouse_route_swallow.log; echo "t_mouse_route_swallow: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_mouse_route_swallow: a monitor swallowing every press outside the picture takes the title bar from AppKit, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_movie_evcopy > $(B)/t_movie_evcopy.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "31 checks, 3 failed" $(B)/t_movie_evcopy.log; then \
+	   cat $(B)/t_movie_evcopy.log; echo "t_movie_evcopy: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_movie_evcopy: events copied at registration stay empty, as expected"
 	$(B)/t_net
 	@status=0; $(B)/t_net_bsd > $(B)/t_net_bsd.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "ENetDown 100 *✗" $(B)/t_net_bsd.log; then \
@@ -252,6 +297,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL event signalled with the message pushed" $(B)/t_oe_unlocked.log; then \
 	   cat $(B)/t_oe_unlocked.log; echo "t_oe_unlocked: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_oe_unlocked: the event cleared after unlocking ends clear with a message queued, as expected"
+	@status=0; $(B)/t_oe_noios > $(B)/t_oe_noios.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '^FAIL' $(B)/t_oe_noios.log)" -ne 1 ] || ! grep -q "FAIL iOS, a profile with ios_mode handheld" $(B)/t_oe_noios.log; then \
+	   cat $(B)/t_oe_noios.log; echo "t_oe_noios: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_oe_noios: without the profile's iOS mode Tears of the Kingdom starts docked on iOS, as expected"
 	$(B)/t_movie_fps
 	@status=0; $(B)/t_movie_fps_any > $(B)/t_movie_fps_any.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "main+0x770f04 .*✗" $(B)/t_movie_fps_any.log; then \
@@ -263,6 +312,39 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_lang_region.log)" -ne 5 ]; then \
 	   cat $(B)/t_lang_region.log; echo "t_lang_region: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_lang_region: the language alone loses Traditional Chinese, British English, Canadian French and Latin American Spanish, as expected"
+	$(B)/t_guest_as
+	@status=0; $(B)/t_guest_as_nolimit > $(B)/t_guest_as_nolimit.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_guest_as_nolimit.log)" -ne 2 ]; then \
+	   cat $(B)/t_guest_as_nolimit.log; echo "t_guest_as_nolimit: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_guest_as_nolimit: without the 2^39 bound the gaps past it are taken, as expected"
+	TMPDIR="$(abspath $(B))" $(B)/t_romfs_parts
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_romfs_parts_nosha > $(B)/t_romfs_parts_nosha.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_romfs_parts_nosha.log)" -ne 2 ] || ! grep -q "one byte changed.*✗" $(B)/t_romfs_parts_nosha.log; then \
+	   cat $(B)/t_romfs_parts_nosha.log; echo "t_romfs_parts_nosha: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_romfs_parts_nosha: without the digest a damaged part is unpacked, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_romfs_parts_anypath > $(B)/t_romfs_parts_anypath.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_romfs_parts_anypath.log)" -ne 1 ] || ! grep -q "evil.*✗" $(B)/t_romfs_parts_anypath.log; then \
+	   cat $(B)/t_romfs_parts_anypath.log; echo "t_romfs_parts_anypath: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_romfs_parts_anypath: paths taken as they are write outside the tree, as expected"
+	$(B)/t_coolstart
+	@status=0; $(B)/t_coolstart_onelook > $(B)/t_coolstart_onelook.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_coolstart_onelook.log)" -ne 3 ]; then \
+	   cat $(B)/t_coolstart_onelook.log; echo "t_coolstart_onelook: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_coolstart_onelook: one look and on starts runs hot, as expected"
+	$(B)/t_rtld 2>/dev/null
+	@status=0; $(B)/t_rtld_order > $(B)/t_rtld_order.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_rtld_order.log)" -ne 3 ] || ! grep -q "subsdk0-9, sdk).*" $(B)/t_rtld_order.log; then \
+	   cat $(B)/t_rtld_order.log; echo "t_rtld_order: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_rtld_order: the profile's module order binds main's foo to sdk's, as expected"
+	@status=0; $(B)/t_rtld_ours > $(B)/t_rtld_ours.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_rtld_ours.log)" -ne 1 ] || ! grep -q "✗ DM_RTLD unset" $(B)/t_rtld_ours.log; then \
+	   cat $(B)/t_rtld_ours.log; echo "t_rtld_ours: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_rtld_ours: ours as the default, as expected"
+	TMPDIR="$(abspath $(B))" $(B)/t_rng_font 2>/dev/null
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rng_font_rev > $(B)/t_rng_font_rev.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_rng_font_rev.log)" -ne 2 ]; then \
+	   cat $(B)/t_rng_font_rev.log; echo "t_rng_font_rev: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_rng_font_rev: fonts in reverse order miss their types, as expected"
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_survey_cols > $(B)/t_survey_cols.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_survey_cols.log)" -ne 1 ] || ! grep -q "the rotation's rows.*✗" $(B)/t_survey_cols.log; then \
 	   cat $(B)/t_survey_cols.log; echo "t_survey_cols: unexpected negative-control result ($$status)"; exit 1; \
@@ -336,6 +418,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "t_time: 16 checks, 2 failed" $(B)/t_time_ctxold.log; then \
 	   cat $(B)/t_time_ctxold.log; echo "t_time_ctxold: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_time_ctxold: the old user clock context has no time point, as expected"
+	$(B)/t_tzrule 2>/dev/null
+	@status=0; $(B)/t_tzrule_dev > $(B)/t_tzrule_dev.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_tzrule_dev.log)" -ne 7 ]; then \
+	   cat $(B)/t_tzrule_dev.log; echo "t_tzrule_dev: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_tzrule_dev: the rule ignored for the device zone, as expected"
 	$(B)/t_touch
 	$(B)/t_touchpad 2>/dev/null
 	@status=0; $(B)/t_touchpad_rehit > $(B)/t_touchpad_rehit.log 2>/dev/null || status=$$?; \
@@ -429,6 +516,12 @@ $(B)/t_audren_pace_sink: t_audren_pace.c ../audren_pace.h | $(B)
 	clang -O1 -Wall -DDM_TEST_SINK_NO_RESYNC -I.. -o $@ t_audren_pace.c
 $(B)/t_audren: t_audren.c ../hle_audren.c ../audren_pace.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audren.c
+$(B)/t_audio_extras: t_audio_extras.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_audio_extras.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
+$(B)/t_audio_extras_vol: t_audio_extras.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_AUDIO_VOLUME_IGNORED -o $@ t_audio_extras.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
+$(B)/t_audio_extras_kept: t_audio_extras.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_AUDIO_PLAYED_KEPT -o $@ t_audio_extras.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
@@ -473,6 +566,10 @@ $(B)/t_relr: t_relr.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_relr.c
 $(B)/t_relr_unchecked: t_relr.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -DDM_TEST_RELR_UNCHECKED -I.. -Wl,-dead_strip -o $@ t_relr.c
+$(B)/t_tzrule: t_tzrule.c ../hle_time.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_tzrule.c -framework CoreFoundation
+$(B)/t_tzrule_dev: t_tzrule.c ../hle_time.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_TZRULE_DEVICE -I.. -o $@ t_tzrule.c -framework CoreFoundation
 $(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_time.c -framework CoreFoundation
 $(B)/t_time_one: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
@@ -503,6 +600,12 @@ $(B)/t_ktrace: t_ktrace.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_ktrace.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c ../options.c
+$(B)/t_rtld: t_rtld.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_rtld.c ../hle.c ../options.c
+$(B)/t_rtld_ours: t_rtld.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -DDM_TEST_RTLD_DEFAULT_OURS -o $@ t_rtld.c ../hle.c ../options.c
+$(B)/t_rtld_order: t_rtld.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -DDM_TEST_RTLD_LOAD_ORDER -o $@ t_rtld.c ../hle.c ../options.c
 $(B)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mods.c
 $(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
@@ -527,6 +630,10 @@ $(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
+$(B)/t_fs_strict: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_PATH_STRICT=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
+$(B)/t_fs_saveyes: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_SAVE_ALWAYS=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_nopin: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_ROM_NO_PIN=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_kill: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
@@ -549,6 +656,10 @@ $(B)/t_coremask: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_hid_applet: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_hid_applet.c
+$(B)/t_hid_applet_silent: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CTLSUPPORT_SILENT -I.. -o $@ t_hid_applet.c
 $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
 $(B)/t_hid_receipt_oneslot: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
@@ -561,6 +672,9 @@ $(B)/t_hid_script_nocircle: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpa
 VPX ?= /opt/homebrew/opt/libvpx
 $(B)/t_movie: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -o $@ t_movie.c ../movie_av.m ../movie_webm.c ../hstack.S ../hstack.c $(VPX)/lib/libvpx.a \
+		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
+$(B)/t_movie_evcopy: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -DDM_TEST_EVENTS_COPIED -o $@ t_movie.c ../movie_av.m ../movie_webm.c ../hstack.S ../hstack.c $(VPX)/lib/libvpx.a \
 		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
 $(B)/t_touchpad: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad.c
@@ -586,8 +700,28 @@ $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_oe_unlocked: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OE_EVENT_UNLOCKED -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_oe_noios: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OPMODE_NO_IOS -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_oe_noop: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_rng_font: t_rng_font.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_rng_font.c
+$(B)/t_rng_font_rev: t_rng_font.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_FONT_REVERSED -o $@ t_rng_font.c
+$(B)/t_coolstart: t_coolstart.c ../coolstart.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_coolstart.c
+$(B)/t_coolstart_onelook: t_coolstart.c ../coolstart.h | $(B)
+	clang -O1 -Wall -Werror -I.. -DDM_TEST_COOL_ONE_LOOK -o $@ t_coolstart.c
+$(B)/t_romfs_parts: t_romfs_parts.c ../romfs_parts.c ../romfs_parts.h ../../tools/romfs_parts.py | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_romfs_parts.c
+$(B)/t_romfs_parts_nosha: t_romfs_parts.c ../romfs_parts.c ../romfs_parts.h | $(B)
+	clang -O1 -Wall -Werror -I.. -DDM_TEST_PARTS_NO_SHA -o $@ t_romfs_parts.c
+$(B)/t_romfs_parts_anypath: t_romfs_parts.c ../romfs_parts.c ../romfs_parts.h | $(B)
+	clang -O1 -Wall -Werror -I.. -DDM_TEST_PARTS_ANY_PATH -o $@ t_romfs_parts.c
+$(B)/t_guest_as: t_guest_as.c ../guest_as.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_guest_as.c
+$(B)/t_guest_as_nolimit: t_guest_as.c ../guest_as.h | $(B)
+	clang -O1 -Wall -Werror -I.. -DDM_TEST_AS_NO_LIMIT -o $@ t_guest_as.c
 $(B)/t_lang: t_lang.c ../lang.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_lang.c
 $(B)/t_lang_region: t_lang.c ../lang.h | $(B)

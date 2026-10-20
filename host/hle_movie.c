@@ -21,7 +21,7 @@
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#if __has_include(<vpx/vpx_decoder.h>)   // host/Makefile adds libvpx when it is installed (not in the iOS app yet)
+#if __has_include(<vpx/vpx_decoder.h>)   // host/Makefile adds libvpx when it is installed; ios/run.sh the iOS one when ios/tools/build_libvpx.sh has built it
 #define DM_HAVE_VPX 1
 #include <arm_neon.h>
 #include <vpx/vp8dx.h>
@@ -345,7 +345,7 @@ typedef struct {
     pthread_mutex_t mu;
     int type, fmt, mode, kind, started, last_error;
     mav_media *media; int track; int32_t width, height, channels, sample_rate;
-    void *ev[4];                                     // DecoderEvents: input available, output available, format changed, error
+    void **ev, *evc[4];                              // DecoderEvents (the game's): input available, output available, format changed, error
     mav_reader *rd; int rd_done, restart;            // restart: read again from the next input's time once rd_done
     int in_state[NIN]; uint8_t *in_mem[NIN]; size_t in_cap; int64_t in_pts[NIN]; uint32_t in_flags[NIN];
     int credit[NIN], ncredit;                        // sent inputs not yet answered, in order
@@ -429,9 +429,18 @@ static int dec_pump(dec_t *d) {
     }
     return sig;
 }
+// RegisterClientEvents keeps the game's DecoderEvents, read when an event is signalled (plan item 64k): blade2-mobile's game registers the four
+// pointers before it has made the events and fills them in later; copying them at registration kept nulls, and its decoder never woke it
+static void **ev_keep(void **copy, void **ev) {
+#ifdef DM_TEST_EVENTS_COPIED   // negative control of t_movie only: the four pointers copied at registration, as before
+    if (ev) { memcpy(copy, ev, 4 * sizeof *ev); return copy; }
+#endif
+    (void)copy; return ev;
+}
+static void *ev_at(void **ev, int i) { return ev ? ev[i] : NULL; }
 static void dec_signal(dec_t *d, int sig) {   // outside the lock: the woken game thread calls back in
-    if ((sig & 1) && d->ev[0]) g_signal(d->ev[0]);
-    if ((sig & 2) && d->ev[1]) g_signal(d->ev[1]);
+    if ((sig & 1) && ev_at(d->ev, 0)) g_signal(ev_at(d->ev, 0));
+    if ((sig & 2) && ev_at(d->ev, 1)) g_signal(ev_at(d->ev, 1));
 }
 static void dec_dtor(void **self) {
     dec_t *d = DEC(self); if (!d) return;
@@ -460,7 +469,7 @@ static int dec_Configure(void **self, void **md) {
     MVLOG("Decoder %p Configure: track %d %s", (void *)self, d->track, t->mime);
     return ST_OK;
 }
-static int dec_RegisterClientEvents(void **self, void **ev) { dec_t *d = DEC(self); for (int i = 0; i < 4; i++) d->ev[i] = ev[i]; return ST_OK; }
+static int dec_RegisterClientEvents(void **self, void **ev) { dec_t *d = DEC(self); d->ev = ev_keep(d->evc, ev); return ST_OK; }
 static int dec_GetOutputFormat(void **self, void **md) {
     dec_t *d = DEC(self); if (!d->media) return ST_INVALID_CONFIG;
     dec_format(d, md); MVTRACE("dec %p GetOutputFormat", (void *)self); return ST_OK;
@@ -470,7 +479,7 @@ static int dec_Start(void **self) {
     if (!d->media) return ST_INVALID_CONFIG;
     pthread_mutex_lock(&d->mu); d->started = 1; int sig = 1 | dec_pump(d); pthread_mutex_unlock(&d->mu);
     MVLOG("Decoder %p Start (track %d)", (void *)self, d->track);
-    if (d->ev[2]) g_signal(d->ev[2]);   // format changed: Unity learns the frame size from GetOutputFormat
+    if (ev_at(d->ev, 2)) g_signal(ev_at(d->ev, 2));   // format changed: Unity learns the frame size from GetOutputFormat
     dec_signal(d, sig);
     return ST_OK;
 }
@@ -595,7 +604,7 @@ typedef struct vx_t {
     struct vx_t *next;                         // live decoders (dm_movie_tick)
     pthread_mutex_t mu;
     int type, fmt, mode, configured, started, w, h, eos_in, format_sent, last_error;
-    void *ev[4];
+    void **ev, *evc[4];
     vpx_codec_ctx_t vpx; int vpx_live;
     uint8_t *in[VX_IN]; size_t in_cap; int in_free[VX_IN], nin_free;
     vx_in pending[VX_IN]; int npending;        // sent while every output buffer was taken
@@ -611,7 +620,7 @@ static int g_vx_pace = -1;                                                      
 static vx_t *VX(void *self) { return ((vx_t **)self)[1]; }
 static int vx_pace(void) { if (g_vx_pace < 0) { const char *e = getenv("DM_MOVIE_PACE"); g_vx_pace = !(e && !strcmp(e, "0")); } return g_vx_pace; }
 typedef struct { void *ev[8]; int n; } vx_sig;   // events are signalled after the locks are released: the woken game thread calls straight back in
-static void vx_note(vx_t *v, vx_sig *s, int which) { if (v->ev[which] && s->n < 8) s->ev[s->n++] = v->ev[which]; }
+static void vx_note(vx_t *v, vx_sig *s, int which) { void *e = ev_at(v->ev, which); if (e && s->n < 8) s->ev[s->n++] = e; }
 static void vx_fire(const vx_sig *s) { for (int i = 0; i < s->n; i++) g_signal(s->ev[i]); }
 static int vx_frame_bytes(const vx_t *v) { return v->w * v->h + v->w * v->h / 2; }   // even sizes only (Configure)
 static void vx_nv12(const vpx_image_t *img, uint8_t *dst, int w, int h) {   // I420 (libvpx) → packed NV12
@@ -755,7 +764,7 @@ static int vx_Configure(void **self, void **md) {
           VX_IN, v->in_cap >> 10, VX_OUT, vx_frame_bytes(v), vpx_codec_version_str());
     return ST_OK;
 }
-static int vx_RegisterClientEvents(void **self, void **ev) { vx_t *v = VX(self); if (!ev) return ST_BAD_VALUE; for (int i = 0; i < 4; i++) v->ev[i] = ev[i]; return ST_OK; }
+static int vx_RegisterClientEvents(void **self, void **ev) { vx_t *v = VX(self); if (!ev) return ST_BAD_VALUE; v->ev = ev_keep(v->evc, ev); return ST_OK; }
 static int vx_GetOutputFormat(void **self, void **md) { vx_t *v = VX(self); if (!md) return ST_BAD_VALUE; if (!v->configured) return ST_INVALID_CONFIG; vx_format(v, md); return ST_OK; }
 static int vx_Start(void **self) {
     vx_t *v = VX(self); vx_sig s = {0};

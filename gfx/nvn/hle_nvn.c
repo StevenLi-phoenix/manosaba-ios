@@ -20,6 +20,7 @@
 #include "../../host/game.h"
 #include "nvn_dirty.h"
 #include "nvn_perfline.h"
+#include "nvn_trace.h"
 #include <mach/mach_time.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
@@ -277,9 +278,32 @@ NVN(nvnBufferGetSize, size_t, const NVNbuffer *b) { return BF(b)->size; }
 NVN(nvnBufferGetDebugID, uint64_t, const NVNbuffer *b) { return BF(b)->serial; }
 
 // ---------- Descriptor pools ----------
-NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *tp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
-    *(dpool_t *)tp = (dpool_t){(const pool_t *)p, off, n}; OLOG("TexturePool n=%d", n); mtl_set_tex_pool_n(n); return 1;
+// Several texture / sampler pools (plan item 64e, after bayonetta3-mobile's descriptor namespaces, MIT): each pool's IDs have a range of their own
+// in the replay's tables, from the base its descriptor memory got when first initialized (the first pool 0: a game with one pool registers and
+// resolves the IDs it uses), and the replay resolves handles against the pool a command buffer set last (nvn_mtl.m h_tid / h_sid). Before, all
+// pools shared one ID space and a second pool's IDs read the first's objects (pool_second's red line). The same memory initialized again keeps its
+// base (unless it grew)
+static int pool_ns(int kind, uintptr_t at, int n) {
+#ifdef DM_TEST_POOLS_ONE_SPACE   // negative control of gfx/tests t_pools only: one ID space, as before
+    (void)kind; (void)at; (void)n; return 0;
+#endif
+    static struct { uintptr_t at; int base, n; } t[2][64]; static int nt[2], next[2]; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    if (n < 0) n = 0;
+    pthread_mutex_lock(&mu); int base = -1, i = 0;
+    for (; i < nt[kind]; i++) if (t[kind][i].at == at) { if (n <= t[kind][i].n) base = t[kind][i].base; break; }
+    if (base < 0) {
+        base = next[kind]; next[kind] += n;
+        if (i < nt[kind]) t[kind][i] = (typeof(t[0][0])){at, base, n}; else if (nt[kind] < 64) t[kind][nt[kind]++] = (typeof(t[0][0])){at, base, n};
+        if (base) LOG("[nvn] %s pool %d (%d entries) at IDs %d.. of the replay's tables", kind ? "sampler" : "texture", nt[kind], n, base);
+    }
+    pthread_mutex_unlock(&mu); return base;
 }
+static uintptr_t pool_at(const NVNmemoryPool *p, ptrdiff_t off) { const pool_t *o = (const pool_t *)p; return o && o->mem ? (uintptr_t)o->mem + (uintptr_t)off : (uintptr_t)off; }
+NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *tp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
+    int base = pool_ns(0, pool_at(p, off), n);
+    *(dpool_t *)tp = (dpool_t){(const pool_t *)p, off, n, base}; OLOG("TexturePool n=%d", n); if (!base) mtl_set_tex_pool_n(n); return 1;
+}
+static int pool_base(const void *p) { return p ? ((const dpool_t *)p)->base : 0; }
 NVN(nvnTexturePoolFinalize, void, NVNtexturePool *tp) { (void)tp; }
 // Textures Metal cannot create are skipped at replay (nvn_mtl.m tex_desc), and objects registered without being initialized textures hold no valid description:
 // log them with the game's call site (first 32) to find which code builds them.
@@ -296,17 +320,17 @@ static void tex_reg_check(const char *what, int id, const NVNtexture *t, uint64_
     if (why) tex_diag(what, id, o, why, lr);
 }
 NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
-    (void)tp; tex_reg_check("RegisterTexture", id, t, DM_GUEST_RA()); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
+    tex_reg_check("RegisterTexture", id, t, DM_GUEST_RA()); mtl_reg_tex(pool_base(tp) + id, (const tex_t *)t, (const view_t *)v);
 }
 // Image descriptors live in the texture pool alongside texture descriptors, in the same ID space (the replay layer's image slots fetch textures from the same registration table, see nvn_mtl.m NVN_RB_IMG)
 NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
-    (void)tp; tex_reg_check("RegisterImage", id, t, DM_GUEST_RA()); mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v);
+    tex_reg_check("RegisterImage", id, t, DM_GUEST_RA()); mtl_reg_tex(pool_base(tp) + id, (const tex_t *)t, (const view_t *)v);
 }
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
-    *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); return 1;
+    *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n, pool_ns(1, pool_at(p, off), n)}; OLOG("SamplerPool n=%d", n); return 1;
 }
 NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *sp) { (void)sp; }
-NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *sp, int id, const NVNsampler *s) { (void)sp; mtl_reg_samp(id, &((const samp_t *)s)->p); }
+NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *sp, int id, const NVNsampler *s) { mtl_reg_samp(pool_base(sp) + id, &((const samp_t *)s)->p); }
 
 // ---------- Textures ----------
 #define TB(b) ((tex_builder_t *)(b))
@@ -485,11 +509,25 @@ NVN(nvnTextureViewSetDepthStencilMode, void, NVNtextureView *v, NVNtextureDepthS
 NVN(nvnTextureViewGetLayers, NVNboolean, const NVNtextureView *v, int *min, int *n) {
     const view_t *o = (const view_t *)v; *min = o->min_layer; *n = o->nlayers; return o->set_layers;
 }
+NVN(nvnTextureViewGetSwizzle, NVNboolean, const NVNtextureView *v, NVNtextureSwizzle *r, NVNtextureSwizzle *g, NVNtextureSwizzle *b, NVNtextureSwizzle *a) {   // (plan item 64a)
+    const view_t *o = (const view_t *)v; *r = (NVNtextureSwizzle)o->swz_r; *g = (NVNtextureSwizzle)o->swz_g; *b = (NVNtextureSwizzle)o->swz_b; *a = (NVNtextureSwizzle)o->swz_a; return o->set_swz;
+}
+// The view's depth / stencil mode is not stored (views read depth, SetDepthStencilMode above): never set
+NVN(nvnTextureViewGetDepthStencilMode, NVNboolean, const NVNtextureView *v, NVNtextureDepthStencilMode *m) { (void)v; *m = (NVNtextureDepthStencilMode)0; return 0; }
+NVN(nvnTextureGetTextureAddress, NVNtextureAddress, const NVNtexture *t) { return (NVNtextureAddress)(uintptr_t)CTX(t)->mem; }   // its storage in the pool, as GetViewOffset counts from it
 NVN(nvnTextureGetViewOffset, ptrdiff_t, const NVNtexture *t, const NVNtextureView *v) {
     const tex_t *o = CTX(t); const view_t *w = (const view_t *)v;
     if (!w) return 0;
     uint64_t off = w->set_levels ? nvn_tex_level_offset(&o->d, (unsigned)w->base_level) : 0;
     if (w->set_layers) off += (uint64_t)w->min_layer * o->layer_size;
+    return (ptrdiff_t)off;
+}
+NVN_NOPROTO(nvnTextureBuilderGetViewOffset, ptrdiff_t, const NVNtextureBuilder *b, const NVNtextureView *v) {   // as the texture's, from the builder (plan item 64a)
+    const tex_builder_t *o = (const tex_builder_t *)b; const view_t *w = (const view_t *)v;
+    if (!w) return 0;
+    nvn_texlayout L; nvn_tex_layout(&o->d, &L);
+    uint64_t off = w->set_levels ? nvn_tex_level_offset(&o->d, (unsigned)w->base_level) : 0;
+    if (w->set_layers) off += (uint64_t)w->min_layer * L.layer_size;
     return (ptrdiff_t)off;
 }
 // CPU texture read (NVN ReadTexels): for packaged textures the pool memory is the ground truth (de-layout and read directly); GPU-written textures are read back from the MTLTexture (nvn_mtl.m)
@@ -549,7 +587,11 @@ NVN(nvnTextureWriteTexels, void, const NVNtexture *t, const NVNtextureView *v, c
 NVN(nvnTextureWriteTexelsStrided, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r, const void *src, ptrdiff_t row, ptrdiff_t img) {
     gfx_mt_enter("WriteTexelsStrided"); write_texels(CTX(t), (const view_t *)v, r, src, row, img); gfx_mt_leave();
 }
-NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }
+NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) {   // the CPU wrote the region's storage (mtl_flush_texels)
+    const view_t *w = (const view_t *)v;
+    unsigned level = w && w->set_levels ? (unsigned)w->base_level : 0, layer0 = w && w->set_layers ? (unsigned)w->min_layer : 0;
+    gfx_mt_enter("FlushTexels"); mtl_flush_texels(CTX(t), level, layer0, r); gfx_mt_leave();
+}
 
 // ---------- Samplers ----------
 #define SB(b) (&((samp_builder_t *)(b))->p)
@@ -581,6 +623,11 @@ NVN(nvnSamplerBuilderGetMinMagFilter, void, const NVNsamplerBuilder *b, NVNminFi
 NVN(nvnSamplerBuilderGetWrapMode, void, const NVNsamplerBuilder *b, NVNwrapMode *s, NVNwrapMode *t, NVNwrapMode *r) {
     const samp_par *o = &((const samp_builder_t *)b)->p; *s = (NVNwrapMode)o->ws; *t = (NVNwrapMode)o->wt; *r = (NVNwrapMode)o->wr;
 }
+NVN(nvnSamplerBuilderGetLodClamp, void, const NVNsamplerBuilder *b, float *lo, float *hi) { const samp_par *o = &((const samp_builder_t *)b)->p; *lo = o->lod_min; *hi = o->lod_max; }   // (plan item 64a)
+NVN(nvnSamplerBuilderGetLodBias, float, const NVNsamplerBuilder *b) { return ((const samp_builder_t *)b)->p.lod_bias; }
+NVN(nvnSamplerBuilderGetCompare, void, const NVNsamplerBuilder *b, NVNcompareMode *m, NVNcompareFunc *f) { const samp_par *o = &((const samp_builder_t *)b)->p; *m = (NVNcompareMode)o->cmp_mode; *f = (NVNcompareFunc)o->cmp_func; }
+NVN(nvnSamplerBuilderGetBorderColor, void, const NVNsamplerBuilder *b, float *c) { memcpy(c, ((const samp_builder_t *)b)->p.border, 16); }
+NVN(nvnSamplerBuilderGetMaxAnisotropy, float, const NVNsamplerBuilder *b) { return ((const samp_builder_t *)b)->p.aniso; }
 NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) {
     samp_t *o = (samp_t *)s; o->magic = MAGIC('S', 'M', 'P', 0); o->p = ((const samp_builder_t *)b)->p; return 1;
 }
@@ -599,10 +646,28 @@ NVN(nvnProgramFinalize, void, NVNprogram *p) { mtl_prog_release((prog_t *)p); ((
 // first, so the bloom added a matrix row of an earlier pass and the title picture turned red. Same definition as nxnative's keys_hash (seedds, MIT).
 #include <CommonCrypto/CommonDigest.h>
 #include <sys/stat.h>
+// The control section's own length (plan item 64l; the GPU code versions of bayonetta3-mobile's nvn_control.h, MIT, as data): magic 0x98761234,
+// version 1.12 0x838 bytes, 1.14 0x848, 1.15 0x850, 1.16 0x880, the length at +0x20 (both games: every capture 1.16, 0x880). Reading 0x880 of a
+// shorter one hashed and dumped whatever followed it (and could run off its mapping); now those bytes are zeros, so keys and .ctl files keep the
+// 0x880 bytes the offline tools read, and a 1.16 key is unchanged. Another version: reported once, read as 0x880 as before
+static uint32_t ctl_len(const void *control) {
+#ifdef DM_TEST_CTL_FIXED   // negative control of t_nvn only: always 0x880, as before
+    (void)control; return 0x880;
+#endif
+    const uint8_t *p = control; uint32_t magic, major, minor, size;
+    memcpy(&magic, p, 4); memcpy(&major, p + 4, 4); memcpy(&minor, p + 8, 4); memcpy(&size, p + 0x20, 4);
+    if (magic == 0x98761234u && major == 1 && ((minor == 12 && size == 0x838) || (minor == 14 && size == 0x848) || (minor == 15 && size == 0x850))) return size;
+    if (!(magic == 0x98761234u && major == 1 && minor == 16 && size == 0x880)) { static _Atomic int said; if (!atomic_exchange(&said, 1)) LOG("[nvn] [red] shader control section version %u.%u, length %#x (magic %#x): not known, read as 0x880 bytes", major, minor, size, magic); }
+    return 0x880;
+}
+static const uint8_t *ctl_880(const void *control, uint8_t buf[0x880]) {   // the control section as 0x880 bytes, zeros past its own length
+    uint32_t n = ctl_len(control); if (n >= 0x880) return control;
+    memcpy(buf, control, n); memset(buf + n, 0, 0x880 - n); return buf;
+}
 static void shader_key(const NVNshaderData *sd, uint8_t key[8]) {
     uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
-    uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX h; CC_SHA256_Init(&h);
-    CC_SHA256_Update(&h, sd->control, 0x880);
+    uint8_t md[CC_SHA256_DIGEST_LENGTH], cb[0x880]; CC_SHA256_CTX h; CC_SHA256_Init(&h);
+    CC_SHA256_Update(&h, ctl_880(sd->control, cb), 0x880);
     if (sd->data && len && len < (1u << 24)) CC_SHA256_Update(&h, (const void *)(uintptr_t)sd->data, len);
     CC_SHA256_Final(md, &h); memcpy(key, md, 8);
 }
@@ -636,12 +701,12 @@ static void shdump_to(const char *dir, const NVNshaderData *sd, int stop_after_d
     uint8_t md[8]; shader_key(sd, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
     char pc[1200], pd[1200]; snprintf(pc, sizeof pc, "%s/%s.ctl", dir, key); snprintf(pd, sizeof pd, "%s/%s.data", dir, key);
     if (!access(pc, F_OK)) return;
-    uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
+    uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704); uint8_t cb[0x880]; const uint8_t *ctl = ctl_880(sd->control, cb);
 #ifndef DM_TEST_SHDUMP_CTL_FIRST   // negative control of t_nvn only: the control section first, as before
     if (shdump_file(pd, (const void *)sd->data, 0x30 + (size_t)len + 0x100) || stop_after_data) return;
-    shdump_file(pc, sd->control, 0x880);
+    shdump_file(pc, ctl, 0x880);
 #else
-    if (shdump_file(pc, sd->control, 0x880) || stop_after_data) return;
+    if (shdump_file(pc, ctl, 0x880) || stop_after_data) return;
     shdump_file(pd, (const void *)sd->data, 0x30 + (size_t)len + 0x100);
 #endif
 }
@@ -704,7 +769,9 @@ NVN_NOPROTO(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const sha
 NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t *)s = (sync_t){MAGIC('S', 'Y', 'N', 'C'), 0, 0}; return 1; }
 NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
-NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; sync_fence_store((sync_t *)s, mtl_last_fence()); }
+NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) {
+    (void)q; (void)c; (void)f; uint64_t fe = mtl_last_fence(); sync_fence_store((sync_t *)s, fe); trace_end(TR_FENCE, trace_now(), fe, 0);
+}
 // A sync object that was never fenced: FAILED, as the SDK's NVNsyncWaitResult says (plan item 116; it was TIMEOUT_EXPIRED; dr3-mobile follows the
 // SDK too). Counted and logged: neither game does it (the prologue, the cliff save, manosaba: 0). A fenced one is released only after the GPU has
 // actually completed up to that fence value
@@ -718,11 +785,12 @@ static NVNsyncWaitResult sync_wait(const NVNsync *s, uint64_t timeout);
 static _Atomic uint64_t g_sw_n, g_sw_newest, g_sw_ns;
 void nvn_syncwait_stats(uint64_t out[3]) { out[0] = atomic_load(&g_sw_n); out[1] = atomic_load(&g_sw_newest); out[2] = atomic_load(&g_sw_ns); }
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
-    uint64_t f0 = 0, t0 = now_ns(); int newest = s && sync_fence_load((const sync_t *)s, &f0) && f0 && f0 == mtl_last_fence() && mtl_done_fence() < f0;
+    uint64_t f0 = 0, t0 = now_ns(), tr = trace_now(); int newest = s && sync_fence_load((const sync_t *)s, &f0) && f0 && f0 == mtl_last_fence() && mtl_done_fence() < f0;
 #ifdef DM_TEST_SYNCWAIT_DONE_TOO   // negative control of t_nvn only: a wait on the newest fence counted even when it is done
     newest = s && f0 && f0 == mtl_last_fence();
 #endif
     NVNsyncWaitResult r = sync_wait(s, timeout);
+    trace_end(TR_WAIT, tr, f0, (uint64_t)r);
     atomic_fetch_add(&g_sw_n, 1); if (newest) atomic_fetch_add(&g_sw_newest, 1); atomic_fetch_add(&g_sw_ns, now_ns() - t0);
     if (s && s == atomic_load_explicit(&g_acq_sync_last, memory_order_relaxed)) dm_game_frame_sync();
     return r;
@@ -781,8 +849,10 @@ NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *in
     (void)q; if (info) memset(info, 0, sizeof *info); return NVN_QUEUE_GET_ERROR_RESULT_GPU_NO_ERROR;
 }
 NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
-// The queue waits on a sync object on the GPU: the host has a single Metal queue executing in submit order and the fence comes from an earlier submission, so the wait holds by construction
-NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) { (void)q; (void)s; return 1; }
+// The queue waits on a sync object on the GPU: the host has a single Metal queue executing in submit order (every NVN queue's work goes there, so a
+// second queue is ordered with the first) and a fence comes from an earlier submission, so the wait holds by construction. A sync never fenced:
+// false, as the SDK (dr3-mobile read it there; GirlNet's P5R branch the same; plan item 64d)
+NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) { (void)q; uint64_t f; return s && sync_fence_load((const sync_t *)s, &f); }
 NVN(nvnQueueFinish, void, NVNqueue *q) {
     NVN_BLOCKING(); (void)q; gfx_mt_enter("QueueFinish"); mtl_finish(); gfx_mt_leave(); }
 
@@ -926,10 +996,51 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     return (NVNcommandHandle)o->begin;
 }
 NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return ((const cmd_t *)c)->recording != 0; }
-NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
+// CallCommands records a call: the called list's commands are read where they are when it runs (the SDK: command data called directly, it must
+// stay until no list referring to it is in use). TotK main 0x2d4058
+NVN(nvnCommandBufferCallCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
     for (int i = 0; i < n; i++) { uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_CALL, 16); memcpy(p + 8, &h[i], 8); }
 }
-NVN(nvnCommandBufferCallCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) { h_nvnCommandBufferCopyCommands(c, n, h); }   // the replay treats CALL and COPY alike (nxnative); TotK main 0x2d4058
+// CopyCommands copies (plan item 64b; the SDK copies the command and control data, and passes Call and Copy different flags to one helper, which
+// dr3-mobile read in the shipped SDK; ours recorded a call for both, nxnative's way): the records of each source, nested calls inlined, its BEGIN,
+// JUMPs and END left out, are collected first (the destination's memory callback may hand out the source's memory), then recorded into the
+// destination, which no longer needs the sources. Bounded as dr3's: 16 call levels, 1,000,000 records, 64 MiB; a source over a bound, with a call
+// cycle or a record of a bad size is refused whole (a red line), the destination left as it was
+static int copy_collect(const uint8_t *p, int depth, uint8_t **buf, size_t *len, size_t *cap, uint32_t *nrec, const uint8_t **stack) {
+    if (depth > 16 || !p) return 0;
+    for (int i = 0; i < depth; i++) if (stack[i] == p) return 0;
+    stack[depth] = p;
+    for (;;) {
+        op_hdr x; memcpy(&x, p, sizeof x);
+        if (x.size < 8 || (x.size & 7) || x.size > (1u << 24)) return 0;
+        if (x.op == OP_END) return 1;
+        if (x.op == OP_JUMP) { const uint8_t *t; memcpy(&t, p + 8, 8); if (!t) return 0; p = t; continue; }
+        if (x.op == OP_CALL) { uint64_t t; memcpy(&t, p + 8, 8); if (!copy_collect((const uint8_t *)(uintptr_t)t, depth + 1, buf, len, cap, nrec, stack)) return 0; }
+        else if (x.op != OP_BEGIN) {
+            if (++*nrec > 1000000 || *len + x.size > (64u << 20)) return 0;
+            if (*len + x.size > *cap) { *cap = (*len + x.size) * 2; uint8_t *nb = realloc(*buf, *cap); if (!nb) return 0; *buf = nb; }
+            memcpy(*buf + *len, p, x.size); *len += x.size;
+        }
+        p += x.size;
+    }
+}
+NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
+#ifdef DM_TEST_COPY_AS_CALL   // negative control of gfx/tests t_copycmd only: a call, as before
+    h_nvnCommandBufferCallCommands(c, n, h); return;
+#endif
+    uint8_t *buf = NULL; size_t len = 0, cap = 0; uint32_t nrec = 0; const uint8_t *stack[17];
+    for (int i = 0; i < n; i++)
+        if (!copy_collect((const uint8_t *)(uintptr_t)h[i], 0, &buf, &len, &cap, &nrec, stack)) {
+            LOG("[red] CopyCommands: list %d of %d (%#llx) has a call cycle, a bad record or is over the bounds: nothing copied", i + 1, n, (unsigned long long)h[i]); free(buf); return; }
+    for (size_t o = 0; o < len;) { op_hdr x; memcpy(&x, buf + o, sizeof x); memcpy(cmd_alloc(CB(c), x.size), buf + o, x.size); o += x.size; }
+    free(buf);
+}
+// A fence in a command buffer (plan item 61a; it went to the red-reporting stub): the sync takes the fence of the submission that runs the record,
+// set when it is replayed at submit (nvn_mtl.m OP_FENCE_SYNC), so a CPU wait right after the submit waits for that submission, and a list submitted
+// twice leaves the second's. The SDK's fence is "all previous commands completed": the whole submission's is the same or later
+NVN(nvnCommandBufferFenceSync, void, NVNcommandBuffer *c, NVNsync *s, NVNsyncCondition cond, int flags) {
+    (void)cond; (void)flags; uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_FENCE_SYNC, 16); memcpy(p + 8, &s, 8);
+}
 NVN(nvnCommandBufferSignalEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventSignalMode m, NVNeventSignalLocation loc, int flags, uint32_t v) {
     (void)loc; (void)flags;
     uint8_t *p = cmd_alloc(CB(c), 24); put_hdr(p, OP_SIGNAL_EVENT, 24);
@@ -1016,13 +1127,24 @@ NVN(nvnCommandBufferSetRenderEnable, void, NVNcommandBuffer *c, uint32_t en) { *
 NVN(nvnCommandBufferSetRenderEnableConditional, void, NVNcommandBuffer *c, NVNconditionalRenderMode m, NVNbufferAddress a) {
     *REC(c, OP_RENDER_ENABLE, p_render_enable) = (p_render_enable){m == NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_EQUAL ? 2 : 3, a};
 }
-NVN(nvnCommandBufferSetRasterizerDiscard, void, NVNcommandBuffer *c, uint32_t en) {
-    (void)c; static int red; if (B(en) && !red++) LOG("[red] CommandBufferSetRasterizerDiscard 1: not modelled, fragments are still drawn");
-}
+// Rasterizer discard (plan item 64d): a record; the replay leaves the draws out while it is on (nvn_mtl.m draw: exact when the vertex stage writes
+// no memory; one that may is reported, its writes lost: Metal would want a vertex function that returns void, GirlNet's P5R branch builds such
+// variants). Before, it was ignored with a red line and the fragments drawn
+NVN(nvnCommandBufferSetRasterizerDiscard, void, NVNcommandBuffer *c, uint32_t en) { *(int32_t *)rec(c, OP_RASTER_DISCARD, 8) = B(en) != 0; }
 NVN(nvnCommandBufferSetTiledCacheAction, void, NVNcommandBuffer *c, NVNtiledCacheAction a) { (void)c; (void)a; }
 NVN(nvnCommandBufferSetTiledCacheTileSize, void, NVNcommandBuffer *c, int w, int h) { (void)c; (void)w; (void)h; }
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
+// The batch forms (plan item 64d; GirlNet's P5R branch takes uniform batches from 0 and stops the process on others): the first entry is viewport
+// 0's, as the single forms; an entry past 0 that differs, or a batch from past 0, is reported once (viewport arrays beyond 0 are not modelled)
+static int viewport_batch(const char *name, int first, int n, const void *v, size_t stride) {
+    if (first < 0 || n <= 0 || first + n > 16 || !v) return 0;
+    int extra = first > 0; for (int i = 1; i < n && !extra; i++) extra = memcmp(v, (const uint8_t *)v + i * stride, stride) != 0;
+    if (extra) { static int once[2]; if (!once[name[3] == 'D']++) LOG("[red] CommandBuffer%s from %d, %d entries: only viewport 0 is modelled (first case)", name, first, n); }
+    return first == 0;
+}
+NVN(nvnCommandBufferSetScissors, void, NVNcommandBuffer *c, int first, int n, const int *r) { if (viewport_batch("SetScissors", first, n, r, 16)) h_nvnCommandBufferSetScissor(c, r[0], r[1], r[2], r[3]); }
+NVN(nvnCommandBufferSetDepthRanges, void, NVNcommandBuffer *c, int first, int n, const float *r) { if (viewport_batch("SetDepthRanges", first, n, r, 8)) h_nvnCommandBufferSetDepthRange(c, r[0], r[1]); }
 // The program's shaders as of recording: the console copies them into the command stream, and a game may give the same NVNprogram other shaders
 // (ProgramSetShaders again) before the recording is submitted or while it is still replayed. Tears of the Kingdom does (2142 SetShaders), and the
 // replay layer, which read the keys through the program pointer at submit, ran a bloom upsample with another program's pixel shader: it read the
@@ -1076,17 +1198,29 @@ NVN(nvnCommandBufferBindStorageBuffer, void, NVNcommandBuffer *c, NVNshaderStage
 NVN(nvnCommandBufferBindStorageBuffers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *rg) {
     for (int i = 0; i < n; i++) *REC(c, OP_BIND_SSBO, p_bind_buf) = (p_bind_buf){st, first + i, rg[i].address, rg[i].size};
 }
-static p_bind_handles *bind_handles(NVNcommandBuffer *c, int op, int st, int first, int n, const uint64_t *h) {
-    if (n < 0 || n > 32) { LOG("[red] bind handle count %d", n); return NULL; }
-    p_bind_handles *r = RECN(c, op, p_bind_handles, h, n); r->stage = st; r->first = first; r->n = n; r->defer = 0; r->src = 0; memcpy(r->h, h, 8 * n);
-    return r;
+// More than 32 handles (separate textures: 128 a stage, NVN_DEVICE_INFO_SEPARATE_TEXTURE_BINDINGS_PER_STAGE) go in records of 32 (plan item 61b, after
+// bayonetta3-mobile nvn55_snapshot.h, MIT; they were dropped with a red line). Refused: slots past the replay's tables (textures and samplers 128, images
+// 32). defer: each record keeps where its own handles are (BindTexturesDeferred)
+static void bind_handles_at(NVNcommandBuffer *c, int op, int st, int first, int n, const uint64_t *h, int defer) {
+    int lim = op == OP_BIND_IMG ? 32 : 128;
+    if (n < 0 || first < 0 || first + n > lim) { LOG("[red] bind of %d handles from slot %d (op %d): past the %d slots", n, first, op, lim); return; }
+    for (int i = 0; i == 0 || i < n; i += 32) {
+        int k = n - i < 32 ? n - i : 32;
+#ifdef DM_TEST_BIND_NO_SPLIT   // negative control of t_bindfreeze only: more than 32 dropped, as before
+        if (n > 32) { LOG("[red] bind handle count %d", n); return; }
+#endif
+        p_bind_handles *r = RECN(c, op, p_bind_handles, h, k); r->stage = st; r->first = first + i; r->n = k;
+        r->defer = defer && h; r->src = defer && h ? (uint64_t)(uintptr_t)(h + i) : 0; if (h) memcpy(r->h, h + i, 8 * (size_t)k);
+    }
+    if (defer && h) mtl_bh_deferred_seen();
 }
+static void bind_handles(NVNcommandBuffer *c, int op, int st, int first, int n, const uint64_t *h) { bind_handles_at(c, op, st, first, n, h, 0); }
 // Deferred binding: the GPU reads the handles at h when it executes the command, not at recording. TotK main 0x895e8 binds one texture this way through the
 // pointer the game got from GetProcAddress; nxnative found BotW's engine binds every texture so and fills / replaces the handle after recording (a copy taken
-// at recording gave texture 0 everywhere: the whole 3D picture black). The address is recorded and replay reads it (nvn_mtl.m bh_fresh). From nxnative (seedds, MIT)
+// at recording gave texture 0 everywhere: the whole 3D picture black). The address is recorded and the replay reads it once a submission, at its start
+// (nvn_mtl.m bh_fresh, plan item 61b). From nxnative (seedds, MIT)
 NVN_NOPROTO(nvnCommandBufferBindTexturesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNtextureHandle *h) {
-    p_bind_handles *r = bind_handles(c, OP_BIND_TEX, st, first, n, (const uint64_t *)h);
-    if (r && h) { r->defer = 1; r->src = (uint64_t)(uintptr_t)h; }
+    bind_handles_at(c, OP_BIND_TEX, st, first, n, (const uint64_t *)h, 1);
 }
 // Image (writable texture): handle = texture pool index (GetImageHandle returns it as-is; the game does not call RegisterImage, images and textures share registration)
 NVN(nvnCommandBufferBindImages, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNimageHandle *h) {
@@ -1105,6 +1239,18 @@ NVN(nvnCommandBufferBindSeparateTexture, void, NVNcommandBuffer *c, NVNshaderSta
 NVN(nvnCommandBufferBindSeparateSampler, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNseparateSamplerHandle h) {
     bind_handles(c, OP_BIND_SAMP, st, i, 1, &h.value);
 }
+#ifndef DM_TEST_DEFER_AT_RECORD   // negative control of gfx/tests t_nvn64a only: the new deferred binds read at recording
+#define DEFER_NEW 1
+#else
+#define DEFER_NEW 0
+#endif
+// More binds a next game may call (plan item 64a, bayonetta3-mobile's list): one image, combined textures as BindTexture takes them, and the deferred
+// image / separate texture / separate sampler binds, read at the submission's start as BindTexturesDeferred's (nvn_mtl.m bh_fresh, plan item 61b)
+NVN(nvnCommandBufferBindImage, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNimageHandle h) { uint64_t v = (uint64_t)h; bind_handles(c, OP_BIND_IMG, st, i, 1, &v); }
+NVN(nvnCommandBufferBindTextures, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNtextureHandle *h) { bind_handles(c, OP_BIND_TEX, st, first, n, (const uint64_t *)h); }
+NVN_NOPROTO(nvnCommandBufferBindImagesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNimageHandle *h) { bind_handles_at(c, OP_BIND_IMG, st, first, n, (const uint64_t *)h, DEFER_NEW); }
+NVN_NOPROTO(nvnCommandBufferBindSeparateTexturesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateTextureHandle *h) { bind_handles_at(c, OP_BIND_TEX, st, first, n, (const uint64_t *)h, DEFER_NEW); }
+NVN_NOPROTO(nvnCommandBufferBindSeparateSamplersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h) { bind_handles_at(c, OP_BIND_SAMP, st, first, n, (const uint64_t *)h, DEFER_NEW); }
 // Line width: Metal draws lines one pixel wide; anything else is reported once (TotK main 0x83a28)
 NVN(nvnCommandBufferSetLineWidth, void, NVNcommandBuffer *c, float w) { (void)c; if (w != 1.0f) { static int once; if (!once++) LOG("[nvn] SetLineWidth %.2f: lines are drawn 1 pixel wide", w); } }
 NVN(nvnCommandBufferSetStencilValueMask, void, NVNcommandBuffer *c, NVNface f, int m) { *REC(c, OP_STENCIL, p_stencil) = (p_stencil){f, m, 0, 0, 0}; }
@@ -1134,7 +1280,7 @@ NVN(nvnCommandBufferBarrier, void, NVNcommandBuffer *c, int bits) { *(int32_t *)
 static void pool_second(const char *what, const void *p) {
     static _Atomic(const void *) first[2]; static _Atomic int red[2]; int k = what[0] == 's';
     const void *none = NULL; if (!p || atomic_compare_exchange_strong(&first[k], &none, p) || atomic_load(&first[k]) == p) return;
-    if (!atomic_exchange(&red[k], 1)) LOG("[red] Set%sPool: a second %s pool (%p after %p): the host keeps one ID space, the second pool's IDs read the first's objects (first case)",
+    if (!atomic_exchange(&red[k], 1)) LOG("[nvn] Set%sPool: a second %s pool (%p after %p), its IDs in a range of their own (plan item 64e; first case)",
                                           k ? "Sampler" : "Texture", what, p, atomic_load(&first[k]));
 }
 NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { pool_second("texture", p); REC(c, OP_SET_TEX_POOL, p_set_pool)->pool = (const dpool_t *)p; }
@@ -1190,6 +1336,10 @@ NVN(nvnColorStateSetBlendEnable, void, NVNcolorState *s, int i, uint32_t en) {
     color_st *o = ST(color_st, s); if (i < 0 || i > 7) return;
     o->blend_en = B(en) ? (o->blend_en | 1u << i) : (o->blend_en & ~(1u << i));
 }
+// Getters bayonetta3-mobile has and a next game may call (plan item 64a): each reads back what its setter stored
+NVN(nvnColorStateGetAlphaTest, NVNalphaFunc, const NVNcolorState *s) { return (NVNalphaFunc)((const color_st *)s)->alpha_func; }
+NVN(nvnColorStateGetBlendEnable, NVNboolean, const NVNcolorState *s, int i) { return i >= 0 && i < 8 && (((const color_st *)s)->blend_en >> i & 1); }
+NVN(nvnColorStateGetLogicOp, NVNlogicOp, const NVNcolorState *s) { return (NVNlogicOp)((const color_st *)s)->logic_op; }
 NVN(nvnChannelMaskStateSetDefaults, void, NVNchannelMaskState *s) { ST(chmask_st, s)->mask = 0xffffffffu; }
 NVN(nvnChannelMaskStateSetChannelMask, void, NVNchannelMaskState *s, int i, uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
     if (i < 0 || i > 7) return;
@@ -1232,6 +1382,10 @@ NVN(nvnVertexAttribStateSetStreamIndex, void, NVNvertexAttribState *s, int i) { 
 NVN(nvnVertexStreamStateSetDefaults, void, NVNvertexStreamState *s) { *ST(vs_st, s) = (vs_st){0, 0}; }
 NVN(nvnVertexStreamStateSetStride, void, NVNvertexStreamState *s, ptrdiff_t st) { ST(vs_st, s)->stride = (uint32_t)st; }
 NVN(nvnVertexStreamStateSetDivisor, void, NVNvertexStreamState *s, int d) { ST(vs_st, s)->divisor = d; }
+NVN(nvnVertexAttribStateGetFormat, void, const NVNvertexAttribState *s, NVNformat *f, ptrdiff_t *off) { const va_st *o = (const va_st *)s; *f = (NVNformat)o->fmt; *off = o->offset; }   // (plan item 64a)
+NVN(nvnVertexAttribStateGetStreamIndex, int, const NVNvertexAttribState *s) { return ((const va_st *)s)->stream; }
+NVN(nvnVertexStreamStateGetStride, ptrdiff_t, const NVNvertexStreamState *s) { return ((const vs_st *)s)->stride; }
+NVN(nvnVertexStreamStateGetDivisor, int, const NVNvertexStreamState *s) { return (int)((const vs_st *)s)->divisor; }
 
 static _Atomic uint64_t g_sub_wall_ns, g_sub_cpu_ns, g_sub_instr;   // Wall clock / this thread's CPU time / this thread's retired instruction count for submit (excluding present) (taken away per frame)
 static _Atomic uint64_t g_cum_sub_instr, g_cum_sub_cpu_ns;   // Cumulative versions of the above (the "translation" summary row every 300 frames takes the difference; on a real device read through the log port: instructions per draw / submit CPU per frame)
@@ -1272,6 +1426,7 @@ static int test_work_ms(void) { static int ms = -1; if (ms < 0) { const char *e 
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     if (test_work_ms() > 0) { uint64_t from = atomic_exchange(&g_test_work_from, 0); if (from) sleep_until_ns(from + (uint64_t)test_work_ms() * 1000000ull); }
     NVN_BLOCKING();
+    uint64_t tr = trace_now();
     gfx_enter(); gfx_mt_enter("SubmitCommands");
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
@@ -1288,18 +1443,24 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
     gfx_mt_leave(); gfx_leave();
+    trace_end(TR_SUBMIT, tr, (uint64_t)n, mtl_last_fence());
 }
 
 // Commands that only affect GPU state / only execute on the GPU: the null device only counts them (the thunk has already counted)
 static void nvn_nop(void) {}
-// Depth bounds are not modelled: disabling them is fine, enabling them is reported once (the draws are not rejected by the bounds)
-static int g_depth_bounds_red;
-NVN(nvnCommandBufferSetDepthBounds, void, NVNcommandBuffer *cb, uint32_t enable, float n, float f) {
-    (void)cb; if (enable && !g_depth_bounds_red++) LOG("[red] CommandBufferSetDepthBounds enabled (%g..%g): depth bounds are not modelled, ignored", n, f);
-}
+// Depth bounds (plan item 64c): fragments whose stored depth lies outside [near, far] are discarded, as Metal's setDepthTestMinBound:maxBound:
+// does on macOS / iOS 26 (nvn_mtl.m enc_r_depth_bounds); before, they were ignored with a red line
+NVN(nvnCommandBufferSetDepthBounds, void, NVNcommandBuffer *cb, uint32_t enable, float n, float f) { *REC(cb, OP_DEPTH_BOUNDS, p_depth_bounds) = (p_depth_bounds){B(enable) != 0, n, f}; }
+// Maxwell hardware settings with nothing in Metal to set (plan item 64a): lossy colour reduction (enabling it is reported: Metal stores exactly, which
+// is never worse), its thresholds, and 32-bit float depth compression in ZCull (Metal's hidden surface removal is its own)
+NVN_NOPROTO(nvnCommandBufferSetColorReductionEnable, void, NVNcommandBuffer *c, uint32_t on) { (void)c; if (B(on)) { static int once; if (!once++) LOG("[nvn] CommandBufferSetColorReductionEnable(1): Metal has no lossy colour reduction, colours stored exactly"); } }
+NVN_NOPROTO(nvnCommandBufferSetColorReductionThresholds, void, NVNcommandBuffer *c, int format_class, int a, int b) { (void)c; (void)format_class; (void)a; (void)b; }
+NVN_NOPROTO(nvnCommandBufferSetZCullZF32CompressionEnable, void, NVNcommandBuffer *c, uint32_t on) { (void)c; (void)on; }
+// Automatic GPU checkpoints are a debugging aid of the console; accepted (bayonetta3-mobile read the shipped SDK's version: it returns 1)
+NVN_NOPROTO(nvnDeviceSetAutomaticCheckpointsMask, NVNboolean, NVNdevice *d, int mask) { (void)d; (void)mask; return 1; }
 // SetPatchSize, MultiDrawArrays / ElementsIndirectCount, DispatchComputeIndirect and DownsampleTextureView used to be listed here, so a game calling
 // them lost draws, dispatches or a downsample without a line: they go to the red-reporting stub now (upstream d2r-mobile 44a6770; nxnative has
-// DispatchComputeIndirect / DrawElementsIndirect and Downsample as a resolve, for when a game calls them). SetDepthBounds is below
+// DispatchComputeIndirect / DrawElementsIndirect and Downsample as a resolve, for when a game calls them). SetDepthBounds is above (plan item 64c)
 static const char *const g_nops[] = {
     "nvnCommandBufferWaitSync",    // A GPU-side wait on a sync object (CPU waits go through nvnSyncWait, which really waits on the fence). Sync objects come only
                                    // from QueueFenceSync and WindowAcquireTexture, whose fence value is "the highest already submitted when recorded", and the
@@ -1376,6 +1537,7 @@ NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
     memcpy(o->crop, v, sizeof v);
     dm_touch_screen(ww, hh);
 }
+NVN(nvnWindowGetCrop, void, const NVNwindow *w, NVNrectangle *r) { const win_t *o = (const win_t *)w; *r = (NVNrectangle){o->crop[0], o->crop[1], o->crop[2], o->crop[3]}; }   // (plan item 64a)
 static void trow(uint64_t f, const char *name, double v);
 static void set_time_constraint(uint64_t period_ns);
 static void rt_comp_tick(uint64_t period_ns);
@@ -1422,6 +1584,7 @@ static int win_interval(const win_t *o) {
     return nvn_hold_interval(g_display_mode ? 1 : o->interval, g_hz, atomic_load(&g_fps_hold)); }
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     NVN_BLOCKING();
+    uint64_t tr = trace_now();
     win_t *o = (win_t *)w;
     int nuse = o->nactive ? o->nactive : o->ntex;
     *idx = nuse ? o->next++ % nuse : 0;
@@ -1457,8 +1620,11 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     if (s) { static int newest = -1; if (newest < 0) { const char *e = getenv("DM_NVN_ACQ_SYNC"); newest = e && !strcmp(e, "newest"); if (newest) LOG("[nvn] DM_NVN_ACQ_SYNC=newest: the acquire sync waits for the newest submission"); }
              sync_fence_store((sync_t *)s, newest ? mtl_last_fence() : 0); }
     if (!g_fs_started) { g_fs_started = 1; g_fs_prev_start = g_fs_start; g_fs_start = now_ns(); }   // a frame starts when its first acquire returns (nvn_fstep.h)
+    trace_end(TR_ACQUIRE, tr, (uint64_t)*idx, wait);
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
+// The queue's acquire (NVN 55; plan item 64a): the window's, without a sync (both results: 0 success, 1 native error)
+NVN(nvnQueueAcquireTexture, NVNqueueAcquireTextureResult, NVNqueue *q, NVNwindow *w, int *idx) { (void)q; return (NVNqueueAcquireTextureResult)h_nvnWindowAcquireTexture(w, NULL, idx); }
 
 // Frame boundary: on each present, print / write to disk the call count of each NVN function for this frame
 static uint64_t g_prev[NVN_NFUNC];
@@ -1491,7 +1657,7 @@ static void dump_frame(void) {
         fflush(g_tsv); }
     if (g_frame <= (uint64_t)nframes) LOG("[nvn] %s %llu: %u functions, %llu calls |%s", g_frame ? "frame" : "init", g_frame, nfn, total, line);
     else if (g_frame % 300 == 0) LOG("[nvn] frame %llu: %u functions, %llu calls", g_frame, nfn, total);
-    g_frame++; cs_dump();
+    g_frame++; cs_dump(); trace_frame(g_frame);   // DM_NVN_TRACE (nvn_trace.h): its window starts and ends at frame starts
     // Every 300 frames read resident memory and hand it to the graphics layer to print the memory readout line (mtl_mem_stat, low frequency, capped). Memory watchdog: when resident memory exceeds the cap, log a failure and exit on its own. On by default only on the Mac host (24 GB: runaway host memory
     // drags the whole machine into a kernel panic, which happened twice with other programs on the same machine), or set for tests with DM_MEM_CAP_GB=<integer>; the player's iOS app has no cap (exiting before the system kills it is pointless and only adds another kind of crash)
     // Read every 60 frames (plan item 178, lordran-native 24740d4, MIT: a short spike, a movie's buffers, is caught); the line is still printed only on
@@ -1769,6 +1935,7 @@ __attribute__((weak)) void dm_game_present(void) {}   // game hook (host/game.h)
 __attribute__((weak)) void dm_sdk_test_present(uint64_t frame) { (void)frame; }   // host/sdktest.c (DM_SDK_TEST); none in the graphics unit tests
 __attribute__((weak)) int dm_game_realtime_step(void) { return 0; }   // game hook (host/game.h): the game's step follows the measured frame time
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
+    uint64_t tr = trace_now();
     if (fstep_on()) {   // the step for the next frame from this one's time on screen and cost (nvn_fstep.h), before the game's hook stores it
         const double vs = 1e9 / 60; uint64_t now = now_ns();
         double shown = g_fs_prev_start && g_fs_start > g_fs_prev_start ? (g_fs_start - g_fs_prev_start) / vs : 0, cpu = g_fs_start && now > g_fs_start ? (now - g_fs_start) / vs : 0;
@@ -1802,6 +1969,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     gfx_mt_leave();
     gfx_leave();
     atomic_fetch_add(&g_nvn_ns, now_ns() - t0);
+    trace_end(TR_PRESENT, tr, (uint64_t)idx, g_frame);
     uint64_t f = g_frame, ps, dr; mtl_stats(&ps, &dr);
     if (nvn_real[0] || nvn_real[1]) {   // DM_NVN_PROF: record phase = time of all implemented functions except submit; submit phase = QueueSubmitCommands
         static unsigned isub = ~0u; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);

@@ -97,6 +97,11 @@ void *module_sym(module_t *m, const char *name) {
                if (l != r) { g_symchk_bad++; LOG("[red] DM_SYMCHECK: %s in %s, hash %p ≠ linear %p", name, m->name, r, l); } }
     return r;
 }
+static const Elf64_Sym *module_sym_entry(module_t *m, const char *name) {   // module_sym's symbol itself (the first defined one of the name)
+    if (!m->symh) { for (unsigned i = 1; i < m->nsym; i++) { const Elf64_Sym *s = &m->symtab[i]; if (s->st_shndx && !strcmp(m->strtab + s->st_name, name)) return s; } return NULL; }
+    for (unsigned j = sym_hash(name) & m->symh_mask; m->symh[j]; j = (j + 1) & m->symh_mask) { const Elf64_Sym *s = &m->symtab[m->symh[j]]; if (!strcmp(m->strtab + s->st_name, name)) return s; }
+    return NULL;
+}
 void *guest_sym(const char *name) {
     for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return p; }
     return NULL;
@@ -111,10 +116,46 @@ module_t *module_of(const void *p) {
     return NULL;
 }
 
-// Cross-module symbol resolution: first look for a definition in the loaded modules, and only if not found hand over to HLE / stubs
-static uint64_t resolve_sym(module_t *m, const char *name, int weak) {
+// Cross-module symbol resolution: first look for a definition in the loaded modules, and only if not found hand over to HLE / stubs (relocations
+// go through bind_sym below; host/tests t_loader_weak calls this)
+__attribute__((unused)) static uint64_t resolve_sym(module_t *m, const char *name, int weak) {
     for (int i = 0; i < g_nmod; i++) { void *p = module_sym(&g_mod[i], name); if (p) return (uint64_t)p; }
     return resolve_import(m, name, weak);
+}
+// Horizon's rtld (plan item 64h; its rules as the ISC-licensed oss-rtld reimplementation has them): a reference of hidden or protected visibility
+// binds in its own module; one of default visibility to the first module, in the order main, subsdk0-9, sdk (rtld walks the address space upward,
+// where the loader put them in that order), that defines the name with a non-local binding, even when its own module defines it too (UE4's main
+// overrides malloc for every module). Ours bound a symbol its module defines there and looked the others up in the profile's module order (main sdk
+// subsdk0). Both are worked out for every symbol relocation and the relocation line counts where the two differ. rtld's is the default since
+// both games ran the same with it (their sdk binds 801 / 782 relocations otherwise, all typeinfo, vtables and the like, to main's or subsdk0's
+// copies, as the console does); DM_RTLD=0 binds by ours
+static int rtld_rank(const module_t *m, int i) {
+#ifdef DM_TEST_RTLD_LOAD_ORDER   // negative control of host/tests t_rtld only: the profile's order
+    (void)m; return i;
+#endif
+    return !strcmp(m->name, "main") ? 0 : !strncmp(m->name, "subsdk", 6) ? 1 + atoi(m->name + 6) : !strcmp(m->name, "sdk") ? 100 : 200 + i;
+}
+static int g_rtld = -1; static unsigned long g_rtld_diff;
+static uint64_t bind_sym(module_t *m, const Elf64_Sym *s, const char *nm) {
+    if (g_rtld < 0) { const char *e = getenv("DM_RTLD"); g_rtld = !(e && !strcmp(e, "0"));
+#ifdef DM_TEST_RTLD_DEFAULT_OURS   // negative control of t_rtld only: ours unless DM_RTLD=1, as before
+                      g_rtld = e && !strcmp(e, "1");
+#endif
+                      if (!g_rtld) LOG("DM_RTLD=0: symbols bound as before item 64h (a module's own definition first, then the profile's order)"); }
+    uint64_t local = s->st_shndx ? (uint64_t)m->base + s->st_value : 0, cur = local, rt = 0;
+    for (int i = 0; i < g_nmod && !cur; i++) { void *p = module_sym(&g_mod[i], nm); if (p) cur = (uint64_t)p; }
+    if (ELF64_ST_VISIBILITY(s->st_other) != STV_DEFAULT) rt = local;
+    else for (int i = 0, best = 1 << 30; i < g_nmod; i++) {
+        const Elf64_Sym *d = module_sym_entry(&g_mod[i], nm); int r;
+        if (d && ELF64_ST_BIND(d->st_info) != STB_LOCAL && d->st_shndx != SHN_COMMON && (r = rtld_rank(&g_mod[i], i)) < best) { best = r; rt = (uint64_t)g_mod[i].base + d->st_value; }
+    }
+    if (cur != rt && g_rtld_diff++ < 4) {
+        module_t *a = module_of((void *)(uintptr_t)rt), *b = module_of((void *)(uintptr_t)cur);
+        LOG("%s: %s binds to %s+%#llx by rtld's rules, %s+%#llx by ours (plan item 64h; %s)", m->name, nm, a ? a->name : "nothing", a ? (unsigned long long)(rt - (uint64_t)(uintptr_t)a->base) : 0ull,
+            b ? b->name : "nothing", b ? (unsigned long long)(cur - (uint64_t)(uintptr_t)b->base) : 0ull, g_rtld > 0 ? "rtld's taken, DM_RTLD=0 takes ours" : "ours taken (DM_RTLD=0)");
+    }
+    uint64_t v = g_rtld > 0 ? rt : cur;
+    return v ? v : resolve_import(m, nm, ELF64_ST_BIND(s->st_info) == STB_WEAK);
 }
 
 // Forced take-over table (hle.h HLE_FORCE, the __DATA,swforce section): a hit overrides the definition inside the module
@@ -274,7 +315,7 @@ static void relocate(module_t *m) {
         case DT_JMPREL: jmprel = d->d_un.d_ptr; break;
         case DT_PLTRELSZ: pltsz = d->d_un.d_val; break;
     }
-    int cnt[3] = {0};
+    int cnt[3] = {0}; unsigned long diff0 = g_rtld_diff;
     const Elf64_Rela *tabs[2] = {(const Elf64_Rela *)(m->base + rela), (const Elf64_Rela *)(m->base + jmprel)};
     uint64_t sizes[2] = {relasz, pltsz};
     for (int t = 0; t < 2; t++)
@@ -285,13 +326,13 @@ static void relocate(module_t *m) {
             if (type == R_AARCH64_RELATIVE) { *where = (uint64_t)m->base + r->r_addend; cnt[0]++; continue; }
             const Elf64_Sym *s = &m->symtab[si];
             uint64_t v = (uint64_t)force_lookup(m->strtab + s->st_name);
-            if (!v) v = s->st_shndx ? (uint64_t)m->base + s->st_value : resolve_sym(m, m->strtab + s->st_name, ELF64_ST_BIND(s->st_info) == STB_WEAK);
+            if (!v) v = bind_sym(m, s, m->strtab + s->st_name);
             if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
             else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
         }
     int nrelr = 0; uint64_t bad = relr_each(m, relr_apply, &nrelr);
     if (bad) die("[red] %s: DT_RELR entry %llu is not a valid relocation (a bitmap before any address, or a slot unaligned or outside the module): the module is not loaded", m->name, (unsigned long long)bad - 1);
-    LOG("%s: reloc relative=%d relr=%d abs/glob=%d jump=%d", m->name, cnt[0], nrelr, cnt[1], cnt[2]);
+    LOG("%s: reloc relative=%d relr=%d abs/glob=%d jump=%d, %lu bound otherwise by rtld's rules", m->name, cnt[0], nrelr, cnt[1], cnt[2], g_rtld_diff - diff0);
 }
 
 // DM_LOADHASH=1 (diagnostics): after loading, output an address-independent sha256 per module, to prove that the load results of "early start / no early start" are byte-identical.

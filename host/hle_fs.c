@@ -267,15 +267,35 @@ static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_
     if (found) return 1;
     errno = ENOENT; return 0;
 }
+// Two spellings Horizon takes (plan item 64k; armyja's nxnative-aa-port, MIT, written anew): a separator before the mount name (Unity's .NET path
+// code, Path.GetFullPath with the working directory "/", gives "/rom:/…") and '\' between components (Ace Attorney opens "savedata:\systemdata")
+static const char *path_lead(const char *p) {
+#ifndef DM_TEST_PATH_STRICT   // negative control of t_fs only: both spellings refused, as before
+    while (*p == '/') p++;
+#endif
+    return p;
+}
+static int path_fwd(const char *rest, char *buf, size_t n, const char **out) {   // '\' as '/': 0 when the path is too long
+    *out = rest;
+#ifndef DM_TEST_PATH_STRICT
+    if (!strchr(rest, '\\')) return 1;
+    if (strlcpy(buf, rest, n) >= n) { errno = ENAMETOOLONG; return 0; }
+    for (char *q = buf; *q; q++) if (*q == '\\') *q = '/';
+    *out = buf;
+#endif
+    return 1;
+}
 // create only allows the last component to not exist yet; intermediate directories still need an exact match.
 static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create) {
+    p = path_lead(p);
     const char *c = strchr(p, ':');
     if (!c) { errno = ENOENT; return 0; }
     size_t ln = c - p;
     for (int i = 0; i < g_nmnt; i++) {
         if (strlen(g_mnt[i].name) != ln || strncmp(g_mnt[i].name, p, ln)) continue;
         if (ro) *ro = g_mnt[i].ro;
-        const char *rest = c + 1;
+        const char *rest; char fwd[0x400];
+        if (!path_fwd(c + 1, fwd, sizeof fwd, &rest)) return 0;
         if (g_mnt[i].overlay[0] && !create) return rom_overlay_path(&g_mnt[i], rest, out, n);
         strlcpy(out, g_mnt[i].dir, n);
         while (*rest) {
@@ -340,7 +360,18 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", 
 HLE_FORCE("_ZN2nn2fs21MountTemporaryStorageEPKc", "fsp-srv; temporary storage → host directory", Result, h_fs_MountTemp, const char *name) {
     char b[1024]; return mount(name, envdir("DM_TEMP", "run/platform/temp", b, sizeof b), 0);
 }
-HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv; the save directory is created at mount", Result, h_fs_EnsureSave, const void *uid) { (void)uid; return RES_OK; }
+// The save exists once its committed directory ($DM_SAVE) does (plan item 64k): the console answers IsSaveDataExisting false until the save data is
+// made (EnsureSaveData, or the system at the first launch); it used to answer yes always. EnsureSaveData makes the directory (as the mount does)
+static int save_exists(void) {
+#ifdef DM_TEST_SAVE_ALWAYS   // negative control of t_fs only: always yes, as before
+    return 1;
+#endif
+    const char *d = getenv("DM_SAVE"); struct stat st; return d && !stat(d, &st) && S_ISDIR(st.st_mode);
+}
+HLE_FORCE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", "fsp-srv; the save directory made if it is not there", Result, h_fs_EnsureSave, const void *uid) {
+    (void)uid; const char *d = getenv("DM_SAVE"); if (d && mkdir(d, 0755) && errno != EEXIST) LOG("[red] EnsureSaveData: %s not made, errno %d", d, errno);
+    return RES_OK;
+}
 // The current working directory of the transactional save (the copy the game reads and writes; the host's own side files must be written here to enter the committed version with Commit). Returns NULL when no save is mounted
 const char *dm_save_workdir(void) { for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].commit[0]) return g_mnt[i].dir; return NULL; }
 // The committed directory of the transactional save (the copy on disk, the version from the last Commit). Returns NULL when no save is mounted
@@ -650,6 +681,7 @@ HLE_FORCE_OPT("_ZN2nn2fs9IsMountedEPKc", "mount table query (returns bool)", uns
 //   What the real RomFS / save data attributes report is unverified; the limits only serve path validation, and the game's paths are far shorter than 0x300.
 static int path_mounted(const char *path) {
     if (!path || !strncmp(path, "@Host", 5)) return 0;
+    path = path_lead(path);
     const char *c = strchr(path, ':'); if (!c) return 0;
     size_t ln = (size_t)(c - path); int hit = 0;
     pthread_mutex_lock(&g_lock);
@@ -667,10 +699,10 @@ HLE_FORCE_OPT("_ZN2nn2fs17MountAddOnContentEPKciPvm", "add-on content: nothing t
     (void)buf; (void)sz; LOG("fs MountAddOnContent %s #%d: the host has no add-on content data", name, idx); return RES_PATH_NOT_FOUND;
 }
 // bool results: Switch callers read only w0's low byte
-HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "does the save exist: the save directory is created at mount, always yes", unsigned, h_fs_SaveExists, const void *uid) { (void)uid; return 1; }
+HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "does the save exist: its directory is there", unsigned, h_fs_SaveExists, const void *uid) { (void)uid; return save_exists(); }
 // Another application's save (TotK looks for The Legend of Zelda: Breath of the Wild's, 0x01007ef00011e000): the host has only this game's save
 HLE_FORCE_OPT("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", "does the save exist (given application): only this game's", unsigned, h_fs_SaveExistsApp, uint64_t app, const void *uid) {
-    (void)uid; return app == dm_game.program_id;
+    (void)uid; return app == dm_game.program_id && save_exists();
 }
 // Access log switch and read priority (TotK calls SetPriorityOnCurrentThread on its threads): on the console both ask fsp-srv; the host has no access log,
 // and priority does not change its reads. From nxnative's hle_fs.c (seedds, MIT)

@@ -155,8 +155,9 @@ static void run(obj *ex, obj *dec, outlog *L, uint64_t tick_ns, int rounds) {
 }
 static obj *new_decoder(void *md) {
     obj *d = calloc(1, sizeof *d); mv_Decoder((void **)d, DEC_VP9, 4, 1, 16);
-    void *ev[4] = {&t_event_obj[0], &t_event_obj[1], &t_event_obj[2], &t_event_obj[3]};
-    VCALL(d, D_EVENTS, f_md, ev);
+    static void *ev[4];   // the game's DecoderEvents: registered empty, filled in after (blade2-mobile's game; plan item 64k)
+    memset(ev, 0, sizeof ev); VCALL(d, D_EVENTS, f_md, ev);
+    for (int i = 0; i < 4; i++) ev[i] = &t_event_obj[i];
     if (VCALL(d, D_CONFIGURE, f_md, &md) != ST_OK) return NULL;
     return d;
 }

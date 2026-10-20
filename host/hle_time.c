@@ -177,3 +177,64 @@ HLE_FORCE_OPT("_ZN2nn4time48CalculateStandardUserSystemClockDifferenceByUserERKN
     return (b->user_ctx.offset - a->user_ctx.offset) * 1000000000ll;
 }
 HLE_FORCE_OPT("_ZN2nn4time8FinalizeEv", "the time service is taken over: nothing to close", Result, h_time_Finalize, void) { return RES_OK; }
+
+// Named time-zone rules (plan item 64k; acnh-mobile converts by name with CFTimeZone, MIT, written anew): LoadTimeZoneRule keeps the location name in
+// the caller's TimeZoneRule (a large opaque block on the console; the first 48 bytes are used here), and the rule overloads convert by that zone's
+// offsets: ToCalendarTime as the device one; ToPosixTime tries the offsets a day before and a day after the local time and keeps each instant that
+// converts back, so a local time repeated by a change gives both (ascending), a skipped one or a date that does not exist none, with success (the SDK
+// reference). An unknown name breaks the SDK's precondition: reported red, the rule is UTC. GetDeviceLocationName: the host's zone (UTC under
+// DM_FIXED_TIME, as the clock snapshots)
+typedef struct { char magic[8]; char name[0x24]; } tz_rule;
+static CFTimeZoneRef rule_zone(const void *rule) {
+    const tz_rule *r = rule; char nm[0x25] = {0};
+    if (!memcmp(r->magic, "DMTZRULE", 8)) memcpy(nm, r->name, sizeof r->name);
+    CFStringRef s = CFStringCreateWithCString(NULL, nm[0] ? nm : "UTC", kCFStringEncodingASCII);
+    CFTimeZoneRef tz = s ? CFTimeZoneCreateWithName(NULL, s, true) : NULL;
+    if (s) CFRelease(s);
+    return tz ? tz : CFTimeZoneCreateWithTimeIntervalFromGMT(NULL, 0);
+}
+static int32_t zone_offset(CFTimeZoneRef tz, int64_t t) { return (int32_t)CFTimeZoneGetSecondsFromGMT(tz, (CFAbsoluteTime)t - kCFAbsoluteTimeIntervalSince1970); }
+HLE_FORCE_OPT("_ZN2nn4time21GetDeviceLocationNameEPNS0_12LocationNameE", "the host's time zone name", void, h_time_DevLoc, char *out) { location_name(out, 0x24); }
+HLE_FORCE_OPT("_ZN2nn4time16LoadTimeZoneRuleEPNS0_12TimeZoneRuleERKNS0_12LocationNameE", "a time zone rule by location name (host CFTimeZone)", Result, h_time_LoadRule, void *rule, const char *name) {
+    tz_rule *r = rule; memset(r, 0, sizeof *r); memcpy(r->magic, "DMTZRULE", 8); strlcpy(r->name, name, sizeof r->name);
+    CFStringRef s = CFStringCreateWithCString(NULL, r->name, kCFStringEncodingASCII); CFTimeZoneRef tz = s ? CFTimeZoneCreateWithName(NULL, s, true) : NULL;
+    if (s) CFRelease(s);
+    if (tz) CFRelease(tz); else { LOG("[red] LoadTimeZoneRule: location \"%s\" is not a time zone the host knows (the SDK's precondition): converted as UTC", r->name); strlcpy(r->name, "UTC", sizeof r->name); }
+    return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditionalInfoERKNS0_9PosixTimeERKNS0_12TimeZoneRuleE", "absolute → local time by a loaded rule",
+              Result, h_time_ToCalRule, CalendarTime *ct, CalendarAdditionalInfo *ai, const int64_t *pt, const void *rule) {
+    CFTimeZoneRef tz = rule_zone(rule);
+#ifndef DM_TEST_TZRULE_DEVICE   // negative control of t_tzrule only: the rule ignored, the device zone used
+    int32_t off = zone_offset(tz, *pt); time_t lt = (time_t)(*pt + off); struct tm tm; gmtime_r(&lt, &tm);
+    CFAbsoluteTime at = (CFAbsoluteTime)*pt - kCFAbsoluteTimeIntervalSince1970;
+    int dst = CFTimeZoneIsDaylightSavingTime(tz, at); CFStringRef ab = CFTimeZoneCopyAbbreviation(tz, at); char abbr[8] = "UTC";
+    if (ab) { CFStringGetCString(ab, abbr, sizeof abbr, kCFStringEncodingASCII); CFRelease(ab); }
+#else
+    time_t t0 = (time_t)*pt; struct tm tm; localtime_r(&t0, &tm); int32_t off = (int32_t)tm.tm_gmtoff; int dst = tm.tm_isdst > 0; char abbr[8] = "UTC";
+#endif
+    CFRelease(tz);
+    if (ct) *ct = (CalendarTime){(int16_t)(tm.tm_year + 1900), (int8_t)(tm.tm_mon + 1), (int8_t)tm.tm_mday, (int8_t)tm.tm_hour, (int8_t)tm.tm_min, (int8_t)tm.tm_sec, 0};
+    if (ai) { memset(ai, 0, sizeof *ai); ai->wday = tm.tm_wday; ai->yday = tm.tm_yday; strlcpy(ai->tzname, abbr, sizeof ai->tzname); ai->dst = dst != 0; ai->offset = off; }
+    return RES_OK;
+}
+HLE_FORCE_OPT("_ZN2nn4time11ToPosixTimeEPiPNS0_9PosixTimeEiRKNS0_12CalendarTimeERKNS0_12TimeZoneRuleE", "local → absolute times by a loaded rule (0-2 results)",
+              Result, h_time_ToPosixRule, int32_t *count, int64_t *out, int32_t max, const CalendarTime *ct, const void *rule) {
+    struct tm in = {.tm_year = ct->year - 1900, .tm_mon = ct->month - 1, .tm_mday = ct->day, .tm_hour = ct->hour, .tm_min = ct->minute, .tm_sec = ct->second};
+    time_t local = timegm(&in); struct tm back; int n = 0; int64_t r[2];
+    if (local != (time_t)-1 && gmtime_r(&local, &back) && back.tm_year == ct->year - 1900 && back.tm_mon == ct->month - 1 && back.tm_mday == ct->day &&
+        back.tm_hour == ct->hour && back.tm_min == ct->minute && back.tm_sec == ct->second) {   // a date that does not exist (February 30) is normalized by timegm: none
+        CFTimeZoneRef tz = rule_zone(rule);
+        for (int k = -1; k <= 1; k += 2) {
+            int64_t t = (int64_t)local - zone_offset(tz, (int64_t)local + k * 86400);
+            if (t + zone_offset(tz, t) != (int64_t)local || (n && r[0] == t)) continue;
+            r[n++] = t;
+        }
+        CFRelease(tz);
+    }
+    if (n == 2 && r[0] > r[1]) { int64_t x = r[0]; r[0] = r[1]; r[1] = x; }
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) out[i] = r[i];
+    *count = n;
+    return RES_OK;
+}

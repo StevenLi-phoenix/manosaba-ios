@@ -5,6 +5,9 @@
 # Read from the files: modules (main, sdk, subsdk* present in ExeFS; rtld is the host's job), main's NSO build ID, the program ID (main.npdm ACI0),
 # the engine (Unity when RomFS has Data/globalgamemanagers), the RomFS key files with sizes and a tree count. Everything else is a default to review:
 # title / version (the id unless given), language en-US, screen 1920x1080, save_sync empty (fill in the save files to keep in iCloud sync).
+# new_game.py --check [<id>...]: the keys the files decide (program_id, modules, main_build_id, npdm, engine), worked out again from each profile's
+#   own workspace and compared with games/<id>/game.json, with the engine markers in its code modules as facts (plan item 64n; nxnative's
+#   profile_guess.py --check, MIT, written anew). A game whose dump is not under DM_ROOT is skipped. Exit 1 on a difference
 import json, os, struct, sys
 
 UNITY_KEYS = ('Data/globalgamemanagers', 'Data/globalgamemanagers.assets', 'Data/level0', 'Data/resources.assets', 'Data/sharedassets0.assets',
@@ -32,10 +35,46 @@ def npdm_fields(npdm):   # META 0x14 SystemResourceSize; ACI0 0x30 / 0x34 kernel
     for i in range(ks // 4):
         w = struct.unpack_from('<I', d, aci + ko + 4 * i)[0]
         if w & 0xf == 0x7: prio = [(w >> 10) & 63, (w >> 4) & 63]
+    if os.environ.get('T_NEW_GAME_PRIO_SWAPPED'): prio = prio[::-1]   # negative control of tools/tests/t_new_game.py only
     return {'system_resource_size': f'{struct.unpack_from("<I", d, 0x14)[0]:#x}', 'thread_priority': prio}
+
+MARKERS = [(b'il2cpp_', 'Unity IL2CPP'), (b'UnityEngine', 'Unity'), (b'sead::', 'Nintendo sead'), (b'agl::', 'Nintendo agl'), (b'Unreal', 'Unreal'),
+           (b'CRIWARE', 'CRIWARE'), (b'Wwise', 'Wwise'), (b'FMOD', 'FMOD'), (b'Havok', 'Havok'), (b'nvnBootstrapLoader', 'NVN'), (b'vkCreateInstance', 'Vulkan')]   # (nxnative's list, as data)
+
+def file_keys(exefs, romfs):
+    """The profile keys the dumped files decide"""
+    mods = ['main'] + [m for m in ['sdk'] + sorted(f for f in os.listdir(exefs) if f.startswith('subsdk')) if os.path.isfile(os.path.join(exefs, m))]
+    nso = open(os.path.join(exefs, 'main'), 'rb').read(0x50)
+    if nso[:4] != b'NSO0': die(f'{exefs}/main: not an NSO')
+    return {'program_id': program_id(os.path.join(exefs, 'main.npdm')), 'modules': mods, 'main_build_id': nso[0x40:0x50].hex(),
+            'npdm': npdm_fields(os.path.join(exefs, 'main.npdm')), 'engine': 'unity' if os.path.isfile(os.path.join(romfs, 'Data/globalgamemanagers')) else 'unknown'}
+
+def markers(exefs, mods):   # engine markers in the code modules (needs lz4 for the compressed segments: dm's venv)
+    try: sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import symaddr
+    except ImportError: return ['(lz4 missing: no markers)']
+    seen = []
+    for m in mods:
+        try: img = symaddr.load(os.path.join(exefs, m))
+        except Exception as e: seen.append((f'({m}: {e})', '')); continue
+        seen += [(name, m) for pat, name in MARKERS if pat in img and name not in [x for x, _ in seen]]
+    return [f'{x} ({m})' if m else x for x, m in seen]
+
+def check(ids):
+    repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'); root = os.path.abspath(os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work'))
+    bad = 0; ids = ids or sorted(d for d in os.listdir(os.path.join(repo, 'games')) if os.path.isfile(os.path.join(repo, 'games', d, 'game.json')))
+    for gid in ids:
+        g = json.load(open(os.path.join(repo, 'games', gid, 'game.json'), encoding='utf-8'))
+        exefs, romfs = (os.path.join(root, g['workspace'][k]) for k in ('exefs', 'romfs'))
+        if not os.path.isfile(os.path.join(exefs, 'main.npdm')): print(f'{gid}: no dump under {root}, skipped'); continue
+        got = file_keys(exefs, romfs); diff = [k for k in got if got[k] != g.get(k)]
+        for k in diff: print(f'{gid}: {k} {g.get(k)!r} in game.json, {got[k]!r} from the files')
+        bad += bool(diff)
+        print(f'{gid}: {"differs" if diff else "the keys the files decide agree"}; markers: {", ".join(markers(exefs, got["modules"])) or "none"}')
+    return bad
 
 def main():
     a = sys.argv[1:]
+    if a[:1] == ['--check']: sys.exit(1 if check(a[1:]) else 0)
     opt = {}
     for k in ('--title', '--version', '--language'):
         if k in a: i = a.index(k); opt[k[2:]] = a[i + 1]; del a[i:i + 2]

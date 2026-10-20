@@ -34,7 +34,11 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
   # Host sources, header paths and frameworks from host/Makefile; the game's modules as embedded code
   python3 tools/gen_build.py ../host Gen "$GAME" > Gen/dm.xcconfig || { t "[red] gen_build failed"; exit 1; }
   F=$(python3 tools/gen_embed.py "$OUT" Gen/embed.S $MODS) || { t "[red] gen_embed failed ($OUT)"; exit 1; }
-  { echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F"; echo "DM_GAME_TITLE = $TITLE"; } >> Gen/dm.xcconfig
+  # VP8 / VP9 movies (plan item 62b): the iOS libvpx when it has been built (tools/build_libvpx.sh), checked first; host/hle_movie.c finds its headers
+  VPX=$ROOT/build/ios/libvpx; VPXL=; VPXI=
+  if [ -f "$VPX/lib/libvpx.a" ]; then python3 tools/vpx_check.py "$VPX/lib/libvpx.a" 18.0 || exit 1; VPXL="\"$VPX/lib/libvpx.a\""; VPXI="\"$VPX/include\""
+  else t "no iOS libvpx in $VPX: VP8 / VP9 movies will not play (ios/tools/build_libvpx.sh builds it)"; fi
+  { echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F $VPXL"; echo "DM_VPX_INC = $VPXI"; echo "DM_GAME_TITLE = $TITLE"; } >> Gen/dm.xcconfig
   for m in $MODS; do cp "$OUT/$m.fixups.tsv" "$OUT/$m.gates.tsv" Gen/dm/ || exit 1; done
   cp "$(ws shader_map)" Gen/dm/shader_map.tsv || { t "[red] no shader stage map"; exit 1; }
   if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || exit 1; t "env switches baked in from $DM_ENV_FILE"; fi   # read at launch (host/envfile.h)

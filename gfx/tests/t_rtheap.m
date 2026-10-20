@@ -6,7 +6,8 @@
 // disjoint one is still blue and the last one green (validation layer, no command buffer error); a target whose guest range is too small for its
 // Metal texture, and one in a pool that is not virtual, keep textures of their own; the census counts 3 placed and 1 not fitting of the 4
 // virtual-pool targets. On Metal 3 every target keeps a texture of its own. A target allowed past its scaled range (-DDM_TEST_RTHEAP_NO_LIMIT):
-// 2 fail (Metal 4: 4)
+// 2 fail (Metal 4: 4). The default (plan item 166): on with Metal 4 and the TBDR rewrites off, off with =0, on Metal 3 or with the rewrites;
+// off unless asked (-DDM_TEST_RTHEAP_DEFAULT_OFF): 1 fails.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -58,6 +59,9 @@ int main(void) { @autoreleasepool {
       ok = rt_heap_place(0x100000, 0x100000, RT_HEAP_SCALE, 0x150000, 0x10000, heap, &at);
       CHECK(!ok, "... needing 1.31 MiB (more than its range × 1.25): refused");
       CHECK(heap == 80u << 20 && rt_heap_size(1000001, RT_HEAP_SCALE) == 0x140000, "the heap: pool × 1.25 rounded up to 64 KiB (%llu MiB)", (unsigned long long)(heap >> 20)); }
+    // the default (plan item 166): on unless DM_NVN_RT_HEAP=0, with Metal 4 and the TBDR rewrites off
+    CHECK(rt_heap_decide(NULL, 0, 0) && rt_heap_decide("1", 0, 0) && !rt_heap_decide("0", 0, 0) && !rt_heap_decide(NULL, 0, 1) && !rt_heap_decide("1", 0, 1) && !rt_heap_decide(NULL, 1, 0),
+          "default: on with Metal 4 and the TBDR rewrites off; off with =0, on Metal 3 or with the rewrites on");
     // on the GPU through tex_mtl
     setenv("DM_NVN_TBDR", "0", 1); setenv("DM_NVN_RT_HEAP", "1", 1);
     mtl_init();

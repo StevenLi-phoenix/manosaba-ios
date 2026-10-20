@@ -32,7 +32,7 @@ typedef struct { uint32_t magic, flags; uint8_t *mem; uint64_t size; } pool_t;  
 typedef struct { NVNdevice *dev; pool_t *pool; int64_t off; uint64_t size; } buf_builder_t;  FITS(buf_builder_t, NVNbufferBuilder);
 typedef struct { uint32_t magic; pool_t *pool; int64_t off; uint64_t size; uint8_t *mem; uint64_t serial; } buf_t;  FITS(buf_t, NVNbuffer);
 
-typedef struct { const pool_t *pool; int64_t off; int32_t n; } dpool_t;                       // Texture / sampler descriptor pool
+typedef struct { const pool_t *pool; int64_t off; int32_t n, base; } dpool_t;                 // Texture / sampler descriptor pool; base: its IDs' start in the replay's tables (plan item 64e)
 FITS(dpool_t, NVNtexturePool); FITS(dpool_t, NVNsamplerPool);
 
 typedef struct {
@@ -164,7 +164,7 @@ enum {
     OP_BIND_PROGRAM, OP_BIND_STATE, OP_BIND_VATTR, OP_BIND_VSTREAM, OP_BIND_VBUF,
     OP_BIND_UBO, OP_BIND_SSBO, OP_BIND_TEX, OP_BIND_SAMP,
     OP_STENCIL, OP_POLY_OFFSET, OP_DRAW, OP_DRAW_IDX, OP_DISPATCH, OP_BARRIER,
-    OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_DEPTH_CLAMP, OP_COPY_IMAGE_STRIDE, OP_RENDER_ENABLE, OP_PRIM_RESTART, OP_COUNT_
+    OP_SET_TEX_POOL, OP_SET_SAMP_POOL, OP_COPY_B2T, OP_COPY_STRIDE, OP_BLEND_COLOR, OP_COPY_T2B, OP_BIND_IMG, OP_COPY_T2T, OP_RESET_COUNTER, OP_CLEAR_TEX, OP_DEPTH_CLAMP, OP_COPY_IMAGE_STRIDE, OP_RENDER_ENABLE, OP_PRIM_RESTART, OP_FENCE_SYNC, OP_DEPTH_BOUNDS, OP_RASTER_DISCARD, OP_COUNT_
 };
 // Payload (immediately follows op_hdr)
 typedef struct { int32_t n; const tex_t *color[8]; view_t cview[8]; uint8_t has_cview[8]; const tex_t *depth; view_t dview; uint8_t has_dview; } p_set_rt;
@@ -180,7 +180,8 @@ typedef struct { int32_t first, n; uint32_t st[16]; } p_bind_vattr;
 typedef struct { int32_t first, n; vs_st st[16]; } p_bind_vstream;
 typedef struct { int32_t first, n; NVNbufferRange r[16]; } p_bind_vbuf;
 typedef struct { int32_t stage, index; uint64_t addr, size; } p_bind_buf;  // UBO / SSBO
-// defer / src: a deferred binding (BindTexturesDeferred) records where the handles are; replay reads them from there (nvn_mtl.m bh_fresh)
+// defer / src: a deferred binding (BindTexturesDeferred) records where the handles are; replay reads them from there once a submission (nvn_mtl.m
+// bh_fresh: defer becomes the submission's generation)
 typedef struct { int32_t stage, first, n, defer; uint64_t src; uint64_t h[32]; } p_bind_handles; // Separate texture / sampler handles
 typedef struct { int32_t face, value_mask, mask, ref, which; } p_stencil;  // which: 0 value mask 1 write mask 2 reference value
 typedef struct { float factor, units, clamp; } p_poly_offset;
@@ -194,6 +195,7 @@ typedef struct { const tex_t *tex; view_t view; uint8_t has_view, is_uint; NVNco
 typedef struct { int64_t stride; } p_copy_stride;
 typedef struct { float rgba[4]; } p_blend_color;
 typedef struct { int32_t enable; } p_depth_clamp;
+typedef struct { int32_t enable; float lo, hi; } p_depth_bounds;   // SetDepthBounds: stored depths outside [lo, hi] are discarded (plan item 64c)
 typedef struct { int32_t enable; uint32_t index; } p_prim_restart;   // SetPrimitiveRestart   // 1 = depth clamp (fragments beyond the near / far planes are kept at the boundary depth, Metal DepthClipModeClamp)
 
 // Entry point of the Metal replay layer (nvn_mtl.m): replays a set of command handles into the current submission
@@ -213,6 +215,7 @@ double mtl_gpu_ms(uint64_t f);       // the union of the frame's command-buffer 
 double mtl_gpu_sum_ms(uint64_t f);   // their plain sum (the GPU time reported before 2026-10-19)
 void mtl_sub_index(const uint64_t *h, int n);   // Start of submission: build the store lookahead index in replay order (nvn_mtl.m)
 void mtl_sub_snapshot(const uint64_t *h, int n);   // Start of submission: copy the uniform ranges it binds as they are now (nvn_mtl.m, DM_NVN_UBO_SNAPSHOT)
+void mtl_bh_deferred_seen(void);   // A deferred binding was recorded: submissions read deferred handles at their start even without uniform snapshots (nvn_mtl.m)
 void xv_test_counts(int *dc, int *viol);
 int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1);   // The frame's earliest GPUStart / latest GPUEnd (mach absolute time, ns); returns 0 if not all complete or there is no GPU time
 void mtl_stats(uint64_t *passes, uint64_t *draws);
@@ -242,6 +245,7 @@ void mtl_create_stats(uint64_t *lib, uint64_t *pso);   // Cumulative: number of 
 void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img);
 // CPU texture write: write from src (row / img byte strides) into the region starting at level / layer0
 void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img);
+void mtl_flush_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r);   // FlushTexels: a CPU write of the region's storage
 // Descriptor pool registration (texture ID / sampler ID → object snapshot), program release
 void mtl_reg_tex(int id, const tex_t *t, const view_t *v);
 void mtl_reg_samp(int id, const samp_par *p);

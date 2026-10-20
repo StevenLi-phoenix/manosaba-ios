@@ -90,8 +90,17 @@ uint64_t dm_entropy64(void) {
     uint64_t n = atomic_fetch_add(&g_detrng_n, 1) + 1; if (n == 1 || n % 1000 == 0) LOG("DM_DETCLOCK: deterministic entropy call %llu", (unsigned long long)n);
     return z;
 }
-HLE("getentropy", int, g_getentropy, void *p, size_t n) {
-    if (!detclock_cfg()) { arc4random_buf(p, n); return 0; }
+static void entropy_fill(void *p, size_t n) {
+    if (!detclock_cfg()) { arc4random_buf(p, n); return; }
     for (size_t i = 0; i < n; i += 8) { uint64_t v = dm_entropy64(); memcpy((uint8_t *)p + i, &v, n - i < 8 ? n - i : 8); }
-    return 0;
 }
+// Taken over also where a module defines it (plan item 64i; GirlNet does): the sdk's own goes to its random generator, and as both games' sdk
+// does, more than 256 bytes are refused (-1; the sdk sets errno 5 too, which the host cannot reach)
+HLE_FORCE_OPT("getentropy", "libc getentropy: the host's entropy stream", int, g_getentropy, void *p, size_t n) {
+    if (n > 256) return -1;
+    entropy_fill(p, n); return 0;
+}
+// The SDK's random bytes (plan item 64i, as armyja's port): on the console they come from a csrng session, a service the host does not have, so a
+// game that asks reached std::terminate (Ace Attorney's save encryption). The host's entropy stream instead, deterministic with DM_DETCLOCK
+HLE_FORCE_OPT("_ZN2nn6crypto36GenerateCryptographicallyRandomBytesEPvm", "crypto random bytes: the host's entropy stream", void, h_crypto_random, void *p, size_t n) { entropy_fill(p, n); }
+HLE_FORCE_OPT("_ZN2nn2os19GenerateRandomBytesEPvm", "os random bytes: the host's entropy stream", void, h_os_random, void *p, size_t n) { entropy_fill(p, n); }

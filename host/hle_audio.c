@@ -39,6 +39,8 @@ typedef struct {
     _Atomic uint64_t cb_n;               // sound card callbacks of this output: the watchdog's evidence that the device still plays it
     uint64_t wd_n, wd_t, said_under;     // watchdog (under g_aos_lock): callback count last seen and when it last moved; underruns already logged
     int stalled, retry_ms; uint64_t retry_at;   // the device stopped calling back (or refused to start): the silent sink stands in, the AudioUnit is retried at retry_at
+    _Atomic float vol;                   // SetAudioOutVolume's gain, applied as the game's samples are taken (1 = as they are)
+    _Atomic uint64_t played_b;           // bytes of the game's buffers played since the last StartAudioOut (GetAudioOutPlayedSampleCount)
 } aout;
 
 // Registry of open outputs: suspended / resumed all at once by the front-end lifecycle (going to background). g_aos_lock also serializes every backend
@@ -74,6 +76,9 @@ static void *event_notify(void *p) {
     return NULL;
 }
 
+static void gain16(uint8_t *p, uint64_t n, float v) {   // PCM16 samples times v, saturated
+    for (uint64_t i = 0; i + 2 <= n; i += 2) { int16_t x; memcpy(&x, p + i, 2); float y = x * v; x = (int16_t)(y > 32767.0f ? 32767 : y < -32768.0f ? -32768 : y); memcpy(p + i, &x, 2); }
+}
 // Take n bytes from the pending queue and hand them to the output side; once a whole block has played, move it to released and notify the ordinary thread.
 static void pull(aout *a, uint8_t *dst, uint64_t n) {
     int released = 0;
@@ -89,6 +94,10 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
         gbuf *b = a->q[qh & (QMAX - 1)];
         uint64_t k = b->size - a->pos; if (k > n) k = n;
         memcpy(dst, (uint8_t *)b->ptr + a->pos, k);
+#ifndef DM_TEST_AUDIO_VOLUME_IGNORED   // negative control of t_audio_extras only: the volume not applied
+        { float v = atomic_load_explicit(&a->vol, memory_order_relaxed); if (v != 1.0f) gain16(dst, k, v >= 0 ? v : 0); }
+#endif
+        atomic_fetch_add_explicit(&a->played_b, k, memory_order_relaxed);
         dst += k; n -= k; a->pos += k;
         if (a->pos >= b->size) {
             uint32_t rw = atomic_load_explicit(&a->rel_tail, memory_order_relaxed);
@@ -274,6 +283,7 @@ HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKN
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
     atomic_init(&a->null_run, 0); atomic_init(&a->notify_run, 1);
     atomic_init(&a->notify_pending, 0); atomic_init(&a->notify_armed, 0);
+    atomic_init(&a->vol, 1.0f); atomic_init(&a->played_b, 0);
     a->notify_sem = dispatch_semaphore_create(0); a->rel_sem = dispatch_semaphore_create(0);
     // The thread that signals the game's buffer event at USER_INTERACTIVE (upstream d2r-mobile afad65c): at the default QoS (21) 16 of its wake-ups
     // in 240 s came more than 2 ms late on an iPhone 17 Pro Max, none after; a player heard gaps while moving (PR #52)
@@ -300,7 +310,11 @@ HLE_FORCE_OPT("_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutERKNS0_17AudioOut
 HLE_FORCE("_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE", "start playback", Result, h_au_Start, void *g) {
     aout *a = ao(g);
     pthread_mutex_lock(&g_aos_lock);
-    if (atomic_exchange_explicit(&a->state, STATE_STARTED, memory_order_acq_rel) != STATE_STARTED) {
+    if (atomic_load_explicit(&a->state, memory_order_acquire) != STATE_STARTED) {
+#ifndef DM_TEST_AUDIO_PLAYED_KEPT   // negative control of t_audio_extras only: the played count not started again
+        atomic_store_explicit(&a->played_b, 0, memory_order_relaxed);   // samples played since this StartAudioOut (the SDK reference)
+#endif
+        atomic_store_explicit(&a->state, STATE_STARTED, memory_order_release);
         if (a->au && !g_suspended) { a->stalled = 0; au_go(a, now_ns()); }   // a refusal: the silent sink, and the watchdog retries the unit
         else null_start(a);
     }
@@ -350,6 +364,44 @@ HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBuff
     if (ok) { a->q[qt & (QMAX - 1)] = b; atomic_store_explicit(&a->q_tail, qt + 1, memory_order_release); }
     pthread_mutex_unlock(&a->m);
     return ok;      // bool: false when the queue is full (the real device has a limit too)
+}
+// The rest of AudioOut (plan item 64j; after acnh-mobile's hle_audio.c, MIT, written anew, with the semantics of the SDK reference and yuzu's
+// audio_out_system.cpp, facts only). Both games' subsdk0 import GetAudioOutPlayedSampleCount; the SDK's own looks the AudioOut up in its session
+// table, finds none for a host output and reads through a null pointer (manosaba's sdk+0x1f8630; the others the same)
+HLE_FORCE_OPT("_ZN2nn5audio17SetAudioOutVolumeEPNS0_8AudioOutEf", "output gain, applied as the samples are taken", void, h_au_SetVol, void *g, float v) {
+    atomic_store_explicit(&ao(g)->vol, v, memory_order_relaxed);   // kept as given (GetAudioOutVolume returns it); a negative or NaN gain plays as 0
+}
+HLE_FORCE_OPT("_ZN2nn5audio17GetAudioOutVolumeEPKNS0_8AudioOutE", "output gain", float, h_au_GetVol, const void *g) { return atomic_load_explicit(&ao(g)->vol, memory_order_relaxed); }
+HLE_FORCE_OPT("_ZN2nn5audio28GetAudioOutPlayedSampleCountEPKNS0_8AudioOutE", "sample frames of the game's buffers played since StartAudioOut", int64_t, h_au_Played, const void *g) {
+    aout *a = ao(g); return (int64_t)(atomic_load_explicit(&a->played_b, memory_order_relaxed) / (2u * (unsigned)a->ch));
+}
+HLE_FORCE_OPT("_ZN2nn5audio22GetAudioOutBufferCountEPKNS0_8AudioOutE", "buffers appended and not played yet, the one playing included", int, h_au_Count, const void *g) {
+    aout *a = ao(g); return (int)(atomic_load_explicit(&a->q_tail, memory_order_acquire) - atomic_load_explicit(&a->q_head, memory_order_acquire));
+}
+HLE_FORCE_OPT("_ZN2nn5audio22ContainsAudioOutBufferEPKNS0_8AudioOutEPKNS0_14AudioOutBufferE", "appended and not taken back yet (pending or released)", bool, h_au_Contains, const void *g, const gbuf *b) {
+    aout *a = ao(g); int found = 0;
+    pthread_mutex_lock(&a->m);
+    for (uint32_t i = atomic_load_explicit(&a->rel_head, memory_order_acquire), e = atomic_load_explicit(&a->rel_tail, memory_order_acquire); i != e && !found; i++) found = a->rel[i & (RELMAX - 1)] == b;
+    for (uint32_t i = atomic_load_explicit(&a->q_head, memory_order_acquire), e = atomic_load_explicit(&a->q_tail, memory_order_acquire); i != e && !found; i++) found = a->q[i & (QMAX - 1)] == b;
+    pthread_mutex_unlock(&a->m);
+    return found;
+}
+// Every pending buffer released at once, unplayed, and the event signalled: only while started (false otherwise, as yuzu). The output's consumer is
+// held off by g_aos_lock's backend stop and start around the move, so the queue has one writer
+HLE_FORCE_OPT("_ZN2nn5audio20FlushAudioOutBuffersEPNS0_8AudioOutE", "pending buffers released unplayed (started outputs only)", bool, h_au_Flush, void *g) {
+    aout *a = ao(g);
+    pthread_mutex_lock(&g_aos_lock);
+    if (atomic_load_explicit(&a->state, memory_order_acquire) != STATE_STARTED) { pthread_mutex_unlock(&g_aos_lock); return false; }
+    int was = a->backend; backend_stop(a);
+    pthread_mutex_lock(&a->m);
+    uint32_t h = atomic_load_explicit(&a->q_head, memory_order_relaxed), t = atomic_load_explicit(&a->q_tail, memory_order_acquire), rt = atomic_load_explicit(&a->rel_tail, memory_order_relaxed);
+    for (uint32_t i = h; i != t; i++) a->rel[rt++ & (RELMAX - 1)] = a->q[i & (QMAX - 1)];   // pending + released never exceed QMAX (Append and the release move keep it)
+    atomic_store_explicit(&a->rel_tail, rt, memory_order_release); atomic_store_explicit(&a->q_head, t, memory_order_release); a->pos = 0;
+    pthread_mutex_unlock(&a->m);
+    if (was != BK_NONE) { if (was == BK_AU && a->au && !g_suspended) au_go(a, now_ns()); else null_start(a); }
+    pthread_mutex_unlock(&g_aos_lock);
+    if (t != h) notify_release(a);
+    return true;
 }
 HLE_FORCE("_ZN2nn5audio25GetReleasedAudioOutBufferEPNS0_8AudioOutE", "next played buffer, NULL if none", gbuf *, h_au_Released, void *g) {
     aout *a = ao(g); gbuf *b = NULL;

@@ -30,6 +30,6 @@ for s in srcs:
     if s == os.path.join(host, 'main.c'): os.symlink(s, f'{gen}/main/main.c'); continue
     flat = os.path.relpath(s, os.path.dirname(host)).replace('/', '__').replace('..', '_')   # same names in different directories do not collide
     os.symlink(s, f'{gen}/src/{flat}')
-print('HEADER_SEARCH_PATHS = $(inherited) ' + ' '.join(f'"{d}"' for d in incs + dirs))
+print('HEADER_SEARCH_PATHS = $(inherited) ' + ' '.join(f'"{d}"' for d in incs + dirs) + ' $(DM_VPX_INC)')   # DM_VPX_INC: ios/run.sh (the iOS libvpx, plan item 62b)
 print('OTHER_CFLAGS = $(inherited) ' + ' '.join(defs))
 print('DM_FRAMEWORKS = ' + ' '.join(f'-framework {f}' for f in fws if f != 'Cocoa'))

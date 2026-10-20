@@ -1916,13 +1916,19 @@ Tier 3d, Tears of the Kingdom:
   Metal 4 and 3, API validation: one split before the reading draw, a run of two shares it, a plain draw between makes two, the first draw of a
   pass none, a pending clear flushed, a barrier between two reading draws splits; a split before every reading draw fails 2). To check (the user):
   a turning camera over paved ground or decals (Hyrule Castle courtyard in the PR) with and without the switch
-- [ ] 166 a three-hour soak of the 60 fps product before 151 (MacNativeGames #57, #72, #74; upstream #90). First run (batch 53's tools:
+- [x] batch 54 · 166 a three-hour soak of the 60 fps product before 151 (MacNativeGames #57, #72, #74; upstream #90). First run (batch 53's tools:
   `tools/soak.py run --input` repeats a cycle of command channel lines around the screenshots, `--input-after` from a second on; `games/totk/
   soak_walk.cmd` walks Link round a square with jumps; `t_soak` +3, key presses taking no time fails 2): the cliff save at 120 fps stopped after
   47 min with `FATAL GPU allocated 6555 MB, above the budget of 6553 MB` (MacNativeGames #72's stop, there after 2 h 43 min); footprint +5.4 GB/h.
   The memory line names it: render targets of virtual pools, 3,185 made and all alive with textures of their own (3.6 GB at 40 min): the game
   keeps those texture objects (on the console they only alias its 111 MiB pool), each one a Metal texture here. Item 138's `DM_NVN_RT_HEAP=1`
-  bounds them to a heap of 1.25 × the pool; next: the same soak with it, then its default (on iOS the TBDR rewrites turn it off)
+  bounds them to a heap of 1.25 × the pool; next: the same soak with it, then its default (on iOS the TBDR rewrites turn it off).
+  Second run, the same soak with DM_NVN_RT_HEAP=1: 180.2 min, exit 0; after the 45-min warm-up footprint +77 MB/h and Metal +47 MB/h (footprint
+  peak 4,124 MB, 4,088 at the end; GPU allocated 2,100-2,200 MB through the run, 2,267 at the end), frame time p50 8.28 → 8.60 ms and GPU 5.99 →
+  6.93 ms between the first and last quarters, one red line kind (the conditional render of 112, from the start). So the heap is now the default
+  where it can be (`rt_heap_decide`: Metal 4 with the TBDR rewrites off, which is Tears of the Kingdom on the Mac; DM_NVN_RT_HEAP=0 turns it off);
+  t_rtheap +1 (off unless asked, DM_TEST_RTHEAP_DEFAULT_OFF: 1 fails). Noted for later: the memory pool table held 3,198 (peak 3,470) of its 4,096
+  entries; iOS stays without it (62h)
 - [x] batch 53 · 167 a teleport command (`games/totk/survey.c`, `DM_SURVEY=1`; MacNativeGames d164868 `world_survey.c`, MIT: its 1.4.3
   addresses, actor layout and bounds as data, written anew): `survey pos <tag>` / `survey move <tag> X Y Z <frames>` on the command channel (a
   new hook `dm_game_command` takes lines the host does not know, checked when read), run at the frame point (new hook `dm_game_frame_sync`: the
@@ -1992,11 +1998,20 @@ Tier 3d, iOS, Mac and tooling:
   included: app container and bundle paths, a home folder's user, UUIDs, MAC, IPv4 and e-mail addresses; frame numbers, offsets and versions stay.
   Memory read every 60 frames (lordran 24740d4: short spikes), the line still printed on 64 MB changes; the memory line gives the Metal 4 command
   allocators (main, uploads, presents). `t_rundiag` (+5; nothing redacted fails 3), `t_cmdalloc` (2, Metal 4 and 3; left out fails 1)
-- [ ] 179 tests to take: overlapping `UpdateUniformBuffer` writes (Touchable), a 512 re-upload soak (lordran), the pass-continuation cases
-  (GirlNet `t_p5r_rt_continue_gpu.m`). Batch 53 took the first two: `t_nvn` 5a2 (144 bytes, 16 at 128 and 64 at 64 over them, 128 cases × 8
+- [x] batch 54 · 179 tests to take: overlapping `UpdateUniformBuffer` writes (Touchable), a 512 re-upload soak (lordran), the pass-continuation
+  cases (GirlNet `t_p5r_rt_continue_gpu.m`). Batch 53 took the first two: `t_nvn` 5a2 (144 bytes, 16 at 128 and 64 at 64 over them, 128 cases × 8
   rounds, every byte the last write's, run with renamed updates and with DM_NVN_UB_RENAME=0; the newest applied first fails 1) and `t_upsoak`
   (512 re-uploads of a 1920x1080 texture: one upload then 511 re-uploads, at most 3 alive, the allocation flat from the 128th, none resident after
-  release; released textures left resident fails 1). The pass continuation cases are next
+  release; released textures left resident fails 1). Batch 54: `gfx/tests/t_rt_continue.m`, GirlNet's ten cases written anew and an eleventh
+  (two command buffers of one submission through the public NVN calls: an 8x4 two-level RGBA8 target and a D32F S8 one, red at 0.5 / 0x55 in the
+  left half, then green at 0.75 / 0x66 over all of it under LESS; colour, depth and stencil read back exactly with guarded rows, passes and
+  attachment bytes loaded counted). With the TBDR rewrites on (the default and iOS's) one pass, nothing loaded, for: nothing between, a barrier
+  before or after the second SetRenderTargets (OP_BARRIER does not end a pass), programs without read-only metadata, the texture ID registered
+  again, and a view of level 0 (merged by the deferral: `sub_eq` compares texture, level and layer; GirlNet splits it); two passes for a clear
+  again, a copy of the target between (the copy holds the first result), a program sampling the target (a logged split) and the eleventh, a view
+  of level 1 with the same depth target (level 0 keeps the first result; the colour load skipped by `first_draw_covers`). With DM_NVN_TBDR=0
+  (Tears of the Kingdom's Mac default) every case two passes, 288 bytes loaded but after the clear. Colour targets compared by texture alone in
+  `rt_same` (DM_TEST_RT_SAME_NO_VIEW): the eleventh continues the level-0 pass and draws green over it, 1 fails
 - [x] batch 34 · 180 screens judged by TypeSafe's Jev model drive the test runs (the d2r-mobile author's method; the user agreed to send
   screenshots, the key stays outside the repository in `~/.config/typesafe/api_key`): `tools/jevdrive.py` follows a running host's command
   channel (`DM_CMD`, `DM_NVN_SHOT_OUT=960x540`: `shot`, ask, `key`) until a goal's done condition holds on two frames in a row; goals in
@@ -2009,43 +2024,240 @@ Tier 3d, iOS, Mac and tooling:
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)
-  - [ ] 61a LASRecomp's render-queue cases as a test first (nested lists kept, a fence in a nested list published, two waiters, the four wait
-    results, a fence whose ring slot was reused)
-  - [ ] 61b deferred bindings frozen at submit; binds of more than 32 handles split, not dropped
-  - [ ] 61c a per-frame critical-path trace (submit, commit, GPU, waits, acquire, present)
+  - [x] batch 54 · 61a LASRecomp's render-queue cases as a test first (nested lists kept, a fence in a nested list published, two waiters, the
+    four wait results, a fence whose ring slot was reused). `gfx/tests/t_rqueue.c` (18) against the submit as it is now, so a translation thread
+    has to keep them: a parent calling a child in game memory and one that overflows into a host segment, both command buffer objects finalized
+    and used again (the second overflowing too) and the child's control memory written over (the SDK copies control data at CallCommands),
+    submitted twice: 62 = 2 x (1 + 30); the nested fence FAILED before any submit, the first submission's right after it (a held wait times out),
+    then the second's; two waiters, with completion let go up to the first only the first returns and a 1 ms wait on the second's nested fence
+    times out; all four results; the first queue fence still ALREADY_SIGNALED 4,097 submissions later and the same sync fenced again holding the
+    newest. `nvnCommandBufferFenceSync` went to the red-reporting stub: now a record (OP_FENCE_SYNC) whose replay at submit gives the sync this
+    submission's fence (`g_fence + 1`, as the occlusion reports). Found: completion may only be held after QueueFinish, the submit waits for one
+    of the four occlusion-count buffers (`g_vis_ring`), so five submissions not done stop the fifth. Test hook `mtl_test_done_to` (completion let
+    go up to a fence). The nested fence given the last submission's (DM_TEST_FENCE_SYNC_LAST): 5 fail
+  - [x] batch 54 · 61b deferred bindings frozen at submit; binds of more than 32 handles split, not dropped. Ours dropped any bind of more than 32
+    handles with a red line, though separate textures have 128 slots a stage (`NVN_DEVICE_INFO_SEPARATE_TEXTURE_BINDINGS_PER_STAGE`); now records
+    of 32 and the rest, each deferred one reading its own part, and refused only past the replay's tables (textures and samplers 128, images 32).
+    A deferred bind (`BindTexturesDeferred`) was read from the game's array at every walk of the replay; now once a submission: the first read
+    stamps the record with the submission's generation (`mtl_sub_begin`), and the walks at the start make it (`mtl_sub_index`'s, or
+    `mtl_sub_snapshot`'s, which walks for this alone when uniform snapshots are off). `gfx/tests/t_bindfreeze.m` (7, with snapshots on and off):
+    40 textures from slot 4 and 70 samplers in every slot, past 128 or 33 images refused; a deferred bind in a child called twice keeps the
+    submit's handles when they are written over after the start, the next submission takes the new ones; a deferred 40 the same in both records.
+    More than 32 dropped (DM_TEST_BIND_NO_SPLIT): 4 fail; read at every walk (DM_TEST_BH_EACH_READ): 2 fail
+  - [x] batch 54 · 61c a per-frame critical-path trace (submit, commit, GPU, waits, acquire, present). `gfx/nvn/nvn_trace.{h,c}`
+    (totk-mobile's host/timeline.c, Apache-2.0, written anew): DM_NVN_TRACE=<first>+<frames>:<path> records submit, the parts committed to Metal
+    and their GPU spans, SyncWait, FenceSync, acquire, present and the display time, on CLOCK_UPTIME_RAW (Metal's base), and writes a TSV;
+    `tools/trace_report.py` splits each frame of the presenting thread into translation / sync waits / acquire / present / game, with the GPU's
+    busy time, latency and starved time, and names the largest. Tears of the Kingdom's prologue on the Mac, frames 1501-1799 of the 30 fps product:
+    period 33.7 ms, translation median 6.7 / p95 20.5 ms, game 0.35 ms, acquire 26.1 ms, GPU busy 7.0 ms: 297 of 299 frames wait for the
+    display, 2 for translation. The 60 fps product (120 Hz headless), frames 6001-6299: period 8.3 / p95 15.6 ms, translation 2.1 / p95 9.6 ms,
+    acquire 5.9 ms, GPU 3.8 ms: 229 frames wait for the display, 47 (16 %) for translation, 23 for the game. So 61 does not raise 30 fps, and
+    at high rates a sixth of the frames miss a vsync on translation (more on an iPhone's CPU: 61d). `gfx/tests/t_trace.c` (10;
+    DM_TEST_TRACE_KEEP_UNSTARTED: 3 fail), `tools/tests/t_trace_report.py` (7; T_TRACE_SUM_GPU, the GPU busy summed instead of united: 1 fails)
   - [ ] 61d the translation thread's time-constraint policy (re-declared at most every 200 ms) against none, on the iPhone
   - [ ] 61e full-screen single-draw passes as compute, measured; idle gaps between encoders from a Metal System Trace
 - [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
-  - [ ] 62a guest memory: reserved in `main()` before UIKit and Metal, a gap log on failure, the base checked against 2^39, `guest_heap_mb` at least
-    2,176 and no pool add on iOS
-  - [ ] 62b VP9 on iOS: libvpx cross-built with a pinned hash, or VideoToolbox's VP9 decoder (iOS 26.2+) with libvpx as fallback
-  - [ ] 62c BC → ASTC on the GPU (MacNativeGames `nvn_bc1astc.c`, `nvn_bctc.metal`)
-  - [ ] 62d handheld mode by default on iOS (1280x720)
-  - [ ] 62e RomFS as one image or 1 GiB parts with an index; a ready marker instead of the tree walk at every launch
-  - [ ] 62f `maxBufferLength` and the reservation base logged at boot; a cooldown between A/B runs on the phone
+  - [x] batch 54 · 62a guest memory: reserved in `main()` before UIKit and Metal, a gap log on failure, the base checked against 2^39, `guest_heap_mb`
+    at least 2,176 and no pool add on iOS. `host/guest_as.h`: the lowest free gap from 4 GiB that holds the most, 2 MiB aligned and ending at or
+    below 2^39, from 6 GiB down by 256 MiB to what the game needs (prefix and stack 512 MiB, the heap, an alias region of 1.5 GiB); placed
+    with `vm_map` fixed, without overwriting (the iOS SDK's `mach_vm.h` is an #error: `vm_region_64` / `vm_map`); mmap's own choice if that fails;
+    the free gaps of 256 MiB or more logged when it got less than 6 GiB or nothing. iOS reserves it at the top of `main()`, after env.txt and
+    before the Metal device and UIKit (`svc_reserve_early`). Every platform: a block ending past 2^39 is moved below it (macOS 27 reserves about
+    24 GiB of its own in 0x70_0000_0000..2^39, MacNativeGames), and the boot line says how far below it ends (the Mac's 0x70_0000_0000 + 12 GiB:
+    52 GiB). Tears of the Kingdom: `guest_heap_mb` 2176 (its SetHeapSize asks 0x86000000) and the new `ios_pool_add_mb` 0 (the console's pool;
+    manosaba keeps 512, as it runs on the phones now). `host/tests/t_guest_as.c` (11: choices over made-up maps, the gap log, a live 6 GiB
+    reservation in this process's map); the end not held to 2^39 (DM_TEST_AS_NO_LIMIT): 2 fail. The size an iPhone gets is a device check
+  - [x] batch 54 · 62b VP9 on iOS: libvpx cross-built with a pinned hash, or VideoToolbox's VP9 decoder (iOS 26.2+) with libvpx as fallback.
+    libvpx (GirlNet dropped VideoToolbox's VP9 probe, which faulted at a movie's start on iOS): `ios/tools/build_libvpx.sh` fetches 1.17.0, refuses
+    it unless its SHA-256 is the pinned 1020f184... (ours matched the value totk-mobile pins), and builds the VP8 / VP9 decoders static for arm64
+    iOS 18.0 and later (both the iOS 26 and the Metal 3 iOS 18 builds) in a temporary directory (configure takes no path with a space; the
+    repository's has one) into `$DM_ROOT/build/ios/libvpx` (600 KB). `ios/run.sh` links it when it is there, after `ios/tools/vpx_check.py`
+    (arm64 alone, every object LC_BUILD_VERSION platform 2 with a minimum OS no later than 18.0, `_vpx_codec_vp9_dx` defined; Homebrew's Mac one is
+    refused), and hle_movie.c's `__has_include` finds the headers through `DM_VPX_INC`; without it a line says movies will not play.
+    `tools/tests/t_vpx_check.py` (7, with the built library); the platform not checked (T_VPX_CHECK_NO_PLATFORM): 2 fail. A cutscene on the phone
+    is a device check once Tears of the Kingdom runs there
+  - [x] batch 54 · 62c BC → ASTC on the GPU (MacNativeGames `nvn_bc1astc.c`, `nvn_bctc.metal`): BC1, the bulk of Tears of the Kingdom's colour
+    textures. Without BC a BC1 texture was decompressed to RGBA8 (8 times its size); now ASTC 4x4 (twice): `gfx/tex/nvn_bc1astc.c` and the same
+    statements as the kernel b1a (nvn_mtl.m). Four colours on ASTC's 2-bit weights (0, 21, 43, 64), three colours on its trits (0, 32, 64: the
+    midpoint exact; MacNativeGames searched 2- and 3-bit weights, which left up to 20 off on wide blocks), index 3 on a dual plane with 1-bit
+    weights (alpha exact). Block modes 0x042 / 0x051 / 0x441 worked out from the specification's layout, the trit packing as the inverse of its
+    decoding; both proven by Metal's own ASTC decoder. Upload: the GPU deswizzle's BC1 blocks, b1a behind them in the staging block, and after a
+    barrier copies into the ASTC texture (3D and the CPU paths: the C transcoder); BC1 views become ASTC views; WriteTexels, texture → buffer
+    copies and ReadTexels of BC textures without BC are refused with a red line (their pitch is for BC blocks: before, Metal got rows too short).
+    DM_NVN_BC1_ASTC=0: decompressed as before. `gfx/tests/t_bc1astc.m` (9, and 1 with it off): against bcdec through Metal's decoder four
+    colours within 2 (bcdec rounds a 5-bit 3 to 25 where bit replication gives 24, and 21/64 stands for 1/3), three within 1, alpha exact; the
+    kernel the CPU's bytes on 2,560 blocks; a 64x64 RGBA_DXT1 texture through the upload path ASTC_4x4_LDR with the CPU transcoder's texels, its
+    sRGB twin ASTC_4x4_sRGB. The four-colour palette in index order (DM_TEST_B1A_FOUR_ORDER): 3 fail. In the game (TotK's prologue on the Mac,
+    GPU allocated at frame 3840): with BC 1,984 MB; DM_TEST_NO_BC=1 with BC1 as ASTC 2,314 MB, with it decompressed (DM_NVN_BC1_ASTC=0) 3,545 MB:
+    1,231 MB less on a GPU without BC; the two no-BC runs' frame 800 identical, frame times the same (p50 33.6 / 33.8 ms)
+  - [ ] 62c2 the other BC formats on GPUs without BC: BC2 / BC3 / BC7 → ASTC 4x4 and BC4 / BC5 → EAC R11 / RG11 (MacNativeGames
+    `nvn_bctc.metal`: decoded and encoded again, lossy); now decompressed (4x and 2x their size). After a run of Tears of the Kingdom on a GPU
+    without BC shows what its memory comes to (62's census under the limit): lossy, and only those devices gain. With BC1 as ASTC the prologue
+    still takes 330 MB more than with BC (2,314 against 1,984 MB at frame 3840): what the other formats cost
+  - [ ] 62c3 BC textures the GPU writes, on GPUs without BC: TotK's encoders render blocks through a one-texel-per-block integer view; with BC
+    an auxiliary texture takes them and is copied in (blk_view_fmt / blk_writeback); without BC the blocks need decoding into the decompressed (or
+    ASTC) texture after the pass. Until then those draws and clears are left out (64m), so the textures they make keep what they had
+  - [x] batch 54 · 62d handheld mode by default on iOS (1280x720): game.json `ios_mode` "handheld" (Tears of the Kingdom; manosaba stays docked,
+    as it runs on the phones now) makes `dm_opmode` start at 0 on iOS: the game renders 1280x720 and the handheld controller is the connected
+    one; `DM_OPMODE` still decides when set. `host/tests/t_oe.c` +3 (40); the profile's iOS mode not read (DM_TEST_OPMODE_NO_IOS): 1 fails
+  - [x] batch 54 · 62e RomFS as one image or 1 GiB parts with an index; a ready marker instead of the tree walk at every launch (the marker:
+    item 175). Parts as the way in, files as before at run time (the file system, movies, overlays and mods open RomFS files by path):
+    `tools/romfs_parts.py pack <tree> <out>` writes parts of at most 1 GiB (records "DMRF", path length, size, path, bytes; files sorted, a
+    larger file a part by itself) and `romfs.dmri` (each part's bytes, files and SHA-256); `check` holds the parts to it. Copied into the app's
+    Documents, the next launch (`romfs_locate`) unpacks them (`host/romfs_parts.c`): every part still there checked first, then part by part
+    into Application Support/romfs.partial, each part deleted once its files are written (a launch cut short carries on), the folder renamed
+    when none is left (an older tree removed first), the marker of 175 then walks the new tree once. Paths that are absolute or have empty,
+    "." or ".." components are refused, as a part whose records end elsewhere or count otherwise. `host/tests/t_romfs_parts.c` (8: packed by
+    the Python tool with 4 KiB parts, unpacked byte for byte, a changed byte and a missing part refused before writing, a cut-short launch
+    carried on, "../evil" refused); the digest not checked (DM_TEST_PARTS_NO_SHA): 2 fail; paths as they are (DM_TEST_PARTS_ANY_PATH): 1 fails.
+    Copying Tears of the Kingdom's parts to a phone is a device check
+  - [x] batch 54 · 62f `maxBufferLength` and the reservation base logged at boot; a cooldown between A/B runs on the phone. The "Metal device"
+    line has maxBufferLength and the recommended working set (mush8 PR #3); the base and how far below 2^39 the block ends are 62a's line.
+    `DM_COOL_START=nominal` (or `fair`) makes the app wait before the game starts until the thermal state is at most that, looking every 5 s,
+    at most 10 minutes, and log the wait (T5eng: the same scene at 60 fps on a cool phone, 30 on a hot one): `host/coolstart.h`,
+    `host/tests/t_coolstart.c` (5); one look and on (DM_TEST_COOL_ONE_LOOK): 3 fail
   - [ ] 62g one varying interface as a fallback library (bayonetta3: every vertex shader exports the union of the pixel inputs) if a device's log
     shows a "not written by vertex shader" failure (item 137: none on the Mac since chain bab8d4746968; the red line names both keys)
   - [ ] 62h render targets of virtual pools in a heap on for iOS (`DM_NVN_RT_HEAP=1`, item 138: 140-190 MB less GPU memory on the cliff save)
     after screenshot comparisons over more scenes; with the TBDR rewrites on it needs them alias-aware (pass merges and content facts by heap
     range) or stays off
 - [ ] 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
-  - [ ] 63a MetalFX's docked guard against the scene's content size, not the allocated texture (MacNativeGames ff092e3)
+  - [-] 63a MetalFX's docked guard against the scene's content size, not the allocated texture (MacNativeGames ff092e3): their fix is in the
+    docked replacement of the game's own upscaling pass (mfxup_dock), which is 63 itself and not ours yet; our MetalFX (present-time,
+    `fx_apply`) already compares the crop rectangle, the content size, with the size on screen. To keep in mind when 63 comes
 - [ ] 64 for the next game: add-on content, FenceSync, ClearBuffer and the other NVN functions, LDN (the list of 2026-10-20 too)
-  - [ ] 64a the 47 NVN functions bayonetta3-mobile has and we lack (deferred binds, ClearBuffer, indirect draws, getters, ZCull, subtiles)
-  - [ ] 64b CopyCommands as a copy made at the call, a command-handle registry, CALL recursion bounded (dr3's 64 checks)
-  - [ ] 64c depth bounds through `setDepthTestMinBound:maxBound:` (bayonetta3's 24-pixel vectors)
-  - [ ] 64d rasterizer discard (vertex variants that return void), two queues, `SetScissors` / `SetDepthRanges` batches
-  - [ ] 64e several texture and sampler pools (bayonetta3's descriptors, lordran's 58 checks)
-  - [ ] 64f tessellation through a Metal 3 command buffer between Metal 4 submissions
-  - [ ] 64g HSETP2 `.H_AND` as LASRecomp and yuzu (5 vectors); translator call arguments kept local
-  - [ ] 64h symbol resolution as Horizon's rtld; a SystemEvent kept while its detached read end waits
-  - [ ] 64i `getentropy` as HLE_FORCE, `nn::pl::GetSharedFont`, IL2CPP's `stat` / `lstat` by name, the crypto RNG
-  - [ ] 64j AudioOut volume and counters; AVC / AAC from the bytes the game sends; FlushTexels as a CPU write
-  - [ ] 64k named time-zone rules, `IsSaveDataExisting` from the directory, OpenPreselectedUser, the NPDM's system resource size,
-    RegisterClientEvents keeping its pointer, ShowControllerSupport's result, `\` and `/rom:` paths, Unity shader layouts before Unity 6
-  - [ ] 64l the control section length by GPU code version (0x838-0x880; acnh-mobile 0x848)
-  - [ ] 64m guards against Metal aborts: a non-depth format on the depth attachment, a cube view whose slices are not a multiple of 6
-  - [ ] 64n LDN as dr3 (Bonjour, an HMAC-signed control protocol, a two-process test); provisional profiles from the game files
+  - [x] batch 54 · 64a the 47 NVN functions bayonetta3-mobile has and we lack (deferred binds, ClearBuffer, indirect draws, getters, ZCull, subtiles):
+    43 by name against its table; 27 now: the getters of colour state, vertex attribute / stream state, sampler builder (LOD clamp and bias,
+    compare, border colour, anisotropy), texture view (swizzle; the depth / stencil mode is not modelled, so never set), a texture's address, a
+    builder's view offset, the window crop; BindImage, BindTextures, the deferred image / separate texture / separate sampler binds (read at the
+    submission's start as 61b's); the queue's acquire (the window's, without a sync); the checkpoint mask (1, as the shipped SDK, bayonetta3);
+    colour reduction and ZCull's float depth compression accepted with nothing to set in Metal. `gfx/tests/t_nvn64a.m` (10); the new deferred
+    binds read at recording (DM_TEST_DEFER_AT_RECORD): 1 fails
+  - [ ] 64a2 the rest of 64a: ClearBuffer, DrawArrays / DrawElementsIndirect, the IndirectCount multi-draws, DispatchComputeIndirect and
+    Downsample (Metal's indirect draws through `draw()`, whose rewrites read vertex counts on the CPU: deferral, chunks, coverage), the deferred
+    uniform / storage buffer binds (the uniform snapshot walks only plain binds), SetPatchSize with 64f; left to the red-reporting stub: the
+    subtile size calls, GetCommandMemorySize, GetSparseTileLayout (its layout is not in our header) and the integer border colour getters (no
+    setters here)
+  - [x] batch 54 · 64b CopyCommands as a copy made at the call, a command-handle registry, CALL recursion bounded (dr3's 64 checks). Ours
+    recorded a call for both (nxnative's way); the SDK copies for CopyCommands (dr3-mobile read the shipped SDK's helper and its flags). Now:
+    the sources' records collected first, nested calls inlined, BEGIN / JUMP / END left out (the destination's memory callback may hand out the
+    sources' memory), then recorded into the destination; refused whole past 16 call levels, 1,000,000 records or 64 MiB, on a call cycle or a
+    record of a bad size. The replay follows calls 64 deep at most (a cycle recursed until the stack ran out). No handle registry: ours only
+    hands out handles from EndRecording, and a registry of Tears of the Kingdom's (1.28 million calls a run, the addresses reused) would grow
+    with every recording. `gfx/tests/t_copycmd.m` (7: a copy keeps its content when the source is recorded over, a call does not; nested calls
+    inlined; the source's memory handed to the destination meanwhile; two lists in order; a self-calling list refused and, submitted, stopped
+    at 64 deep; a bad record refused); Copy recorded as a call (DM_TEST_COPY_AS_CALL): 4 fail. Neither game calls CopyCommands in its first
+    frames (the call tables of the earlier runs)
+  - [x] batch 54 · 64c depth bounds through `setDepthTestMinBound:maxBound:` (bayonetta3's 24-pixel vectors). `SetDepthBounds` was ignored
+    with a red line; now a record (OP_DEPTH_BOUNDS) the replay keeps in its state and gives each game draw's encoder through the state cache
+    (macOS / iOS 26: Metal 4, and the Metal 3 build behind @available), (0, 1) when off; internal draws (clear quads) turn it off. Metal compares
+    the stored depth, as NVN, and takes only 0 <= min <= max <= 1: bounds above it are clamped, bounds that admit nothing skip the draw.
+    bayonetta3 emulated it in shaders (a depth snapshot read at the fragment's entry); the M5 does it natively. `gfx/tests/t_dbounds.m` (6 cases,
+    36 texels over stored 0.2 0.3 0.5 0.75 0.1 1.0, bayonetta3's vectors with its NaN texel as 0.75: a depth attachment keeps no NaN), with the
+    Metal validation layer; not given to Metal (DM_TEST_DBOUNDS_NOT_SET): 2 fail; empty bounds drawn (DM_TEST_DBOUNDS_EMPTY_DRAWN): 2 fail.
+    `t_nvn` 7b checks the record (149). Neither game enables depth bounds (no red line in any run, the 80-minute soak included)
+  - [x] batch 54 · 64d rasterizer discard (vertex variants that return void), two queues, `SetScissors` / `SetDepthRanges` batches.
+    Rasterizer discard was ignored with a red line (fragments drawn); now a record, and the replay leaves draws out while it is on: exact when
+    the vertex stage writes no memory, reported once when it may (an image or storage binding: its writes are lost; GirlNet's P5R branch builds
+    vertex variants that return void for Metal's rasterization-disabled pipelines, which our shader build does not make). The batch forms went
+    to the red-reporting stub: entry 0 is applied as the single forms, a batch from past 0 or with a differing entry is reported once (GirlNet
+    stops the process there). Two queues: every NVN queue's work goes to the one Metal queue in submission order, so a second queue is ordered
+    with the first; `QueueWaitSync` now answers false on a sync never fenced (the SDK, as dr3 read it; GirlNet the same), true otherwise
+    (manosaba calls it on the acquire sync, which is fenced). `gfx/tests/t_nvn64d.m` (5); discard ignored (DM_TEST_DISCARD_DRAWN): 2 fail
+  - [x] batch 54 · 64e several texture and sampler pools (bayonetta3's descriptors, lordran's 58 checks). All pools shared one ID space (a
+    second pool's IDs read the first's objects; a red line). Now each pool has an ID range in the replay's tables from the base its descriptor
+    memory got at its first initialization (`hle_nvn.c pool_ns`: the first pool 0, so a game with one pool is unchanged; the same memory
+    initialized again keeps its base unless it grew), registrations go to base + ID, and the replay resolves texture, image and sampler handles
+    at the base of the pool a command buffer set last (`h_tid` / `h_sid` at every handle decode; a switch invalidates the argument-buffer
+    reuse). Neither game sets a second pool (no such line in any run). `gfx/tests/t_pools.m` (5: the same ID 5 in two texture pools and ID 3 in
+    two sampler pools resolve by the pool set; back to the first; the base kept); one ID space (DM_TEST_POOLS_ONE_SPACE): 4 fail
+  - [ ] 64f tessellation through a Metal 3 command buffer between Metal 4 submissions. With the next game that tessellates: neither has a
+    tessellation stage (control +0x714 of every capture is 0, 1 or 5: TotK 28,652 + 24,371, manosaba 2,740), ProgramSetShaders already reports one
+    red, and it needs the translator's hull / domain stages as well
+  - [ ] 64g HSETP2 `.H_AND` as LASRecomp and yuzu (5 vectors); translator call arguments kept local. With the next change of the translation
+    chain: both are translator changes, so the chain version moves and every shader of both games is translated again (Tears of the Kingdom's
+    25,320 and manosaba's 1,299, and the iOS libraries), while neither game has the instruction (the review counted 0 uses)
+  - [x] batch 54 · 64h symbol resolution as Horizon's rtld (the SystemEvent: 64h2). The ISC-licensed oss-rtld reimplementation's rules: a
+    reference of hidden or protected visibility binds in its own module; one of default visibility to the first module, in the order main,
+    subsdk0-9, sdk, that defines the name with a non-local binding (not undefined, not SHN_COMMON), even when its own module defines it too (UE4's
+    main overrides malloc for every module). Ours bound a symbol its module defines there and looked others up in the profile's module order.
+    Both are worked out for every symbol relocation (`bind_sym`), and each module's relocation line counts where they differ (the first four
+    named): in both games main and subsdk0 0, the sdk 801 (manosaba) and 782 (TotK), all typeinfo, vtables and the like (`_ZTSSt9bad_alloc`,
+    `_ZTIN2nn2sf13ISharedObjectE`, `_ZTCNSt3__118basic_stringstream…`) that rtld binds to main's or subsdk0's copies. With rtld's binding both
+    games ran the same (manosaba's shots within 0.19 %, no red line; TotK's s800 0.02 %, s1300 / s1800 inside their usual spread, the same three
+    red lines and frame times), so it is the default; DM_RTLD=0 binds by ours. `host/tests/t_rtld.c` (7, synthetic modules in TotK's profile
+    order, the default included); the profile's order kept (DM_TEST_RTLD_LOAD_ORDER): 3 fail; ours as the default (DM_TEST_RTLD_DEFAULT_OURS): 1
+    fails
+  - [ ] 64h2 a SystemEvent kept while its detached read end waits (blade2-mobile, UE4's audio renderer): neither game's main or subsdk0 imports
+    `DetachReadableHandleOfSystemEvent` (only the sdk defines it); with a UE4 game
+  - [x] batch 54 · 64i `getentropy` as HLE_FORCE, `nn::pl::GetSharedFont`, IL2CPP's `stat` / `lstat` by name, the crypto RNG. getentropy taken
+    over also where a module defines it (both games' sdk does: it refuses more than 256 bytes with errno 5, kept, and otherwise asks its random
+    generator); `nn::crypto::GenerateCryptographicallyRandomBytes` and `nn::os::GenerateRandomBytes` from the host's entropy stream too (on the
+    console a csrng session, a service the host does not have: armyja's game reached std::terminate), deterministic with DM_DETCLOCK.
+    GetSharedFont: every shared font at once in SharedFontData {type, address, size}, 24 bytes each (read off manosaba's sdk+0x40f8d0, which
+    writes type at +0, address at +8, size at +16), in type order (the SDK reference says the order differs by language and gives no table;
+    strato answers in type order too, with a TODO). IL2CPP's `SystemNative_Stat` / `LStat` are not dynamic symbols in manosaba's main, so there is
+    no name to take over; armyja patches them by per-build offsets, which waits for a Unity game that needs it. `host/tests/t_rng_font.c` (5);
+    fonts in reverse order (DM_TEST_FONT_REVERSED): 2 fail
+  - [x] batch 54 · 64j AudioOut volume and counters; FlushTexels as a CPU write (AVC / AAC from the bytes the game sends: 64j2). Both games'
+    subsdk0 import `GetAudioOutPlayedSampleCount`, which the host did not take over: the SDK's own looks the AudioOut up in its session table,
+    finds none for a host output and reads through a null pointer (manosaba sdk+0x1f8630; BufferCount, Flush and the volume calls the same).
+    Now Set / GetAudioOutVolume (the gain applied as the game's samples are taken, saturated; kept as given, a negative or NaN gain plays as 0),
+    GetAudioOutPlayedSampleCount (sample frames of the game's buffers played since the last StartAudioOut, as the SDK reference words it),
+    GetAudioOutBufferCount (pending, the one playing included), ContainsAudioOutBuffer (pending or released and not taken back) and
+    FlushAudioOutBuffers (only while started, false otherwise; the pending buffers released unplayed and the event signalled, the consumer held off
+    around the move), with the semantics of the SDK reference and yuzu's `audio_out_system.cpp` (facts only; acnh-mobile flushes only when
+    stopped). `host/tests/t_audio_extras.c` (8); volume not applied (DM_TEST_AUDIO_VOLUME_IGNORED): 3 fail; the played count not started again
+    (DM_TEST_AUDIO_PLAYED_KEPT): 1 fails.
+    FlushTexels: a texture whose storage is its content (packaged, CPU-filled, linear on its pool buffer) needs nothing, its pages are watched; one
+    whose content is its MTLTexture (the GPU has written it) takes the flushed region from its storage, unless WriteTexels wrote it since its last
+    flush (ours writes such a texture's MTLTexture and not its storage, so taking the storage would undo it: Tears of the Kingdom pairs each of its
+    42 WriteTexels with a FlushTexels; dr3-mobile's game writes the storage itself, 491 flushes before its first frame). `gfx/tests/t_flushtexels.m`
+    (3); flush ignored (DM_TEST_FLUSH_IGNORED): 1 fails; the region taken after a WriteTexels too (DM_TEST_FLUSH_AFTER_WT): 2 fail
+  - [ ] 64j2 AVC / AAC decoded from the bytes the game sends (lordran acfb424: VideoToolbox from SPS / PPS, the reorder window from the SPS,
+    AudioConverter for AAC; about 1,000 lines). Ours decodes the same track again with AVFoundation, and its Extractor hands the game that track's
+    own samples, so for manosaba the bytes and the re-read agree. With the next game that demuxes itself or gives a memory source, or a desync seen
+  - [x] batch 54 · 64k named time-zone rules, `IsSaveDataExisting` from the directory, OpenPreselectedUser, the NPDM's system resource size,
+    RegisterClientEvents keeping its pointer, ShowControllerSupport's result, `\` and `/rom:` paths, Unity shader layouts before Unity 6.
+    Named rules: LoadTimeZoneRule keeps the location in the caller's rule (validated with CFTimeZone; an unknown name, against the SDK's precondition,
+    red and UTC), and the rule overloads of ToCalendarTime / ToPosixTime convert by that zone (ToPosixTime keeps each of the offsets a day before and
+    after that converts back: two for a repeated hour, none for a skipped one or February 30, with success); GetDeviceLocationName the host's zone.
+    Neither game calls them (both use the device zone, whose cases t_time already has). `host/tests/t_tzrule.c` (13, with the host zone UTC); the
+    rule ignored for the device zone (DM_TEST_TZRULE_DEVICE): 7 fail. IsSaveDataExisting (manosaba imports both overloads, TotK the one with an
+    application) answered yes always: now whether $DM_SAVE is there, and EnsureSaveData makes it (it was a no-op), so a first launch sees no save
+    as on the console; t_fs +1 (DM_TEST_SAVE_ALWAYS: 1 fails). OpenPreselectedUser (the Result variant; both games call TryOpenPreselectedUser):
+    the same local user. The system resource size: done by 160 (game.json `npdm.system_resource_size`, GetInfo 16 / 17). Movie decoders keep the
+    game's DecoderEvents and read it when they signal (blade2-mobile's game registers the four pointers before making the events): t_movie
+    registers an empty array and fills it after; copied at registration (DM_TEST_EVENTS_COPIED): 3 fail. ShowControllerSupport (both games import
+    the variant with a result) wrote nothing: now playerCount 1 at +0 and the connected Npad at +4 (SDK reference layout); `host/tests/t_hid_applet.c`
+    (4; nothing written, DM_TEST_CTLSUPPORT_SILENT: 2 fail). Paths: a separator before the mount name ("/rom:/…", Unity's Path.GetFullPath) and
+    '\' between components (armyja's Ace Attorney) taken, IsPathMounted too; t_fs +2 (DM_TEST_PATH_STRICT: 2 fail). [-] Unity shader layouts:
+    our shaders are captured from the NVN calls at run time (`shmap_from_capture.py`), never split out of Unity's serialized files, so the layout
+    of Unity's Shader objects does not reach us
+  - [x] batch 54 · 64l the control section length by GPU code version (0x838-0x880; acnh-mobile 0x848). The shader key and the capture read 0x880
+    bytes of every control section; a shorter one (GPU code 1.12 0x838, 1.14 0x848, 1.15 0x850, the length at +0x20: bayonetta3-mobile's
+    nvn_control.h as data) hashed and dumped whatever followed it, and could run off its mapping. Now its own length and zeros to 0x880, so the .ctl
+    files keep the 0x880 bytes dmsh_build.py checks and keys still match the offline tools; another version is reported once and read as before.
+    Both games' captures are all 1.16 / 0x880 (TotK 28,652 + 24,371, manosaba 2,740), so no key of theirs moves. t_nvn 5b2 (+3, 152); always
+    0x880 (DM_TEST_CTL_FIXED): 2 fail
+  - [x] batch 54 · 64m guards against Metal aborts: a non-depth format on the depth attachment, a cube view whose slices are not a multiple of 6
+    (super-mario-odyssey-ios 693bc6b / 356ab26, MIT, written anew; not seen in our games). A depth target whose Metal format is not depth-renderable
+    is left out of the pass (red once; the pipeline's depth format follows the attachment), and a cube-typed view of a number of faces not a
+    multiple of 6 is made as a 2D view (one face) or a 2D array. Both abort the process on the Mac with or without the debug layer (SIGABRT, checked
+    with the negatives). A third, found by the TotK run with DM_TEST_NO_BC=1 (62c's comparison): a BC texture kept decompressed or as ASTC on a GPU
+    without BC has no Metal view of another format, and TotK's BC encoders write their blocks through a one-texel-per-block integer view (RGBA16UI
+    of BC4 → a view of R8Unorm): the abort in Metal's view validation came between frames 120 and 180. Such an attachment or clear is now left out,
+    red once (decoding the blocks into the texture: 62c3). `gfx/tests/t_mtlguard.m` (4, each case in a process of its own: the test run again with
+    --case, since Metal's compiler service is not reachable from a forked child); any format attached as depth (DM_TEST_DEPTH_ANY_FORMAT): 1
+    fails; the cube type kept (DM_TEST_CUBE_VIEW_KEPT): 2 fail; the views of an unpacked BC texture made (DM_TEST_UNPACKED_VIEW): 1 fails
+  - [x] batch 54 · 64n provisional profiles from the game files (LDN: 64n2). `tools/new_game.py` already drafts a profile from the dump (modules,
+    build ID, program ID, the NPDM's system resource size and thread priorities, Unity by its RomFS); now `--check` works those keys out again from
+    each profile's own workspace and compares them with the hand-made game.json, printing the engine markers of the code modules as facts
+    (nxnative's profile_guess.py --check and its marker list, MIT, as data): both games agree (manosaba: Unity, FMOD, NVN; Tears of the Kingdom:
+    sead, agl, Havok, NVN). `tools/tests/t_new_game.py` (2: a synthetic NPDM, and --check when the dumps are under DM_ROOT); the priorities read
+    the wrong way round (T_NEW_GAME_PRIO_SWAPPED=1): 1 fails, 2 with the dumps
+  - [ ] 64n2 LDN as dr3 (Bonjour, an HMAC-signed control protocol, a two-process test): neither game imports any `nn::ldn` function; with the next
+    game that has local play
 - [ ] 112 conditional rendering on the GPU (a kernel writing indirect draw arguments)
 - [ ] 113 framebuffer fetch for in-pass reads of the current pixel (after 42)
 - [ ] 114 an iOS Simulator build for the touch controls, safe areas and lifecycle

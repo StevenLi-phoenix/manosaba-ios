@@ -65,3 +65,21 @@ static int font_ok(int t) {
 HLE_FORCE_OPT("_ZN2nn2pl22GetSharedFontLoadStateENS0_14SharedFontTypeE", "shared font load state: loaded once the host has read it (1)", int, h_pl_LoadState, int t) { return font_ok(t); }
 HLE_FORCE_OPT("_ZN2nn2pl20GetSharedFontAddressENS0_14SharedFontTypeE", "shared font address: the plain TTF in the host's shared memory block", const void *, h_pl_Address, int t) { font_ok(t); return g_shm + g_off[t]; }
 HLE_FORCE_OPT("_ZN2nn2pl17GetSharedFontSizeENS0_14SharedFontTypeE", "shared font size: TTF bytes", size_t, h_pl_Size, int t) { font_ok(t); return g_size[t]; }
+// Every font at once (plan item 64i; Touchable does it with a fallback font): the SDK's own asks pl:u for the fonts in the language's order and fills
+// SharedFontData {type, address, size}, 24 bytes each (both games' sdk: sdk+0x40f8d0 in manosaba's writes type at +0, address at +8, size at +16).
+// The language's order is not known (the SDK reference says only that it differs by language, e.g. a Chinese font before the standard one for
+// Chinese; strato answers in type order, with a TODO): type order here. True once every font is there (font_ok stops naming a missing file, as the others do)
+typedef struct { uint32_t type, pad; const void *address; uint64_t size; } shared_font_data;
+_Static_assert(sizeof(shared_font_data) == 24, "SharedFontData is 24 bytes");
+HLE_FORCE_OPT("_ZN2nn2pl13GetSharedFontEPiPNS0_14SharedFontDataEiNS_8settings12LanguageCodeE", "every shared font, in type order", int, h_pl_GetSharedFont,
+              int *count, shared_font_data *out, int max, uint64_t language) {
+    (void)language;
+    for (int t = 0; t < NFONT; t++) font_ok(t);
+    *count = NFONT;
+#ifndef DM_TEST_FONT_REVERSED   // negative control of host/tests t_rng_font only
+    for (int i = 0; i < NFONT && i < max; i++) out[i] = (shared_font_data){(uint32_t)i, 0, g_shm + g_off[i], g_size[i]};
+#else
+    for (int i = 0; i < NFONT && i < max; i++) { int t = NFONT - 1 - i; out[i] = (shared_font_data){(uint32_t)t, 0, g_shm + g_off[t], g_size[t]}; }
+#endif
+    return 1;
+}

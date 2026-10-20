@@ -40,6 +40,7 @@ SRC = \
 	movie_av.m \
 	movie_webm.c \
 	options.c \
+	romfs_parts.c \
 	romfs_validate.c \
 	sdktest.c \
 	sead.c \
@@ -55,7 +56,8 @@ FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework 
 	-framework UniformTypeIdentifiers -framework GameController -framework Network -framework AVFoundation -framework CoreMedia -framework CoreVideo
 INCLUDES = -I. -I../gfx/nvn/include -I$(GAMEDIR)
 # VP8 / VP9 movies (hle_movie.c: Tears of the Kingdom's cutscenes) decode with libvpx when it is installed (brew install libvpx; the static library is
-# linked in, BSD-3-Clause). -isystem and the archive are not taken over by the iOS app (ios/tools/gen_build.py), which has no VP9 decoder yet
+# linked in, BSD-3-Clause). -isystem and the archive are not taken over by the iOS app (ios/tools/gen_build.py): it links its own, built by
+# ios/tools/build_libvpx.sh (ios/run.sh, plan item 62b)
 VPX ?= /opt/homebrew/opt/libvpx
 VPX_LIB := $(wildcard $(VPX)/lib/libvpx.a)
 VPX_FLAGS := $(if $(VPX_LIB),-isystem $(VPX)/include $(VPX_LIB))

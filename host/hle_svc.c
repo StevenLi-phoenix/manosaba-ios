@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <TargetConditionals.h>
 #include <mach/mach.h>
+#include "guest_as.h"
 #include <errno.h>
 #include <unistd.h>
 #include <sched.h>
@@ -71,38 +72,54 @@ static void mem_init(void) {
     const char *e = getenv("DM_GUEST_AS_GB"); if (e && atoi(e) >= 6) g_reserve = (size_t)atoi(e) << 30;
 #if TARGET_OS_IPHONE
     // Without the extended virtual addressing entitlement (a free account cannot sign it) the largest single reservation varies by device and OS:
-    // 6 GB already fails on an iPhone 17 Pro (iOS 26.4). Step down from 6 GB by 256 MB until it succeeds; everything except the 256 MB prefix, the
-    // 256 MB stack region and the profile's heap (guest_heap_mb) goes to the alias region (manosaba on the Mac: a 90 s story run peaks at 1166 MB
-    // of alias used, highest offset 2460 MB).
+    // 6 GB already fails on an iPhone 17 Pro (iOS 26.4). From 6 GB down by 256 MB to what the game needs, in the lowest free gap from 4 GB that ends
+    // below 2^39 (guest_as.h, plan item 62a; done at the top of main(), before UIKit and Metal map theirs: svc_reserve_early), the free gaps logged
+    // when it is less than 6 GB; mmap's own choice if that fails. Everything except the 256 MB prefix, the 256 MB stack region and the profile's
+    // heap (guest_heap_mb) goes to the alias region (manosaba on the Mac: a 90 s story run peaks at 1166 MB of alias used, highest offset 2460 MB),
+    // which needs 1.5 GB at least (VammManager keeps ~1 GB)
     if (!e) {
-        for (size_t r = g_reserve; r >= 0x80000000ull; r -= 0x10000000ull) {
+        size_t heap = (size_t)(dm_game.guest_heap_mb ? dm_game.guest_heap_mb : 256) << 20, want = g_reserve, least = 0x20000000ull + heap + 0x60000000ull;
+        if (least > want) die("reserve guest AS: a %zu MB heap needs %zu MB, more than the %zu MB asked for", heap >> 20, least >> 20, want >> 20);
+        static as_gap gaps[1024]; int ng = as_gaps(gaps, 1024, AS_FROM, AS_LIMIT), ingap = 0; uint64_t at = 0, size = 0;
+        if (as_pick(gaps, ng, want, least, 0x10000000ull, 2ull << 20, &at, &size) && (g_as = as_reserve_at(at, size))) { g_reserve = size; ingap = 1; }
+        else for (size_t r = want; r >= least; r -= 0x10000000ull) {
             g_as = mmap(NULL, r, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
             if (g_as != MAP_FAILED) { g_reserve = r; break; }
             g_as = NULL;
         }
-        if (!g_as) die("reserve guest AS: not even 2 GB could be reserved");
-        size_t heap = (size_t)(dm_game.guest_heap_mb ? dm_game.guest_heap_mb : 256) << 20;
-        if (heap > g_reserve - 0x80000000ull) die("reserve guest AS: %zu MB cannot hold a %zu MB heap", g_reserve >> 20, heap >> 20);
+        if (!g_as || g_reserve < want) as_log_gaps(stderr, gaps, ng);
+        if (!g_as) die("reserve guest AS: not even the %zu MB a %zu MB heap needs could be reserved (free gaps above)", least >> 20, heap >> 20);
         alias_cap = g_reserve - 0x20000000ull - heap;
-        LOG("guest address space: iOS reserved %zu MB (alias %zu MB)", g_reserve >> 20, alias_cap >> 20);
-        if (alias_cap < 0x60000000ull) die("reserve guest AS: only %zu MB, alias region %zu MB is too small (VammManager keeps ~1 GB)", g_reserve >> 20, alias_cap >> 20);
+        LOG("guest address space: iOS reserved %zu MB of %zu (alias %zu MB, heap %zu MB)%s", g_reserve >> 20, want >> 20, alias_cap >> 20, heap >> 20, ingap ? " in a free gap" : " where mmap put it");
     }
 #endif
     if (!g_as) g_as = mmap(NULL, RESERVE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (g_as == MAP_FAILED) die("reserve guest AS %#zx", RESERVE);
+    if ((uint64_t)(uintptr_t)g_as + RESERVE > AS_LIMIT) {   // past the Switch's 39-bit space (macOS 27 reserves about 24 GB of its own somewhere in 0x70_0000_0000..2^39, MacNativeGames)
+        static as_gap gaps[1024]; uint8_t *was = g_as; uint64_t at, size;
+        int ng = as_gaps(gaps, 1024, AS_FROM, AS_LIMIT);
+        g_as = as_pick(gaps, ng, RESERVE, RESERVE, 0x10000000ull, 2ull << 20, &at, &size) ? as_reserve_at(at, size) : NULL;
+        if (!g_as) { as_log_gaps(stderr, gaps, ng); die("reserve guest AS: %p + %zu MB ends past 2^39 and no free gap below holds it", (void *)was, RESERVE >> 20); }
+        munmap(was, RESERVE);
+        LOG("guest address space: moved below 2^39 from %p", (void *)was);
+    }
     // Partition inside the block: 256 MB prefix, alias region, stack region 256 MB, heap the rest
     g_alias = g_as + 0x10000000; g_alias_cap = alias_cap;
     g_stack = g_alias + g_alias_cap; g_stack_cap = 0x10000000;
     g_heap  = g_stack + g_stack_cap; g_heap_cap  = RESERVE - (size_t)(g_heap - g_as);
-    LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)RESERVE, g_heap, g_alias, g_stack);
+    LOG("guest AS %p +%#llx  heap %p alias %p stack %p (ends %llu MB below 2^39)", g_as, (unsigned long long)RESERVE, g_heap, g_alias, g_stack,
+        (unsigned long long)((AS_LIMIT - ((uint64_t)(uintptr_t)g_as + RESERVE)) >> 20));
 }
+// The guest address space reserved now (iOS main(), before UIKit and Metal take address space: plan item 62a); otherwise at the first svc
+void svc_reserve_early(void) { mem_init(); }
 
-// Application memory pool reported to the game: the 3285 MB a 4 GB Switch gives applications, + DM_APP_POOL_ADD_MB (default 512; may be negative).
+// Application memory pool reported to the game: the 3285 MB a 4 GB Switch gives applications, + DM_APP_POOL_ADD_MB (default 512; on iOS the profile's
+// ios_pool_add_mb, Tears of the Kingdom 0, plan item 62a; may be negative).
 // GetInfo TotalMemory reports it and SetHeapSize refuses a heap that does not fit beside the loaded images.
 #define APP_POOL 0xCD500000ull
 static uint64_t app_pool(void) {
     static uint64_t v;
-    if (!v) { const char *e = getenv("DM_APP_POOL_ADD_MB"); long add = e ? atol(e) : 512; v = APP_POOL + ((uint64_t)add << 20);
+    if (!v) { const char *e = getenv("DM_APP_POOL_ADD_MB"); long add = e ? atol(e) : TARGET_OS_IPHONE ? dm_game.ios_pool_add_mb : 512; v = APP_POOL + ((uint64_t)add << 20);
               if (e) LOG("DM_APP_POOL_ADD_MB: application pool %llu MB (Switch 3285 MB %+ld)", (unsigned long long)(v >> 20), add); }
     return v;
 }

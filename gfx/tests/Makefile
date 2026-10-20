@@ -97,10 +97,14 @@ t_ppred: t_ppred.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ppred.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_bc1astc: t_bc1astc.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bc1astc.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_writetexels: t_writetexels.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_writetexels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_flushtexels: t_flushtexels.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_flushtexels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_vfetch: t_vfetch.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vfetch.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_depth_plain: t_depth_plain.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -111,6 +115,26 @@ t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_trace: t_trace.c ../nvn/nvn_trace.c ../nvn/nvn_trace.h
+	clang $(CFLAGS) -o $@ t_trace.c ../nvn/nvn_trace.c
+t_nvn64a: t_nvn64a.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64a.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_copycmd: t_copycmd.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_copycmd.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_dbounds: t_dbounds.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_dbounds.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_nvn64d: t_nvn64d.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64d.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_pools: t_pools.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pools.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_mtlguard: t_mtlguard.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_mtlguard.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_bindfreeze: t_bindfreeze.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bindfreeze.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_rqueue: t_rqueue.c ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rqueue.c ../../host/crash.c $(HSTACK) $(GFX) $(FW)
+t_rt_continue: t_rt_continue.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_continue.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_upsoak: t_upsoak.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upsoak.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ubren: t_ubren.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -213,6 +237,17 @@ run: \
 	t_shmap \
 	t_cmdalloc \
 	t_upsoak \
+	t_rt_continue \
+	t_rqueue \
+	t_bindfreeze \
+	t_trace \
+	t_bc1astc \
+	t_nvn64a \
+	t_copycmd \
+	t_dbounds \
+	t_nvn64d \
+	t_pools \
+	t_mtlguard \
 	t_fuse_check \
 	t_gputime \
 	t_hmap \
@@ -273,6 +308,7 @@ run: \
 	t_warm_list \
 	t_wb \
 	t_writetexels \
+	t_flushtexels \
 	t_xv \
 	t_zskip
 	./t_nvn
@@ -327,6 +363,21 @@ run: \
 	TMPDIR=. ./t_shmap
 	TMPDIR=. ./t_cmdalloc
 	./t_upsoak
+	MTL_DEBUG_LAYER=1 ./t_rt_continue
+	DM_NVN_TBDR=0 MTL_DEBUG_LAYER=1 ./t_rt_continue   # the TBDR rewrites off, Tears of the Kingdom's Mac default: every case two passes (plan item 179)
+	./t_rqueue
+	./t_bindfreeze
+	DM_NVN_UBO_SNAPSHOT=0 ./t_bindfreeze   # the walk for deferred handles alone (plan item 61b)
+	TMPDIR=. ./t_trace
+	MTL_DEBUG_LAYER=1 ./t_bc1astc
+	./t_bc1astc off   # DM_NVN_BC1_ASTC=0: BC1 decompressed as before (plan item 62c)
+	./t_nvn64a
+	./t_copycmd
+	MTL_DEBUG_LAYER=1 ./t_dbounds
+	MTL_DEBUG_LAYER=1 ./t_nvn64d
+	./t_pools
+	MTL_DEBUG_LAYER=1 ./t_mtlguard
+	MTL_DEBUG_LAYER=1 ./t_flushtexels
 	MTL_DEBUG_LAYER=1 ./t_fout
 	MTL_DEBUG_LAYER=1 ./t_rtheap
 	./t_linkfifo

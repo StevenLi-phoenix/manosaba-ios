@@ -22,6 +22,10 @@ HLE_FORCE("_ZN2nn7account16ShowUserSelectorEPNS0_3UidERKNS0_21UserSelectionSetti
 HLE_FORCE("_ZN2nn7account22TryOpenPreselectedUserEPNS0_10UserHandleE", "user preselected at launch: always the local user (returns bool)", unsigned, h_acc_TryOpenPre, UserHandle *h) {
     h->v[0] = k_uid.v[0]; h->v[1] = k_uid.v[1]; h->v[2] = HANDLE_MAGIC; return 1;
 }
+// The Result variant (plan item 64k; blade2-mobile's game calls it): the same local user
+HLE_FORCE_OPT("_ZN2nn7account19OpenPreselectedUserEPNS0_10UserHandleE", "user preselected at launch: the local user", Result, h_acc_OpenPre, UserHandle *h) {
+    h->v[0] = k_uid.v[0]; h->v[1] = k_uid.v[1]; h->v[2] = HANDLE_MAGIC; return RES_OK;
+}
 HLE_FORCE("_ZN2nn7account8OpenUserEPNS0_10UserHandleERKNS0_3UidE", "open user; the handle holds the Uid itself", Result, h_acc_OpenUser, UserHandle *h, const Uid *uid) {
     h->v[0] = uid->v[0]; h->v[1] = uid->v[1]; h->v[2] = HANDLE_MAGIC; return RES_OK;
 }

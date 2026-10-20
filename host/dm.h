@@ -16,7 +16,9 @@ typedef struct { uint64_t r_offset, r_info; int64_t r_addend; } Elf64_Rela;
 #define ELF64_R_SYM(i) ((i) >> 32)
 #define ELF64_R_TYPE(i) ((i) & 0xffffffff)
 #define ELF64_ST_BIND(i) ((i) >> 4)
-enum { STB_WEAK = 2 };
+#define ELF64_ST_VISIBILITY(o) ((o) & 3)
+enum { STB_LOCAL = 0, STB_WEAK = 2 };
+enum { STV_DEFAULT = 0, SHN_COMMON = 0xfff2 };
 enum { DT_INIT = 12, DT_RELA = 7, DT_RELASZ = 8, DT_JMPREL = 23, DT_PLTRELSZ = 2, DT_SYMTAB = 6, DT_STRTAB = 5,
        DT_INIT_ARRAY = 25, DT_INIT_ARRAYSZ = 27 };
 enum { R_AARCH64_ABS64 = 257, R_AARCH64_GLOB_DAT = 1025, R_AARCH64_JUMP_SLOT = 1026, R_AARCH64_RELATIVE = 1027 };

@@ -1,17 +1,25 @@
 // nn::oe (application operating environment): on the console the state comes from the am / oe services; the host answers with its own state.
 // oe::Initialize is in hle_sdkinit.c.
-// Environment: DM_OPMODE=0 handheld / 1 console (default 1); DM_LANG=language code (default: the game profile's language);
+// Environment: DM_OPMODE=0 handheld / 1 console (default 1; on iOS the profile's ios_mode); DM_LANG=language code (default: the game profile's language);
 // DM_OE_SCRIPT="focus=3@10,focus=1@20,opmode=0@30" changes state at those seconds (counted from the game's first notification fetch), for testing without a window.
 #include "hle.h"
 #include "game.h"
+#include <TargetConditionals.h>
 #include <stdatomic.h>
 #include <unistd.h>
 
-// Operation mode: runtime state (the front end may change it), read once from DM_OPMODE
+// Operation mode: runtime state (the front end may change it), first DM_OPMODE when it is set; else on iOS handheld for a game whose profile says
+// so (game.json "ios_mode": "handheld", plan item 62d: Tears of the Kingdom renders 1280x720 as the console in hand, not 1920x1080), else console
+int dm_opmode_start(const char *env, int iphone, int ios_handheld) {
+#ifndef DM_TEST_OPMODE_NO_IOS   // negative control of host/tests t_oe only: the profile's iOS mode not read
+    if (!env && iphone && ios_handheld) return 0;
+#endif
+    return env ? atoi(env) : 1;
+}
 static _Atomic int g_opmode = -1;
 int dm_opmode(void) {
     int m = g_opmode;
-    if (m < 0) { const char *e = getenv("DM_OPMODE"); int v = e ? atoi(e) : 1; int exp = -1; atomic_compare_exchange_strong(&g_opmode, &exp, v); m = g_opmode; }
+    if (m < 0) { int v = dm_opmode_start(getenv("DM_OPMODE"), TARGET_OS_IPHONE, dm_game.ios_handheld); int exp = -1; atomic_compare_exchange_strong(&g_opmode, &exp, v); m = g_opmode; }
     return m;
 }
 

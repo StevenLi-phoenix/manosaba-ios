@@ -15,7 +15,7 @@
 #include <dispatch/dispatch.h>
 
 enum { RS_PSO, RS_DSS, RS_VIEWPORT, RS_SCISSOR, RS_CULL, RS_WINDING, RS_FILL, RS_BIAS, RS_CLIP, RS_STENCIL, RS_BLEND, RS_VISIBILITY, RS_ADDRESS,
-       RS_INSTANCED, RS_INDEXED, RS_STORE, RS_LAYER, RS_BEGIN, RS_END };
+       RS_INSTANCED, RS_INDEXED, RS_STORE, RS_LAYER, RS_DBOUNDS, RS_BEGIN, RS_END };
 enum { RS_CAP = 4096, RS_SPIN_NS = 200000 };
 typedef struct { uint64_t op, u[8]; } rs_packet;
 static struct {
@@ -62,6 +62,7 @@ static void rs_apply(id<MTL4RenderCommandEncoder> __strong *enc, const rs_packet
         case RS_FILL: [e setTriangleFillMode:(MTLTriangleFillMode)u[0]]; break;
         case RS_BIAS: { float v[3]; memcpy(v, u, sizeof v); [e setDepthBias:v[0] slopeScale:v[1] clamp:v[2]]; break; }
         case RS_CLIP: [e setDepthClipMode:(MTLDepthClipMode)u[0]]; break;
+        case RS_DBOUNDS: { float v[2]; memcpy(v, u, sizeof v); [e setDepthTestMinBound:v[0] maxBound:v[1]]; break; }
         case RS_STENCIL: [e setStencilReferenceValue:(uint32_t)u[0]]; break;
         case RS_BLEND: { float v[4]; memcpy(v, u, sizeof v); [e setBlendColorRed:v[0] green:v[1] blue:v[2] alpha:v[3]]; break; }
         case RS_VISIBILITY: [e setVisibilityResultMode:(MTLVisibilityResultMode)u[0] offset:(NSUInteger)u[1]]; break;

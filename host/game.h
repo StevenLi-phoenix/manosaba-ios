@@ -13,6 +13,8 @@ typedef struct {
     const char *languages;                    // the game's languages, space-separated nn::settings codes (game.json "languages"; host/lang.h)
     int screen_w, screen_h;                   // console output size the game renders at (touch space until the game sets a crop)
     unsigned guest_heap_mb;                   // heap region on iOS; the rest of the address space reservation goes to the alias region
+    int ios_pool_add_mb;                      // on iOS, MB added to the console's 3285 MB application pool (game.json ios_pool_add_mb, default 512 as on the Mac;
+                                              //    Tears of the Kingdom 0: the console's pool, its heap in the reservation; DM_APP_POOL_ADD_MB overrides)
     int nvn_api_major, nvn_api_minor;         // NVN API version nvnDeviceGetInteger reports (game.json device_api "major.minor")
     struct { int tex, ntex, samp, nsamp, img, nimg; } nvn_c2;   // c[2] handle tables of the game's shaders: byte base and slot count (game.json nvn_c2)
     int nvn_depth_mode;                       // NVNdepthMode its shaders were built for (game.json depth_mode: 0 near_is_minus_w, 1 near_is_zero)
@@ -23,6 +25,7 @@ typedef struct {
                                               //    which on the console is the HOME menu: Tears of the Kingdom stops there); minimized is Background either way
     int virtual_cores;                        // 1: guest threads hold one of three virtual cores while running guest code (game.json virtual_cores; hle_thread.c): the game
                                               //    keeps per-core data without locks (Tears of the Kingdom)
+    int ios_handheld;                         // 1: on iOS the operation mode starts handheld (game.json ios_mode "handheld", hle_oe.c; default "console")
     int touch_pad;                            // 1: on iOS the touchscreen is on-screen controls (game.json touch "pad", host/touchpad.c) for a game steered with a
                                               //    controller; default "screen": touches go to the game's touchscreen
     uint32_t npdm_sysres;                     // the NPDM's SystemResourceSize (game.json npdm.system_resource_size; GetInfo 16; 0 = the host's 32 MiB)
