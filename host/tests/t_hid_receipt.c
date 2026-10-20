@@ -29,7 +29,10 @@ static void exercise(int which) {
  char path[256];snprintf(path,sizeof path,"%s/hid-receipt-%d.jsonl",getenv("TMPDIR")?getenv("TMPDIR"):"/tmp",getpid());unlink(path);
  unsetenv("DM_KEYS");unsetenv("DM_HID_RECEIPT_LOG");if(which)setenv("DM_HID_RECEIPT_LOG",path,1);if(which==2)setenv("DM_KEYS","A@0+10",1);
  NpadState s;uint32_t id=0;Row *rows=calloc(1024,sizeof *rows);int limit=0,n;
- if(which==4) {
+ if(which==5) {   // a game polling two styles in turn, nothing changing: one line per (controller, style), not one per poll (plan item 145)
+  dm_input_set(0,0,0,0,0);for(int i=0;i<100;i++){id=0;h_hid_GetFullKey(&s,&id);id=0x20;h_hid_GetHandheld(&s,&id);}
+  n=load(path,rows,&limit);CK(n==2);CK(limit==0);
+ } else if(which==4) {
   dm_input_set(0,0,0,0,0);h_hid_GetFullKey(&s,&id);h_hid_GetFullKey(&s,&id);
   clock_ns+=1000000000ull;h_hid_GetFullKey(&s,&id);
   n=load(path,rows,&limit);CK(n==2);if(n==2){CK(rows[0].sampling==1&&rows[1].sampling==3);CK(rows[1].time-rows[0].time==1000000000ull);CK(!rows[0].buttons&&!rows[1].buttons);}CK(limit==0);
@@ -52,4 +55,4 @@ static void exercise(int which) {
  }
  free(rows);unlink(path);printf("HID_RECEIPT case=%d checks=%d failures=%d\n",which,checks,fails);fflush(stdout);_exit(fails?1:0);
 }
-int main(void){int fail=0;for(int i=0;i<5;i++){pid_t p=fork();if(!p)exercise(i);int s;waitpid(p,&s,0);fail+=!WIFEXITED(s)||WEXITSTATUS(s)!=0;}printf("HID_RECEIPT %s cases=5 failures=%d\n",fail?"FAIL":"PASS",fail);return !!fail;}
+int main(void){int fail=0;for(int i=0;i<6;i++){pid_t p=fork();if(!p)exercise(i);int s;waitpid(p,&s,0);fail+=!WIFEXITED(s)||WEXITSTATUS(s)!=0;}printf("HID_RECEIPT %s cases=6 failures=%d\n",fail?"FAIL":"PASS",fail);return !!fail;}

@@ -7868,6 +7868,54 @@ static void live_rows_write(id<MTLBuffer> b, size_t w, uint64_t n) {   // comple
         for (size_t x = 0; x < w; x += 8) { const uint8_t *q = p + (size_t)r * w * 4 + x * 4; o += (size_t)snprintf(line + o, sizeof line - o, "%02x", (q[0] + q[1] + q[2]) / 3); } }
     line[o] = 0; pthread_mutex_lock(&g_lr_mu); fprintf(g_lr_f, "%s\n", line); fflush(g_lr_f); pthread_mutex_unlock(&g_lr_mu);
 }
+// DM_PRESENT_LUMA=<file> (plan item 145; bayonetta3-mobile's copy of blade2-mobile compares the same frame's guest image and drawable, MIT, written
+// anew): PL_ROWS rows of the present's guest image (its crop) and of the drawable it became, copied after the present pass and averaged ((r + g +
+// b) / 3 of the stored bytes); a line per present ("present, source, output, output / source"), and a red line, once, when the output is under
+// 35 % of a source of 16 or more: the present path (scaling, MetalFX, the drawable's format) darkened the picture. Needs a window: the layer is made
+// readable for it (framebufferOnly off). 8-bit RGBA / BGRA only. Unit test gfx/tests/t_pluma.m
+#define PL_ROWS 18
+static FILE *g_pl_f; static int g_pl_on = -1; static pthread_mutex_t g_pl_mu = PTHREAD_MUTEX_INITIALIZER; static uint64_t g_pl_n, g_pl_dark;
+static __strong id<MTLBuffer> g_pl_buf[3][2];
+static int pl_on(void) {
+    if (g_pl_on < 0) { const char *e = getenv("DM_PRESENT_LUMA"); g_pl_on = e && (g_pl_f = fopen(e, "w")) != NULL;
+        if (e && !g_pl_on) MLOG("[red] DM_PRESENT_LUMA: cannot open %s", e);
+        if (g_pl_on) { fprintf(g_pl_f, "present\tsource\toutput\tratio\n"); MLOG("DM_PRESENT_LUMA: the guest image and the drawable of each present compared in %s", e); } }
+    return g_pl_on;
+}
+static int pl_fmt_ok(MTLPixelFormat f) { return f == MTLPixelFormatRGBA8Unorm || f == MTLPixelFormatRGBA8Unorm_sRGB || f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB; }
+static double pl_mean(const uint8_t *p, size_t w, int rows) { uint64_t sum = 0; for (size_t k = 0; k < w * (size_t)rows; k++) sum += p[4 * k] + p[4 * k + 1] + p[4 * k + 2]; return w ? sum / (3.0 * (double)w * rows) : 0; }
+static int pl_dark(double src, double out) { return src >= 16 && out < 0.35 * src; }
+static id<MTLBuffer> pl_buf(int slot, int k, size_t w) {
+    if (!g_pl_buf[slot][k] || g_pl_buf[slot][k].length < w * 4 * PL_ROWS) { g_pl_buf[slot][k] = [g_dev newBufferWithLength:w * 4 * PL_ROWS options:MTLResourceStorageModeShared]; res_add(g_pl_buf[slot][k]); res_commit(); }
+    return g_pl_buf[slot][k];
+}
+// Copies the rows into this slot's buffers (encoded on cb after the present pass); *ws / *wo the row widths, 0 when a format is not read
+static void pl_encode(id cb, id<MTLTexture> src, const int crop[4], id<MTLTexture> out, int slot, id<MTLBuffer> *bs, id<MTLBuffer> *bo, size_t *ws, size_t *wo) {
+    *ws = *wo = 0;
+    if (!pl_fmt_ok(src.pixelFormat) || !pl_fmt_ok(out.pixelFormat) || out.framebufferOnly) { static int once; if (!once++) MLOG("DM_PRESENT_LUMA: formats %lu / %lu (or a drawable not readable): not compared", (unsigned long)src.pixelFormat, (unsigned long)out.pixelFormat); return; }
+    NSUInteger x = 0, y = 0, w = src.width, h = src.height;
+#ifndef DM_TEST_PLUMA_NO_CROP   // negative control of t_pluma only: the whole guest image, not the part shown
+    if (crop && (crop[2] || crop[3])) { x = (NSUInteger)crop[0]; y = (NSUInteger)crop[1]; w = (NSUInteger)crop[2]; h = (NSUInteger)crop[3]; }
+#endif
+    *bs = pl_buf(slot, 0, w); *bo = pl_buf(slot, 1, out.width);
+    id e = enc_b_begin(cb);
+#if !DM_NVN_M3
+    [(id<MTL4ComputeCommandEncoder>)e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
+#endif
+    for (int r = 0; r < PL_ROWS; r++) {
+        enc_b_copy_texture_buffer(e, src, 0, 0, MTLOriginMake(x, y + (h * (2 * r + 1)) / (2 * PL_ROWS), 0), MTLSizeMake(w, 1, 1), *bs, w * 4 * r, w * 4, w * 4);
+        enc_b_copy_texture_buffer(e, out, 0, 0, MTLOriginMake(0, (out.height * (2 * r + 1)) / (2 * PL_ROWS), 0), MTLSizeMake(out.width, 1, 1), *bo, out.width * 4 * r, out.width * 4, out.width * 4);
+    }
+    m4_end(e);
+    *ws = w; *wo = out.width;
+}
+static void pl_write(uint64_t n, double src, double out) {   // the present's completion
+    if (!g_pl_f) return;
+    pthread_mutex_lock(&g_pl_mu); g_pl_n++;
+    fprintf(g_pl_f, "%llu\t%.2f\t%.2f\t%.3f\n", (unsigned long long)n, src, out, src > 0 ? out / src : 0); fflush(g_pl_f);
+    if (pl_dark(src, out) && !g_pl_dark++) MLOG("[red] DM_PRESENT_LUMA: present %llu shows %.1f where its guest image has %.1f (under 35 %%): the present path darkens the picture", (unsigned long long)n, out, src);
+    pthread_mutex_unlock(&g_pl_mu);
+}
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     g_present_n++;
@@ -7924,6 +7972,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 #if TARGET_OS_OSX
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // Windowed mode follows the display's vsync to prevent tearing
 #endif
+    if (pl_on() && layer.framebufferOnly) layer.framebufferOnly = NO;   // DM_PRESENT_LUMA reads the drawable
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
     uint64_t dt0 = now_ns();
@@ -7940,6 +7989,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     CBUF cb = [g_q commandBuffer];   // older API: presentation is recorded on the command buffer (presentDrawable), so the frame reaches the screen only after its drawing is done
     int fx_crop[4]; id<MTLFence> fx_wait; id<MTLTexture> fx = fx_apply(cb, src, crop, dr.texture, fx_crop, &fx_wait);
     if (!present_encode_m4(cb, fx ?: src, dr.texture, fx ? fx_crop : crop, alloc_i, nil)) return 0;
+    id<MTLBuffer> pl_s = nil, pl_o = nil; size_t pl_sw = 0, pl_ow = 0; uint64_t pl_n = g_present_n; if (pl_on()) pl_encode(cb, src, crop, dr.texture, alloc_i, &pl_s, &pl_o, &pl_sw, &pl_ow);
 #else
     [g_present_alloc4[alloc_i] reset];
     [g_q4 waitForDrawable:dr];
@@ -7951,6 +8001,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     size_t live_w = src.width, live_h = src.height; int live_bgra = src.pixelFormat == MTLPixelFormatBGRA8Unorm || src.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB;
     NSString *live_file = live ? @(live_path) : nil;
     id<MTLBuffer> rows = live_rows(cb, src, g_present_n); uint64_t rows_n = g_present_n;
+    id<MTLBuffer> pl_s = nil, pl_o = nil; size_t pl_sw = 0, pl_ow = 0; uint64_t pl_n = g_present_n; if (pl_on()) pl_encode(cb, src, crop, dr.texture, alloc_i, &pl_s, &pl_o, &pl_sw, &pl_ow);
     [cb endCommandBuffer];
 #endif
 #if !DM_NVN_M3
@@ -7959,6 +8010,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [FB_ON(o, cb) FB_SEL:^(FB_ARG f) {
         if (f.error) MLOG("[red] present command buffer error: %s", f.error.description.UTF8String);
         pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
+        if (pl_sw && pl_ow) pl_write(pl_n, pl_mean(pl_s.contents, pl_sw, PL_ROWS), pl_mean(pl_o.contents, pl_ow, PL_ROWS));
 #if !DM_NVN_M3
         if (live) dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ png_write_buf(live, live_w, live_h, live_bgra, live_file.UTF8String); });
         if (rows) live_rows_write(rows, live_w, rows_n);

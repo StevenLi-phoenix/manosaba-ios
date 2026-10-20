@@ -13,6 +13,7 @@ void svc_thread_dump(void) {}
 void crash_install(void);
 void nvn_present_config(int hz, int display_mode);
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include <unistd.h>
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
@@ -85,7 +86,10 @@ static size_t tex_size(int fmt, int w, int h, int flags, size_t *align) {
     return P(nvnTextureBuilderGetStorageSize)(&tb);
 }
 
+static char g_tsv_path[600];   // 6h: the frame log, capped at 1 MB
 int main(void) {
+    snprintf(g_tsv_path, sizeof g_tsv_path, "%s/t_nvn_%d.tsv", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", getpid());
+    setenv("DM_NVN_TSV", g_tsv_path, 1); setenv("DM_NVN_TSV_MAX_MB", "1", 1);
     crash_install();   // the same SIGSEGV / SIGBUS handling as production (the page-fault hook is dispatched from within it)
     // 1. Bootstrap address lookup: bootstrap gets GetProcAddress, then uses it to get all the names
     PFNNVNBOOTSTRAPLOADERPROC boot = (PFNNVNBOOTSTRAPLOADERPROC)h_nvnBootstrapLoader;
@@ -777,6 +781,25 @@ int main(void) {
             printf("    acquire took %.1f ms, early %llu\n", ms, (unsigned long long)(g_acq_early - e0));
         }
         g_acq_gpu = 0; mtl_present_flush();
+    }
+
+    // 6h. The frame log's size cap (plan item 145; DM_NVN_TSV_MAX_MB=1, set at the start): filled past 1 MB, the next frame's end writes the cap
+    //     line and stops; two more frames add nothing
+    {
+        NVNwindowBuilder wb5; NVNwindow w5; P(nvnWindowBuilderSetDevice)(&wb5, &dev); P(nvnWindowBuilderSetDefaults)(&wb5);
+        NVNtexture *sc2[2] = {&sc[0], &sc[1]};
+        P(nvnWindowBuilderSetTextures)(&wb5, 2, sc2); P(nvnWindowInitialize)(&w5, &wb5);
+        static char fill[1100000]; memset(fill, '#', sizeof fill); fill[sizeof fill - 1] = '\n';
+        int ix; P(nvnWindowAcquireTexture)(&w5, NULL, &ix);
+        if (g_tsv) fwrite(fill, 1, sizeof fill, g_tsv);
+        P(nvnQueuePresentTexture)(&q, &w5, ix);
+        struct stat st1 = {0}, st2 = {0}; stat(g_tsv_path, &st1);
+        for (int k = 0; k < 2; k++) { P(nvnWindowAcquireTexture)(&w5, NULL, &ix); P(nvnQueuePresentTexture)(&q, &w5, ix); }
+        stat(g_tsv_path, &st2);
+        char tail[200] = ""; FILE *f = fopen(g_tsv_path, "r"); if (f) { fseek(f, -150, SEEK_END); size_t r = fread(tail, 1, sizeof tail - 1, f); tail[r] = 0; fclose(f); }
+        EXPECT("frame log past its 1 MB cap: the cap line written, then nothing more", 1, strstr(tail, "# size cap of 1 MB reached") && st1.st_size == st2.st_size && st1.st_size > 1048576);
+        printf("    frame log %lld bytes, then %lld\n", (long long)st1.st_size, (long long)st2.st_size);
+        mtl_present_flush(); unlink(g_tsv_path);
     }
 
     // 6b. Shader key = sha256(0x880-byte control section + code area of the length at control +0x704)[:8]: a shader with the same control

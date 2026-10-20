@@ -43,6 +43,7 @@ run: \
 	$(B)/t_guest_mem_heapold \
 	$(B)/t_guest_mem_physold \
 	$(B)/t_hid_receipt \
+	$(B)/t_hid_receipt_oneslot \
 	$(B)/t_hid_script \
 	$(B)/t_hid_script_nocircle \
 	$(B)/t_hstack \
@@ -173,6 +174,10 @@ run: \
 	   tail -5 $(B)/t_guest_mem_heapold.log; echo "t_guest_mem_heapold: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_guest_mem_heapold: the old SetHeapSize takes a 1-byte heap and the next growth faults, as expected"
 	$(B)/t_hid_receipt 2>/dev/null
+	@status=0; $(B)/t_hid_receipt_oneslot > $(B)/t_hid_receipt_oneslot.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "HID_RECEIPT FAIL cases=6 failures=1" $(B)/t_hid_receipt_oneslot.log; then \
+	   cat $(B)/t_hid_receipt_oneslot.log; echo "t_hid_receipt_oneslot: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_hid_receipt_oneslot: one slot for all styles logs every poll of a game polling two, as expected"
 	$(B)/t_hid_script 2>/dev/null
 	@status=0; $(B)/t_hid_script_nocircle > $(B)/t_hid_script_nocircle.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL LSL and LSU overlap" $(B)/t_hid_script_nocircle.log; then \
@@ -474,6 +479,8 @@ $(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | 
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
+$(B)/t_hid_receipt_oneslot: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_RECEIPT_ONE_SLOT -I.. -o $@ t_hid_receipt.c
 $(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c ../touchpad.c
 $(B)/t_hid_script_nocircle: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)

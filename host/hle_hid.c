@@ -128,13 +128,20 @@ static void receipt_init(void) {
         if (!g_receipt_file) LOG("[red] DM_HID_RECEIPT_LOG: cannot open %s", path);
     }
 }
+// Each (controller, style) is deduplicated on its own (plan item 145, bayonetta3-mobile's copy of blade2-mobile, MIT): a game that polls several styles
+// in turn otherwise made every poll a change and used up the 1,024 lines in seconds
 static void receipt(const NpadState *s, uint32_t id, uint32_t style, uint64_t km, uint64_t read_start_ns) {
     if (!g_receipt_file) return;
-    static NpadState last; static uint32_t last_id, last_style;
-    static uint64_t last_km, last_ns; static unsigned count; static int have, truncated;
+    static struct { NpadState state; uint32_t id, style; uint64_t km, ns; int have; } seen[16];
+    static unsigned count; static int truncated;
     NpadState state = *s; state.sampling = 0; uint64_t t = now_ns();
     pthread_mutex_lock(&g_receipt_lock);
-    if (truncated || (have && id == last_id && style == last_style && km == last_km && !memcmp(&state, &last, sizeof state) && t - last_ns < 1000000000ull)) {
+    unsigned k = 0;
+#ifndef DM_TEST_RECEIPT_ONE_SLOT   // negative control of t_hid_receipt only: one slot for all, as before
+    while (k < 16 && seen[k].have && (seen[k].id != id || seen[k].style != style)) k++;
+#endif
+    if (k == 16) k = 15;   // more pairs than slots: the last slot is shared
+    if (truncated || (seen[k].have && seen[k].id == id && seen[k].style == style && km == seen[k].km && !memcmp(&state, &seen[k].state, sizeof state) && t - seen[k].ns < 1000000000ull)) {
         pthread_mutex_unlock(&g_receipt_lock); return;
     }
     if (count == 1024) {
@@ -143,7 +150,7 @@ static void receipt(const NpadState *s, uint32_t id, uint32_t style, uint64_t km
         fprintf(g_receipt_file, "{\"event\":\"npad_return\",\"read_start_ns\":%llu,\"time_ns\":%llu,\"sampling\":%lld,\"id\":%u,\"style\":%u,\"buttons\":%llu,\"lx\":%d,\"ly\":%d,\"rx\":%d,\"ry\":%d,\"attributes\":%u,\"script_mask\":%llu}\n",
                 (unsigned long long)read_start_ns, (unsigned long long)t, (long long)s->sampling, id, style, (unsigned long long)s->buttons,
                 s->lx, s->ly, s->rx, s->ry, s->attributes, (unsigned long long)km);
-        last = state; last_id = id; last_style = style; last_km = km; last_ns = t; have = 1; count++;
+        seen[k].state = state; seen[k].id = id; seen[k].style = style; seen[k].km = km; seen[k].ns = t; seen[k].have = 1; count++;
     }
     if (fflush(g_receipt_file)) { LOG("[red] DM_HID_RECEIPT_LOG: write failed"); truncated = 1; }
     pthread_mutex_unlock(&g_receipt_lock);

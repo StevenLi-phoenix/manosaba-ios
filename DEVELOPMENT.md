@@ -1790,7 +1790,15 @@ Tier 3c, smaller items listed at the user's request (2026-10-20: every finding o
   outside the module or past the end of the address space, or a table outside the module refuse the module with a red line (it wrote wherever
   the words said). Both games' tables pass unchanged (TotK main 499,078 slots, manosaba main 613,227). `t_relr` (totk-mobile's table and bounds;
   without the checks 5 fail, one of them a child dying on a write far away)
-- [ ] 145 small diagnostics: a size cap on the frame log, a same-frame present brightness check, the HID receipt deduplicated per controller style
+- [x] batch 45 · 145 small diagnostics (bayonetta3-mobile's copy of blade2-mobile, MIT, written anew): the frame log (`DM_NVN_TSV`) stops at
+  `DM_NVN_TSV_MAX_MB` (32 by default, 1-4096) with a last line saying so (it had no limit); `DM_PRESENT_LUMA=<file>` compares each present's guest
+  image (the part shown) with the drawable it became, 18 rows of each copied after the present pass, a line per present and a red line once when
+  the output is under 35 % of a source of 16 or more (the present path, MetalFX or the drawable's format darkening the picture; needs a window,
+  the layer made readable for it; `nvn_mtl.m` `pl_*`); the HID receipt log (`DM_HID_RECEIPT_LOG`) deduplicates each (controller, style) on its own
+  (a game polling two styles in turn made every poll a change). `t_nvn` 6h (past 1 MB the cap line, then nothing more; no cap fails 1), `t_pluma`
+  (5, Metal 4 and Metal 3: the crop's 200 against an output of 40 dark, an output as bright not, a dark scene not flagged, a float image not
+  compared, a line per present and the red line once; the whole image read fails 1), `t_hid_receipt` case 5 (two styles polled 100 times in turn:
+  2 lines; one slot for all fails it)
 - [ ] 146 NCZ (solid zstd) input in the game extraction, restored to NCA with its hash checked
 - [ ] 147 tests that run the game's own SDK code against the host (time, vibration, fonts; needs the game, not CI)
 - [ ] 148 an in-game settings panel and a control layout editor for the touch controls (BotWRecomp menu, lordran)

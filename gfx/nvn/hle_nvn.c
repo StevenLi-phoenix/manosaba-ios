@@ -1425,7 +1425,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
 
 // Frame boundary: on each present, print / write to disk the call count of each NVN function for this frame
 static uint64_t g_prev[NVN_NFUNC];
-static FILE *g_tsv;
+static FILE *g_tsv; static int g_tsv_full;   // g_tsv_full: the size cap was reached, nothing more is written (the file stays open: other threads write rows)
 static void dump_frame(void) {
     static int inited, nframes = 3, calls = 1;
     if (!inited) {
@@ -1442,10 +1442,16 @@ static void dump_frame(void) {
         g_prev[i] = c;
         if (!d) continue;
         total += d; nfn++;
-        if (g_tsv && calls) fprintf(g_tsv, "%llu\t%s\t%llu\n", g_frame, nvn_names[i], d);
+        if (g_tsv && !g_tsv_full && calls) fprintf(g_tsv, "%llu\t%s\t%llu\n", g_frame, nvn_names[i], d);
         if (g_frame <= (uint64_t)nframes && o < sizeof line - 96) o += snprintf(line + o, sizeof line - o, " %s=%llu", nvn_names[i] + 3, d);
     }
-    if (g_tsv) fflush(g_tsv);
+    if (g_tsv && !g_tsv_full) {   // a size cap (plan item 145, bayonetta3-mobile's copy of blade2-mobile, MIT): DM_NVN_TSV_MAX_MB, 32 by default (1-4096)
+        static uint64_t cap; if (!cap) { const char *e = getenv("DM_NVN_TSV_MAX_MB"); long mb = e ? strtol(e, NULL, 10) : 32; if (mb < 1 || mb > 4096) mb = 32; cap = (uint64_t)mb << 20; }
+#ifndef DM_TEST_TSV_NO_CAP   // negative control of t_nvn only: no cap
+        if ((uint64_t)ftello(g_tsv) >= cap) { fprintf(g_tsv, "# size cap of %llu MB reached at frame %llu: nothing more is written (DM_NVN_TSV_MAX_MB)\n", (unsigned long long)(cap >> 20), (unsigned long long)g_frame);
+            g_tsv_full = 1; LOG("[nvn] DM_NVN_TSV reached its size cap of %llu MB at frame %llu: nothing more is written (DM_NVN_TSV_MAX_MB)", (unsigned long long)(cap >> 20), (unsigned long long)g_frame); }
+#endif
+        fflush(g_tsv); }
     if (g_frame <= (uint64_t)nframes) LOG("[nvn] %s %llu: %u functions, %llu calls |%s", g_frame ? "frame" : "init", g_frame, nfn, total, line);
     else if (g_frame % 300 == 0) LOG("[nvn] frame %llu: %u functions, %llu calls", g_frame, nfn, total);
     g_frame++; cs_dump();
@@ -1597,7 +1603,7 @@ static int g_slow = -1;
 static int slow_on(void) { if (g_slow < 0) g_slow = getenv("DM_SLOWFRAME") != NULL; return g_slow; }
 static int frame_rec(void) { return g_tsv || slow_on(); }
 static void trow(uint64_t f, const char *name, double v) {
-    if (g_tsv) fprintf(g_tsv, "%llu\t%s\t%.3f\n", f, name, v);
+    if (g_tsv && !g_tsv_full) fprintf(g_tsv, "%llu\t%s\t%.3f\n", f, name, v);
     if (slow_on()) { __typeof__(g_sr[0]) *r = &g_sr[f % SRN]; if (r->f != f) { r->f = f; r->n = 0; } if (r->n < 64) { r->k[r->n] = name; r->v[r->n++] = v; } }
 }
 static double srow(uint64_t f, const char *name, double dflt) {
