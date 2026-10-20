@@ -17,6 +17,21 @@ static inline uint64_t nvn_pace(nvn_pacer *p, uint64_t now, uint64_t period) {
     return 0;
 }
 
+// Display-link ticks one frame takes (plan item 123): the game's present interval counts refreshes of the present rate hz, the link ticks at link_hz
+// (30 in the power-saving mode, 120 in pacing mode 2), so a frame takes interval x link_hz / hz ticks, rounded up, at least one. The step used to
+// be the interval (x 2 in mode 2) whatever the link's rate: Tears of the Kingdom at interval 2 with the 30 fps setting got two 30 Hz ticks a frame,
+// 15 fps. Rounded up, interval 3 at 30 Hz gives 2 ticks (15 fps for the 20 the game asks; never faster than asked). Unit test tests/t_pace.c
+static inline unsigned nvn_link_step(unsigned itv, unsigned hz, unsigned link_hz) {
+    if (!itv) itv = 1;
+    if (!hz) hz = 60;
+#ifndef DM_TEST_LINK_STEP_FIXED   // negative control of t_pace only: the interval, doubled at 120 Hz, as before
+    unsigned s = (itv * link_hz + hz - 1) / hz;
+    return s ? s : 1;
+#else
+    return itv * (link_hz >= 120 && hz < 120 ? 2 : 1);
+#endif
+}
+
 // Uncapped pacing (plan item 53, after MacNativeGames' TOTK_UNCAPPED, ly05010419/MacNativeGames, MIT): for a game whose step follows the measured
 // frame time (the host's dm_game_realtime_step), the game does not wait for the display. Our own clock paces it at up to `cap` Hz (its present
 // interval × 1 / cap a frame) and the display link shows the newest finished frame at each refresh, so a scene slower than 60 fps shows at its own

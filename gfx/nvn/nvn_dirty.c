@@ -73,9 +73,27 @@ static range_t *find_span(uintptr_t a, size_t len) {
     for (int i = 0; i < n; i++) { range_t *r = rg(i); if (live_at(i) && a >= r->base && a + len <= r->end) return r; }
     return NULL;
 }
+// A write released through one range stamps every range on that host page (plan item 118; acnh-mobile c2af194's case, MIT): only a range's first
+// and last page can be shared (pools are 4 KiB aligned and do not overlap), and a range registered after the page was protected starts "not
+// protected" there, so the fault released only the range that held the protection and the other never saw the write (a texture in it kept stale
+// contents; and find_span may answer a query about one pool with the other's range). Atomics only: called from the fault handler too
+static void stamp_shared(range_t *r, uintptr_t p, uint64_t g) {
+#ifndef DM_TEST_DIRTY_STAMP_ONE   // negative control of t_dirty_shared only: the releasing range alone, as before
+    uintptr_t np = (r->end - r->base) >> g_shift; if (p != 0 && p + 1 != np) return;
+    uintptr_t a = r->base + (p << g_shift); int n = atomic_load(&g_nr);
+    for (int i = 0; i < n; i++) {
+        range_t *o = rg(i); if (o == r || !live_at(i) || a < o->base || a >= o->end) continue;
+        _Atomic uint64_t *gp = &o->gen[(a - o->base) >> g_shift]; uint64_t cur = atomic_load(gp);
+        while (cur < g && !atomic_compare_exchange_weak(gp, &cur, g)) {}
+    }
+#else
+    (void)r; (void)p; (void)g;
+#endif
+}
 static void unprotect_page(range_t *r, uintptr_t p) {   // The caller has already changed the state from PROT to BUSY
     mp(r->base + (p << g_shift), g_pg, PROT_READ | PROT_WRITE);
-    atomic_store(&r->gen[p], atomic_fetch_add(&g_now, 1) + 1);
+    uint64_t g = atomic_fetch_add(&g_now, 1) + 1;
+    atomic_store(&r->gen[p], g); stamp_shared(r, p, g);
     atomic_store(&r->state[p], PG_NONE);
 }
 // Release one page of a range: if protected, unprotect and stamp it; if another thread is changing its protection, wait for it to finish and look
@@ -112,7 +130,7 @@ static void prep_write(void *addr, size_t len) {
             if (open) {   // pages [run, p) are ours (BUSY): one mprotect, then each stamped and released
                 mp(r->base + (run << g_shift), (p - run) << g_shift, PROT_READ | PROT_WRITE);
                 uint64_t g = atomic_fetch_add(&g_now, 1) + 1;
-                for (uintptr_t k = run; k < p; k++) { atomic_store(&r->gen[k], g); atomic_store(&r->state[k], PG_NONE); }
+                for (uintptr_t k = run; k < p; k++) { atomic_store(&r->gen[k], g); stamp_shared(r, k, g); atomic_store(&r->state[k], PG_NONE); }
                 atomic_fetch_add(&g_preps, p - run); open = 0;
             }
             if (p <= q && st == PG_BUSY) release_page(r, p, &g_preps);

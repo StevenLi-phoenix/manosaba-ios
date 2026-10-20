@@ -48,6 +48,33 @@ typedef struct {
     uint64_t serial;                     // Initialization serial: the replay layer uses it to find the MTLTexture in the host table (the game may copy the object by value, so object pointers cannot be stored)
 } tex_t;                                                                                     FITS(tex_t, NVNtexture);
 _Static_assert(sizeof(tex_t) <= 0x80, "tex_t exceeds this SDK's actual NVNtexture size 0x80");
+// Two texture objects on the same storage (plan item 119; bayonetta3-mobile compares storage ranges): the same serial, or overlapping memory (a
+// texture initialized over a live one's storage gets its own serial but the same texture, nvn_mtl.m g_stor_shared)
+// A primitive that has a front and a back face (plan item 120): polygons only, as the SDK says of culling; points and lines are drawn whatever the
+// cull face, FRONT_AND_BACK included (both draw paths used to drop every primitive under it). Patches are taken as triangles (their domain is
+// not known here). Checked by gfx/tests/t_cull_prim.c
+static inline int nvn_prim_has_face(int prim) {
+#ifndef DM_TEST_CULL_ALL_PRIMS   // negative control of t_cull_prim only: every primitive, as before
+    return (prim >= NVN_DRAW_PRIMITIVE_TRIANGLES && prim <= NVN_DRAW_PRIMITIVE_POLYGON) || prim == NVN_DRAW_PRIMITIVE_TRIANGLES_ADJACENCY ||
+           prim == NVN_DRAW_PRIMITIVE_TRIANGLE_STRIP_ADJACENCY || prim == NVN_DRAW_PRIMITIVE_PATCHES;
+#else
+    (void)prim; return 1;
+#endif
+}
+// The size of a render pass without attachments (plan item 121; bayonetta3-mobile test_attachmentless.m: a 4x3 viewport gives 12 fragments): the
+// scissor's extent when one is set (it bounds every fragment; Tears of the Kingdom's case, a 1x1 scissor), else the viewport's (it was 1x1 then),
+// at least 1x1, at most 16384. Checked by gfx/tests/t_attless.c
+static inline void nvn_attless_size(int has_sc, int sx, int sy, int sw, int sh, const float vp[4], unsigned *w, unsigned *h) {
+    long x = 1, y = 1;
+    if (has_sc) { x = (long)sx + sw; y = (long)sy + sh; }
+#ifndef DM_TEST_ATTLESS_SCISSOR_ONLY   // negative control of t_attless only: 1x1 without a scissor, as before
+    else if (vp && vp[2] > 0 && vp[3] > 0) { x = (long)__builtin_ceilf(vp[0] + vp[2]); y = (long)__builtin_ceilf(vp[1] + vp[3]); }
+#endif
+    *w = (unsigned)(x < 1 ? 1 : x > 16384 ? 16384 : x); *h = (unsigned)(y < 1 ? 1 : y > 16384 ? 16384 : y);
+}
+static inline int tex_same_storage(const tex_t *a, const tex_t *b) {
+    return a->serial == b->serial || (a->mem && b->mem && a->mem < b->mem + b->size && b->mem < a->mem + a->size);
+}
 // NVNtextureView is at most 0x10 bytes in this SDK: Unity keeps two views 0x10 apart on its stack (main+0x9c35ec / +0x9c361c), and a view right before a
 // staging NVNbuffer (main+0x9c7f40: view at sp+0x20, buffer at sp+0x30). The earlier 0x1c-byte view_t overran the next local on every SetDefaults
 // (that NVNbuffer lost its memory pool pointer's low half; Unity then crashed releasing the upload memory of the first video frame).

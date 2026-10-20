@@ -267,6 +267,7 @@ static int g_pass, g_fail;
 static void check(const char *name, int (*ok)(const pad *)) {
     uint64_t b = 0; int32_t a[4] = {0};
     int have = hle_hid_last(&b, &a[0], &a[1], &a[2], &a[3]);
+    b &= 0xffff;   // the buttons the controls press: the sticks' direction buttons (bits 16-23, hle_hid.c) follow the sticks checked here
     pad s = {b, a[0] / (float)DM_STICK_MAX, a[1] / (float)DM_STICK_MAX, a[2] / (float)DM_STICK_MAX, a[3] / (float)DM_STICK_MAX};
     int pass = have && ok(&s); if (pass) g_pass++; else g_fail++;
     LOG("touch pad test: %-24s %s  buttons %05llx  L %+.2f %+.2f  R %+.2f %+.2f%s", name, pass ? "ok  " : "FAIL", (unsigned long long)s.b,

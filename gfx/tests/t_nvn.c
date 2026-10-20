@@ -333,7 +333,8 @@ int main(void) {
 
     // 6. Sync / window / present
     NVNsync s1, s2; P(nvnSyncInitialize)(&s1, &dev); P(nvnSyncInitialize)(&s2, &dev);
-    EXPECT("wait on unfenced sync = timeout(2)", 2, P(nvnSyncWait)(&s1, 0));
+    EXPECT("wait on a sync never fenced = FAILED(3), as the SDK says", 3, P(nvnSyncWait)(&s1, 0));
+    EXPECT("... also with a timeout (it does not wait it out)", 3, P(nvnSyncWait)(&s1, 2000000000ull));
     P(nvnQueueFenceSync)(&q, &s1, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0);
     EXPECT("wait after fence = already signaled(0)", 0, P(nvnSyncWait)(&s1, 0));
     NVNtexture sc[2]; NVNtextureBuilder tb; P(nvnTextureBuilderSetDevice)(&tb, &dev); P(nvnTextureBuilderSetDefaults)(&tb);

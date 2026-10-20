@@ -1518,16 +1518,40 @@ Tier 3b, iOS and tooling:
   more, all right (ours copies the address first); the wrong order, emulated (`DM_TEST_LDC_BUG=1`), fails 1
 
 Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, before Tier 4). Correctness, small:
-- [ ] 115 pipeline keys without the blend state of targets whose blending is off (TotK 729 → 397 keys)
-- [ ] 116 SyncWait on a sync never fenced: FAILED as the SDK says (count such waits in both games first)
-- [ ] 117 the Metal 3 buffer table without the 512 cap, indexed
-- [ ] 118 dirty-page state per host page (acnh-mobile's test as is)
-- [ ] 119 the self-sampling guard by storage overlap
-- [ ] 120 cull FRONT_AND_BACK keeps points and lines
-- [ ] 121 a pass without attachments sized from viewport and scissor, samples from the multisample state
-- [ ] 122 the silent audio sink resynchronized after a suspension
-- [ ] 123 the display-link step from the applied rate
-- [ ] 124 stick directions as NpadButton bits 16-23
+- [x] batch 28 · 115 pipeline keys carry zeros for the blend state of targets whose blending is off (`nvn_pso_skey.h` `pso_key_blend_canon`, in
+  `pso_key_fill` and on the player's list at warm-up, where rows that become one pipeline are folded): Tears of the Kingdom's list 729 keys →
+  397, its warm-up now builds 397 render pipelines (332 folded), manosaba 23 → 23. `t_pso_canon` (5 + the lists' counts; every slot kept fails 3)
+- [x] batch 28 · 116 SyncWait on a sync never fenced returns FAILED, as the SDK's NVNsyncWaitResult says (was TIMEOUT_EXPIRED); counted and logged:
+  0 such waits in the prologue, the cliff save and manosaba. QueueWaitSync left as it is (the SDK gives it no failure). `t_nvn` (134; the old
+  result fails 2)
+- [x] batch 28 · 117 the Metal 3 buffer table grows and is indexed (`nvn_m3buf.h`, on `nvn_pool_find.h`; acnh-mobile c2af194's case, MIT): Tears of the
+  Kingdom passes 513 buffers in the prologue on `dmhost_m3`, no "not in any registered buffer" line; the old 512 cap rebuilt the same way left
+  binds, compute binds and indexed draws out and s1800 black but for the subtitles (99.5 % of it differs): the iOS 18 app would have shown that.
+  `t_m3buf` (7: 1,537 buffers; the 512 cap fails 3)
+- [x] batch 28 · 118 a write released through one range stamps every range on that host page (`nvn_dirty.c` `stamp_shared`, also in the fault handler:
+  atomics only): a pool registered on a page another pool had protected started "not protected" there, and the fault stamped only the other's
+  range; find_span could also answer a query about one pool with the other's range, so neither saw the write. acnh-mobile's `t_dirty_shared.c`
+  (MIT) as is, the checks named: both see it now; 5,000 rounds with a writer on the page leave nothing registered (stamping one range fails 2)
+- [-] batch 28 · 119 not needed: with `DM_NVN_COUNTS=1` no draw sampled a texture that shares an attachment's storage under another serial (0 in the
+  prologue, the cliff save and manosaba; Tears of the Kingdom shares storage 64,000 times, never so); the count stays in the counts mode
+  (`nvn_obj.h` `tex_same_storage`)
+- [x] batch 28 · 120 cull FRONT_AND_BACK drops polygons only (`nvn_obj.h` `nvn_prim_has_face`: points, lines and line strips drawn; both draw paths
+  dropped every primitive); neither game draws a point or a line under it (logged once if one does). `t_cull_prim` (15; every primitive fails 6)
+- [x] batch 28 · 121 a pass without attachments takes the viewport's extent when no scissor is set (`nvn_attless_size`; it was 1x1: a 4x3 viewport
+  gave one fragment, bayonetta3-mobile's case); with a scissor its extent as before (Tears of the Kingdom's 1x1). The samples stay 1: no
+  multisample state above 1 in either game's attachmentless passes (logged if one comes), and it would change the pipeline's sample count.
+  `t_attless` (7; scissor only fails 4)
+- [x] batch 28 · 122 the silent audio sink starts again from now when more than 100 ms behind (`audren_pace.h` `sink_step`; acnh-mobile, nxnative
+  3bd1e9e): after a 2 s freeze the next 50 ms hold 9 pulls, not 409; manosaba stopped for 3 s with SIGSTOP logs the restart. `t_audren_pace`
+  (8; never restarted fails 1)
+- [x] batch 28 · 123 the display-link step from the rate the link runs at (`nvn_pace.h` `nvn_link_step`: interval × link rate / present rate, rounded
+  up): on the power-saving 30 Hz link interval 2 takes one tick (30 fps; was two: 15 fps). `t_pace` (31; the old step fails 3). The window
+  run on the device or the Mac with the 30 fps setting is for the user
+- [x] batch 28 · 124 the sticks set NpadButton StickL / StickR Left, Up, Right, Down (bits 16-23, the SDK's names; `dm_input.h` `dm_stick_dirs`): an axis
+  at half its range or more (blade2-mobile 34755e9, MIT), so nothing inside the SDK's dead zone circle of AnalogStickMax / 2; whether the
+  console also sets one on a diagonal outside that circle with both axes under half is not documented and not checked on a console. The touch
+  controls' self-test masks them (it checks the controls' own buttons: all ok in the cliff save). `t_stickdir` (8; none fails 5), `t_hid_script`
+  and `t_hid_receipt` expect them
 - [ ] 125 a guarded backtrace, the svc and Break module names, unique `RED_ONCE` tags (with a test), the shader capture written atomically
 - [ ] 126 the texture view in the SDK's 16-byte layout (TotK's setters in Unicorn first)
 - [ ] 127 the Mac mouse monitor leaving the title bar to AppKit, App Nap held off

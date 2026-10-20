@@ -17,6 +17,17 @@ typedef struct {
 
 typedef struct { char vs[24], fs[24]; uint8_t vs_stage, fs_stage, merged, fz; pso_fz_desc fz_desc; pso_key k; } pso_skey;
 
+// A key's blend state only where blending is on (plan item 115; super-mario-odyssey-ios 693bc6b had the idea): the descriptor reads blend[i] only
+// when blend_en has bit i, so a slot whose blending is off carries zeros, and keys that differ only there become one pipeline. Measured on the
+// player's list: Tears of the Kingdom's keys 729 → 397 (older layouts 3,628 → 2,441), manosaba 32 → 32. Checked by gfx/tests/t_pso_canon.c
+static inline void pso_key_blend_canon(pso_key *k) {
+#ifndef DM_TEST_PSO_NO_CANON   // negative control of t_pso_canon only: every slot's blend state kept, as before
+    for (int i = 0; i < 8; i++) if (!(k->blend_en >> i & 1)) memset(&k->blend[i], 0, sizeof k->blend[i]);
+#else
+    (void)k;
+#endif
+}
+
 static inline void pso_skey_from(const pso_key *k, NvShader *vs, NvShader *fs, int merged, const pso_fz_desc *fz, pso_skey *out) {
     memset(out, 0, sizeof *out);
     memcpy(&out->k, k, sizeof out->k);

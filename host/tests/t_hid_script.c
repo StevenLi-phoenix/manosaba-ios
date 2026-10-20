@@ -36,7 +36,7 @@ int main(void) {
     at(1.5); CHECK(rd().buttons == 0, "A released at 1.5 s");
     at(2.1); CHECK(rd().buttons == DM_BTN_B, "B with the default hold of 0.2 s");
     at(2.2); CHECK(rd().buttons == 0, "B released at 2.2 s");
-    at(3.05); { NpadState s = rd(); CHECK(s.lx == -32767 && s.ly == 0 && s.buttons == 0, "LSL pushes the left stick left, not a button"); }
+    at(3.05); { NpadState s = rd(); CHECK(s.lx == -32767 && s.ly == 0 && s.buttons == DM_BTN_STICK_L_LEFT, "LSL pushes the left stick left; the only button is its direction (bit 16)"); }
     at(3.15); { NpadState s = rd(); CHECK(s.lx == -23169 && s.ly == 23169, "LSL and LSU overlap: the diagonal on the stick's circle (-23169, 23169)"); }
     at(4.05); rd(); CHECK(g_tn == 1 && g_t[0].id == 0 && g_t[0].x == 0.25f && g_t[0].y == 0.5f, "touch item: one finger at (0.25, 0.5)");
     int calls = g_tcalls; at(4.06); rd(); CHECK(g_tcalls == calls, "unchanged touch set: not pushed again");
@@ -62,8 +62,8 @@ int main(void) {
     dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0); rd();
     CHECK(hid_key_mask("A") == DM_BTN_A && hid_key_mask("MINUS") == DM_BTN_MINUS && hid_key_mask("LSL") == PK_LSL && !hid_key_mask("Q") && !hid_key_mask("T0.5:0.5"),
           "command channel key names: buttons and left stick keys, not touch items or unknown names");
-    hid_cmd_keys(DM_BTN_ZR | PK_LSR, 0); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_ZR && s.lx == 32767, "command channel keys held (cmdchan.c down)"); }
-    hid_cmd_keys(0, DM_BTN_ZR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 32767, "... ZR released, the stick still held"); }
+    hid_cmd_keys(DM_BTN_ZR | PK_LSR, 0); { NpadState s = rd(); CHECK(s.buttons == (DM_BTN_ZR | DM_BTN_STICK_L_RIGHT) && s.lx == 32767, "command channel keys held (cmdchan.c down)"); }
+    hid_cmd_keys(0, DM_BTN_ZR); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_STICK_L_RIGHT && s.lx == 32767, "... ZR released, the stick still held"); }
     hid_cmd_keys(0, PK_LSR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 0, "... all released"); }
 
     // On-screen controls (touchpad.c): buttons ORed; their stick after the front end's, before the controller's
@@ -72,8 +72,8 @@ int main(void) {
       tp_layout(844, 390, 47, 0, 47, 21); float sx, sy, ax, ay, r; tp_find("stick", &sx, &sy, &r); tp_find("A", &ax, &ay, &r);
       at(20); tp_touch(1, TP_DOWN, ax, ay); s = rd(); CHECK(s.buttons == DM_BTN_A && s.lx == 0, "on-screen A");
       dm_pad_set(DM_BTN_B, 1000, 0, 0, 0); tp_touch(2, TP_DOWN, sx, sy); tp_touch(2, TP_MOVE, sx, sy - 200); at(20.05); s = rd();
-      CHECK(s.buttons == (DM_BTN_A | DM_BTN_B) && s.lx == 0 && s.ly == 32767, "with a controller: buttons ORed, the on-screen stick before the controller's");
-      CHECK(hle_hid_last(&lb, &la[0], &la[1], &la[2], &la[3]) && lb == (DM_BTN_A | DM_BTN_B) && la[1] == 32767, "hle_hid_last: that state");
+      CHECK(s.buttons == (DM_BTN_A | DM_BTN_B | DM_BTN_STICK_L_UP) && s.lx == 0 && s.ly == 32767, "with a controller: buttons ORed, the on-screen stick before the controller's");
+      CHECK(hle_hid_last(&lb, &la[0], &la[1], &la[2], &la[3]) && lb == (DM_BTN_A | DM_BTN_B | DM_BTN_STICK_L_UP) && la[1] == 32767, "hle_hid_last: that state");
       dm_input_set(0, -5, 6, 0, 0); at(20.1); s = rd(); CHECK(s.lx == -5 && s.ly == 6, "the front end's stick before the on-screen one");
       dm_input_set(0, 32767, -32767, -32768, 0); s = rd();
       CHECK(s.lx == 23169 && s.ly == -23169 && s.rx == -32767 && s.ry == 0, "a keyboard diagonal onto the circle, an axis at -32768 to -32767");

@@ -11,6 +11,8 @@ t_nvn: t_nvn.c ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(FW)
 t_dirty_slots: t_dirty_slots.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h
 	clang $(CFLAGS) -o $@ t_dirty_slots.c ../../host/crash.c ../nvn/nvn_dirty.c
+t_dirty_shared: t_dirty_shared.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h
+	clang $(CFLAGS) -o $@ t_dirty_shared.c ../../host/crash.c ../nvn/nvn_dirty.c
 t_dirty_race: t_dirty_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h
 	clang $(CFLAGS) -o $@ t_dirty_race.c ../../host/crash.c
 t_deswz_gpu: t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../tex/nvn_deswizzle.h ../tex/nvn_deswizzle_gpu.h ../nvn/nvn_tex.c ../nvn/nvn_tex.h
@@ -39,6 +41,12 @@ t_aniso: t_aniso.c ../nvn/nvn_aniso.h
 	clang -O1 -Wall -Werror -o $@ t_aniso.c
 t_perfline: t_perfline.c ../nvn/nvn_perfline.h
 	clang -O1 -Wall -Werror -o $@ t_perfline.c
+t_m3buf: t_m3buf.c ../nvn/nvn_m3buf.h ../nvn/nvn_pool_find.h
+	clang -O1 -Wall -Werror -o $@ t_m3buf.c
+t_cull_prim: t_cull_prim.c ../nvn/nvn_obj.h
+	clang $(CFLAGS) -Werror -o $@ t_cull_prim.c
+t_attless: t_attless.c ../nvn/nvn_obj.h
+	clang $(CFLAGS) -Werror -o $@ t_attless.c
 t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
 	clang -O1 -Wall -Werror -I../nvn/include -o $@ t_sync_order.c
 t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
@@ -131,6 +139,8 @@ t_rt_depth_ro: t_rt_depth_ro.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_depth_ro.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_skey.m -framework Foundation
+t_pso_canon: t_pso_canon.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_canon.m -framework Foundation
 t_refl: t_refl.m ../nvn/nvn_refl.m ../nvn/nvn_refl.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_refl.m ../nvn/nvn_refl.m -framework Metal -framework Foundation
 t_gputime: t_gputime.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -148,11 +158,14 @@ t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 run: \
 	t_alpha \
 	t_aniso \
+	t_attless \
 	t_chunk \
 	t_copy_pitch \
 	t_cover \
+	t_cull_prim \
 	t_d16clear \
 	t_defer_chain \
+	t_dirty_shared \
 	t_drvseg \
 	t_depth_plain \
 	t_deswz_gpu \
@@ -171,6 +184,7 @@ run: \
 	t_layer \
 	t_libcopy \
 	t_live \
+	t_m3buf \
 	t_mip_extent \
 	t_nvn \
 	t_pace \
@@ -185,6 +199,7 @@ run: \
 	t_present_crop \
 	t_present_fx \
 	t_present_res \
+	t_pso_canon \
 	t_pso_skey \
 	t_refl \
 	t_restart \
@@ -218,6 +233,7 @@ run: \
 	./t_nvn
 	./t_dirty_slots
 	./t_dirty_race
+	./t_dirty_shared
 	./t_deswz_gpu
 	./t_pace
 	./t_hmap
@@ -228,6 +244,9 @@ run: \
 	./t_sync_order
 	./t_aniso
 	./t_perfline
+	./t_m3buf
+	./t_cull_prim
+	./t_attless
 	./t_poolcache
 	./t_poolcheck
 	./t_tex_auto
@@ -286,6 +305,7 @@ run: \
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --small-depth
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
 	./t_pso_skey
+	./t_pso_canon
 	MTL_DEBUG_LAYER=1 ./t_samp
 	MTL_DEBUG_LAYER=1 ./t_fmt_swz
 	DM_NVN_DEPTH_PLAIN=1 ./t_depth_plain

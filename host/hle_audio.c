@@ -4,6 +4,7 @@
 //       the Mac App (app_mac.m) is the product and sets DM_AUDIO=1 at launch ("no sound": the App used to take the command-line default and never played sound).
 //       If the sound card cannot be opened (no output device etc.) it no longer exits: logs red, and this channel is consumed in real time by the silent sink while the game runs on.
 // The contents of AudioOut / AudioOutBuffer / AudioOutParameter are read and written only through the interfaces below; the host defines its own internal layout and writes only the front part of each struct.
+#include "audren_pace.h"
 #include "hle.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <TargetConditionals.h>
@@ -169,13 +170,15 @@ static int au_open(aout *a) {   // 0 = the sound card is open; -1 = it cannot be
       LOG("audio: CoreAudio output opened in %.1f ms on %s thread \"%s\"%s", ms, thr_cur_name(tn, 1) ? "the guest" : "a host", gn, ms > 1000 ? " [red] slow: that thread waited (tomodachi-native once saw 40 s)" : ""); }
     return 0;
 }
-// Silent sink: consumes in real time at 48 kHz every 5 ms
+// Silent sink: consumes in real time at 48 kHz every 5 ms; more than 100 ms behind (the thread was frozen in an iOS suspension), it starts again
+// from now instead of catching up in a burst (audren_pace.h sink_step, plan item 122)
 static void *null_sink(void *p) {
     aout *a = p; uint8_t scratch[RATE / 200 * 2 * 8];
-    uint64_t bytes = (uint64_t)RATE / 200 * 2 * a->ch, t = now_ns();
+    uint64_t bytes = (uint64_t)RATE / 200 * 2 * a->ch, t = now_ns(); unsigned resyncs = 0, said = 0;
     if (atomic_fetch_add_explicit(&a->sinks, 1, memory_order_acq_rel)) atomic_fetch_add_explicit(&g_consumer_dupes, 1, memory_order_relaxed);
     while (atomic_load_explicit(&a->null_run, memory_order_acquire)) {
-        t += 5000000; uint64_t now = now_ns(); if (t > now) usleep((useconds_t)((t - now) / 1000));
+        uint64_t w = sink_step(&t, now_ns(), 5000000, 100000000, &resyncs); if (w) usleep((useconds_t)(w / 1000));
+        if (resyncs != said && said < 4) { said = resyncs; LOG("audio: silent sink more than 100 ms behind (a stall or a suspension): started again from now (%u times)", resyncs); }
         pull(a, scratch, bytes);
     }
     atomic_fetch_sub_explicit(&a->sinks, 1, memory_order_acq_rel);

@@ -669,11 +669,21 @@ NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t
 NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; sync_fence_store((sync_t *)s, mtl_last_fence()); }
-// A sync object that was never fenced waits until timeout, as on a real device; a fenced one is released only after the GPU has actually completed up to that fence value
+// A sync object that was never fenced: FAILED, as the SDK's NVNsyncWaitResult says (plan item 116; it was TIMEOUT_EXPIRED; dr3-mobile follows the
+// SDK too). Counted and logged: neither game does it (the prologue, the cliff save, manosaba: 0). A fenced one is released only after the GPU has
+// actually completed up to that fence value
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     NVN_BLOCKING();
     uint64_t fence;
-    if (!sync_fence_load((const sync_t *)s, &fence)) return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+    if (!sync_fence_load((const sync_t *)s, &fence)) {
+        static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+        if (k <= 3 || !(k & (k - 1))) LOG("[nvn] SyncWait on a sync never fenced (#%llu, timeout %llu ns, sync %p): FAILED", (unsigned long long)k, (unsigned long long)timeout, (const void *)s);
+#ifndef DM_TEST_SYNC_UNFENCED_TIMEOUT   // negative control of t_nvn only: TIMEOUT_EXPIRED, as before
+        return NVN_SYNC_WAIT_RESULT_FAILED;
+#else
+        return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+#endif
+    }
     if (mtl_wait(fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
     return mtl_wait(fence, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 }

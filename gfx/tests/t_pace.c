@@ -43,6 +43,22 @@ int main(void) {
         int got = nvn_uncapped_hz(u[i].rt, u[i].phz, u[i].unc, u[i].cap, u[i].disp), ok = got == u[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", u[i].why, u[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
+    // Display-link ticks a frame takes (nvn_link_step, plan item 123); the old step (-DDM_TEST_LINK_STEP_FIXED, the interval whatever the link's
+    // rate) fails the three power-saving cases at interval 2, 3 and 4
+    struct { unsigned itv, hz, lhz, want; const char *why; } k[] = {
+        {1, 60, 60, 1, "interval 1, 60 Hz link: 1 tick (60 fps)"},
+        {2, 60, 60, 2, "interval 2, 60 Hz link: 2 ticks (30 fps)"},
+        {2, 60, 120, 4, "interval 2, 120 Hz link (mode 2): 4 ticks (30 fps)"},
+        {2, 60, 30, 1, "interval 2, power-saving 30 Hz link: 1 tick (30 fps, was 2: 15 fps)"},
+        {1, 60, 30, 1, "interval 1, 30 Hz link: 1 tick (30 fps, the cap)"},
+        {3, 60, 30, 2, "interval 3, 30 Hz link: 2 ticks (15 fps; never faster than the 20 asked)"},
+        {4, 60, 30, 2, "interval 4, 30 Hz link: 2 ticks (15 fps, as asked; was 4: 7.5 fps)"},
+        {2, 120, 120, 2, "interval 2 of a 120 Hz present rate on a 120 Hz link: 2 ticks (60 fps)"},
+    };
+    for (int i = 0; i < (int)(sizeof k / sizeof *k); i++) {
+        unsigned got = nvn_link_step(k[i].itv, k[i].hz, k[i].lhz); int ok = got == k[i].want; n++;
+        printf("%-72s expected %3u → got %3u %s\n", k[i].why, k[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

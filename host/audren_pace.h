@@ -19,3 +19,17 @@ static inline uint64_t pace_wait(audren_pace *p, uint64_t now, uint64_t period, 
     (void)p; (void)now; (void)period; (void)queued; return 0;
 #endif
 }
+
+// The silent sink's pacing (hle_audio.c null_sink; plan item 122): one pull every period on a deadline that advances by the period. After a stall
+// longer than resync (an iOS suspension freezes the thread; acnh-mobile and nxnative 3bd1e9e restart past 100 ms, MIT) the deadline starts again
+// from now: it kept adding 5 ms to a deadline seconds old, and the sink pulled back to back until it caught up, a burst that emptied the game's
+// queue. Returns how long to wait before this pull (0 = now); *resyncs counts the restarts. Unit test tests/t_audren_pace.c
+static inline uint64_t sink_step(uint64_t *t, uint64_t now, uint64_t period, uint64_t resync, unsigned *resyncs) {
+#ifndef DM_TEST_SINK_NO_RESYNC   // negative control of t_audren_pace only: never restarted, as before
+    if (now > *t + resync) { *t = now; if (resyncs) ++*resyncs; }
+#else
+    (void)resync; (void)resyncs;
+#endif
+    *t += period;
+    return *t > now ? *t - now : 0;
+}

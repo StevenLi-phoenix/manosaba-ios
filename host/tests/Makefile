@@ -11,6 +11,7 @@ run: \
 	$(B)/t_audren \
 	$(B)/t_audren_pace \
 	$(B)/t_audren_pace_out \
+	$(B)/t_audren_pace_sink \
 	$(B)/t_cloudlist \
 	$(B)/t_cloudlist_old \
 	$(B)/t_cloudsync \
@@ -59,6 +60,8 @@ run: \
 	$(B)/t_sead \
 	$(B)/t_sead_broken \
 	$(B)/t_sleep \
+	$(B)/t_stickdir \
+	$(B)/t_stickdir_none \
 	$(B)/t_swkbd \
 	$(B)/t_sysevent \
 	$(B)/t_threadcpu \
@@ -83,6 +86,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "no two frames under 1 ms apart *✗" $(B)/t_audren_pace_out.log; then \
 	   cat $(B)/t_audren_pace_out.log; echo "t_audren_pace_out: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_audren_pace_out: frames paced by the output come in pairs, as expected"
+	@status=0; $(B)/t_audren_pace_sink > $(B)/t_audren_pace_sink.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "after a 2 s suspension: 9-11 pulls.*✗" $(B)/t_audren_pace_sink.log; then \
+	   cat $(B)/t_audren_pace_sink.log; echo "t_audren_pace_sink: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_audren_pace_sink: a silent sink never restarted pulls in a burst after a suspension, as expected"
 	$(B)/t_cloudlist 2>/dev/null
 	@status=0; $(B)/t_cloudlist_old > $(B)/t_cloudlist_old.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "before the call returned *✗" $(B)/t_cloudlist_old.log; then \
@@ -181,6 +188,11 @@ run: \
 	   cat $(B)/t_sead_broken.log; echo "t_sead_broken: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_sead_broken: a heap taken without checking it reaches the address is found past its end, as expected"
 	$(B)/t_sleep
+	$(B)/t_stickdir
+	@status=0; $(B)/t_stickdir_none > $(B)/t_stickdir_none.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "left stick fully left alone: bit 16 .*✗" $(B)/t_stickdir_none.log; then \
+	   cat $(B)/t_stickdir_none.log; echo "t_stickdir_none: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_stickdir_none: sticks without direction buttons set none, as expected"
 	$(B)/t_swkbd
 	$(B)/t_sysevent 2>/dev/null
 	$(B)/t_threadcpu 2>/dev/null
@@ -273,6 +285,8 @@ $(B)/t_audren_pace: t_audren_pace.c ../audren_pace.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_audren_pace.c
 $(B)/t_audren_pace_out: t_audren_pace.c ../audren_pace.h | $(B)
 	clang -O1 -Wall -DDM_TEST_AUDREN_PACE_OUTPUT -I.. -o $@ t_audren_pace.c
+$(B)/t_audren_pace_sink: t_audren_pace.c ../audren_pace.h | $(B)
+	clang -O1 -Wall -DDM_TEST_SINK_NO_RESYNC -I.. -o $@ t_audren_pace.c
 $(B)/t_audren: t_audren.c ../hle_audren.c ../audren_pace.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audren.c
 $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
@@ -394,6 +408,10 @@ $(B)/t_rundiag_nokeep: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_NO_KEEP -I.. -o $@ t_rundiag.c
 $(B)/t_rundiag_head: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_HEAD -I.. -o $@ t_rundiag.c
+$(B)/t_stickdir: t_stickdir.c ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_stickdir.c
+$(B)/t_stickdir_none: t_stickdir.c ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_STICK_NO_DIRS -I.. -o $@ t_stickdir.c
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_swkbd.c ../hle_swkbd.c
 T_THREAD_EXIT_SRC = t_thread_exit.c t_thread_exit_guest.S ../hle_thread.c ../thread.c ../entry.S ../hstack.S ../hstack.c

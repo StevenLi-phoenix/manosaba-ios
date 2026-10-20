@@ -191,6 +191,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (km & PK_LSL) s->lx = -32767; if (km & PK_LSR) s->lx = 32767;   // script stick pseudo-keys (up is positive)
     if (km & PK_LSU) s->ly = 32767;  if (km & PK_LSD) s->ly = -32767;
     stick_circle(&s->lx, &s->ly); stick_circle(&s->rx, &s->ry);
+    s->buttons |= dm_stick_dirs(s->lx, s->ly, s->rx, s->ry);   // the sticks as direction buttons, bits 16-23 (dm_input.h)
     s->attributes = ATTR_CONNECTED;
     atomic_store(&g_last_btn, s->buttons);
     atomic_store(&g_last_axes, (uint64_t)(uint16_t)s->lx | (uint64_t)(uint16_t)s->ly << 16 | (uint64_t)(uint16_t)s->rx << 32 | (uint64_t)(uint16_t)s->ry << 48);

@@ -41,14 +41,14 @@ static void exercise(int which) {
   n=load(path,rows,&limit);CK(n==1);if(n==1){CK(rows[0].buttons==s.buttons);CK(rows[0].script==DM_BTN_A);CK(rows[0].lx==123&&rows[0].ly==-456&&rows[0].rx==7&&rows[0].ry==-8);}CK(limit==0);
  } else {
   dm_input_set(0,0,0,0,0);h_hid_GetFullKey(&s,&id);CK(s.sampling==1&&s.attributes==1);
-  dm_input_set(DM_BTN_B,32767,-32767,11,-12);h_hid_GetFullKey(&s,&id);CK(s.buttons==DM_BTN_B&&s.lx==23169&&s.ly==-23169&&s.rx==11&&s.ry==-12);   // the diagonal onto the stick's circle
+  dm_input_set(DM_BTN_B,32767,-32767,11,-12);h_hid_GetFullKey(&s,&id);CK(s.buttons==(DM_BTN_B|DM_BTN_STICK_L_RIGHT|DM_BTN_STICK_L_DOWN)&&s.lx==23169&&s.ly==-23169&&s.rx==11&&s.ry==-12);   // the diagonal onto the stick's circle (and its two direction buttons, plan item 124)
   h_hid_GetFullKey(&s,&id);CK(s.sampling==3);
   dm_input_set(0,0,0,0,0);h_hid_GetFullKey(&s,&id);CK(!s.buttons&&!s.lx&&!s.ly);
-  opmode=0;id=0x20;dm_input_set(DM_BTN_Y,-32767,0,0,0);h_hid_GetHandheld(&s,&id);CK(s.attributes==1&&s.buttons==DM_BTN_Y&&s.lx==-32767);
+  opmode=0;id=0x20;dm_input_set(DM_BTN_Y,-32767,0,0,0);h_hid_GetHandheld(&s,&id);CK(s.attributes==1&&s.buttons==(DM_BTN_Y|DM_BTN_STICK_L_LEFT)&&s.lx==-32767);
   id=0;h_hid_GetFullKey(&s,&id);CK(s.attributes==0&&!s.buttons&&!s.lx&&s.sampling==6);
   n=load(path,rows,&limit);
   if(!which)CK(n==-1);
-  else {CK(n==5);CK(limit==0);if(n==5){CK(rows[0].sampling==1&&rows[0].time==clock_ns&&rows[0].buttons==0);CK(rows[1].sampling==2&&rows[1].buttons==DM_BTN_B&&rows[1].lx==23169&&rows[1].ry==-12);CK(rows[2].sampling==4&&rows[2].buttons==0&&rows[2].lx==0);CK(rows[3].id==0x20&&rows[3].style==STYLE_HANDHELD&&rows[3].attrs==1&&rows[3].lx==-32767);CK(rows[4].id==0&&rows[4].style==STYLE_FULLKEY&&rows[4].attrs==0&&rows[4].sampling==6);}}
+  else {CK(n==5);CK(limit==0);if(n==5){CK(rows[0].sampling==1&&rows[0].time==clock_ns&&rows[0].buttons==0);CK(rows[1].sampling==2&&rows[1].buttons==(DM_BTN_B|DM_BTN_STICK_L_RIGHT|DM_BTN_STICK_L_DOWN)&&rows[1].lx==23169&&rows[1].ry==-12);CK(rows[2].sampling==4&&rows[2].buttons==0&&rows[2].lx==0);CK(rows[3].id==0x20&&rows[3].style==STYLE_HANDHELD&&rows[3].attrs==1&&rows[3].lx==-32767);CK(rows[4].id==0&&rows[4].style==STYLE_FULLKEY&&rows[4].attrs==0&&rows[4].sampling==6);}}
  }
  free(rows);unlink(path);printf("HID_RECEIPT case=%d checks=%d failures=%d\n",which,checks,fails);fflush(stdout);_exit(fails?1:0);
 }

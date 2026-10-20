@@ -148,20 +148,19 @@ static void up_wait_zero(_Atomic int *v) {
 static pthread_mutex_t g_res_mu = PTHREAD_MUTEX_INITIALIZER;   // Dedicated lock for the residency set: res_add is called on paths that hold g_mu (arena_new), so it cannot share g_mu
 static NSHashTable *g_res_objects;
 #if DM_NVN_M3
-// The older API binds by "buffer object + offset", while the replay layer holds GPU addresses: registered buffers (zero-copy buffers of memory pools, argument blocks, staging blocks and so on, a few dozen) are looked up by address range.
-// Registered by weak reference (__unsafe_unretained, removed when residency is withdrawn); the most recently hit entry is tried first - bindings within one pass almost always land on the same one or two buffers
-enum { M3_BUFS = 512 };
-static struct { uint64_t gpu, len; __unsafe_unretained id<MTLBuffer> buf; } g_m3_bufs[M3_BUFS]; static int g_m3_nbufs; static os_unfair_lock g_m3_lk = OS_UNFAIR_LOCK_INIT;
-static void m3_buf_add(id<MTLBuffer> b) { os_unfair_lock_lock(&g_m3_lk); if (g_m3_nbufs < M3_BUFS) { g_m3_bufs[g_m3_nbufs].gpu = b.gpuAddress; g_m3_bufs[g_m3_nbufs].len = b.length; g_m3_bufs[g_m3_nbufs++].buf = b; } os_unfair_lock_unlock(&g_m3_lk); }
-static void m3_buf_del(id b) { os_unfair_lock_lock(&g_m3_lk); for (int i = 0; i < g_m3_nbufs; i++) if (g_m3_bufs[i].buf == b) { g_m3_bufs[i] = g_m3_bufs[--g_m3_nbufs]; break; } os_unfair_lock_unlock(&g_m3_lk); }
+// The older API binds by "buffer object + offset", while the replay layer holds GPU addresses: registered buffers are looked up by address range
+// (nvn_m3buf.h: a growing, indexed table; it stopped at 512). Registered by weak reference (removed when residency is withdrawn)
+#include "nvn_m3buf.h"
+static m3buf_tab g_m3_tab; static os_unfair_lock g_m3_lk = OS_UNFAIR_LOCK_INIT;
+static void m3_buf_add(id<MTLBuffer> b) {
+    os_unfair_lock_lock(&g_m3_lk); int bad = m3buf_add(&g_m3_tab, b.gpuAddress, b.length, (__bridge void *)b); int n = g_m3_tab.n; os_unfair_lock_unlock(&g_m3_lk);
+    static int once; if (bad && !once++) MLOG("[red] legacy API buffer table: no memory for buffer %d", n);
+    if (n == 513) MLOG("legacy API buffer table: 513 buffers registered (the old table stopped at 512 and dropped the rest)");
+}
+static void m3_buf_del(id b) { os_unfair_lock_lock(&g_m3_lk); m3buf_del(&g_m3_tab, (__bridge void *)b); os_unfair_lock_unlock(&g_m3_lk); }
 static id<MTLBuffer> m3_buf(uint64_t gpu, NSUInteger *off) {
-    static _Thread_local int last; id<MTLBuffer> r = nil; *off = 0; if (!gpu) return nil;
-    os_unfair_lock_lock(&g_m3_lk);
-    int i = last < g_m3_nbufs && gpu >= g_m3_bufs[last].gpu && gpu - g_m3_bufs[last].gpu < g_m3_bufs[last].len ? last : -1;
-    for (int k = 0; i < 0 && k < g_m3_nbufs; k++) if (gpu >= g_m3_bufs[k].gpu && gpu - g_m3_bufs[k].gpu < g_m3_bufs[k].len) i = k;
-    if (i >= 0) { last = i; r = g_m3_bufs[i].buf; *off = (NSUInteger)(gpu - g_m3_bufs[i].gpu); }
-    os_unfair_lock_unlock(&g_m3_lk);
-    return r;
+    uint64_t o = 0; os_unfair_lock_lock(&g_m3_lk); void *p = m3buf_find(&g_m3_tab, gpu, &o); id<MTLBuffer> r = (__bridge id<MTLBuffer>)p; os_unfair_lock_unlock(&g_m3_lk);
+    *off = (NSUInteger)o; return r;
 }
 #endif
 // Test switch DM_RES_CENSUS=1 (not normally on): records every object that has entered the residency set (weak references); on the tick of the memory readout line it reports the count and size of those "still in the residency set" and those "removed from the residency set but not yet destroyed".
@@ -2456,6 +2455,7 @@ static void fin_drain(void) {   // submit thread, at the start of a submission
 void mtl_tex_release(tex_t *t) { if (t->serial) { live_finalized(t); fin_queue(t->serial); tex_forget_serial(t->serial); } }
 
 // ---------- Render passes: SetRenderTargets opens a new pass; clears before the first command in the pass are folded into the load action ----------
+static void state_vp_ms(float vp[4], int ms[3]);   // the draw state's viewport 0 (zeros without one) and multisample enable / samples / raster samples (defined with S)
 static struct {
     p_set_rt rt; int has_rt;
     uint8_t clear_c[8]; MTLClearColor cc[8];
@@ -3161,10 +3161,16 @@ static RENC rp_begin_ex(int clear_only) {
         int none = 1;
         for (int i = 0; i < R.rt.n && i < 8; i++) none &= !R.rt.color[i];
         if (none) {
-            NSUInteger w = R.has_sc ? (NSUInteger)MAX((int64_t)R.sc.x + R.sc.w, 1) : 1, h = R.has_sc ? (NSUInteger)MAX((int64_t)R.sc.y + R.sc.h, 1) : 1;
+            float vp0[4]; int ms0[3]; state_vp_ms(vp0, ms0); unsigned w0, h0; nvn_attless_size(R.has_sc, R.sc.x, R.sc.y, R.sc.w, R.sc.h, vp0, &w0, &h0);   // nvn_obj.h
+            NSUInteger w = w0, h = h0;
             if (R.rt.depth) { NSUInteger lv = R.rt.has_dview && R.rt.dview.set_levels ? R.rt.dview.base_level : 0; w = mip_extent(R.rt.depth->d.width, lv); h = mip_extent(R.rt.depth->d.height, lv); }
             pd.renderTargetWidth = MIN(w, 16384u); pd.renderTargetHeight = MIN(h, 16384u); pd.defaultRasterSampleCount = 1; any = 1;
-            static int once[2]; if (!once[!!R.rt.depth]++) MLOG("render pass without attachments, %lux%lu from the %s (first case)", (unsigned long)pd.renderTargetWidth, (unsigned long)pd.renderTargetHeight, R.rt.depth ? "unused depth target" : "scissor");
+            static int once[2]; if (!once[!!R.rt.depth]++) MLOG("render pass without attachments, %lux%lu from the %s (first case)", (unsigned long)pd.renderTargetWidth, (unsigned long)pd.renderTargetHeight, R.rt.depth ? "unused depth target" : R.has_sc ? "scissor" : "viewport");
+            {   // measured for plan item 121: the viewport reaching past this size, or a multisample state with more samples
+                static uint64_t nm; float vp[4]; int ms[3]; state_vp_ms(vp, ms);
+                if (!R.rt.depth && (vp[0] + vp[2] > (float)pd.renderTargetWidth || vp[1] + vp[3] > (float)pd.renderTargetHeight || ms[1] > 1 || ms[2] > 1) && ++nm <= 8)
+                    MLOG("render pass without attachments %lux%lu: viewport %.0f,%.0f %.0fx%.0f, multisample enable %d samples %d raster samples %d (case %llu)", (unsigned long)pd.renderTargetWidth,
+                         (unsigned long)pd.renderTargetHeight, vp[0], vp[1], vp[2], vp[3], ms[0], ms[1], ms[2], (unsigned long long)nm); }
         }
     }
     if (!any) {
@@ -3426,6 +3432,7 @@ static void shmap_load(void) {
 #include "nvn_pso_skey.h"
 #include "nvn_warm_list.h"
 #include "nvn_aniso.h"
+#include "nvn_pace.h"
 #include "nvn_retry.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; int sum_ok, sum_img, sum_imgw; uint32_t sum_cmask; } @end   // sum_*: udc_note_draw's per-program summary
 @implementation NvProg @end
@@ -3486,7 +3493,7 @@ static _Atomic int g_warm_ready;
 static int g_warm_started;
 static uint64_t g_warm_t0;
 static _Atomic int g_warm_running;   // Background warm-up has not finished yet (the loading screen on entering a run waits a little longer based on this, see mtl_warm_wait)
-static uint64_t g_warm_shaders, g_warm_rps, g_warm_cps, g_warm_skip_fz, g_warm_old_rows;
+static uint64_t g_warm_shaders, g_warm_rps, g_warm_cps, g_warm_skip_fz, g_warm_old_rows, g_warm_folded;
 static uint64_t g_warm_claim_shaders, g_warm_claim_rps, g_warm_claim_cps;
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap);
 static id<MTLFunction> alpha_plain(id<MTLLibrary> lib, NSString *entry);
@@ -3948,6 +3955,7 @@ static struct {
     int restart_set, restart_en; uint32_t restart_idx;   // SetPrimitiveRestart (restart_set: the game has set it; its default is not documented)
     float blend_color[4], alpha_ref; int64_t copy_stride, copy_image_stride;
 } S;
+static void state_vp_ms(float vp[4], int ms[3]) { for (int k = 0; k < 4; k++) vp[k] = S.has_vp ? S.vp[0][k] : 0; ms[0] = S.ms.enable; ms[1] = S.ms.samples; ms[2] = S.ms.raster_samples; }
 static uint32_t cur_chmask(void) { return S.chmask.mask; }
 // BindProgram attaches a program per stage bit (NVN semantics: only the stages in stages are replaced, the others keep their binding; a program without a shader for that stage = that stage is unbound).
 // Unity's programs each contain a single stage and vertex / pixel are bound in two calls; D2R binds all stages at once, which is why replacing the whole program used to happen to work.
@@ -4210,6 +4218,7 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c | (g_lay.active ? PSO_LAYERED : 0);
     if (alpha_on()) { k->alpha_func = S.color.alpha_func; memcpy(&k->alpha_ref, &S.alpha_ref, sizeof k->alpha_ref); }
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
+    pso_key_blend_canon(k);   // zeros where blending is off (nvn_pso_skey.h)
     const nvn_refl *rf = &vs->rf;
     for (int v = 0; v < rf->nv; v++) { int a = rf->v[v].nvn; if (a < 16 && a < S.nattr) { k->attr[a] = S.attr[a]; int st = S.attr[a].stream; if (st < 16) k->stream[st] = S.stream[st]; } }
 }
@@ -4350,7 +4359,7 @@ static void warm_enqueue(WarmItem *item) {
 static void warm_worker(NSArray<NSString *> *paths) {
     @autoreleasepool {
         NSMutableDictionary<NSString *, NvShader *> *dict = [NSMutableDictionary dictionary];
-        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set], *canon = [NSMutableSet set];
         for (NSString *path in paths) {
             NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
             if (!txt) { MLOG("[red] failed to read warm-up list: %s", path.UTF8String); continue; }
@@ -4366,6 +4375,8 @@ static void warm_worker(NSArray<NSString *> *paths) {
                     warm_enqueue(item); g_warm_shaders++;
                 } else if ([c[0] isEqualToString:@"R"] && c.count >= 2) {
                     pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) { g_warm_old_rows++; continue; }   // a key of an earlier layout
+                    pso_key_blend_canon(&sk.k);   // a row written before item 115 carries the blend state of slots whose blending is off: as the draws' keys are now
+                    { char ch[sizeof sk * 2 + 1]; pso_skey_hex(&sk, ch); NSString *cs = @(ch); if ([canon containsObject:cs]) { g_warm_folded++; continue; } [canon addObject:cs]; }
                     NSString *vkey = warm_key(sk.vs, sizeof sk.vs), *fkey = warm_key(sk.fs, sizeof sk.fs);
                     NvShader *vs = vkey.length ? warm_shader(dict, vkey, sk.vs_stage) : nil;
                     NvShader *fs = fkey.length ? warm_shader(dict, fkey, sk.fs_stage) : nil;
@@ -4391,8 +4402,8 @@ static void warm_worker(NSArray<NSString *> *paths) {
                 }
             }
         }
-        MLOG("pipeline warm-up complete: %llu shaders / %llu render pipelines (%llu specialized fragments skipped) / %llu compute pipelines, background time %.1f ms; skipped: %llu render rows of an earlier key layout, rows of %lu libraries not in this translation",
-             g_warm_shaders, g_warm_rps, g_warm_skip_fz, g_warm_cps, (bp_now() - g_warm_t0) / 1e6, g_warm_old_rows, (unsigned long)g_warm_missing.count);
+        MLOG("pipeline warm-up complete: %llu shaders / %llu render pipelines (%llu specialized fragments skipped) / %llu compute pipelines, background time %.1f ms; skipped: %llu render rows of an earlier key layout, %llu the same pipeline as another (blend state of slots without blending), rows of %lu libraries not in this translation",
+             g_warm_shaders, g_warm_rps, g_warm_skip_fz, g_warm_cps, (bp_now() - g_warm_t0) / 1e6, g_warm_old_rows, g_warm_folded, (unsigned long)g_warm_missing.count);
     }
     atomic_store(&g_warm_running, 0);
 }
@@ -5348,7 +5359,12 @@ static void count_self_sample(NvProg *pr) {
             if (!ok) continue;
             int l0, l1, y0, y1; view_span(&r.v, r.has_v, &r.t, 0, &l0, &l1, &y0, &y1);
             for (int k = 0; k <= 8; k++) {
-                const tex_t *a = k < 8 ? (k < R.rt.n ? R.rt.color[k] : NULL) : R.rt.depth; if (!a || a->serial != r.t.serial) continue;
+                const tex_t *a = k < 8 ? (k < R.rt.n ? R.rt.color[k] : NULL) : R.rt.depth; if (!a) continue;
+                if (a->serial != r.t.serial && tex_same_storage(a, &r.t)) {   // measured for plan item 119: another serial on the attachment's storage
+                    static uint64_t np; np++; if (np <= 8 || !(np & (np - 1)))
+                        MLOG("counts: a draw samples texture %llu (%ux%u format %#x), which shares storage with attachment %d (texture %llu, %ux%u format %#x) of its pass (%llu so far)",
+                             (unsigned long long)r.t.serial, r.t.d.width, r.t.d.height, r.t.d.format, k, (unsigned long long)a->serial, a->d.width, a->d.height, a->d.format, (unsigned long long)np); }
+                if (a->serial != r.t.serial) continue;
                 hit = 1; if (k == 8) dep = 1;
                 int m0, m1, z0, z1; view_span(k < 8 ? &R.rt.cview[k] : &R.rt.dview, k < 8 ? R.rt.has_cview[k] : R.rt.has_dview, a, 1, &m0, &m1, &z0, &z1);
                 if (l0 < m1 && m0 < l1 && y0 < z1 && z0 < y1) { ov = 1;
@@ -6424,7 +6440,9 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     { static int small = -1; if (small < 0) { const char *e = getenv("DM_NVN_SKIP_SMALL"); small = e ? atoi(e) : 0; if (small) MLOG("DM_NVN_SKIP_SMALL: dropping draws whose target width is ≤ %d (diagnostic, rendering is wrong)", small); }
       if (small > 0 && R.has_rt && !g_defer_replaying) { int k = R.rt.n && R.rt.color[0] ? 0 : R.rt.depth ? 8 : -1;
         if (k >= 0) { uint64_t s_; int lv, sl; rt_sub(&R.rt, k, &s_, &lv, &sl); const tex_t *t = k == 8 ? R.rt.depth : R.rt.color[0]; if ((int)MAX(t->d.width >> lv, 1u) <= small) return; } } }
-    if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) return;
+    if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) {   // points and lines have no face (nvn_obj.h): drawn
+        if (nvn_prim_has_face(dw ? dw->prim : di->prim)) return;
+        static int once; if (!once++) MLOG("cull FRONT_AND_BACK on primitive %d (no face): drawn (first case, pass %llu)", dw ? dw->prim : di->prim, g_stat_pass); }
     // The continued render pass may have been opened with fewer depth / stencil attachments (open modes 2 / 3 / 4): if the plane this draw needs is not attached, split before it (on reopen, attach per the new lookahead)
     if ((g_rt_merged || (g_enc && g_ren_pass == g_pass.serial)) && g_enc_mode != 0 && (((S.ds.dt || S.ds.dw) && !g_pass.hd) || (S.ds.st && !g_pass.hs))) {   // (a pass that went on past a renamed update: its lookahead did too, this is a safety net)
         static int once2; if (!once2++) MLOG("same-target continuation: a draw in the continued pass needs a depth / stencil plane that is not attached, splitting here (first case pass %llu)", g_stat_pass);
@@ -6484,7 +6502,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     }
     enc_r_scissor(en, sc);
     if (g_cnt_on > 0) { if (S.has_vp) cnt_extent(sc, S.vp[0][0], S.vp[0][1], S.vp[0][0] + S.vp[0][2], S.vp[0][1] + S.vp[0][3]); else cnt_extent(sc, 0, 0, tw, th); }
-    if (S.poly.cull == NVN_FACE_FRONT_AND_BACK) return;
+    if (S.poly.cull == NVN_FACE_FRONT_AND_BACK && nvn_prim_has_face(dw ? dw->prim : di->prim)) return;
     { static int nocull = -1; if (nocull < 0) { nocull = getenv("DM_NVN_NOCULL") != NULL; if (nocull) MLOG("DM_NVN_NOCULL: face culling off (diagnostic, rendering is wrong)"); }   // diagnostic: does a missing draw come back without culling?
       enc_r_cull(en, nocull ? MTLCullModeNone : S.poly.cull == NVN_FACE_FRONT ? MTLCullModeFront : S.poly.cull == NVN_FACE_BACK ? MTLCullModeBack : MTLCullModeNone); }
     enc_r_winding(en, S.poly.front == NVN_FRONT_FACE_CCW ? MTLWindingCounterClockwise : MTLWindingClockwise);
@@ -8076,7 +8094,10 @@ int mtl_link_wait_tick(uint64_t timeout_ns) { @autoreleasepool {
     // Wait for the display link only when running faster than the display: if a display-link tick has already passed since the previous frame started work (this frame is already behind), start immediately instead of waiting in vain for the next display-link tick --
     // otherwise when the frame time is slightly more than one display-link period it would "miss the tick -> wait another whole tick", locking the frame rate straight to half (measured on Mac under windowed load: runs of dropped frames)
     static uint64_t started_tick;   // Display-link tick number when the previous frame started work (only the game's present thread calls this function)
-    const uint64_t step = (g_dm_present_link == 2 ? 2 : 1) * (uint64_t)atomic_load(&g_link_itv);   // How many display-link ticks one frame takes: 1 with a 60 Hz display link; 2 with a 120 Hz display link (the game still outputs 60 frames); times the present interval in game interval mode
+    // How many display-link ticks one frame takes, from the rate the link runs at (nvn_pace.h nvn_link_step): the present interval in game interval mode
+    // (1 in display mode) of the present rate, on a 60 Hz link that many ticks, on the 120 Hz one twice as many, on the power-saving 30 Hz one half
+    const int lhz = g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : atomic_load(&g_link_hz);
+    const uint64_t step = nvn_link_step((unsigned)atomic_load(&g_link_itv), (unsigned)atomic_load(&g_link_hz), (unsigned)lhz);
     pthread_mutex_lock(&g_link_mu);
     if (g_link_tick_n >= started_tick + step) { started_tick = g_link_tick_n; pthread_mutex_unlock(&g_link_mu); return 1; }
     struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
