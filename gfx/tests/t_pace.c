@@ -76,6 +76,20 @@ int main(void) {
         int got = nvn_hold_interval(h[i].itv, h[i].hz, h[i].hold), ok = got == h[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", h[i].why, h[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
+    // The iOS frame rate policy (nvn_fps_policy, plan item 135); the setting alone (-DDM_TEST_POLICY_USER_ONLY) fails 3
+    struct { int user, lp, th, want; const char *why; } fp[] = {
+        {60, 0, 0, 60, "60 fps set, nominal: 60"},
+        {60, 0, 1, 60, "60 fps set, thermal Fair: 60"},
+        {60, 0, 2, 30, "60 fps set, thermal Serious: 30"},
+        {60, 0, 3, 30, "60 fps set, thermal Critical: 30"},
+        {60, 1, 0, 30, "60 fps set, Low Power Mode: 30"},
+        {30, 0, 0, 30, "30 fps set: 30"},
+        {30, 1, 3, 30, "30 fps set, Low Power and Critical: 30 (never above the setting)"},
+    };
+    for (int i = 0; i < (int)(sizeof fp / sizeof *fp); i++) {
+        int got = nvn_fps_policy(fp[i].user, fp[i].lp, fp[i].th), ok = got == fp[i].want; n++;
+        printf("%-72s expected %3d → got %3d %s\n", fp[i].why, fp[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

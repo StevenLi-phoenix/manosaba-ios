@@ -1697,7 +1697,11 @@ Tier 3c, iOS:
   (`dm_audio_reset`, from front_ios.m's observer). `t_audio` scenarios 6 (underruns: 61 with 305 ms of zeros after one 100 ms block, none before
   the start; uncounted fails) and 7 (a playing unit stopped behind the host's back: the silent sink after 252 ms with blocks still released, the
   unit again after 1,285 ms; without the watchdog fails; needs an output device). On a device (the user): the session's logged rate and buffer
-- [ ] 135 Low Power Mode and thermal Serious → 30 fps; `ENABLE_DEBUG_DYLIB: NO`
+- [x] batch 37 · 135 iOS: the frame rate applied is the setting held at 30 in Low Power Mode or from thermal state Serious up (`nvn_fps_policy`
+  in `gfx/nvn/nvn_pace.h`, after super-mario-odyssey-ios's frame pacer, MIT), applied at start and again when the setting, the power mode or the
+  thermal state changes, with the reason logged; `ENABLE_DEBUG_DYLIB: NO` in `ios/project.yml` (kept by project_m3.py). `t_pace` (7 policy cases;
+  the setting alone fails 3), `t_ios_cpu.py` (2 more checks; the spec without the line fails 2). On a device (the user): Low Power Mode on and
+  off while playing logs "frame rate 30 fps (Low Power Mode)" and back
 - [ ] 136 patches always applied, chosen by the page (no option pages on iOS)
 
 Tier 3c, larger:

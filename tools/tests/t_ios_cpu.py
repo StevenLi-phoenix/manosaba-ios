@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""The iOS builds' CPU (plan item 108): ios/project.yml compiles for apple-a14, the oldest Metal 4 chip (A14 / M1), so one IPA covers every device
+"""The iOS builds' CPU (plan item 108) and their single binary (item 135: ENABLE_DEBUG_DYLIB NO in project.yml and kept by project_m3.py; a Debug
+build would move the app's code and the embedded game images into a separate debug dylib): ios/project.yml compiles for apple-a14, the oldest Metal 4 chip (A14 / M1), so one IPA covers every device
 iOS 26 runs Metal 4 on; tools/project_m3.py keeps it for the iOS 18 build and adds DM_NVN_M3 and the iOS 18 target; tools/project_free.py leaves it.
 With an app executable (argument or DM_TEST_APP_BIN, e.g. work/run/ios/dd-ipa/Build/Products/Release-iphoneos/DmIOS.app/DmIOS), its host code
 (__TEXT,__text, disassembled with every later extension known to llvm-objdump) is also checked for instructions an A14 lacks: BF16, I8MM, SME,
-WFxT (measured before the change: none in the apple-a18 build either). The spec with the old apple-a18 (T_IOS_YML=<copy>, by hand) fails 2."""
+WFxT (measured before the change: none in the apple-a18 build either). The spec with the old apple-a18 (T_IOS_YML=<copy>, by hand) fails 2;
+without the ENABLE_DEBUG_DYLIB line it fails 2."""
 import os, re, subprocess, sys, tempfile
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 YML = os.environ.get('T_IOS_YML') or os.path.join(ROOT, 'ios', 'project.yml')
@@ -15,11 +17,14 @@ def cflags(text):
     m = re.search(r'^\s*OTHER_CFLAGS:\s*(.*?)\s*(#.*)?$', text, re.M); return m.group(1) if m else ''
 spec = open(YML, encoding='utf-8').read()
 check('project.yml: -mcpu=apple-a14', '-mcpu=apple-a14' in cflags(spec).split())
+def no_debug_dylib(text): return re.search(r'^\s*ENABLE_DEBUG_DYLIB:\s*NO\b', text, re.M) is not None
+check('project.yml: ENABLE_DEBUG_DYLIB NO (one binary in Debug too)', no_debug_dylib(spec))
 with tempfile.TemporaryDirectory() as td:
     out = os.path.join(td, 'm3.yml')
     r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ios', 'tools', 'project_m3.py'), YML, out], capture_output=True, text=True)
     m3 = open(out, encoding='utf-8').read() if r.returncode == 0 else ''
     check('project_m3.py: apple-a14 with DM_NVN_M3=1, iOS 18.0', cflags(m3).split() == ['$(inherited)', '-mcpu=apple-a14', '-DDM_NVN_M3=1'] and 'iOS: "18.0"' in m3)
+    check('project_m3.py: ENABLE_DEBUG_DYLIB NO kept', no_debug_dylib(m3))
     out = os.path.join(td, 'free.yml')
     r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ios', 'tools', 'project_free.py'), YML, out], capture_output=True, text=True)
     check('project_free.py: the CPU left as it is', r.returncode == 0 and cflags(open(out, encoding='utf-8').read()) == cflags(spec))

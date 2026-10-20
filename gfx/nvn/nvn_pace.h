@@ -43,6 +43,16 @@ static inline int nvn_hold_interval(int itv, int hz, int hold_fps) {
     return itv;
 }
 
+// The iOS frame rate the device can afford (plan item 135, after super-mario-odyssey-ios's frame pacer, MIT): the player's setting, held at 30 in
+// Low Power Mode or from thermal state Serious up (NSProcessInfoThermalStateSerious = 2, Critical = 3), where iOS throttles the device anyway and a
+// game paced for 60 misses frames unevenly. Unit test tests/t_pace.c
+static inline int nvn_fps_policy(int user_fps, int low_power, int thermal) {
+#ifdef DM_TEST_POLICY_USER_ONLY   // negative control of t_pace only: the setting alone, as before
+    (void)low_power; (void)thermal; return user_fps;
+#endif
+    return (low_power || thermal >= 2) && user_fps > 30 ? 30 : user_fps;
+}
+
 // Uncapped pacing (plan item 53, after MacNativeGames' TOTK_UNCAPPED, ly05010419/MacNativeGames, MIT): for a game whose step follows the measured
 // frame time (the host's dm_game_realtime_step), the game does not wait for the display. Our own clock paces it at up to `cap` Hz (its present
 // interval × 1 / cap a frame) and the display link shows the newest finished frame at each refresh, so a scene slower than 60 fps shows at its own

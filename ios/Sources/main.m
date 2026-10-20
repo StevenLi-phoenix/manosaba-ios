@@ -30,6 +30,7 @@
 #include "front.h"
 #include "game.h"
 #include "romfs_validate.h"
+#include "nvn_pace.h"   // nvn_fps_policy (plan item 135)
 
 int dm_main(int argc, char **argv);   // host/main.c, compiled with -Dmain=dm_main
 UIView *front_ios_view(CGRect frame, CGFloat scale);   // scale = the screen's native scale
@@ -221,20 +222,27 @@ static void *boot_thread(void *arg) {
 // MetalFX also follow a change made while the game runs (on returning to it); the render resolution is read by the game once, at startup.
 void mtl_fps_set(int fps); void mtl_upscale_set(int on);   // gfx/nvn/nvn_mtl.m
 static NSInteger g_gfx_fps, g_gfx_fx;   // the settings as last applied: a later change is applied, an unchanged one leaves a launch's variables alone
+// The frame rate applied is the setting held at 30 in Low Power Mode or from thermal state Serious up (nvn_fps_policy, plan item 135): iOS throttles
+// the device then anyway, and a game paced for 60 misses frames unevenly. Re-applied when the setting, the power mode or the thermal state changes
+static int fps_afforded(NSInteger user, const char **why) {
+    NSProcessInfo *pi = NSProcessInfo.processInfo; int lp = pi.isLowPowerModeEnabled, th = (int)pi.thermalState, f = nvn_fps_policy((int)user, lp, th);
+    *why = f < user ? (lp ? "Low Power Mode" : th >= 3 ? "thermal state critical" : "thermal state serious") : "the setting";
+    return f;
+}
 static void gfx_settings_boot(void) {
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    g_gfx_fps = [d integerForKey:@"dm.fps"] == 30 ? 30 : 60; g_gfx_fx = [d boolForKey:@"dm.metalfx"];
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults; const char *why;
+    g_gfx_fps = fps_afforded([d integerForKey:@"dm.fps"] == 30 ? 30 : 60, &why); g_gfx_fx = [d boolForKey:@"dm.metalfx"];
     NSInteger h = [d integerForKey:@"dm.render_height"];
     if (g_gfx_fps == 30) setenv("DM_FPS", "30", 0);
     if (h > 0) { char b[16]; snprintf(b, sizeof b, "%ld", (long)h); setenv("DM_RENDER_HEIGHT", b, 0); }
     if (g_gfx_fx) setenv("DM_UPSCALE", "metalfx", 0);
-    plog("boot: graphics settings: %ld fps, render height %s, MetalFX %s", (long)g_gfx_fps, getenv("DM_RENDER_HEIGHT") ?: "the game's", g_gfx_fx ? "on" : "off");
+    plog("boot: graphics settings: %ld fps (%s), render height %s, MetalFX %s", (long)g_gfx_fps, why, getenv("DM_RENDER_HEIGHT") ?: "the game's", g_gfx_fx ? "on" : "off");
 }
 static void gfx_settings_refresh(void) {
     if (!g_host_up) return;
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    NSInteger fps = [d integerForKey:@"dm.fps"] == 30 ? 30 : 60, fx = [d boolForKey:@"dm.metalfx"];
-    if (fps != g_gfx_fps) { g_gfx_fps = fps; mtl_fps_set((int)fps); }
+    const char *why; NSInteger fps = fps_afforded([d integerForKey:@"dm.fps"] == 30 ? 30 : 60, &why), fx = [d boolForKey:@"dm.metalfx"];
+    if (fps != g_gfx_fps) { g_gfx_fps = fps; mtl_fps_set((int)fps); plog("frame rate %ld fps (%s)", (long)fps, why); }
     if (fx != g_gfx_fx) { g_gfx_fx = fx; mtl_upscale_set((int)fx); }
 }
 static void host_start(NSString *romfs) {
@@ -243,6 +251,8 @@ static void host_start(NSString *romfs) {
     gfx_settings_boot();
     [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:NSOperationQueue.mainQueue
                                                 usingBlock:^(NSNotification *n) { (void)n; gfx_settings_refresh(); }];
+    for (NSNotificationName nm in @[NSProcessInfoPowerStateDidChangeNotification, NSProcessInfoThermalStateDidChangeNotification])   // (they come on any thread)
+        [NSNotificationCenter.defaultCenter addObserverForName:nm object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; gfx_settings_refresh(); }];
     boot_prepare(romfs);
     dm_host_preload_start(g_argc, g_argv);   // module loading and relocation on a background thread, alongside the rest of the UI setup
     front_ios_lifecycle_install();
