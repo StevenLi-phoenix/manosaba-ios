@@ -1351,6 +1351,13 @@ __attribute__((weak)) void dm_main_yield_stats(uint64_t *n, uint64_t *ns) { *n =
 __attribute__((weak)) uint32_t dm_guest_work_qos(unsigned *count) { if (count) *count = 0; return QOS_CLASS_UNSPECIFIED; }
 extern uint32_t mtl_present_qos(void);
 static uint64_t g_frame;
+// The GPU work of the frame last drawn into a swapchain image, at its acquire (plan item 142, after blade2-mobile 43e760e hle_nvn.c, MIT): on the
+// console an image comes back only after the display let go of it, long after that frame's GPU work, and a game that recycles per-frame memory by
+// frame count relies on that (blade2: UE4's rings, black frames without the wait). Our present only enqueues. Counted: acquires, and those that
+// return before that work is done; DM_NVN_ACQ_GPU=wait waits for it there. Unit test gfx/tests/t_nvn.c 6g
+static uint64_t g_acq_n, g_acq_early, g_acq_gpu_ns;
+static int g_acq_gpu = -1;   // 1: wait (DM_NVN_ACQ_GPU=wait); -1 until read (t_nvn sets it)
+static int acq_gpu_wait(void) { if (g_acq_gpu < 0) { const char *e = getenv("DM_NVN_ACQ_GPU"); g_acq_gpu = e && !strcmp(e, "wait"); if (g_acq_gpu) LOG("[nvn] DM_NVN_ACQ_GPU=wait: a swapchain acquire waits for the GPU work of the frame last drawn into its image"); } return g_acq_gpu; }
 static uint64_t g_acq_wait_ns, g_pq_wait_ns;   // Accumulated display-link wait / wait for the present queue to return inside acquire, recorded per frame at present (there can be several acquires within one frame)
 uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
@@ -1401,6 +1408,11 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // The previous present of this texture has not yet been processed by the present thread (display cannot keep up, a whole swapchain round behind): wait for it to be returned, then hand it to the game to draw
     uint64_t tk = *idx < 4 ? o->ticket[*idx] : 0;
     if (tk) { uint64_t w0 = now_ns(); mtl_present_wait(tk); g_pq_wait_ns += now_ns() - w0; }
+    { uint64_t rf = *idx < 4 ? o->rfence[*idx] : 0; g_acq_n++;   // the frame last drawn into this image (see g_acq_early)
+#ifndef DM_TEST_ACQ_GPU_NO_WAIT   // negative control of t_nvn only: never waits
+      if (rf && mtl_done_fence() < rf) { g_acq_early++; if (acq_gpu_wait()) { uint64_t w0 = now_ns(); mtl_wait(rf, 5000000000ull); g_acq_gpu_ns += now_ns() - w0; } }
+#endif
+    }
     // The acquire sync means "the display path no longer reads this texture": mtl_present_wait above waited for its last present to be committed, and
     // every later use of the texture is ordered after that present on the one Metal queue. Fencing it to the newest submission instead held the game's
     // CPU here until the whole previous frame had run, so the replay of a frame and the GPU work of the one before never overlapped (MacNativeGames,
@@ -1543,6 +1555,10 @@ static void tsummary(uint64_t frame) {
         o += snprintf(line + o, sizeof line - o, " %s p50 %.2f / p95 %.2f / max %.2f ms (%u frames);", g_tname[k], v[n / 2], v[(n * 95) / 100 < n ? (n * 95) / 100 : n - 1], v[n - 1], n);
     }
     LOG("[nvn] timing up to frame %llu:%s", frame, line);
+    { static uint64_t pn, pe, pw; if (g_acq_n > pn) LOG("[nvn] swapchain acquires up to frame %llu: %llu, %llu of them before the GPU finished the frame last drawn into that image%s",
+          frame, (unsigned long long)(g_acq_n - pn), (unsigned long long)(g_acq_early - pe), acq_gpu_wait() ? "" : " (DM_NVN_ACQ_GPU=wait waits)");
+      if (acq_gpu_wait() && g_acq_gpu_ns > pw) LOG("[nvn] ... waited %.2f ms for it in all", (g_acq_gpu_ns - pw) / 1e6);
+      pn = g_acq_n; pe = g_acq_early; pw = g_acq_gpu_ns; }
     { char pl[128]; dm_perf_line(pl, sizeof pl); LOG("[nvn] fps / GPU line at frame %llu: %s", frame, pl); }   // what the iOS overlay / Mac title show
     power_line(frame);
     { unsigned n = g_tn[0] < TWIN ? g_tn[0] : TWIN, over = 0; double v[TWIN];   // frame interval gets its own line (M1 baseline): number of frames > 16.7 ms in this window and p99
@@ -1712,7 +1728,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     gfx_enter();
     uint64_t t0 = now_ns();
     gfx_mt_enter("PresentTexture");
-    if (idx >= 0 && idx < o->ntex && idx < 4) o->ticket[idx] = mtl_present(CTX(o->tex[idx]), present_period(o) / 1e9, o->crop);   // enqueue only, return immediately
+    if (idx >= 0 && idx < o->ntex && idx < 4) { o->ticket[idx] = mtl_present(CTX(o->tex[idx]), present_period(o) / 1e9, o->crop); o->rfence[idx] = mtl_last_fence(); }   // enqueue only, return immediately; the frame's work is committed (QueueSubmitCommands replays and commits at once)
     gfx_mt_leave();
     gfx_leave();
     atomic_fetch_add(&g_nvn_ns, now_ns() - t0);

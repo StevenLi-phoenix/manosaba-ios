@@ -1768,7 +1768,14 @@ Tier 3c, larger:
   `t_memsnap.py` (5 more on a synthetic snapshot)
 
 Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):
-- [ ] 142 the swapchain acquire against the frame's GPU work: count acquires that return before that image's frame is done, then wait (blade2)
+- [x] batch 44 · 142 the swapchain acquire against the GPU work of the frame last drawn into its image (after blade2-mobile 43e760e, MIT: UE4
+  recycles per-frame memory by frame count, and without the wait it drew black frames): the present records the newest submission's fence for the
+  image (`win_t` `rfence`), the acquire counts the times that work is not done yet, and the timing summary logs "swapchain acquires up to frame N:
+  …, M of them before the GPU finished the frame last drawn into that image"; `DM_NVN_ACQ_GPU=wait` waits for it there. Measured, all frames: 0 of
+  2,100 in the TotK prologue, 0 of 2,100 on the cliff save (also with the wait: frame p50 33.9 ms, submit 7.4, GPU 6.9 against 33.9 / 7.6 / 6.7),
+  0 of 3,300 in manosaba: on the Mac the GPU is done long before, so the wait stays off; a device's log tells. `t_nvn` 6g (with completions held
+  back, `mtl_test_done_hold`: counted, returns at once without the wait and only after the 150 ms hold with it; never counted or waiting,
+  `DM_TEST_ACQ_GPU_NO_WAIT`, fails 2). On a device (the user): the count in TotK and manosaba logs
 - [x] batch 30 · 143 svc details as Horizon (switchbrew's results; totk-mobile's vectors): SetHeapSize refuses sizes that are not 2 MiB multiples or
   above 4 GiB (InvalidSize; it took any size: a 1-byte heap then left the next growth's pages unwritable) and sizes above the heap region with
   OutOfMemory 0xD001 (was 0xD401), refuses a shrink over a MapMemory source (InvalidCurrentMemory), and gives back memory as fresh pages (a regrow

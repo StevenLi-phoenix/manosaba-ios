@@ -34,6 +34,7 @@ static void mem_cb(NVNcommandBuffer *c, NVNcommandBufferMemoryEvent ev, size_t m
     P(nvnCommandBufferAddCommandMemory)(c, &g_cmdpool, (ptrdiff_t)g_cmdoff, n); g_cmdoff += n;
 }
 
+static void *release_later(void *a) { (void)a; void mtl_test_done_hold(int on); usleep(150000); mtl_test_done_hold(0); return NULL; }   // 6g
 // Suspend unit test: do the submit on another thread
 static _Atomic int g_sstarted, g_sdone; static pthread_mutex_t g_smu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_scv = PTHREAD_COND_INITIALIZER;
 static NVNqueue *g_sq; static NVNcommandHandle g_sh; static NVNT_nvnQueueSubmitCommands g_sub;
@@ -745,6 +746,37 @@ int main(void) {
         uint64_t f0 = now_ns(); P(nvnQueueFinish)(&q); double fin_ms = (now_ns() - f0) / 1e6;
         EXPECT("QueueFinish with presents queued returns without waiting for them (< 100 ms)", 1, fin_ms < 100);
         mtl_present_test_stall(0); mtl_present_flush();
+    }
+
+    // 6g. The swapchain acquire against the GPU work of the frame last drawn into the image (plan item 142): with completions held back
+    //     (mtl_test_done_hold: the GPU still on that frame), acquiring the image again is counted; without the wait it returns at once, the frame not
+    //     done; with DM_NVN_ACQ_GPU=wait it returns only once the hold is let go (150 ms later, from another thread), the frame done
+    {
+        void mtl_test_done_hold(int on);
+        nvn_present_config(0, 0);
+        NVNwindowBuilder wb4; NVNwindow w4; P(nvnWindowBuilderSetDevice)(&wb4, &dev); P(nvnWindowBuilderSetDefaults)(&wb4);
+        NVNtexture *sc2[2] = {&sc[0], &sc[1]};
+        P(nvnWindowBuilderSetTextures)(&wb4, 2, sc2); P(nvnWindowInitialize)(&w4, &wb4);
+        for (int mode = 0; mode < 2; mode++) {
+            g_acq_gpu = mode; mtl_present_flush(); mtl_wait(mtl_last_fence(), 5000000000ull);
+            int ix; uint64_t e0 = g_acq_early;
+            P(nvnWindowAcquireTexture)(&w4, NULL, &ix);
+            mtl_test_done_hold(1);
+            P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferBarrier)(&cb, 0); NVNcommandHandle hf = P(nvnCommandBufferEndRecording)(&cb);
+            P(nvnQueueSubmitCommands)(&q, 1, &hf);   // the frame's work
+            uint64_t rf = mtl_last_fence();
+            P(nvnQueuePresentTexture)(&q, &w4, ix);
+            P(nvnWindowAcquireTexture)(&w4, NULL, &ix); P(nvnQueuePresentTexture)(&q, &w4, ix);   // the other image
+            pthread_t th; if (mode) pthread_create(&th, NULL, release_later, NULL);
+            uint64_t a0 = now_ns(); P(nvnWindowAcquireTexture)(&w4, NULL, &ix); double ms = (now_ns() - a0) / 1e6; int done = mtl_done_fence() >= rf;
+            if (mode) pthread_join(th, NULL); else mtl_test_done_hold(0);
+            P(nvnQueuePresentTexture)(&q, &w4, ix);
+            if (!mode) EXPECT("acquiring an image whose frame the GPU has not finished: counted, returns at once with the frame not done (no wait)", 1,
+                              g_acq_early > e0 && !done && ms < 100);
+            else EXPECT("... DM_NVN_ACQ_GPU=wait: counted, returns once the frame is done (after the 150 ms hold)", 1, g_acq_early > e0 && done && ms > 100);
+            printf("    acquire took %.1f ms, early %llu\n", ms, (unsigned long long)(g_acq_early - e0));
+        }
+        g_acq_gpu = 0; mtl_present_flush();
     }
 
     // 6b. Shader key = sha256(0x880-byte control section + code area of the length at control +0x704)[:8]: a shader with the same control

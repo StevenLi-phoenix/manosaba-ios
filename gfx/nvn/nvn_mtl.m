@@ -134,6 +134,7 @@ static uint64_t g_fence;                        // Highest committed fence value
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t g_done;                         // Highest completed fence value (written by the completion callback)
+static int g_test_done_hold; static uint64_t g_test_done_held;   // mtl_test_done_hold (t_nvn only)
 static _Atomic int g_last_commit_error;
 static _Atomic int g_up_pending;
 // Waiting for upload batches: the completion handler broadcasts after it clears a counter, the waiter blocks until it reads zero (nxnative e06a8ec's
@@ -1361,7 +1362,7 @@ uint64_t mtl_sub_commit(void) {
         }
         #undef REPORT_TICKS
         free(ops);
-        pthread_mutex_lock(&g_mu); if (fence > g_done) g_done = fence; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
+        pthread_mutex_lock(&g_mu); if (g_test_done_hold) { if (fence > g_test_done_held) g_test_done_held = fence; } else if (fence > g_done) g_done = fence; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
         if (atomic_fetch_sub(&g_inflight, 1) == 1 && g_ka_idle) dispatch_semaphore_signal(g_ka_idle);
         defer_drain();
     }];
@@ -1389,6 +1390,13 @@ uint64_t mtl_done_fence(void) { pthread_mutex_lock(&g_mu); uint64_t d = g_done; 
 uint64_t mtl_last_fence(void) { return g_fence; }
 int mtl_last_commit_error(void) { return atomic_load(&g_last_commit_error); }
 
+// Test only (t_nvn, plan item 142): while held, completed submissions do not move the done fence, as if the GPU were still on them; letting go
+// moves it to the newest completed. Under g_mu
+void mtl_test_done_hold(int on) {
+    pthread_mutex_lock(&g_mu); g_test_done_hold = on;
+    if (!on && g_test_done_held > g_done) { g_done = g_test_done_held; pthread_cond_broadcast(&g_cv); }
+    pthread_mutex_unlock(&g_mu);
+}
 int mtl_wait(uint64_t fence, uint64_t timeout_ns) { @autoreleasepool {
     struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl);
     uint64_t ns = (uint64_t)dl.tv_nsec + (timeout_ns > 3600000000000ull ? 3600000000000ull : timeout_ns);
