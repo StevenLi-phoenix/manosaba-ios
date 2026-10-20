@@ -97,7 +97,12 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
                 void thr_svc_enter(uint64_t *regs, uint64_t pc); void thr_svc_exit(void);
                 module_t *m = module_of((void *)ret_addr);
                 thr_svc_enter(regs, m ? (uint64_t)m->base + g->orig : 0);
-                uint64_t r = svc_dispatch(g->arg, regs, g->orig);
+#ifndef DM_TEST_GATE_ORIG_REL   // negative control of t_gate_svc only: the offset in the module, as before
+                uint64_t pc = m ? (uint64_t)m->base + g->orig : g->orig;   // the svc instruction's address (plan item 125: its offset alone, which
+#else                                                                     // module_of cannot place, made every svc log line say "?")
+                uint64_t pc = g->orig;
+#endif
+                uint64_t r = svc_dispatch(g->arg, regs, pc);
                 thr_svc_exit();
                 return r;
             }

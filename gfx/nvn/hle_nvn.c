@@ -606,16 +606,33 @@ static void shader_key(const NVNshaderData *sd, uint8_t key[8]) {
     CC_SHA256_Final(md, &h); memcpy(key, md, 8);
 }
 // DM_SHDUMP=directory (sampling for offline translation): for each new shader write <key>.ctl (the 0x880-byte control section) and <key>.data (from data: 0x30 + the length recorded at control +0x704 + 0x100 bytes).
+// The .ctl marks a capture as done (a shader with one is skipped), so it is written last and each file whole (to .tmp, then renamed; plan item 125,
+// bayonetta3-mobile writes atomically): the .ctl used to come first, and a run ended between the two left a capture without its code that later
+// runs skipped and the offline build tripped on. stop_after_data: the unit test's crash between the two files (t_nvn)
+static int shdump_file(const char *path, const void *p, size_t n) {
+    char tmp[1300]; snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb"); if (!f) return -1;
+    int bad = fwrite(p, 1, n, f) != n; if (fclose(f)) bad = 1;
+    if (bad || rename(tmp, path)) { unlink(tmp); return -1; }
+    return 0;
+}
+static void shdump_to(const char *dir, const NVNshaderData *sd, int stop_after_data) {
+    uint8_t md[8]; shader_key(sd, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
+    char pc[1200], pd[1200]; snprintf(pc, sizeof pc, "%s/%s.ctl", dir, key); snprintf(pd, sizeof pd, "%s/%s.data", dir, key);
+    if (!access(pc, F_OK)) return;
+    uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
+#ifndef DM_TEST_SHDUMP_CTL_FIRST   // negative control of t_nvn only: the control section first, as before
+    if (shdump_file(pd, (const void *)sd->data, 0x30 + (size_t)len + 0x100) || stop_after_data) return;
+    shdump_file(pc, sd->control, 0x880);
+#else
+    if (shdump_file(pc, sd->control, 0x880) || stop_after_data) return;
+    shdump_file(pd, (const void *)sd->data, 0x30 + (size_t)len + 0x100);
+#endif
+}
 static void shdump(const NVNshaderData *sd) {
     static const char *dir; static int init; if (!init) { dir = getenv("DM_SHDUMP"); init = 1; if (dir) mkdir(dir, 0755); }
     if (!dir || !sd->control) return;
-    uint8_t md[8]; shader_key(sd, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
-    char p[1200]; snprintf(p, sizeof p, "%s/%s.ctl", dir, key);
-    if (!access(p, F_OK)) return;
-    uint32_t len = *(const uint32_t *)((const uint8_t *)sd->control + 0x704);
-    FILE *f = fopen(p, "wb"); if (!f) return; fwrite(sd->control, 1, 0x880, f); fclose(f);
-    snprintf(p, sizeof p, "%s/%s.data", dir, key);
-    if ((f = fopen(p, "wb"))) { fwrite((const void *)sd->data, 1, 0x30 + (size_t)len + 0x100, f); fclose(f); }
+    shdump_to(dir, sd, 0);
 }
 // Shader stage: a graphics code area starts with the 78563412 marker + 0x30 header, then the first SPH word has type bits 0–4 (1 = VTG, 2 = pixel) and shader type bits 10–13 (1 = vertex, 5 = pixel);
 // no marker = compute (data is bare instructions). Same test as the offline shmap_from_capture.py / dmsh_build.py. Needed when BindProgram attaches a program per stage bit (see nvn_mtl.m prog_bind)

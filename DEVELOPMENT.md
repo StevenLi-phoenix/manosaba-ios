@@ -1552,9 +1552,22 @@ Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, 
   console also sets one on a diagonal outside that circle with both axes under half is not documented and not checked on a console. The touch
   controls' self-test masks them (it checks the controls' own buttons: all ok in the cliff save). `t_stickdir` (8; none fails 5), `t_hid_script`
   and `t_hid_receipt` expect them
-- [ ] 125 a guarded backtrace, the svc and Break module names, unique `RED_ONCE` tags (with a test), the shader capture written atomically
-- [ ] 126 the texture view in the SDK's 16-byte layout (TotK's setters in Unicorn first)
-- [ ] 127 the Mac mouse monitor leaving the title bar to AppKit, App Nap held off
+- [x] batch 29 · 125 crash and diagnostics fixes: the crash report's backtrace reads each frame with vm_read_overwrite (`crash.c` `dm_backtrace`;
+  totk-mobile does so): a corrupt x29 faulted inside the crash handler and lost the rest (`t_crash_bt`: a chain into an unmapped page prints both
+  return addresses and a note; the direct read dies of SIGSEGV, 2 fail); the svc gate hands `svc_dispatch` the svc's address, not its offset in
+  the module (`hle.c` `gate_dispatch`: every red SVC line and Break said "?"; `t_gate_svc`, the offset alone fails 2), and Break names the svc's
+  module and its caller's apart (they were mixed); 18 `RED_ONCE` calls of 13 tags shared by unrelated messages moved to free tags, each tag one
+  message (`tools/tests/t_red_once.py`; the old source fails 1); the shader capture writes `.data` then `.ctl`, each whole through a rename
+  (`hle_nvn.c` `shdump_to`: a run ended between the two left a `.ctl` that marked a capture without its code as done; `t_nvn`, the old order
+  fails 2)
+- [-] batch 29 · 126 not needed, and wrong for Tears of the Kingdom: it keeps its own fields right after a view (7250b79: a 12-byte `view_t` overwrote
+  them), so its SDK's view is not the 16 bytes Bayonetta 3's is; and every view both games hand over was made by our SetDefaults (measured once
+  with a mark in bytes 10-15: 16,384+ views each in the prologue, the cliff save and manosaba, none without it; that run wrote past `view_t`, so
+  the switch was not kept). No view sets a depth / stencil mode (the red line for it never fired)
+- [x] batch 29 · 127 the Mac window: a press on the title bar goes to AppKit with its drag and release (it was swallowed with every press outside the
+  picture: moving the window by its title bar did nothing), one on the black bars is still no touch (`host/mouse_route.h`; `t_mouse_route`, 9; the
+  old routing fails 3); App Nap held off while a window runs (`beginActivityWithOptions` user-initiated, latency-critical; blade2-mobile: a hidden
+  window without sound turned a 10 ms sleep into 200 ms). The window checks are for the user
 - [ ] 128 tests from the deep review: WriteTexels, vertex fetch on the GPU, the svc vectors, time zones, RELR, pool lookup overflow, alpha NaN refs
 - [ ] 129 rewriter: swapped-operand jump tables, disassembly past undecodable words, the CBZ success path in equiv, a narrower TSD filter, a
   synthetic NSO self-test in CI

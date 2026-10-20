@@ -21,6 +21,8 @@ run: \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
 	$(B)/t_waitsync \
+	$(B)/t_crash_bt \
+	$(B)/t_crash_bt_unguarded \
 	$(B)/t_crash_stderr \
 	$(B)/t_envfile \
 	$(B)/t_freeze \
@@ -31,6 +33,8 @@ run: \
 	$(B)/t_fs_kill \
 	$(B)/t_fs_kill_inplace \
 	$(B)/t_gameslot \
+	$(B)/t_gate_svc \
+	$(B)/t_gate_svc_rel \
 	$(B)/t_guest_mem \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_script \
@@ -44,6 +48,8 @@ run: \
 	$(B)/t_memsnap \
 	$(B)/t_mods \
 	$(B)/t_mods_case \
+	$(B)/t_mouse_route \
+	$(B)/t_mouse_route_swallow \
 	$(B)/t_movie \
 	$(B)/t_net \
 	$(B)/t_net_bsd \
@@ -108,6 +114,11 @@ run: \
 	$(B)/t_condvar
 	$(B)/t_condvar_old
 	$(B)/t_waitsync
+	$(B)/t_crash_bt
+	@status=0; $(B)/t_crash_bt_unguarded > $(B)/t_crash_bt_unguarded.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ a corrupt frame pointer" $(B)/t_crash_bt_unguarded.log; then \
+	   cat $(B)/t_crash_bt_unguarded.log; echo "t_crash_bt_unguarded: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_crash_bt_unguarded: a backtrace reading frames directly faults on a corrupt frame pointer, as expected"
 	$(B)/t_crash_stderr
 	TMPDIR="$(abspath $(B))" $(B)/t_envfile
 	$(B)/t_freeze
@@ -124,6 +135,11 @@ run: \
 	   cat $(B)/t_fs_kill_inplace.log; echo "t_fs_kill_inplace: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_fs_kill_inplace: a commit that removes the committed save before cloning in its place tears it under SIGKILL, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_gameslot 2>/dev/null
+	$(B)/t_gate_svc
+	@status=0; $(B)/t_gate_svc_rel > $(B)/t_gate_svc_rel.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ svc_dispatch gets the svc" $(B)/t_gate_svc_rel.log; then \
+	   cat $(B)/t_gate_svc_rel.log; echo "t_gate_svc_rel: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_gate_svc_rel: an svc gate passing the offset alone gives an address in no module, as expected"
 	$(B)/t_guest_mem 2>/dev/null
 	$(B)/t_hid_receipt 2>/dev/null
 	$(B)/t_hid_script 2>/dev/null
@@ -154,6 +170,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ 01_one's layer" $(B)/t_mods_case.log; then \
 	   cat $(B)/t_mods_case.log; echo "t_mods_case: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_mods_case: paths built with the program ID as asked break on a file system that tells cases apart, as expected"
+	$(B)/t_mouse_route
+	@status=0; $(B)/t_mouse_route_swallow > $(B)/t_mouse_route_swallow.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "press on the title bar .*✗" $(B)/t_mouse_route_swallow.log; then \
+	   cat $(B)/t_mouse_route_swallow.log; echo "t_mouse_route_swallow: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_mouse_route_swallow: a monitor swallowing every press outside the picture takes the title bar from AppKit, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_movie 2>/dev/null
 	$(B)/t_net
 	@status=0; $(B)/t_net_bsd > $(B)/t_net_bsd.log 2>/dev/null || status=$$?; \
@@ -313,6 +334,18 @@ $(B)/t_threaddump: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_threaddump_suspended: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_BT_PRINT_SUSPENDED -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_crash_bt: t_crash_bt.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../crash.c
+$(B)/t_crash_bt_unguarded: t_crash_bt.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_BT_UNGUARDED -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../crash.c
+$(B)/t_gate_svc: t_gate_svc.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_gate_svc.c ../hle.c ../options.c
+$(B)/t_gate_svc_rel: t_gate_svc.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -DDM_TEST_GATE_ORIG_REL -I.. -Wl,-dead_strip -o $@ t_gate_svc.c ../hle.c ../options.c
+$(B)/t_mouse_route: t_mouse_route.c ../mouse_route.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_mouse_route.c
+$(B)/t_mouse_route_swallow: t_mouse_route.c ../mouse_route.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_MOUSE_SWALLOW_TITLE -I.. -o $@ t_mouse_route.c
 $(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
 $(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)

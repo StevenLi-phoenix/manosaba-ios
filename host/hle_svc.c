@@ -543,9 +543,10 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     }
     case 0x26: {  // Break(reason, ptr, size): SDK fatal abort
         uint32_t res = (regs[1] && regs[2] >= 4) ? *(uint32_t *)regs[1] : 0;
-        module_t *mm = module_of((void *)regs[30]);
+        module_t *ms = module_of((void *)orig_addr), *mm = module_of((void *)regs[30]);   // the svc's own module and its caller's (they were mixed: one's name, the other's offset)
         static int nb;
-        LOG("Break#%d reason=%#llx Result=%#x, svc at %s+%#llx", ++nb, regs[0], res, mm ? mm->name : "?", orig_addr);
+        LOG("Break#%d reason=%#llx Result=%#x, svc at %s+%#llx, called from %s+%#llx", ++nb, regs[0], res, ms ? ms->name : "?", ms ? orig_addr - (uint64_t)ms->base : orig_addr,
+            mm ? mm->name : "?", mm ? regs[30] - (uint64_t)mm->base : regs[30]);
         abort_context();
         dm_backtrace(regs[29]);
         if (regs[0] & 0x80000000ull) return 0;   // notification only, can continue

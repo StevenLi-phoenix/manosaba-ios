@@ -7,6 +7,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
+#include "mouse_route.h"
 #include "cloud.h"
 #include "dm.h"
 #include "dm_input.h"
@@ -222,6 +223,9 @@ void front_run(void (*guest)(void)) {
         NSWindow *win = [[NSWindow alloc] initWithContentRect:r styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
         win.title = @(dm_game.title); win.restorable = NO; g_win = win;
+        {   // App Nap held off while the game runs (plan item 127; blade2-mobile: a hidden window without sound turned a 10 ms sleep into 200 ms)
+            static id<NSObject> act; act = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"game running"];
+            LOG("front: App Nap held off (NSActivityUserInitiated | NSActivityLatencyCritical)"); }
         if (getenv("DM_PERF_LINE") && strcmp(getenv("DM_PERF_LINE"), "0")) {   // the fps / GPU line in the title, twice a second (gfx/nvn/nvn_perfline.h)
             int dm_perf_line(char *out, size_t n);
             [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; char b[128]; dm_perf_line(b, sizeof b);
@@ -254,14 +258,19 @@ void front_run(void (*guest)(void)) {
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
             return nil;                                                    // swallowed: no system beep
         }];
-        // Left button = finger 0 on the touchscreen (front.h dm_touch_set) at the normalized position in the game picture
+        // Left button = finger 0 on the touchscreen (front.h dm_touch_set) at the normalized position in the game picture; a press on the title bar
+        // (outside the content view) goes to AppKit with its drag and release, one on the black bars is no touch (mouse_route.h, plan item 127)
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *e) {
+            static mouse_route_st mr;
             if (e.window != win) return e;
-            if (e.type == NSEventTypeLeftMouseUp) { dm_touch_set(NULL, 0); return nil; }
             NSPoint p = [v convertPoint:e.locationInWindow fromView:nil]; NSRect gr = game_rect();
             if (gr.size.width <= 0 || gr.size.height <= 0) return e;
             float nx = (float)((p.x - gr.origin.x) / gr.size.width), ny = (float)(1.0 - (p.y - gr.origin.y) / gr.size.height);   // AppKit origin bottom left, touch origin top left
-            if (e.type == NSEventTypeLeftMouseDown && (nx < 0 || nx > 1 || ny < 0 || ny > 1)) return nil;   // on the black bars: not a touch
+            int phase = e.type == NSEventTypeLeftMouseDown ? MR_DOWN : e.type == NSEventTypeLeftMouseUp ? MR_UP : MR_DRAG;
+            int route = mouse_route(&mr, phase, NSPointInRect(p, v.bounds), nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1);
+            if (route == MR_APPKIT) return e;
+            if (route == MR_SWALLOW) return nil;
+            if (phase == MR_UP) { dm_touch_set(NULL, 0); return nil; }
             dm_touch t = {0, nx < 0 ? 0 : nx > 1 ? 1 : nx, ny < 0 ? 0 : ny > 1 ? 1 : ny};
             dm_touch_set(&t, 1); return nil;
         }];

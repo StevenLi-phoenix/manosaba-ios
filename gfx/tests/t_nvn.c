@@ -331,6 +331,18 @@ int main(void) {
         P(nvnMemoryPoolFinalize)(&hp); free(heap);
     }
 
+    // 5b. The shader capture written whole, the control section last (hle_nvn.c shdump_to, plan item 125): stopped after the first file (a crash
+    //     between the two), no .ctl is left to mark a capture without its code; then both, at their sizes. The old order (-DDM_TEST_SHDUMP_CTL_FIRST) fails 2: the .ctl left makes the next call skip, the code never comes
+    {   static uint8_t ctl[0x880], code[0x30 + 0x40 + 0x100]; *(uint32_t *)(ctl + 0x704) = 0x40; for (int i = 0; i < (int)sizeof code; i++) code[i] = (uint8_t)i;
+        NVNshaderData sd = {.data = (NVNbufferAddress)(uintptr_t)code, .control = ctl};
+        char dir[512]; const char *td = getenv("TMPDIR"); snprintf(dir, sizeof dir, "%s/t_nvn_shdump_%d", td ? td : "/private/tmp", (int)getpid()); mkdir(dir, 0755);
+        uint8_t md[8]; shader_key(&sd, md); char key[17]; for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", md[i]);
+        char pc[600], pd[600]; snprintf(pc, sizeof pc, "%s/%s.ctl", dir, key); snprintf(pd, sizeof pd, "%s/%s.data", dir, key);
+        shdump_to(dir, &sd, 1);
+        EXPECT("shader capture cut after its first file: no .ctl marks it done", 0, !access(pc, F_OK));
+        shdump_to(dir, &sd, 0); struct stat sc, sdt;
+        EXPECT("then written whole: .ctl of 0x880 bytes and .data of 0x30 + 0x40 + 0x100", 1, !stat(pc, &sc) && sc.st_size == 0x880 && !stat(pd, &sdt) && sdt.st_size == 0x170);
+        unlink(pc); unlink(pd); rmdir(dir); }
     // 6. Sync / window / present
     NVNsync s1, s2; P(nvnSyncInitialize)(&s1, &dev); P(nvnSyncInitialize)(&s2, &dev);
     EXPECT("wait on a sync never fenced = FAILED(3), as the SDK says", 3, P(nvnSyncWait)(&s1, 0));

@@ -3036,7 +3036,7 @@ static id<MTLTexture> blk_aux(const tex_t *t, const view_t *v, int has_v, blk_wb
     tex_gpu_write(t); base = tex_mtl(t);            // as attach(): the first GPU write can replace a CPU-filled texture's MTLTexture
     if (!base) return nil;
     int is3d = base.textureType == MTLTextureType3D;
-    if (base.textureType != MTLTextureType2D && base.textureType != MTLTextureType2DArray && !is3d) { RED_ONCE(79, "compressed render target of texture type %lu not drawn (first case)", (unsigned long)base.textureType); return nil; }
+    if (base.textureType != MTLTextureType2D && base.textureType != MTLTextureType2DArray && !is3d) { RED_ONCE(6, "compressed render target of texture type %lu not drawn (first case)", (unsigned long)base.textureType); return nil; }
     if (!g_blkaux) g_blkaux = [NSMutableDictionary dictionary];
     NSNumber *key = @(t->serial); id<MTLTexture> a = g_blkaux[key];
     NSUInteger aw = (base.width + 3) / 4, ah = (base.height + 3) / 4;
@@ -3047,14 +3047,14 @@ static id<MTLTexture> blk_aux(const tex_t *t, const view_t *v, int has_v, blk_wb
         d.arrayLength = base.arrayLength; d.depth = base.depth; d.mipmapLevelCount = base.mipmapLevelCount;
         d.storageMode = MTLStorageModePrivate; d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         a = [g_dev newTextureWithDescriptor:d];
-        if (!a) { RED_ONCE(79, "auxiliary block render texture %lux%lu not allocated (first case)", (unsigned long)aw, (unsigned long)ah); return nil; }
+        if (!a) { RED_ONCE(7, "auxiliary block render texture %lux%lu not allocated (first case)", (unsigned long)aw, (unsigned long)ah); return nil; }
         res_add(a); g_blkaux[key] = a;
         static int once; if (!once++) MLOG("render target on a compressed texture (Metal format %lu, %lux%lu) drawn through its view format %lu into a %lux%lu block texture, copied back after the pass (first case)",
                                            (unsigned long)base.pixelFormat, (unsigned long)base.width, (unsigned long)base.height, (unsigned long)vpf, (unsigned long)aw, (unsigned long)ah);
     }
     NSUInteger lv = v->set_levels ? v->base_level : 0, sl = v->set_layers ? v->min_layer : 0;
     NSUInteger lw = MAX(base.width >> lv, 1u), lh = MAX(base.height >> lv, 1u);
-    if (lv >= base.mipmapLevelCount) { RED_ONCE(79, "compressed render target level %lu of %lu not drawn (first case)", (unsigned long)lv, (unsigned long)base.mipmapLevelCount); return nil; }
+    if (lv >= base.mipmapLevelCount) { RED_ONCE(14, "compressed render target level %lu of %lu not drawn (first case)", (unsigned long)lv, (unsigned long)base.mipmapLevelCount); return nil; }
     *w = (blk_wb){a, base, lv, is3d ? 0 : sl, is3d ? sl : 0, lw, lh, (lw + 3) / 4, (lh + 3) / 4, (NSUInteger)mtl_bc_block_bytes(base.pixelFormat)};
     return a;
 }
@@ -3324,7 +3324,7 @@ static void clear_quad(const p_clear_color *c) {
             "vertex float4 cq_vs(uint id [[vertex_id]]) { float2 p = float2((id << 1) & 2, id & 2); return float4(p * 2 - 1, 0, 1); }\n"
             "struct O { float4 c [[color(%d)]]; };\nfragment O cq_fs() { O o; o.c = cc; return o; }\n", i];
         NSError *e = nil; libs[i] = [g_dev newLibraryWithSource:src options:nil error:&e];
-        if (!libs[i]) { RED_ONCE(75, "clear shader: %s", e.localizedDescription.UTF8String); return; }
+        if (!libs[i]) { RED_ONCE(17, "clear shader: %s", e.localizedDescription.UTF8String); return; }
     }
     NSString *key = [NSString stringWithFormat:@"%d/%x/%u,%u,%u,%u,%u,%u,%u,%u/%u/%u/%u/%a,%a,%a,%a", i, c->mask, g_pass.cfmt[0], g_pass.cfmt[1], g_pass.cfmt[2], g_pass.cfmt[3],
                      g_pass.cfmt[4], g_pass.cfmt[5], g_pass.cfmt[6], g_pass.cfmt[7], g_pass.hd ? g_pass.dfmt : 0, g_pass.hs ? g_pass.sfmt : 0, g_pass.samples, c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]];
@@ -3353,7 +3353,7 @@ static void clear_ds_quad(const p_clear_ds *c) {
     if (!lib) {
         NSError *e = nil; lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nconstant float depth [[function_constant(0)]];\n"
             "vertex float4 ds_vs(uint id [[vertex_id]]) { float2 p = float2((id << 1) & 2, id & 2); return float4(p * 2 - 1, depth, 1); }\n" options:nil error:&e];
-        if (!lib) { RED_ONCE(75, "depth-stencil clear shader: %s", e.localizedDescription.UTF8String); return; }
+        if (!lib) { RED_ONCE(24, "depth-stencil clear shader: %s", e.localizedDescription.UTF8String); return; }
         pipelines = [NSMutableDictionary dictionary]; states = [NSMutableDictionary dictionary];
     }
     float depth = c->depth_mask && dfmt ? fminf(1, fmaxf(0, c->depth)) : 0;
@@ -3367,7 +3367,7 @@ static void clear_ds_quad(const p_clear_ds *c) {
         for (int k = 0; k < 8; k++) if (g_pass.cfmt[k]) { d.colorAttachments[k].pixelFormat = (MTLPixelFormat)g_pass.cfmt[k]; d.colorAttachments[k].writeMask = MTLColorWriteMaskNone; }
         d.depthAttachmentPixelFormat = (MTLPixelFormat)dfmt; d.stencilAttachmentPixelFormat = (MTLPixelFormat)sfmt; d.rasterSampleCount = g_pass.samples ? g_pass.samples : 1;
         ps = d.vertexFunction ? [g_dev newRenderPipelineStateWithDescriptor:d error:&e] : nil;
-        if (!ps) { RED_ONCE(76, "partial depth-stencil clear not drawn: %s (first case)", e.localizedDescription.UTF8String); return; }
+        if (!ps) { RED_ONCE(25, "partial depth-stencil clear not drawn: %s (first case)", e.localizedDescription.UTF8String); return; }
         pipelines[key] = ps;
     }
     unsigned sm = sfmt ? c->stencil_mask & 255 : 0, dw = dfmt && c->depth_mask;
@@ -4595,7 +4595,7 @@ static void drv_fill(uint8_t *d, int bank, int stage) {
     if (stage < 0 || stage >= 6) return;
     if (bank == 0) {
         int base = stage == 0 ? 0x110 : stage == 5 ? 0x310 : stage == 1 ? 0x510 : -1;
-        if (base < 0) RED_ONCE(45, "stage %d shader reads driver segment c0, storage buffer table base address not measured", stage);
+        if (base < 0) RED_ONCE(26, "stage %d shader reads driver segment c0, storage buffer table base address not measured", stage);
         else for (int r = 0; r < 16; r++) { uint64_t a = S.ssbo[stage][r].addr; uint32_t n = (uint32_t)S.ssbo[stage][r].size; memcpy(d + base + 16 * r, &a, 8); memcpy(d + base + 16 * r + 8, &n, 4); }
         if (stage == 5) {
             memcpy(d + 0x200, g_dispatch_grid, sizeof g_dispatch_grid);
@@ -4797,7 +4797,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                 static const char *cbd; static int cbd_init; if (!cbd_init) { cbd = getenv("DM_NVN_CBDUMP"); cbd_init = 1; }
                 if (cbd) {
                     char p[1024]; snprintf(p, sizeof p, "%s/F%llu_p%llu_st%d_cb%d_%llx.bin", cbd, (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr);
-                    FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
+                    FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(30, "CBDUMP cannot write %s", p);
                 }
             }
             void *rb_ = NULL; uint64_t rg_ = g_nupd ? upd_shadow(u->addr, u->size, &rb_) : 0;   // logged updates over it: its private copy
@@ -4853,7 +4853,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
         } else if (b->kind == NVN_RB_TBUF) {   // Typed buffer: the buffer texture (target BUFFER) in texture slot r
             int tid = reg < 128 ? (int)(S.tex[nvn_stage][reg] & 0xfffff) : 0;
             void *tv = NULL; uint64_t trid = tid ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
-            if (t && t.textureType != MTLTextureTypeTextureBuffer) { RED_ONCE(40, "texture bound to a typed buffer slot is not a buffer texture (texture ID %d type %lu)", tid, (unsigned long)t.textureType); t = nil; }
+            if (t && t.textureType != MTLTextureTypeTextureBuffer) { RED_ONCE(51, "texture bound to a typed buffer slot is not a buffer texture (texture ID %d type %lu)", tid, (unsigned long)t.textureType); t = nil; }
             if (bl) PD("B %llu st%d tbuf reg%d tid=%d %s ser=%llu", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull);
             if (!t) { t = dummy_tbuf(b->dpf); trid = g_dummy_tbuf_rid[b->dpf & 3]; }
             slots[aid] = trid;
@@ -5428,7 +5428,7 @@ static void fbx_prepare(NvProg *pr) {
             d.mipmapLevelCount = t.mipmapLevelCount; d.arrayLength = t.arrayLength; d.sampleCount = t.sampleCount;
             d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
             id<MTLTexture> c = [g_dev newTextureWithDescriptor:d];
-            if (!c) { RED_ONCE(96, "attachment copy: cannot make a %lux%lu copy texture; the draw samples the attachment", (unsigned long)t.width, (unsigned long)t.height); g_fbx[i] = (fbx_ent){0}; if (i == g_nfbx - 1) g_nfbx--; return; }
+            if (!c) { RED_ONCE(52, "attachment copy: cannot make a %lux%lu copy texture; the draw samples the attachment", (unsigned long)t.width, (unsigned long)t.height); g_fbx[i] = (fbx_ent){0}; if (i == g_nfbx - 1) g_nfbx--; return; }
             res_add(c); g_fbx[i] = (fbx_ent){.copy = c}; pick[j] = i;
         }
     }
@@ -5576,7 +5576,7 @@ void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c Q
 }
 static void sdx_seq(const uint8_t *p) {   // Every operation in mtl_exec: check the sequence number against the index (on mismatch invalidate, and store everything for the rest)
     if (!g_sdx_ok) return;
-    if (g_exec_seq >= g_sdx_nop || g_sdx_op[g_exec_seq] != p) { RED_ONCE(40, "store lookahead index does not match the replay order (seq %u / %u), all remaining passes of this submit store", g_exec_seq, g_sdx_nop); g_sdx_ok = 0; return; }
+    if (g_exec_seq >= g_sdx_nop || g_sdx_op[g_exec_seq] != p) { RED_ONCE(53, "store lookahead index does not match the replay order (seq %u / %u), all remaining passes of this submit store", g_exec_seq, g_sdx_nop); g_sdx_ok = 0; return; }
     g_exec_seq++;
 }
 static int sdx_decide(uint8_t st[9]) {   // st[i]: 2 redundant; otherwise why << 2 (the reason it is needed, same as sd_need). Returns 0 = index unavailable
@@ -6635,7 +6635,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
                     for (int k = 0; k < di->count; k++) { uint32_t v = 0; memcpy(&v, src + w * k, w); if (v == S.restart_idx) { RED_ONCE(84, "primitive restart in a list (index %#x): Metal restarts only strips, drawn without the restart", S.restart_idx); break; } }
                 } else {
                     id<MTLBuffer> ab; size_t ao = arena_alloc((size_t)di->count * w, &ab); uint8_t *dst = (uint8_t *)ab.contents + ao;
-                    for (int k = 0; k < di->count; k++) { uint32_t v = 0; memcpy(&v, src + w * k, w); if (v == S.restart_idx) v = ones; else if (v == ones) RED_ONCE(86, "all-ones index in a strip whose restart index is %#x: Metal restarts there", S.restart_idx); memcpy(dst + w * k, &v, w); }
+                    for (int k = 0; k < di->count; k++) { uint32_t v = 0; memcpy(&v, src + w * k, w); if (v == S.restart_idx) v = ones; else if (v == ones) RED_ONCE(54, "all-ones index in a strip whose restart index is %#x: Metal restarts there", S.restart_idx); memcpy(dst + w * k, &v, w); }
                     gpu = g_cur_arena->gpu + ao; len = (NSUInteger)di->count * w;
                 }
             }
@@ -6727,7 +6727,7 @@ static void copy_t2b(const p_copy_b2t *c) {
         RED_ONCE(67, "texture→buffer copy with invalid strides (row %lld, image %lld, %dx%dx%d)", (long long)S.copy_stride, (long long)S.copy_image_stride, c->r.width, c->r.height, c->r.depth); return; }
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
     void *mb; uint64_t mo;
-    if (!mtl_addr(c->src, extent, &mb, &mo)) { RED_ONCE(31, "texture→buffer copy destination is not in a memory pool"); return; }
+    if (!mtl_addr(c->src, extent, &mb, &mo)) { RED_ONCE(55, "texture→buffer copy destination is not in a memory pool"); return; }
     us_drop(c->src, extent);
     BENC b = blit();
     if (is3d)
@@ -6749,7 +6749,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
         uint8_t *lin = malloc(lp * lr * lz);
         for (int z = 0; z < nz; z++) {
             unsigned layer = is3d ? 0 : layer0 + r->zoffset + z;
-            if ((is3d && z == 0) || !is3d) if (nvn_deswizzle(&t->d, level, layer, t->mem, lin, lp)) { RED_ONCE(32, "ReadTexels deswizzle failed"); free(lin); return; }
+            if ((is3d && z == 0) || !is3d) if (nvn_deswizzle(&t->d, level, layer, t->mem, lin, lp)) { RED_ONCE(56, "ReadTexels deswizzle failed"); free(lin); return; }
             const uint8_t *src = lin + (is3d ? (size_t)(r->zoffset + z) * lp * lr : 0);
             for (size_t y = 0; y < hb; y++) memcpy(dst + z * img + y * row, src + (y0 + y) * lp + x0, wb);
         }
@@ -6783,7 +6783,7 @@ void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVN
             if ((is3d && z == 0) || !is3d) if (nvn_deswizzle(&t->d, level, layer, t->mem, lin, lp)) { RED_ONCE(65, "WriteTexels deswizzle failed format %#x target %d", t->d.format, t->d.target); free(lin); return; }
             uint8_t *dst = lin + (is3d ? (size_t)(r->zoffset + z) * lp * lr : 0);
             for (size_t y = 0; y < hb; y++) memcpy(dst + (y0 + y) * lp + x0, src + z * img + y * row, wb);
-            if ((is3d && z == nz - 1) || !is3d) if (nvn_swizzle(&t->d, level, layer, lin, lp, t->mem)) { RED_ONCE(65, "WriteTexels swizzle failed format %#x target %d", t->d.format, t->d.target); free(lin); return; }
+            if ((is3d && z == nz - 1) || !is3d) if (nvn_swizzle(&t->d, level, layer, lin, lp, t->mem)) { RED_ONCE(57, "WriteTexels swizzle failed format %#x target %d", t->d.format, t->d.target); free(lin); return; }
         }
         free(lin);
         return;
@@ -6816,7 +6816,7 @@ static int pool_buf_listed(const void *buf) { int hit = 0; pthread_mutex_lock(&g
 static void b2t_note(const p_copy_b2t *c, id<MTLTexture> t, id<MTLBuffer> b, uint64_t off, size_t row, size_t img, unsigned cz, unsigned slice, unsigned level) {
     static uint64_t seq; uint64_t tid; pthread_threadid_np(NULL, &tid);
     int listed = pool_buf_listed((__bridge const void *)b);
-    if (!listed) RED_ONCE(90, "buffer→texture copy: the source buffer %p is no longer in the memory pool table at encode time (texture ser=%llu)", (__bridge const void *)b, c->tex->serial);
+    if (!listed) RED_ONCE(58, "buffer→texture copy: the source buffer %p is no longer in the memory pool table at encode time (texture ser=%llu)", (__bridge const void *)b, c->tex->serial);
     g_last_b2t = (typeof(g_last_b2t)){++seq, tid, c->tex->serial, c->src, off, row, img, (uint64_t)b.length, (__bridge const void *)b, (__bridge const void *)t,
         (unsigned)t.width, (unsigned)t.height, (unsigned)t.depth, (unsigned)t.arrayLength, (unsigned)t.mipmapLevelCount, (unsigned)t.pixelFormat, (unsigned)t.textureType, (unsigned)t.storageMode, (unsigned)t.usage,
         c->tex->d.format, (unsigned)c->tex->d.target, c->r.width, c->r.height, cz, (unsigned)c->r.xoffset, (unsigned)c->r.yoffset, slice, level, (unsigned)listed};
@@ -6838,7 +6838,7 @@ static void copy_b2t(const p_copy_b2t *c) {
     uint32_t upf; int ubpp;
     if (bc_unpack(c->tex->d.format, &upf, &ubpp)) {   // No BC: the compressed blocks in the source are decompressed on the CPU into a temporary buffer, then copied pixel-wise into the decompressed-format texture
         const uint8_t *src = [(__bridge id<MTLBuffer>)mb contents];
-        if (!src) { RED_ONCE(46, "no-BC decompression: the source buffer of the buffer→texture copy is not CPU-readable"); return; }
+        if (!src) { RED_ONCE(59, "no-BC decompression: the source buffer of the buffer→texture copy is not CPU-readable"); return; }
         size_t up = (size_t)c->r.width * ubpp, uimg = up * c->r.height;
         id<MTLBuffer> tb = [g_dev newBufferWithLength:uimg * nz ?: 16 options:MTLResourceStorageModeShared];
         for (int z = 0; z < nz; z++) nvn_bc_decode(c->tex->d.format, src + mo + z * img, row, c->r.width, c->r.height, (uint8_t *)tb.contents + z * uimg, up);
@@ -7667,7 +7667,7 @@ static id<MTLBuffer> live_copy(id cb, id<MTLTexture> src, uint64_t n, char *path
         if (c && sscanf(e, "%d,%d", &g_live_first, &g_live_n) == 2 && g_live_n > 0 && g_live_n <= 64) strlcpy(g_live_path, c + 1, sizeof g_live_path); else g_live_first = -1; }
     if (g_live_first < 0 || n < (uint64_t)g_live_first || n >= (uint64_t)(g_live_first + g_live_n)) return nil;
     MTLPixelFormat f = src.pixelFormat;
-    if (f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB && f != MTLPixelFormatBGRA8Unorm && f != MTLPixelFormatBGRA8Unorm_sRGB) { RED_ONCE(90, "live shot: format %lu not supported", (unsigned long)f); return nil; }
+    if (f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB && f != MTLPixelFormatBGRA8Unorm && f != MTLPixelFormatBGRA8Unorm_sRGB) { RED_ONCE(60, "live shot: format %lu not supported", (unsigned long)f); return nil; }
     size_t w = src.width, h = src.height; id<MTLBuffer> buf = [g_dev newBufferWithLength:w * h * 4 options:MTLResourceStorageModeShared]; if (!buf) return nil;
     res_add(buf); res_commit();   // resident before this command buffer is committed
     id e = enc_b_begin(cb);

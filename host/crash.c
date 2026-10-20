@@ -98,12 +98,21 @@ void crash_off(const char *tag, uint64_t a) {   // Also used by diag.c
     else fprintf(stderr, " %s%s%#llx", tag, *tag ? "=" : "", a);
 }
 // Frame pointer backtrace: x29 chain [fp]=previous frame's fp, [fp+8]=return address; only 8-byte aligned, increasing frames are walked, but for one step
-// down or up from a host stack to the guest's (dm_fp_step_ok: a host call's record, hstack.S)
+// down or up from a host stack to the guest's (dm_fp_step_ok: a host call's record, hstack.S). Each frame is read with vm_read_overwrite (plan item
+// 125; totk-mobile does so): it runs in the crash handler, and a corrupt x29 (a memory-corruption crash, as 72) dereferenced there faulted again and
+// lost the rest of the report. An unreadable frame ends the walk with a note
 void dm_backtrace(uint64_t fp) {
     fprintf(stderr, "[dm] bt:");
     int jumps = 0;
     for (int i = 0; i < 32 && fp && !(fp & 7); i++) {
-        uint64_t nfp = ((uint64_t *)fp)[0], ra = ((uint64_t *)fp)[1];
+        uint64_t fr[2];
+#ifndef DM_TEST_BT_UNGUARDED   // negative control of t_crash_bt only: read directly, as before
+        vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)fp, sizeof fr, (vm_address_t)fr, &got) != KERN_SUCCESS || got != sizeof fr) { fprintf(stderr, " (frame %#llx unreadable)", fp); break; }
+#else
+        fr[0] = ((uint64_t *)fp)[0]; fr[1] = ((uint64_t *)fp)[1];
+#endif
+        uint64_t nfp = fr[0], ra = fr[1];
         off("", ra);
         if (!dm_fp_step_ok(fp, nfp, &jumps)) break;
         fp = nfp;
