@@ -20,6 +20,7 @@ def load(path):
     if g.get('depth_mode') not in ('near_is_minus_w', 'near_is_zero'): sys.exit(f'{path}: depth_mode must be "near_is_minus_w" or "near_is_zero"')
     if g.get('alpha_test', 'off') not in ('on', 'off'): sys.exit(f'{path}: alpha_test must be "on" or "off" (omitted: off)')
     if g.get('present_interval', 'display') not in ('display', 'game'): sys.exit(f'{path}: present_interval must be "display" or "game"')
+    if g.get('present_consume', 'newest') not in ('newest', 'fifo'): sys.exit(f'{path}: present_consume must be "newest" or "fifo"')
     if g.get('window_unfocused', 'out_of_focus') not in ('out_of_focus', 'in_focus'): sys.exit(f'{path}: window_unfocused must be "out_of_focus" or "in_focus"')
     if not isinstance(g.get('virtual_cores', False), bool): sys.exit(f'{path}: virtual_cores must be true or false')
     if g.get('touch', 'screen') not in ('screen', 'pad'): sys.exit(f'{path}: touch must be "screen" or "pad"')
@@ -50,6 +51,7 @@ def write_c(g, out):
           '    .nvn_c2 = {%s},' % ', '.join(f'{v[0]}, {v[1]}' for v in (g['nvn_c2']['tex'], g['nvn_c2']['samp'], g['nvn_c2']['img'])),
           '    .nvn_depth_mode = %d,' % (1 if g['depth_mode'] == 'near_is_zero' else 0),
           '    .present_game_interval = %d,' % (g.get('present_interval', 'display') == 'game'),
+          '    .present_fifo = %d,' % (g.get('present_consume', 'newest') == 'fifo'),
           '    .unfocused_in_focus = %d,' % (g.get('window_unfocused', 'out_of_focus') == 'in_focus'),
           '    .virtual_cores = %d,' % bool(g.get('virtual_cores', False)),
           '    .touch_pad = %d,' % (g.get('touch', 'screen') == 'pad'),

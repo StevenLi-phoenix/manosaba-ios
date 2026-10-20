@@ -1744,7 +1744,17 @@ Tier 3c, larger:
   exit listed; fnfuzz leaves cave functions out (an intended change, the game's tests check it). `t_rewriter_synth` (4 more: a cave that loads w0
   from the host page with x16 borrowed through the red zone, run in Unicorn: back at the next instruction with x16 and the flags kept; structck
   passes it; a PC-relative word refused; without the branch back 2 fail). Both games' products unchanged but for the stamp and an empty caves.tsv
-- [ ] 140 FIFO frame consumption for games that step per frame (manosaba)
+- [x] batch 42 · 140 FIFO frame consumption for a game that steps once per frame (game.json `present_consume` `"fifo"`: manosaba;
+  `DM_PRESENT_CONSUME=newest|fifo` overrides; after acnh-mobile c2af194, MIT, written anew): the display link shows the oldest queued frame instead of
+  the newest (`nvn_mtl.m` `link_take`), which dropped the frames queued before it, each a step of the game never shown (manosaba on an iPhone: 14
+  by tick 1,549). A frame stays at least its present period from the tick that showed it (`nvn_pace.h` `nvn_fifo_due`), as the console's swap
+  interval counts vsyncs from the previous flip; acnh-mobile keeps the phase instead, which shows the frame after a late one for a single tick at
+  interval 2. Uncapped pacing keeps the newest. The classic present thread (no display link: the Mac without a window) took every frame in order
+  already. `t_pace` (4 more, on a simulated 60 Hz link with wandering tick times and every 10th frame late: the newest drops 59 of 599, FIFO none
+  and in order; at interval 2 a frame 2 ticks at least and never held past them; after a silent link no burst; one frame a tick whatever its
+  period fails 2), `t_linkfifo` (5, the production queue: the newest of three with two dropped, FIFO three in order one a tick, none dropped or
+  marked done early, interval 2 every other tick, the link off; one a tick fails 1). On a device (the user): manosaba's log says "the display
+  link shows every frame in order" and its "display link up to" lines count 0 "stale frames dropped by coalescing"
 - [ ] 141 IL2CPP class names in crash reports and memory snapshots (manosaba)
 
 Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):

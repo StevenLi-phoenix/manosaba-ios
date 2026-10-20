@@ -2,6 +2,37 @@
 #include "../nvn/nvn_pace.h"
 #include <stdio.h>
 
+// FIFO consumption at the display link (nvn_fifo_due, plan item 140) against taking the newest. A 60 Hz link from t = 1 s whose tick timestamps
+// wander up to 0.2 ms either way; a game presenting at its period, 2 ms before the tick, but every 10th frame 0.7 period late, so the next one is
+// queued behind it by the following tick; at most 3 frames queued (the game waits at its acquire, then presents right after the tick that freed
+// one); ticks [off_a, off_b) never come (a silent link); 600 ticks
+typedef struct { int produced, shown, dropped, in_order, min_gap, held; } fifo_sim;   // held: ticks a frame was queued and its period over, not shown
+static fifo_sim fifo_run(int fifo, int itv, int off_a, int off_b) {
+    const uint64_t P = 16666667, period = (uint64_t)itv * P, T0 = 1000000000ull;
+    int qid[4], qn = 0, next = 0, last_k = -1, last_id = -1; uint64_t ready_after = 0; nvn_pacer pc = {0};
+    fifo_sim s = {0, 0, 0, 1, 1 << 30, 0};
+    for (int k = 0; k < 600; k++) {
+        uint64_t T = T0 + (uint64_t)k * P + (uint64_t)(((int64_t)((k * 7919) % 41) - 20) * 10000);
+        for (;;) {   // frames ready by this tick join the queue while it has room
+            uint64_t r = T0 + (uint64_t)next * period - 2000000 + (next % 10 == 9 ? period * 7 / 10 : 0);
+            if (r < ready_after) r = ready_after;
+            if (r > T || qn >= 3) break;
+            qid[qn++] = next++; s.produced++;
+        }
+        if (k >= off_a && k < off_b) continue;
+        if (!qn) continue;
+        int take;
+        if (fifo) { if (!nvn_fifo_due(&pc, T, period)) { s.held += last_k >= 0 && k - last_k >= itv; continue; } take = 0; }
+        else { take = qn - 1; s.dropped += qn - 1; }
+        if (last_k >= 0) { int gap = k - last_k; if (gap < s.min_gap) s.min_gap = gap; }
+        s.in_order &= qid[take] > last_id; last_id = qid[take]; last_k = k; s.shown++;
+        int full = qn >= 3;
+        if (fifo) { for (int i = 1; i < qn; i++) qid[i - 1] = qid[i]; qn--; } else qn = 0;
+        if (full) ready_after = T + 1;   // the game waited for room: its next frame comes right after this tick
+    }
+    return s;
+}
+
 int main(void) {
     const uint64_t P = 16666667, MS = 1000000;
     struct { uint64_t now, period, want; const char *why; } c[] = {
@@ -90,6 +121,17 @@ int main(void) {
         int got = nvn_fps_policy(fp[i].user, fp[i].lp, fp[i].th), ok = got == fp[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", fp[i].why, fp[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
+    // FIFO consumption (nvn_fifo_due, plan item 140, see fifo_run); one frame every tick whatever its period (-DDM_TEST_FIFO_NO_PERIOD) fails 2
+    {   fifo_sim nw = fifo_run(0, 1, 0, 0), ff = fifo_run(1, 1, 0, 0), f2 = fifo_run(1, 2, 0, 0), fs = fifo_run(1, 2, 200, 230);
+        struct { int ok; const char *why; } f[] = {
+            {nw.dropped > 0, "interval 1 with late frames, the newest taken: frames dropped (the problem)"},
+            {ff.dropped == 0 && ff.in_order && ff.shown >= ff.produced - 3, "... FIFO: none dropped, every frame shown in order"},
+            {f2.min_gap >= 2 && f2.held == 0 && f2.in_order, "interval 2, FIFO: a frame 2 ticks at least, never held past them (early ticks due)"},
+            {fs.min_gap >= 2 && fs.in_order, "... after a silent link (30 ticks, 3 frames queued): 2 ticks a frame, no burst"},
+        };
+        printf("  newest: %d produced, %d shown, %d dropped; FIFO: %d / %d / %d; interval 2: %d / %d, smallest gap %d ticks; after the silent link: smallest gap %d\n",
+               nw.produced, nw.shown, nw.dropped, ff.produced, ff.shown, ff.dropped, f2.produced, f2.shown, f2.min_gap, fs.min_gap);
+        for (int i = 0; i < 4; i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

@@ -16,6 +16,8 @@ typedef struct {
     struct { int tex, ntex, samp, nsamp, img, nimg; } nvn_c2;   // c[2] handle tables of the game's shaders: byte base and slot count (game.json nvn_c2)
     int nvn_depth_mode;                       // NVNdepthMode its shaders were built for (game.json depth_mode: 0 near_is_minus_w, 1 near_is_zero)
     int present_game_interval;                // 1: with a window too, present at the game's present interval (game.json present_interval "game"; default "display": one frame per display tick)
+    int present_fifo;                         // 1: the display link shows every queued frame in order, each for its present period (game.json present_consume "fifo",
+                                              //    a game that steps once per frame: manosaba); default "newest": the newest, older ones dropped
     int unfocused_in_focus;                   // 1: a Mac window that is visible but not key keeps the game in focus (game.json window_unfocused "in_focus"; default "out_of_focus",
                                               //    which on the console is the HOME menu: Tears of the Kingdom stops there); minimized is Background either way
     int virtual_cores;                        // 1: guest threads hold one of three virtual cores while running guest code (game.json virtual_cores; hle_thread.c): the game

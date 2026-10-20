@@ -32,6 +32,21 @@ static inline unsigned nvn_link_step(unsigned itv, unsigned hz, unsigned link_hz
 #endif
 }
 
+// FIFO consumption at the display link (plan item 140; acnh-mobile c2af194 consumes FIFO at the game's period, MIT, written anew): the link shows
+// the oldest queued frame instead of the newest, for a game that steps its logic once per frame (game.json present_consume "fifo": manosaba); the
+// newest drops the frames queued before it, each a step of the game never shown (manosaba on an iPhone: 14 by tick 1,549). A frame stays at least
+// its present period from the tick that showed it, as the console's swap interval counts vsyncs from the previous flip (acnh-mobile keeps the
+// phase instead, which shows the frame after a late one for a single tick at interval 2). now = the tick's target time, p->target = the last
+// shown. 1: the head frame is due; 0: the frame on screen stays this tick. A tick up to 2 ms early is due (timestamps wander; ticks are 8.3 ms
+// apart at 120 Hz). Unit test tests/t_pace.c
+static inline int nvn_fifo_due(nvn_pacer *p, uint64_t now, uint64_t period) {
+#ifndef DM_TEST_FIFO_NO_PERIOD   // negative control of t_pace only: one frame every tick whatever its period
+    if (period && p->target && now + 2000000 < p->target + period) return 0;
+#endif
+    p->target = now;
+    return 1;
+}
+
 // A frame-rate hold (plan item 130): while the host holds the game at hold_fps (hle_oe.c: Tears of the Kingdom's pre-rendered movies at 30),
 // a frame takes at least the present interval that gives that rate at the present rate hz, rounded up (never faster than the hold): 2 at 60 Hz,
 // 3 at 90, 4 at 120. A longer interval of the game's own stays. hold_fps 0 = no hold. Unit test tests/t_pace.c

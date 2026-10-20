@@ -1666,6 +1666,12 @@ static void present_cfg(const win_t *o) {
     const char *m = getenv("DM_PRESENT_INTERVAL"); g_display_mode = m ? !strcmp(m, "display") : scr > 0 && !dm_game.present_game_interval;
     LOG("[nvn] present rate %d Hz, interval mode %s (game-set present interval %d; %s)", g_hz, g_display_mode ? "display (one frame per tick, cut)" : "game (original semantics)", o->interval,
         scr > 0 ? (dm_game.present_game_interval && !m ? "window, game.json present_interval game" : "window") : "no window");
+    // Which queued frame the display link shows (plan item 140): the newest, or every frame in order for a game that steps once per frame (game.json
+    // present_consume "fifo": manosaba). Uncapped pacing shows the newest by design. DM_PRESENT_CONSUME=newest|fifo overrides
+    { const char *c = getenv("DM_PRESENT_CONSUME"); int fifo = c ? !strcmp(c, "fifo") : dm_game.present_fifo;
+      if (g_uncapped) fifo = 0;
+      void mtl_link_set_fifo(int on); mtl_link_set_fifo(fifo);
+      LOG("[nvn] the display link shows %s (%s)", fifo ? "every frame in order, each for its present period" : "the newest frame", c ? "DM_PRESENT_CONSUME" : "game.json present_consume"); }
 }
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);

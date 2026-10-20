@@ -8040,6 +8040,25 @@ static uint64_t g_stall_t0, g_stall_drop, g_stall_n; static int g_stall_red, g_s
 static int g_rescue_mode; static uint64_t g_rescue_back_at, g_rescue_back_ns = 3000000000ull, g_rescue_n;
 __attribute__((weak)) int dm_focus_now(void) { return 1; }   // The host's hle_oe.c provides the strong definition; when graphics unit tests do not link the host it is treated as always active
 __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
+// The queued frame a display-link tick shows (g_pq_mu held; now = the tick's target time, ns); 0: none, the frame on screen stays. By default the
+// newest: the older ones are counted dropped and marked done. With FIFO (plan item 140, game.json present_consume "fifo", DM_PRESENT_CONSUME) the
+// oldest, once its period since the last one shown is over (nvn_pace.h nvn_fifo_due): every frame of a game that steps once per frame is shown
+static _Atomic int g_link_fifo; static nvn_pacer g_link_fp;
+void mtl_link_set_fifo(int on) { atomic_store(&g_link_fifo, on != 0); }
+static uint64_t link_take(uint64_t now, pq_item *it) {
+    if (!g_dm_present_link || g_pq_read == g_pq_in) return 0;
+    if (atomic_load(&g_link_fifo)) {
+        if (!nvn_fifo_due(&g_link_fp, now, (uint64_t)(g_pq[g_pq_read % PQ].period * 1e9))) return 0;
+        *it = g_pq[g_pq_read % PQ];
+        return ++g_pq_read;
+    }
+    uint64_t first = g_pq_read + 1, ticket = g_pq_in;
+    *it = g_pq[(g_pq_in - 1) % PQ];
+    g_pq_read = g_pq_in;
+    if (ticket > first) { g_link_dropped += ticket - first; for (uint64_t k = first; k < ticket; k++) g_pres[k % PRING] = (pres_ent){k, -1}; }   // Old frames merged and dropped are recorded as "not presented", so the present statistics honestly count them as dropped frames
+    if (ticket > 1 && g_pq_done < ticket - 1) g_pq_done = ticket - 1;
+    return ticket;
+}
 @implementation NvMetalDisplayLinkDelegate
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
     (void)link;
@@ -8053,12 +8072,10 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     pthread_cond_broadcast(&g_link_cv);
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
-    if (!g_dm_present_link || g_pq_read == g_pq_in) { pthread_mutex_unlock(&g_pq_mu); return; }
-    uint64_t first = g_pq_read + 1, ticket = g_pq_in;
-    pq_item it = g_pq[(g_pq_in - 1) % PQ]; g_link_it_tin = it.t_in;
-    g_pq_read = g_pq_in;
-    if (ticket > first) { g_link_dropped += ticket - first; for (uint64_t k = first; k < ticket; k++) g_pres[k % PRING] = (pres_ent){k, -1}; }   // Old frames merged and dropped are recorded as "not presented", so the present statistics honestly count them as dropped frames
-    if (ticket > 1 && g_pq_done < ticket - 1) g_pq_done = ticket - 1;
+    double ts = update.targetPresentationTimestamp; pq_item it;
+    uint64_t ticket = link_take((uint64_t)((ts > 0 ? ts : CACurrentMediaTime()) * 1e9), &it);
+    if (!ticket) { pthread_mutex_unlock(&g_pq_mu); return; }
+    g_link_it_tin = it.t_in;
     pthread_cond_broadcast(&g_pq_cv);
     pthread_mutex_unlock(&g_pq_mu);
     int submitted;

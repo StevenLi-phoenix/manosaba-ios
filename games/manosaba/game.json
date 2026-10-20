@@ -12,6 +12,7 @@
   "npdm": {"system_resource_size": "0x1000000", "thread_priority": [28, 59]},
   "device_api": "53.311",
   "depth_mode": "near_is_zero",
+  "present_consume": "fifo",
   "nvn_c2": {"tex": ["0x168", 128], "samp": ["0x568", 128], "img": ["0x120", 8]},
   "romfs": {
     "files": {
