@@ -64,6 +64,13 @@ run: \
 	$(B)/t_logstamp \
 	$(B)/t_logstamp_every \
 	$(B)/t_memsnap \
+	$(B)/t_haptics \
+	$(B)/t_haptics_nogap \
+	$(B)/t_motion \
+	$(B)/t_motion_allstyles \
+	$(B)/t_motion_nobias \
+	$(B)/t_motion_nograv \
+	$(B)/t_motion_nopeak \
 	$(B)/t_mods \
 	$(B)/t_mods_case \
 	$(B)/t_mods_nopin \
@@ -243,6 +250,16 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_hid_applet_silent.log)" -ne 2 ]; then \
 	   cat $(B)/t_hid_applet_silent.log; echo "t_hid_applet_silent: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_hid_applet_silent: the applet's result not written, as expected"
+	$(B)/t_haptics
+	@status=0; $(B)/t_haptics_nogap > $(B)/t_haptics_nogap.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_haptics_nogap.log)" -ne 1 ]; then \
+	   cat $(B)/t_haptics_nogap.log; echo "t_haptics_nogap: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_haptics_nogap: pulses as often as asked fail the gap check, as expected"
+	$(B)/t_motion 2>/dev/null
+	@for v in allstyles nobias nograv nopeak; do status=0; $(B)/t_motion_$$v > $(B)/t_motion_$$v.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_motion_$$v.log)" -ne 1 ]; then \
+	   cat $(B)/t_motion_$$v.log; echo "t_motion_$$v: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; done; echo "t_motion: every style forwarded, the zero point never learned, no gravity, no peak hold each fail one, as expected"
 	env -u DM_NVN_XLAT -u DM_NVN_TBDR $(B)/t_totk_defaults
 	@status=0; env -u DM_NVN_XLAT -u DM_NVN_TBDR $(B)/t_totk_defaults_noxlat > $(B)/t_totk_defaults_noxlat.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_totk_defaults_noxlat.log)" -ne 1 ]; then \
@@ -667,6 +684,21 @@ $(B)/t_totk_defaults: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | 
 	clang -O1 -Wall -I.. -o $@ t_totk_defaults.c
 $(B)/t_totk_defaults_noxlat: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
 	clang -O1 -Wall -DDM_TEST_TOTK_NO_XLAT -I.. -o $@ t_totk_defaults.c
+$(B)/t_haptics: t_haptics.c ../haptics_map.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_haptics.c
+$(B)/t_haptics_nogap: t_haptics.c ../haptics_map.h | $(B)
+	clang -O1 -Wall -I.. -DDM_TEST_PULSE_NO_GAP -o $@ t_haptics.c
+MOTION_DEPS = t_motion.c ../hle_hid.c ../hle_motion.c ../hle.h ../dm.h ../dm_input.h ../front.h
+$(B)/t_motion: $(MOTION_DEPS) | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_motion.c
+$(B)/t_motion_allstyles: $(MOTION_DEPS) | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_VIB_ALL_STYLES -I.. -o $@ t_motion.c
+$(B)/t_motion_nobias: $(MOTION_DEPS) | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_SIX_NO_BIAS -I.. -o $@ t_motion.c
+$(B)/t_motion_nograv: $(MOTION_DEPS) | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_SIX_NO_GRAVITY -I.. -o $@ t_motion.c
+$(B)/t_motion_nopeak: $(MOTION_DEPS) | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_VIB_NO_PEAK -I.. -o $@ t_motion.c
 $(B)/t_hid_applet: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_hid_applet.c
 $(B)/t_hid_applet_silent: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)

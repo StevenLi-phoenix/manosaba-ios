@@ -1,6 +1,6 @@
 // nn::hid (controllers / touchscreen): on the console the state comes from hid shared memory; the host builds it from what the front end publishes
 // (dm_input.h: keyboard / touch / game controller) plus the DM_KEYS script. The connected controller follows the operation mode: DM_OPMODE=1
-// (console, default) → player 1 full-key controller; 0 (handheld) → handheld controller. No vibration devices.
+// (console, default) → player 1 full-key controller; 0 (handheld) → handheld controller. Its six-axis sensor and vibration devices: hle_motion.c.
 #include "hle.h"
 #include "dm_input.h"
 #include "front.h"
@@ -216,13 +216,6 @@ HLE_FORCE("_ZN2nn3hid15GetNpadStyleSetERKj", "Npad style: follows DM_OPMODE", ui
 HLE_FORCE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj", "full key Npad state, from dm_input", void, h_hid_GetFullKey, NpadState *s, const uint32_t *id) { fill(s, *id, STYLE_FULLKEY); }
 HLE_FORCE("_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj", "handheld Npad state, from dm_input", void, h_hid_GetHandheld, NpadState *s, const uint32_t *id) { fill(s, *id, STYLE_HANDHELD); }
 
-// Vibration: device count 0, the game will not initialize / send any further
-HLE_FORCE("_ZN2nn3hid20IsVibrationPermittedEv", "vibration permitted: no (returns bool)", unsigned, h_hid_VibPermit, void) { return 0; }
-HLE_FORCE("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE",
-          "vibration devices: none", int, h_hid_GetVibHandles, void *out, int max, const uint32_t *id, uint32_t style) { (void)out; (void)max; (void)id; (void)style; return 0; }
-HLE_FORCE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", "vibration: not supported", void, h_hid_InitVib, const void *h) { (void)h; }
-HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", "vibration: not supported", void, h_hid_SendVib, const void *h, const void *v) { (void)h; (void)v; }
-
 // Touchscreen: nn::hid::TouchScreenState<16> = { int64 sampling; int32 count; int32 _r; TouchState touches[16] (0x28 each) }
 // Contents are filled by hle_touch.c from the touch points pushed by the front end (see that file for the layout and the short-press latch); the game only looks at entry 0, returns the number of states written, 1
 typedef struct { int64_t sampling; int32_t count, _r; uint8_t touches[16][0x28]; } TouchState16;
@@ -295,22 +288,13 @@ HLE_FORCE_OPT("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", "keyboard st
 // in TotK's startup). From nxnative's hle_hid.c (seedds, MIT)
 HLE_FORCE_OPT("_ZN2nn3hid15InitializeMouseEv", "mouse: the host provides none", void, h_hid_InitMouse0, void) {}
 HLE_FORCE_OPT("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEi", "mouse states: none written", int, h_hid_MouseStates0, void *out, int n) { (void)out; (void)n; return 0; }
-// Values queued by the vibration graph reach the sdk's FlushEnqueuedVibrationValues and from there the hid service proxy: success, nothing sent
-// (nxnative, Metroid Dread)
-HLE_FORCE_OPT("_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi", "vibration (batch): the host has none", Result, h_hid_SendVibs, const void *h, const void *v, int n) {
-    (void)h; (void)v; (void)n; return 0;
-}
 HID_STUB("_ZN2nn3hid17InitializeGestureEii", h_hid_stub8, "nn::hid::InitializeGesture(int, int)")
 HID_STUB("_ZN2nn3hid17InitializeGestureEv", h_hid_stub9, "nn::hid::InitializeGesture()")
-HID_STUB("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub10, "nn::hid::StopSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")
 HID_STUB("_ZN2nn3hid18InitializeKeyboardEv", h_hid_stub11, "nn::hid::InitializeKeyboard()")
-HID_STUB("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub12, "nn::hid::StartSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")
 HID_STUB("_ZN2nn3hid18SwapNpadAssignmentERKjS2_", h_hid_stub13, "nn::hid::SwapNpadAssignment(unsigned int const&, unsigned int const&)")
 HID_STUB("_ZN2nn3hid19GetDebugMouseHandleEv", h_hid_stub14, "nn::hid::GetDebugMouseHandle()")
 HID_STUB("_ZN2nn3hid20StopLrAssignmentModeEv", h_hid_stub15, "nn::hid::StopLrAssignmentMode()")
-HID_STUB("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", h_hid_stub16, "nn::hid::GetSixAxisSensorState(nn::hid::SixAxisSensorState*, nn::hid::SixAxisSensorHandle const&)")
 HID_STUB("_ZN2nn3hid21InitializeTouchScreenEii", h_hid_stub17, "nn::hid::InitializeTouchScreen(int, int)")
-HID_STUB("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", h_hid_stub18, "nn::hid::IsSixAxisSensorAtRest(nn::hid::SixAxisSensorHandle const&)")
 // The controller support applet (plan item 64k; ha7rock's blade2-mobile answers 1P, MIT, written anew): the host has one player, on the Npad its
 // operation mode connects. ControllerSupportResultInfo (SDK reference): int8 playerCount at +0, NpadIdType selectedId at +4 (the one-player mode's
 // choice). The stubs wrote nothing, so a game read whatever its stack held
@@ -325,22 +309,10 @@ HLE_FORCE_OPT("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultI
 }
 HLE_FORCE_OPT("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", "controller support applet: one player connected", Result, h_hid_CtlSupport0, const void *arg) { (void)arg; return RES_OK; }
 HID_STUB("_ZN2nn3hid21StartLrAssignmentModeEv", h_hid_stub21, "nn::hid::StartLrAssignmentMode()")
-HID_STUB("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", h_hid_stub22, "nn::hid::GetSixAxisSensorStates(nn::hid::SixAxisSensorState*, int, nn::hid::SixAxisSensorHandle const&)")
-HID_STUB("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", h_hid_stub23, "nn::hid::GetVibrationDeviceInfo(nn::hid::VibrationDeviceInfo*, nn::hid::VibrationDeviceHandle const&)")
-HID_STUB("_ZN2nn3hid23GetActualVibrationValueEPNS0_14VibrationValueERKNS0_21VibrationDeviceHandleE", h_hid_stub24, "nn::hid::GetActualVibrationValue(nn::hid::VibrationValue*, nn::hid::VibrationDeviceHandle const&)")
-HID_STUB("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", h_hid_stub25, "nn::hid::GetSixAxisSensorHandles(nn::hid::SixAxisSensorHandle*, int, unsigned int const&, nn::util::BitFlagSet<32, nn::hid::NpadStyleTag>)")
 HID_STUB("_ZN2nn3hid23MergeSingleJoyAsDualJoyERKjS2_", h_hid_stub26, "nn::hid::MergeSingleJoyAsDualJoy(unsigned int const&, unsigned int const&)")
 HID_STUB("_ZN2nn3hid24ShowControllerStrapGuideEv", h_hid_stub27, "nn::hid::ShowControllerStrapGuide()")
-HID_STUB("_ZN2nn3hid25EnableSixAxisSensorFusionERKNS0_19SixAxisSensorHandleEb", h_hid_stub28, "nn::hid::EnableSixAxisSensorFusion(nn::hid::SixAxisSensorHandle const&, bool)")
-HID_STUB("_ZN2nn3hid25GetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleE", h_hid_stub29, "nn::hid::GetGyroscopeZeroDriftMode(nn::hid::SixAxisSensorHandle const&)")
-HID_STUB("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE", h_hid_stub30, "nn::hid::SetGyroscopeZeroDriftMode(nn::hid::SixAxisSensorHandle const&, nn::hid::GyroscopeZeroDriftMode const&)")
-HID_STUB("_ZN2nn3hid28IsSixAxisSensorFusionEnabledERKNS0_19SixAxisSensorHandleE", h_hid_stub31, "nn::hid::IsSixAxisSensorFusionEnabled(nn::hid::SixAxisSensorHandle const&)")
 HID_STUB("_ZN2nn3hid28SetNpadJoyAssignmentModeDualERKj", h_hid_stub32, "nn::hid::SetNpadJoyAssignmentModeDual(unsigned int const&)")
 HID_STUB("_ZN2nn3hid28ShowControllerFirmwareUpdateERKNS0_27ControllerFirmwareUpdateArgE", h_hid_stub33, "nn::hid::ShowControllerFirmwareUpdate(nn::hid::ControllerFirmwareUpdateArg const&)")
 HID_STUB("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleEPjRKjNS0_17NpadJoyDeviceTypeE", h_hid_stub34, "nn::hid::SetNpadJoyAssignmentModeSingle(unsigned int*, unsigned int const&, nn::hid::NpadJoyDeviceType)")
 HID_STUB("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKj", h_hid_stub35, "nn::hid::SetNpadJoyAssignmentModeSingle(unsigned int const&)")
 HID_STUB("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKjNS0_17NpadJoyDeviceTypeE", h_hid_stub36, "nn::hid::SetNpadJoyAssignmentModeSingle(unsigned int const&, nn::hid::NpadJoyDeviceType)")
-HID_STUB("_ZN2nn3hid32GetSixAxisSensorFusionParametersEPfS1_RKNS0_19SixAxisSensorHandleE", h_hid_stub37, "nn::hid::GetSixAxisSensorFusionParameters(float*, float*, nn::hid::SixAxisSensorHandle const&)")
-HID_STUB("_ZN2nn3hid32SetSixAxisSensorFusionParametersERKNS0_19SixAxisSensorHandleEff", h_hid_stub38, "nn::hid::SetSixAxisSensorFusionParameters(nn::hid::SixAxisSensorHandle const&, float, float)")
-HID_STUB("_ZN2nn3hid34ResetSixAxisSensorFusionParametersERKNS0_19SixAxisSensorHandleE", h_hid_stub39, "nn::hid::ResetSixAxisSensorFusionParameters(nn::hid::SixAxisSensorHandle const&)")
-HID_STUB("_ZN2nn3hid41IsFirmwareUpdateAvailableForSixAxisSensorERKNS0_19SixAxisSensorHandleE", h_hid_stub40, "nn::hid::IsFirmwareUpdateAvailableForSixAxisSensor(nn::hid::SixAxisSensorHandle const&)")

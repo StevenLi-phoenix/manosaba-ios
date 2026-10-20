@@ -2380,11 +2380,45 @@ Tier 5, needs the user's devices, controller or account:
 - [ ] 65 increased-memory-limit with a free account (one signing attempt)
 - [ ] 66 a Switch Pro controller check of 2
 - [ ] 67 gyro and rumble (implemented here, checked with the controller)
-  - [ ] 67a vibration handles per style, only the connected style forwarded, bool arguments masked (handles 3 / 0x10003; totk-mobile's TotK
-    landing pulse, dr3's envelopes, acnh-mobile's bursts as tests)
+  - [x] batch 58 · 67a vibration handles per style, only the connected style forwarded, bool arguments masked: `host/hle_motion.c` (new). Handles
+    as Tears of the Kingdom 1.4.3's own sdk makes them (read from `utility::GetVibrationDeviceHandles` sdk+0x51e2b0 and
+    `utility::GetSixAxisSensorHandle` sdk+0x51dd20, which `GetVibrationDeviceHandles` / `GetSixAxisSensorHandles` reach through the PLT;
+    dr3-mobile's notes found the same in its SDK): {type, Npad ID's low byte, device index, 0}, type 3 full key, 4 handheld, 5 pair, 6 left, 7
+    right; vibration two devices (0 left, 1 right) for full key / handheld / pair, one for a single Joy-Con ({6, id, 0}, {7, id, 1}); six-axis
+    one for full key and handheld (device 2), two for a pair. The game asks for each style and sends to all (zeros to the others): only the
+    connected controller's values reach the front end (`dm_vibration_take`, dm_input.h). Values held until the next; queued ones
+    (`detail::EnqueueVibrationValue`) at `FlushEnqueuedVibrationValues`; each band taken at the larger of now and the strongest since the
+    last take (totk-mobile's peak hold, so a pulse between two takes is felt once); not finite or a frequency at 0 is silence, amplitudes
+    clamped; `PermitVibration` / `EnableSixAxisSensorFusion` read only their bool's low byte (Switch callers leave the rest: totk-mobile); off
+    while not permitted or out of focus (`dm_focus_now`: what was playing stops, LASRecomp's rule). The public and the `detail::` entry points
+    (Tears of the Kingdom calls the latter: totk-mobile), device info LRA left (1) / right (2) (SDK: VibrationDeviceType / Position by their
+    order), mounted for the connected controller's. Tears of the Kingdom's prologue now gets 2 vibration handles and 1 six-axis handle (it got
+    none). `host/tests/t_motion.c` (25, with totk-mobile's captured landing pulse and the landing value {0.1, 198.7 Hz, 0, 299.9 Hz} as data;
+    every style forwarded, no peak hold: 1 fails each)
   - [ ] 67b the Pro Controller's IMU and HD rumble over IOHID on the Mac (atone), the fallback when GameController reports zero motion
-  - [ ] 67c CoreHaptics with plain players (macOS 26); phone haptics rate-limited and off at a serious thermal state
-  - [ ] 67d gyro fusion with the rest bias learned (BotWRecomp's idea)
+  - [x] batch 58 · 67c CoreHaptics with plain players; phone haptics rate-limited and off at a serious thermal state: `host/gamepad.m` (Mac and
+    iOS) takes the values every 15 ms on a queue of its own; per controller with haptics an engine per handle when it has a left and a right
+    (else one, each band from the side that has it larger); GameController's engines take plain players only (atone f6dba3d on a Pro
+    Controller), so a change of the level (intensity in 1/50, sharpness in 1/10) plays a new endless continuous event and stops the previous
+    one, as SDL and atone do, 0 stops it; the engines play haptics only, do not shut down on their own, start again after a reset
+    (`host/haptics_map.h`: intensity from the larger band
+    through (a + sqrt a) / 2, atone's lift; sharpness the amplitude-weighted frequencies' place between the HD rumble bands' ends, 40.875 and
+    1252.572 Hz, dekuNukem's table, checked). iOS without a controller: the phone's own haptics as single pulses with acnh-mobile's limits (at
+    least 120 ms apart, at most 8 in a 1.5 s burst, under 0.03 none, a value older than 200 ms none), none at a serious thermal state or with
+    `DM_PHONE_HAPTICS=0`. `host/tests/t_haptics.c` (8; pulses as often as asked: 1 fails). The feel (the gain, the sharpness) is a device check
+    with the user's controller and phone
+  - [x] batch 58 · 67d gyro fusion with the rest bias learned: the six-axis state (0x60: the SDK's members and units, the direction at 0x34 as
+    atone's and SkyRecomp's) from the front end's samples (`dm_motion_set`: acceleration in G, angular velocity in revolutions a second, in
+    nn::hid's frame); the orientation by atone/nxnative 185cfda's method (Mahony's filter, the gyro turning a quaternion, the accelerometer
+    pulling the gravity estimate back; its axis order and signs, which they checked with Breath of the Wild's bow aiming on a Pro Controller;
+    written anew); the gyro's zero point learned from the mean of the still samples (BotWRecomp's idea; the SDK documents that its library does
+    so by GyroscopeZeroDriftMode, whose Loose / Standard / Tight set the still threshold here: 18 / 9 / 4.3 degrees a second off the zero
+    point); `StartSixAxisSensor` takes the reference pose at the next sample (SDK: its Z the gravity's); `GetSixAxisSensorState` writes a
+    zeroed, not connected state without a source (it wrote nothing before). `t_motion`: still → identity, a quarter turn → angle 0.25 and the
+    X axis turned, rolled 30 degrees → the Z axis pulled there, a 0.01 rev/s offset learned (the zero point never learned, the gyro alone: 1
+    fails each). What the front end feeds: not yet. GameController documents its motion axes for an iPhone only, so which way a controller's
+    axes point in nn::hid's frame is to be measured first: `DM_PAD_MOTION_LOG=1` logs GameController's gravity, user acceleration and rotation
+    twice a second (device check: flat, tilted forward, turned left); then `gamepad.m` feeds `dm_motion_set`
 - [ ] 68 MixWithOthers on an iPhone
 - [ ] 69 the game over flow with the overlay, in play
 - [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)

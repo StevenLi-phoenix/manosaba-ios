@@ -37,4 +37,13 @@ void dm_gamepad_reset(void);
 void dm_gamepad_inject(int n, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 void dm_gamepad_unplug(int n);
 uint64_t dm_input_samples(void);   // how many times the game has read a controller (a front end can tell whether a press was seen)
+// The connected controller's six-axis sensor and vibration (host/hle_motion.c, plan item 67). Motion samples in nn::hid's frame: acceleration in G,
+// angular velocity in revolutions a second (360 degrees a second = 1), t_ns the sample's time (now_ns's clock); dm_motion_lost when the source goes away
+void dm_motion_set(const float acc[3], const float gyro[3], uint64_t t_ns);
+void dm_motion_lost(void);
+// Vibration for the front end's haptics: per side (0 left, 1 right) {amplitude low, frequency low, amplitude high, frequency high}, each band at the
+// larger of the value now and the strongest since the last take (a pulse shorter than the front end's interval is felt once); 1 when an amplitude
+// is above 0. dm_vibration_active(0) on focus loss and in the background: silent until it is 1 again
+int dm_vibration_take(float out[2][4]);
+void dm_vibration_active(int on);
 // DM_HID_RECEIPT_LOG=<JSONL path>: log of what GetNpadState really returned (see hle_hid.c)
