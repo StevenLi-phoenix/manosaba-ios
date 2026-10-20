@@ -562,40 +562,62 @@ int thr_find_by_name(const char *name, pthread_t *out) {
 }
 // State dump (called from crash.c on watchdog / crash; read-only, takes no lock): what each guest thread is waiting on and where its most recent SVC was issued from
 // During a state dump, take the backtrace of other guest threads: suspend → read registers → walk the frame pointer chain (both guest code and gate blocks keep the x29 chain) → resume; only main / sdk frames are printed
+// The thread's registers, stack top and backtrace, gathered while it is suspended and printed once it runs again: it may hold the stderr lock (in the
+// middle of a log line) or malloc's, and printing while it is stopped would then wait for it forever, the dumper and the game with it (the frames-
+// stopped dump runs in the product, crash.c; plan item 107). Only snprintf into a buffer on this stack and vm reads happen while it is stopped.
+// Unit test tests/t_threaddump.c
 static void thr_bt(thr_t *t) {
     if (!t->mport || t->exited || t->mport == mach_thread_self()) return;
+    char o[8192]; int q = 0;
+#define BT_PUT(...) do { if (q < (int)sizeof o) { int k_ = snprintf(o + q, sizeof o - (size_t)q, __VA_ARGS__); if (k_ > 0) q += k_; if (q > (int)sizeof o) q = (int)sizeof o; } } while (0)
+#ifdef DM_TEST_BT_PRINT_SUSPENDED   // negative control of t_threaddump only: printed while the thread is stopped, as before
+#define BT_FLUSH() do { fputs(o, stderr); q = 0; o[0] = 0; } while (0)
+#else
+#define BT_FLUSH() do { } while (0)
+#endif
+    o[0] = 0;
     if (thread_suspend(t->mport) != KERN_SUCCESS) return;
     arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
     if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
         // Threads not waiting in a system call (running guest code, maybe spinning on a condition): the callee-saved registers x19–x28, and 128 bytes
-        // at each of x19 / x20 (often the object being waited for)t the unfinished count is
-        if (t->wkind == 0) { char rl[400]; int q = snprintf(rl, sizeof rl, "[dm]   %#x registers pc=", t->handle); uint64_t pc = __darwin_arm_thread_state64_get_pc(st); module_t *pm = module_of((void *)pc);
-            q += pm ? snprintf(rl + q, sizeof rl - q, "%s+%#llx", pm->name, pc - (uint64_t)pm->base) : snprintf(rl + q, sizeof rl - q, "%#llx", pc);
-            for (int i = 19; i <= 28; i++) q += snprintf(rl + q, sizeof rl - q, " x%d=%#llx", i, st.__x[i]);
-            fprintf(stderr, "%s\n", rl);
+        // at each of x19 / x20 (often the object being waited for)
+        if (t->wkind == 0) { uint64_t pc = __darwin_arm_thread_state64_get_pc(st); module_t *pm = module_of((void *)pc);
+            BT_PUT("[dm]   %#x registers pc=", t->handle);
+            if (pm) BT_PUT("%s+%#llx", pm->name, pc - (uint64_t)pm->base); else BT_PUT("%#llx", pc);
+            for (int i = 19; i <= 28; i++) BT_PUT(" x%d=%#llx", i, st.__x[i]);
+            BT_PUT("\n");
             for (int i = 19; i <= 20; i++) { uint8_t raw[128]; vm_size_t g = 0; uint64_t a = st.__x[i];
                 if (a < 0x100000000ull || vm_read_overwrite(mach_task_self(), a, sizeof raw, (vm_address_t)raw, &g) || g != sizeof raw) continue;
-                char hx[420]; int h = 0; for (int k = 0; k < 128; k += 4) h += snprintf(hx + h, sizeof hx - h, "%08x ", *(uint32_t *)(raw + k));
-                uint64_t vt = *(uint64_t *)raw; module_t *vm_ = module_of((void *)vt); char vs[64] = ""; if (vm_) snprintf(vs, sizeof vs, " (first 8 bytes = %s+%#llx)", vm_->name, vt - (uint64_t)vm_->base);
-                fprintf(stderr, "[dm]   %#x x%d → 128 bytes at %#llx%s: %s\n", t->handle, i, a, vs, hx); } }
+                uint64_t vt = *(uint64_t *)raw; module_t *vm_ = module_of((void *)vt);
+                BT_PUT("[dm]   %#x x%d → 128 bytes at %#llx", t->handle, i, a);
+                if (vm_) BT_PUT(" (first 8 bytes = %s+%#llx)", vm_->name, vt - (uint64_t)vm_->base);
+                BT_PUT(":"); for (int k = 0; k < 128; k += 4) BT_PUT(" %08x", *(uint32_t *)(raw + k));
+                BT_PUT("\n"); } }
         uint64_t fp = __darwin_arm_thread_state64_get_fp(st), lr = __darwin_arm_thread_state64_get_lr(st);
         // Threads running guest code: print the 1 KiB above the stack top as is (the registers saved by the outer frames are in there, so the wait object and resource address can be recovered afterwards)
-        if (t->wkind == 0 && module_of((void *)__darwin_arm_thread_state64_get_pc(st))) { uint64_t sp = __darwin_arm_thread_state64_get_sp(st), stk[128]; vm_size_t g = 0;   // Printed only if pc is inside a guest module: a thread in sleep / yield has its pc in a system library, and the stack is not worth looking at
+        if (t->wkind == 0 && module_of((void *)__darwin_arm_thread_state64_get_pc(st))) { uint64_t sp = __darwin_arm_thread_state64_get_sp(st), stk[128]; vm_size_t g = 0;   // Printed only if pc is inside a guest module: a thread in sleep / yield has
             if (sp > 0x100000000ull && !vm_read_overwrite(mach_task_self(), sp, sizeof stk, (vm_address_t)stk, &g) && g == sizeof stk)
-                for (int r = 0; r < 128; r += 8) fprintf(stderr, "[dm]   %#x stack sp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n", t->handle, r * 8,
+                for (int r = 0; r < 128; r += 8) BT_PUT("[dm]   %#x stack sp+%#05x: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n", t->handle, r * 8,
                         stk[r], stk[r + 1], stk[r + 2], stk[r + 3], stk[r + 4], stk[r + 5], stk[r + 6], stk[r + 7]); }
-        char line[1024]; int p = snprintf(line, sizeof line, "[dm]   %#x backtrace:", t->handle), nf = 0, jumps = 0;
-        for (int k = 0; k < 64 && fp && nf < 20 && p < (int)sizeof line - 40; k++) {
+        BT_PUT("[dm]   %#x backtrace:", t->handle); int nf = 0, jumps = 0;
+        for (int k = 0; k < 64 && fp && nf < 20; k++) {
             module_t *m = module_of((void *)lr);
-            if (m) { p += snprintf(line + p, sizeof line - p, " %s+%#llx", m->name, lr - (uint64_t)m->base); nf++; }
+            if (m) { BT_PUT(" %s+%#llx", m->name, lr - (uint64_t)m->base); nf++; }
             uint64_t fr[2]; vm_size_t g2 = 0;
             if (vm_read_overwrite(mach_task_self(), fp, 16, (vm_address_t)fr, &g2) || g2 != 16 || !dm_fp_step_ok(fp, fr[0], &jumps)) break;
             fp = fr[0]; lr = fr[1];
         }
-        fprintf(stderr, "%s\n", line);
+        BT_PUT("\n");
+        BT_FLUSH();
     }
     thread_resume(t->mport);
+    fputs(o, stderr);
+#undef BT_PUT
+#undef BT_FLUSH
 }
+#ifdef DM_TEST_HOOKS
+void dm_test_thr_bt_all(void) { for (thr_t *t = g_all; t; t = t->all) thr_bt(t); }   // t_threaddump: the backtraces alone, without the header lines
+#endif
 void svc_thread_dump(void) {
     static const char *kinds[] = {"running / not waiting", "lock", "condition variable", "address", "sync object"};
     int nh = 0; for (int i = 1; i < MAX_H; i++) nh += g_h[i].type != O_FREE;

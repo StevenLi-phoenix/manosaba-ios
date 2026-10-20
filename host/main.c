@@ -3,6 +3,7 @@
 #include "dm.h"
 #include "front.h"
 #include "game.h"
+#include "logstamp.h"
 #include <stdatomic.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -124,6 +125,7 @@ void dm_host_preload_start(int argc, char **argv) {
 int dm_app_bootstrap(int *argc, char ***argv);   // app_mac.m: as a double-clicked .app, prepare the environment and arguments; command line starts are unchanged
 int main(int argc, char **argv) {
 #if TARGET_OS_OSX   // the iOS app compiles this file too (its shell calls the entry); there is no app_mac.m there
+    { const char *e = getenv("DM_LOG_TIME"); if (e && strcmp(e, "0")) logstamp_stderr(); }   // UTC milliseconds on log lines (host/logstamp.h; the iOS shell's default)
     if (dm_app_bootstrap(&argc, &argv)) dm_cloud_boot();   // .app: one iCloud sync before the save is mounted (as in the iOS shell)
     dm_game_slot_acquire(dm_game.id);   // one game at a time on this Mac (game_slot.c)
 #endif

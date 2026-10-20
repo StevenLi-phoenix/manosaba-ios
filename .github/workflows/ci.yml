@@ -1,7 +1,9 @@
 # Checks on every push to main and every pull request (after GirlNet's nxnative fork, mac-host.yml of bfc0376, and LASRecomp's ci.yml, both MIT):
 # the Mac host builds for every game in games/ (the Metal 4 host and the Metal 3 one, with libvpx for the VP9 movies), and the tests that need no
-# game files, no keys and no GPU run: the host unit tests (host/tests) and the tool tests (tools/tests). The graphics tests (gfx/tests, Metal 4 and
-# Metal 3 on a real GPU) and the game runs stay local (DEVELOPMENT.md). Nothing is uploaded or published.
+# game files, no keys and no GPU run: the host unit tests (host/tests), the parsers of outside input again under the undefined-behavior sanitizer
+# (make -C host/tests run-ubsan) and the tool tests (tools/tests); every tracked file passes the public-content audit (tools/audit_public.py: no
+# game data, keys or binaries; the repository is public). The graphics tests (gfx/tests, Metal 4 and Metal 3 on a real GPU) and the game runs stay
+# local (DEVELOPMENT.md). Nothing is uploaded or published.
 name: CI
 on:
   push:
@@ -21,6 +23,8 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - name: Public-content audit
+        run: python3 -I tools/audit_public.py
       - name: libvpx
         run: brew install libvpx
       - name: Host builds, every game, Metal 4 and Metal 3
@@ -31,6 +35,8 @@ jobs:
           done
       - name: Host unit tests
         run: make -C host/tests run
+      - name: Parsers under the undefined-behavior sanitizer
+        run: make -C host/tests run-ubsan
       - name: Tool tests
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"

@@ -18,6 +18,8 @@ void tp_layout(float w, float h, float safe_l, float safe_t, float safe_r, float
 void tp_touch(long id, int phase, float x, float y);
 void tp_enable(int on);            // every finger released; off (a game controller is connected): nothing drawn or read
 void tp_set_hidden(int hidden);    // the eye's choice (the front end keeps it across launches)
+void tp_look_tuning(float sensitivity, int invert_x, int invert_y);   // the camera finger: 0.25-3× (clamped; 0 or NaN = 1), axes inverted
+void tp_look_tuning_get(float *sensitivity, int *invert_x, int *invert_y);
 int tp_hidden(void);
 // The controller at time t (seconds, any monotonic clock): buttons and sticks in -1..1 (up positive); 0 when the controls are off
 int tp_read(double t, uint64_t *buttons, float *lx, float *ly, float *rx, float *ry);

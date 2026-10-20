@@ -13,6 +13,9 @@
 // buttons is the camera: the finger's speed, smoothed, moves the right stick (a resting finger 0, a moving one at least kLookFloor, past the game's
 // own dead zone); lifting it returns the stick to 0. The eye collapses everything to itself and back. A press shorter than the time between two
 // reads of the game is still seen once (as hle_hid.c does for the front end's keys).
+// Camera tuning (plan item 109; lordran-native 42ad4cf's idea, MIT): a sensitivity of 0.25-3× scales the drag speed before the output saturates
+// (0.5× still turns at full speed with a fast enough swipe; a resting finger stays 0 at 3×), and each axis can be inverted. The iOS Settings page
+// (dm.look_sensitivity, dm.look_invert_x / _y; front_ios.m) or DM_TOUCH_LOOK=<sensitivity>[,x][,y] (x / y: inverted) set it.
 // DM_TEST_TOUCHPAD=<test>[:<s>][,...] (any game, the Mac too), s seconds after start (default 30), on a 844x390 layout when the front end has none:
 //   check  BotWRecomp's input checks;  hide  its eye checks;  look  only a camera finger dragged right for 1 s (to see the camera turn in shots)
 // Each check logs "touch pad test: <name> ok|FAIL" with the controller the game last read (hle_hid.c); the frame numbers of each test are logged.
@@ -45,8 +48,19 @@ static struct {
     finger f[16]; int nf;
     int stick; long stick_id; float bx, by, kx, ky;
     int look; long look_id; float lpx, lpy, vx, vy;
+    float look_sens; int look_inv_x, look_inv_y;
     double last_t; uint64_t latch;
-} g = {.enabled = 1, .eye = -1, .dpad = -1};
+} g = {.enabled = 1, .eye = -1, .dpad = -1, .look_sens = 1};
+void tp_look_tuning(float sens, int inv_x, int inv_y) {
+    if (!(sens > 0)) sens = 1;   // NaN or unset
+    pthread_mutex_lock(&g_mu); g.look_sens = sens < 0.25f ? 0.25f : sens > 3 ? 3 : sens; g.look_inv_x = !!inv_x; g.look_inv_y = !!inv_y; pthread_mutex_unlock(&g_mu);
+}
+void tp_look_tuning_get(float *sens, int *inv_x, int *inv_y) { pthread_mutex_lock(&g_mu); *sens = g.look_sens; *inv_x = g.look_inv_x; *inv_y = g.look_inv_y; pthread_mutex_unlock(&g_mu); }
+static void look_parse(const char *e) {   // "<sensitivity>[,x][,y]"
+    tp_look_tuning((float)atof(e), strstr(e, ",x") != NULL, strstr(e, ",y") != NULL);
+    LOG("touch pad: camera sensitivity %.2f×%s%s (DM_TOUCH_LOOK)", g.look_sens, g.look_inv_x ? ", horizontal inverted" : "", g.look_inv_y ? ", vertical inverted" : "");
+}
+static void look_env(void) { static int done; if (done) return; done = 1; const char *e = getenv("DM_TOUCH_LOOK"); if (e) look_parse(e); }   // once
 
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 static void release_all(void) { g.nf = 0; g.stick = g.look = 0; g.vx = g.vy = 0; }
@@ -54,6 +68,7 @@ static void add(int shape, float x, float y, float r, float hh, const char *labe
     if (g.nc < 20) g.c[g.nc++] = (control){{shape, x, y, r, hh, label, 0, 0}, mask};
 }
 void tp_layout(float W, float H, float sl, float st, float sr, float sb) {
+    look_env();
     pthread_mutex_lock(&g_mu);
     float safe[4] = {sl, st, sr, sb};
     // only when the size or the safe area changed (UIKit lays views out again for other reasons too): a new layout releases every finger
@@ -183,8 +198,12 @@ int tp_read(double t, uint64_t *buttons, float *lx, float *ly, float *rx, float 
         g.vx += (dx / dt - g.vx) * a; g.vy += (dy / dt - g.vy) * a;
         float sp = hypotf(g.vx, g.vy);
         if (sp > kLookRest) {
-            float o = kLookFloor + (1 - kLookFloor) * fminf(1.0f, (sp - kLookRest) / (kLookFullSpeed - kLookRest));
-            *rx = g.vx / sp * o; *ry = -g.vy / sp * o;
+#ifndef DM_TEST_TP_SENS_AFTER
+            float o = kLookFloor + (1 - kLookFloor) * fminf(1.0f, g.look_sens * (sp - kLookRest) / (kLookFullSpeed - kLookRest));
+#else       // negative control of t_touchpad only: the sensitivity scales the saturated output
+            float o = fminf(1.0f, g.look_sens * (kLookFloor + (1 - kLookFloor) * fminf(1.0f, (sp - kLookRest) / (kLookFullSpeed - kLookRest))));
+#endif
+            *rx = g.vx / sp * o * (g.look_inv_x ? -1 : 1); *ry = -g.vy / sp * o * (g.look_inv_y ? -1 : 1);
         }
     }
     pthread_mutex_unlock(&g_mu);

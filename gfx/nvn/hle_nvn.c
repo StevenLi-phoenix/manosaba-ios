@@ -18,6 +18,7 @@
 #include "../../host/front.h"
 #include "../../host/game.h"
 #include "nvn_dirty.h"
+#include "nvn_perfline.h"
 #include <mach/mach_time.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
@@ -1412,6 +1413,9 @@ __attribute__((weak)) void dm_longframe_note(const char *what) { LOG("[long fram
 extern void mtl_create_ns(uint64_t *lib_ns, uint64_t *pso_ns); extern uint64_t mtl_upload_bytes(void); extern void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads);
 static const char *const g_tname[6] = {"frame time", "frame work", "NVN submit+present", "GPU", "translation record phase", "translation submit phase"};
 static void tpush(int k, double v) { g_tw[k][g_tn[k]++ % TWIN] = v; }
+// The fps / GPU line (nvn_perfline.h): fed from the present below, read by any thread (the iOS overlay, the Mac window title, the diagnostics export)
+static perfline g_perf;
+int dm_perf_line(char *out, size_t n) { return perfline_fmt(&g_perf, now_ns(), out, n); }
 // Thermal attribution (iOS DM_HEAT): per-frame GPU milliseconds are kept in a separate ring, taking the mean / p95 "since the last read" (at most the last HRN frames), without interfering with the timing summary's 300-frame window
 #define HRN 1024
 static double g_hr[HRN]; static uint64_t g_hn, g_hn_read;
@@ -1488,6 +1492,7 @@ static void tsummary(uint64_t frame) {
         o += snprintf(line + o, sizeof line - o, " %s p50 %.2f / p95 %.2f / max %.2f ms (%u frames);", g_tname[k], v[n / 2], v[(n * 95) / 100 < n ? (n * 95) / 100 : n - 1], v[n - 1], n);
     }
     LOG("[nvn] timing up to frame %llu:%s", frame, line);
+    { char pl[128]; dm_perf_line(pl, sizeof pl); LOG("[nvn] fps / GPU line at frame %llu: %s", frame, pl); }   // what the iOS overlay / Mac title show
     power_line(frame);
     { unsigned n = g_tn[0] < TWIN ? g_tn[0] : TWIN, over = 0; double v[TWIN];   // frame interval gets its own line (M1 baseline): number of frames > 16.7 ms in this window and p99
       if (n) { memcpy(v, g_tw[0], n * sizeof *v); qsort(v, n, sizeof *v, dcmp); for (unsigned i = 0; i < n; i++) over += v[i] > 16.7;
@@ -1630,6 +1635,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     { static int gate;
       if (!gate && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { gate = 1; int ms = mtl_warm_wait(15000); if (ms) LOG("[nvn] run-entry loading screen waited %d ms for pipeline warm-up", ms); } }
     present_cfg(o);
+    { static long sf = -1; static double ss; if (sf < 0) { const char *e = getenv("DM_TEST_PRESENT_STALL"); sf = 0; if (e) { sf = atol(e); const char *c = strchr(e, ':'); ss = c ? atof(c + 1) : 8; } }
+      if (sf > 0 && g_frame == (uint64_t)sf) { LOG("DM_TEST_PRESENT_STALL: present held for %.1f s at frame %llu", ss, (unsigned long long)g_frame); usleep((useconds_t)(ss * 1e6)); } }   // a freeze on purpose (host/crash.c's frames-stopped watch)
     gfx_enter();
     uint64_t t0 = now_ns();
     gfx_mt_enter("PresentTexture");
@@ -1656,6 +1663,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (prev_in) {
         double fr = (t0 - prev_in) / 1e6, wk = (t0 - prev_out) / 1e6, nv = atomic_exchange(&g_nvn_ns, 0) / 1e6;
         tpush(0, fr); tpush(1, wk); tpush(2, nv);
+        perfline_frame(&g_perf, t0);
         trow(f, "@frame_ms", fr); trow(f, "@work_ms", wk); trow(f, "@nvn_ms", nv);
         // Slow-frame attribution (taken only when DM_NVN_TSV is on): this frame's present-thread CPU time (−1 if the thread changed), CPU of all threads in the process, acquire wait accumulated per frame, present call time (same base as the GPU / on-screen present times: ms since process start)
         trow(f, "@wait_ms", g_acq_wait_ns / 1e6); trow(f, "@pq_wait_ms", g_pq_wait_ns / 1e6);
@@ -1699,7 +1707,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         trow(f, "@sub_wall_ms", atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
-    if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); trow(f - 8, "@gpu_sum_ms", mtl_gpu_sum_ms(f - 8)); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
+    if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); perfline_gpu(&g_perf, g); trow(f - 8, "@gpu_ms", g); trow(f - 8, "@gpu_sum_ms", mtl_gpu_sum_ms(f - 8)); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN];   // long-frame log (on by default, DM_LONGFRAME=0 turns it off): a line is printed only when the whole frame > 20 ms or GPU > 16.7 ms, and it is clearly above recent conditions
           static int on = -1; if (on < 0) { const char *e = getenv("DM_LONGFRAME"); on = !(e && !strcmp(e, "0")); }
           // "Long" is relative to recent conditions: when running steadily at 30 fps (menus / windowless host) or under sustained overload, every frame is > 20 ms; those are not long frames and must not flood the log - a frame has to be 40% above the sliding mean of the last 16 frames to count
@@ -1729,6 +1737,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (o->presents > 9) { uint64_t n = o->presents - 8; double a_ = mtl_presented_time(n), b_ = mtl_presented_time(n - 1);
         if (a_ < 0) trow(f - 8, "@presented_ms", -1); else if (a_ > 0 && b_ > 0) trow(f - 8, "@presented_ms", (a_ - b_) * 1e3);
         g_pres_iv[g_presn++ % TWIN] = a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0);
+        perfline_screen(&g_perf, a_ > 0 ? (uint64_t)(a_ * 1e9) : 0);
         { double iv_ = a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0); mtl_ub_present(iv_); }   // same-process alternating measurement (DM_NVN_UB) tallies on-screen present intervals per phase; when off it is just one atomic read
         dm_perf_present(a_ < 0 ? -1 : (a_ > 0 && b_ > 0 ? (a_ - b_) * 1e3 : 0));   // on-screen present intervals are also kept in a separate ring; tsummary reports dropped frames every 300 frames (M1 criterion)
         if (a_ > 0) trow(f - 8, "@pres_at_ms", a_ * 1e3 - g_t0_ns / 1e6); }   // on-screen present time (ms since process start; presentedTime shares a time base with mach_absolute_time)

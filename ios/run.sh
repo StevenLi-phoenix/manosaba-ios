@@ -130,7 +130,8 @@ push-data)
     src=$(cd "$src" && pwd -P)   # the workspace often links to the data elsewhere; devicectl does not follow a symlinked source directory ("Is a directory")
     t "copying $src → Library/Application Support/${x##*:}"
     xcrun devicectl device copy to --device "$D" --domain-type appDataContainer --domain-identifier "$B" --source "$src" \
-      --destination "Library/Application Support/${x##*:}" > "$R/push.log" 2>&1 || { t "[red] copy failed"; tail -5 "$R/push.log"; exit 1; }
+      --destination "Library/Application Support/${x##*:}" > "$R/push.log" 2>&1 || {
+      t "[red] copy failed; run push-data again to go on: devicectl skips the files already there, a file cut short is copied again"; tail -5 "$R/push.log"; exit 1; }
   done
   t "done"; exit 0 ;;
 *)

@@ -91,7 +91,18 @@ static __weak DmMetalView *g_view;
 // Over the whole screen (the letterbox bars too), for a game with game.json touch "pad" (DM_TOUCH=pad / screen overrides it): the controls are laid
 // out inside the safe area, every finger goes to tp_touch, drawn from tp_draw after each touch. Off while a game controller with an extended
 // profile is connected (BotWRecomp's automatic mode): the view is hidden and touches reach the game view. The eye's choice is kept in the user
-// defaults (dm.touch_hidden).
+// defaults (dm.touch_hidden). The camera finger's sensitivity and inversion come from the Settings page (dm.look_sensitivity, dm.look_invert_x /
+// _y; tp_look_tuning, plan item 109), applied at start unless DM_TOUCH_LOOK was set, and whenever they change.
+static float g_look_s = -1; static int g_look_x, g_look_y;   // the Settings values as last read
+static void pad_look_settings(void) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    float s = [d floatForKey:@"dm.look_sensitivity"]; int x = [d boolForKey:@"dm.look_invert_x"], y = [d boolForKey:@"dm.look_invert_y"];
+    if (s == g_look_s && x == g_look_x && y == g_look_y) return;   // another setting changed (the eye's, for one): DM_TOUCH_LOOK stays
+    int first = g_look_s < 0; g_look_s = s; g_look_x = x; g_look_y = y;
+    if (first && getenv("DM_TOUCH_LOOK")) return;
+    tp_look_tuning(s, x, y); float a; int ax, ay; tp_look_tuning_get(&a, &ax, &ay);
+    LOG("front: touch camera sensitivity %.2f×%s%s (Settings)", a, ax ? ", horizontal inverted" : "", ay ? ", vertical inverted" : "");
+}
 @interface DmPadView : UIView
 @end
 @implementation DmPadView { int _hidden; NSTimer *_test; }
@@ -99,6 +110,9 @@ static __weak DmMetalView *g_view;
     if (!(self = [super initWithFrame:f])) return nil;
     self.multipleTouchEnabled = YES; self.opaque = NO; self.backgroundColor = UIColor.clearColor; self.contentMode = UIViewContentModeRedraw;
     _hidden = [NSUserDefaults.standardUserDefaults boolForKey:@"dm.touch_hidden"]; tp_set_hidden(_hidden);
+    pad_look_settings();
+    [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *n) { (void)n; pad_look_settings(); }];
     if (getenv("DM_TEST_TOUCHPAD")) _test = [NSTimer scheduledTimerWithTimeInterval:1 / 15.0 repeats:YES block:^(NSTimer *t) { (void)t; [self setNeedsDisplay]; }];   // the self-test's fingers
     return self;
 }

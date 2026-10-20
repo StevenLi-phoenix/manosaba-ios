@@ -19,6 +19,8 @@ static _Atomic int g_watch_pregame = 1;
 static _Atomic int g_watch_stage_idx;
 static char g_watch_stage[2][256] = {"boot", "boot"};
 static unsigned g_watch_stall;
+static _Atomic uint64_t g_present_ns;   // the last present (0 before the first): the frames-stopped watch below
+static unsigned g_freeze_s;
 static void (*g_dump_hook)(void);
 __attribute__((weak)) void mtl_crash_note(void) {}   // nvn_mtl.m provides the real one; the host's unit tests link crash.c without the graphics layer
 static void (*g_wait_dump)(void);
@@ -37,7 +39,7 @@ void crash_watch_progress(uint32_t tick, const char *stage) {
     atomic_fetch_add(&g_watch_count, 1);
     atomic_store(&g_watch_last_ns, watch_now_ns());
 }
-void crash_watch_frame(void) { if (atomic_load(&g_watch_pregame)) crash_watch_progress(0, "frame presented"); }
+void crash_watch_frame(void) { atomic_store(&g_present_ns, watch_now_ns()); if (atomic_load(&g_watch_pregame)) crash_watch_progress(0, "frame presented"); }
 void crash_watch_pregame_done(void) { atomic_store(&g_watch_pregame, 0); }
 void crash_watch_pregame_again(void) { atomic_store(&g_watch_pregame, 1); }   // Back from a run to the front end: count progress by presented frames again (diag.c)
 void crash_dump_now(const char *why);
@@ -52,8 +54,19 @@ static void *watchdog_main(void *arg) {
 #ifndef DM_TEST_WATCH_NO_BG   // negative control of t_watchdog only
         // In the background (guest clock frozen for reason 1: the iPhone's scene, the Mac's DM_TEST_BG) no frame comes by design: the time away is
         // not "no progress" (a DM_TEST_BG run was killed 15 s into its background). Counting starts again at the return
-        if (guest_clock_frozen_for(1)) { atomic_store(&g_watch_last_ns, now); continue; }
+        if (guest_clock_frozen_for(1)) { atomic_store(&g_watch_last_ns, now); if (atomic_load(&g_present_ns)) atomic_store(&g_present_ns, now); continue; }
 #endif
+        // Frames stopped (plan item 107; the idea from justr4mzi's mush8 fork 979317e, GPL, nothing taken but the idea): DM_FREEZE_DUMP seconds (6)
+        // without a present once the game has presented, in the foreground and with no system keyboard up (the game waits for it by design): one
+        // dump of what every thread waits on per freeze, and a line when frames come back; the game goes on. On in the product (the stall watchdog
+        // below exits, so only tests turn it on); DM_FREEZE_DUMP=0 turns it off
+        if (g_freeze_s) { static uint64_t dumped_for; static int freezes; uint64_t pr = atomic_load(&g_present_ns);
+            if (pr && pr <= now && guest_clock_frozen_for(2)) atomic_store(&g_present_ns, pr = now);
+            if (pr && pr <= now && now - pr >= (uint64_t)g_freeze_s * 1000000000ull && dumped_for != pr) {
+                dumped_for = pr; freezes++;
+                LOG("[red] frames stopped: no present for %.1f s (freeze %d of this run); what each thread waits on follows, the game goes on", (now - pr) / 1e9, freezes);
+                crash_dump_now("frames stopped");
+            } else if (dumped_for && pr != dumped_for && pr > dumped_for) { LOG("frames came back after %.1f s", (pr - dumped_for) / 1e9); dumped_for = 0; } }
         // Second-scale stall (progress has stopped for more than 1 second but has not yet reached the kill threshold): do not exit, dump what each thread is waiting on. When hitting a case of "only one frame every 2 seconds", the 15-second threshold cannot catch it and the log has nothing on what it is waiting for.
         // Dump only after entering a run; at most 3 dumps per process, at least 10 seconds between two dumps (the loading screen and the pause menu also stop ticks, do not let them flood the log)
         { static int dumps; static uint64_t last_dump, dumped_for;
@@ -216,12 +229,18 @@ void crash_install(void) {
     crash_thread_init();
     struct sigaction sa = {.sa_sigaction = on_crash, .sa_flags = SA_SIGINFO | SA_ONSTACK};
     sigaction(SIGALRM, &sa, 0);
-    // Both watchdogs are turned on only when a test explicitly sets DM_WATCH / DM_WATCH_STALL: the product (the player launches from the desktop, no environment variables) turns on neither.
+    // Both watchdogs that exit are turned on only when a test explicitly sets DM_WATCH / DM_WATCH_STALL: the product (the player launches from the desktop, no environment variables) turns on neither.
+    // The frames-stopped watch (watchdog_main), which only dumps, runs in the product too (DM_FREEZE_DUMP=0 turns it off).
     // Found by reading the code: iOS main.m did setenv DM_WATCH=30 by default → the player's launch was killed by SIGALRM at 30 s; the no-progress watchdog defaulted to 15 s → the pause menu (ticks stopped) was killed at 15 s
-    const char *watch = getenv("DM_WATCH"), *stall = getenv("DM_WATCH_STALL");
+    const char *watch = getenv("DM_WATCH"), *stall = getenv("DM_WATCH_STALL"), *fz = getenv("DM_FREEZE_DUMP");
     if (watch) alarm(atoi(watch));
-    if (watch || stall) {
-        g_watch_stall = stall && atoi(stall) > 0 ? (unsigned)atoi(stall) : 15;
+#ifndef DM_TEST_FREEZE_NONE   // negative control of t_freeze only: no frames-stopped watch, the thread only for the test watchdogs (as before)
+    g_freeze_s = fz ? (unsigned)atoi(fz) : 6;
+#else
+    (void)fz;
+#endif
+    if (watch || stall) g_watch_stall = stall && atoi(stall) > 0 ? (unsigned)atoi(stall) : 15;
+    if (watch || stall || g_freeze_s) {
         atomic_store(&g_watch_last_ns, watch_now_ns());
         pthread_t th; if (pthread_create(&th, NULL, watchdog_main, NULL)) die("cannot start the watchdog thread");
         pthread_detach(th);

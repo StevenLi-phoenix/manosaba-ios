@@ -2,6 +2,7 @@
 //   dm.log_overlay       show it (default off)
 //   dm.log_overlay_red   only lines with "[red] "
 //   dm.log_overlay_lines how many lines (default 14)
+//   dm.perf_line         the fps / GPU line in the top right corner (default off; gfx/nvn/nvn_perfline.h), twice a second
 // The log itself stays a plain file that stderr writes directly (a crash backtrace must reach it even when no other thread runs again); the overlay
 // reads that file through its own descriptor, 4 times a second, only while shown. The view takes no touches: they reach the game underneath.
 #import <UIKit/UIKit.h>
@@ -10,11 +11,12 @@
 #include <unistd.h>
 
 int dm_log_fd(void);   // main.m: the log file stderr writes
+int dm_perf_line(char *out, size_t n);   // gfx/nvn/hle_nvn.c
 
 enum { RING = 64, LINE_MAX_CHARS = 220 };
 @interface DmLogOverlay : NSObject
-@property (strong) UILabel *label;
-@property (strong) NSTimer *timer;
+@property (strong) UILabel *label, *perf;
+@property (strong) NSTimer *timer, *perfTimer;
 @property (strong) NSMutableArray<NSString *> *ring;
 @property (strong) NSMutableData *partial;
 @property int fd;
@@ -32,6 +34,18 @@ static DmLogOverlay *g_ov;
         self.timer = [NSTimer scheduledTimerWithTimeInterval:0.25 target:self selector:@selector(tick) userInfo:nil repeats:YES];
         [self tick];
     } else if (!on && self.timer) { [self.timer invalidate]; self.timer = nil; }
+    BOOL pon = [d boolForKey:@"dm.perf_line"];
+    self.perf.hidden = !pon;
+    if (pon && !self.perfTimer) {
+        self.perfTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(perfTick) userInfo:nil repeats:YES];
+        [self perfTick];
+    } else if (!pon && self.perfTimer) { [self.perfTimer invalidate]; self.perfTimer = nil; }
+}
+- (void)perfTick {
+    char b[128]; dm_perf_line(b, sizeof b); self.perf.text = [NSString stringWithFormat:@" %s ", b];
+    UIView *sv = self.perf.superview; UIEdgeInsets in = sv.safeAreaInsets; CGSize sz = [self.perf sizeThatFits:CGSizeMake(sv.bounds.size.width, 40)];
+    self.perf.frame = CGRectMake(sv.bounds.size.width - in.right - 4 - sz.width, in.top + 4, sz.width, sz.height + 4);
+    [sv bringSubviewToFront:self.perf];
 }
 // The log file is renamed when the session becomes the foreground one (boot.launch.txt → boot.txt); an open descriptor follows the rename
 - (void)openLog {
@@ -51,6 +65,7 @@ static DmLogOverlay *g_ov;
             if (*q != '\n') continue;
             NSString *l = [[NSString alloc] initWithBytes:s length:(NSUInteger)(q - s) encoding:NSUTF8StringEncoding];
             if (l.length) {
+                if (l.length > 27 && [l characterAtIndex:0] == '[' && [l characterAtIndex:24] == 'Z' && [l characterAtIndex:25] == ']') l = [l substringFromIndex:27];   // the UTC stamp (host/logstamp.h)
                 if ([l hasPrefix:@"[dm] "]) l = [l substringFromIndex:5];
                 if (l.length > LINE_MAX_CHARS) l = [[l substringToIndex:LINE_MAX_CHARS] stringByAppendingString:@"…"];
                 [self.ring addObject:l]; if (self.ring.count > RING) [self.ring removeObjectAtIndex:0];
@@ -88,11 +103,15 @@ static DmLogOverlay *g_ov;
 
 // Called once the game view exists (main.m); the overlay is a subview of it that never takes touches
 void dm_log_overlay_attach(UIView *view) {
-    if (g_ov) { [view addSubview:g_ov.label]; return; }   // the game view was rebuilt (Retry after missing data)
+    if (g_ov) { [view addSubview:g_ov.label]; [view addSubview:g_ov.perf]; return; }   // the game view was rebuilt (Retry after missing data)
     g_ov = [DmLogOverlay new]; g_ov.fd = -1; g_ov.ring = [NSMutableArray array]; g_ov.partial = [NSMutableData data];
     UILabel *l = [UILabel new]; l.numberOfLines = 0; l.userInteractionEnabled = NO; l.hidden = YES;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; l.layer.cornerRadius = 4; l.clipsToBounds = YES;
     [view addSubview:l]; g_ov.label = l;
+    UILabel *pl = [UILabel new]; pl.userInteractionEnabled = NO; pl.hidden = YES; pl.textColor = UIColor.whiteColor;
+    pl.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightMedium];
+    pl.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; pl.layer.cornerRadius = 4; pl.clipsToBounds = YES;
+    [view addSubview:pl]; g_ov.perf = pl;
     [NSNotificationCenter.defaultCenter addObserver:g_ov selector:@selector(settingsChanged) name:NSUserDefaultsDidChangeNotification object:nil];
     [g_ov settingsChanged];
 }

@@ -71,12 +71,22 @@ it signed with every entitlement of its profile (increased memory limit included
 - **On-screen controls** (games with game.json `touch` "pad": Tears of the Kingdom; `DM_TOUCH=pad` / `screen` overrides the profile, e.g.
   to try them with manosaba): BotWRecomp's layout (`host/touchpad.c`): a floating stick on the left half, D-pad, ABXY, L / R / ZL / ZR, - / +,
   L3 / R3, and the right half outside the buttons turns the camera by the finger's speed. The eye button collapses them to itself (kept across
-  launches); a connected game controller turns them off. `DM_TEST_TOUCHPAD=check:<s>` runs the input checks on the device and logs the result.
+  launches); a connected game controller turns them off. Settings app → this app → Touch Camera: the camera swipe's sensitivity (0.25-3×,
+  applied before the turn speed saturates) and inverted axes (`DM_TOUCH_LOOK=<sensitivity>[,x][,y]` at launch). `DM_TEST_TOUCHPAD=check:<s>`
+  runs the input checks on the device and logs the result.
 - **Saves**: `Documents/save` (transactional, committed atomically). With iCloud entitlements the profile's `save_sync` files are synced
   (`host/cloud.m`).
 - **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Settings app → this app → "Show log on
   screen" draws the last lines over the game while playing ("Only [red] lines", "Lines": 8 / 14 / 24; touches pass through). Launched with
   `DM_LOG_PORT=<port>`, the app also serves its log over USB: `iproxy <local> <port>`, then `tools/logport.py tail <local>`.
+  Each line starts with its UTC time in milliseconds (`host/logstamp.h`; `DM_LOG_TIME=0` in env.txt turns it off). "Show frame rate" puts
+  the game's frames per second, those reaching the screen and the GPU time per frame in the top right corner (`gfx/nvn/nvn_perfline.h`).
+- **Diagnostics**: touch and hold the app's icon → Export Diagnostics: one text file with the device, GPU, memory, thermal state, shader
+  chain, frame rate and switches, then the last 8 MiB of `boot.txt`, `boot.previous.txt`, `boot.interrupted.txt` and `perf.txt`, in the share
+  sheet (`Sources/diag_export.m`); launched that way, the app exports before the game starts. The page shown when the game data is missing
+  has the same button. A session that ends in the foreground without an orderly exit (killed for memory, a crash, a hang the system ended)
+  is noticed at the next launch (`Documents/boot.running`, `host/rundiag.h`): a red line says so and its log is kept as
+  `boot.interrupted.txt` until another such session replaces it.
 - **Graphics settings** (Settings app → this app → Graphics): frame rate 60 / 30 fps (`DM_FPS`; the display link and ProMotion follow), render
   resolution (`DM_RENDER_HEIGHT`, only for games whose hooks apply it — manosaba: `games/manosaba/graphics.c`; read at startup) and MetalFX
   spatial upscaling of the presented picture (`DM_UPSCALE=metalfx`, `gfx/nvn/nvn_mtl.m` `fx_apply`). Frame rate and MetalFX follow a change on
@@ -90,7 +100,8 @@ it signed with every entitlement of its profile (increased memory limit included
 |---|---|
 | `Sources/main.m` | App and scene delegates, log, finding the game data, graphics settings, starting the host |
 | `Sources/front_ios.m` | The front end (`host/front.h`): Metal layer, touches, on-screen controls (`host/touchpad.c`), controllers, lifecycle |
-| `Sources/log_overlay.m`, `Settings.bundle` | On-screen log; the Settings app page (graphics settings and the log switches) |
+| `Sources/log_overlay.m`, `Settings.bundle` | On-screen log and frame rate line; the Settings app page (graphics settings and the log switches) |
+| `Sources/diag_export.m` | Diagnostics export (the Export Diagnostics quick action) |
 | `project.yml` | xcodegen spec; `tools/project_free.py` / `tools/project_m3.py` derive the free-account and iOS 18 variants |
 | `run.sh`, `tools/local_env.sh` | Build / install / launch; reads `local.env` (or `~/.config/dm-ios/local.env`) |
 | `tools/gen_build.py`, `tools/gen_embed.py` | Host sources from `host/Makefile`; the product embedded in the executable |

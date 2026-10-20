@@ -8,5 +8,5 @@ def one(old, new):
     if s.count(old) != 1: sys.exit(f'project_m3.py: "{old[:40]}" should occur exactly once, found {s.count(old)}')
     s = s.replace(old, new)
 one('    iOS: "26.0"', '    iOS: "18.0"')
-one('OTHER_CFLAGS: $(inherited) -mcpu=apple-a18', 'OTHER_CFLAGS: $(inherited) -mcpu=apple-a14 -DDM_NVN_M3=1')
+one('OTHER_CFLAGS: $(inherited) -mcpu=apple-a14 ', 'OTHER_CFLAGS: $(inherited) -mcpu=apple-a14 -DDM_NVN_M3=1 ')
 open(dst, 'w', encoding='utf-8').write(s)

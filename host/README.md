@@ -77,7 +77,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `mods.c` | User mod folders (`DM_MODS`): each mod's RomFS (mod folders or the Atmosphère layout) as an overlay layer in front of the game's |
 | `sead.c` | sead heaps (Tears of the Kingdom): every heap by class, the heaps and block holding an address (`DM_CRASH_HEAP`, the channel's `heap`), list watch (`DM_LIST_WATCH`) |
 | `cmdchan.c` | Live command channel (`DM_CMD`): keys, waits, screenshots, pass records, thread dump, memory snapshot, quit, while the game runs |
-| `crash.c` | Crash handler: guest backtrace, thread dump, watchdog (`DM_WATCH`), memory at registers on a crash (`DM_CRASH_MEM`) |
+| `crash.c` | Crash handler: guest backtrace, thread dump, watchdog (`DM_WATCH`), the frames-stopped dump (`DM_FREEZE_DUMP`), memory at registers on a crash (`DM_CRASH_MEM`) |
 | `diag.c` | Diagnostics: probes (`DM_PROBE`, `DM_THROWLOG`), store watchpoint on all threads (`DM_WATCHPOINT`), boot timeline (`DM_BOOTPROF`), guest sampling (`DM_SAMPLE`), perf record |
 | `memstat.m` | Memory accounting (`DM_MEMSTAT`), low-memory watch |
 | `dm.h` | Common header |
@@ -96,9 +96,13 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_MODS=<dir>` | Mods: each entry's `romfs`, `contents/<program id>/romfs` or `atmosphere/contents/<program id>/romfs` (or loose files) in front of the RomFS, in name order, the first winning; names starting with `.` or `-` are off; code mods are not applied (iOS: `Documents/mods`) |
 | `DM_CRASH_HEAP=<reg>,...`, `DM_LIST_WATCH=[heap+]<addr>,...` | sead games: on a crash, the heaps and block holding each register's address; watch intrusive lists and dump the threads when one gets a null next (`sead.c`) |
 | `DM_TEST_BG=<s>,<len>[;...]` | The iPhone's trip to the background and back at those times (focus, audio, guest clock, graphics), on the Mac too; `tools/lifecycle_check.py` judges the log |
+| `DM_LOG_TIME=1` | UTC milliseconds at the start of every log line (`logstamp.h`; on by default in the iOS app, where `DM_LOG_TIME=0` turns it off) |
+| `DM_PERF_LINE=1` | With a window: the game's frames per second, those reaching the screen and the GPU time per frame in its title, twice a second (`gfx/nvn/nvn_perfline.h`; the iOS app's "Show frame rate") |
+| `DM_TOUCH_LOOK=<s>[,x][,y]` | On-screen controls: the camera swipe's sensitivity (0.25-3×, before the turn speed saturates), `x` / `y` invert that axis (`touchpad.c`; the iOS Settings page's Touch Camera) |
 | `DM_TOUCH=pad` or `screen` | iOS: on-screen controls or the game's touchscreen, whatever the profile's `touch` says |
 | `DM_TEST_TOUCHPAD=<test>[:<s>][,...]` | On-screen controls checked in the running game (the Mac too, on an 844x390 layout): `check` (BotWRecomp's input checks against the controller the game read), `hide` (the eye), `look` (a camera drag only, for shots) |
 | `DM_WATCH=<s>` | Stop after that many seconds (exit 142) |
+| `DM_FREEZE_DUMP=<s>` | Frames stopped that many seconds (default 6) after the first present, in the foreground: one dump of what every thread waits on per freeze and a line when frames come back; the game goes on (on by default, 0 turns it off; `DM_TEST_PRESENT_STALL=<frame>:<s>` holds a present on purpose) |
 | `DM_LANG` | Override the profile's language |
 | `DM_MOVIE=1` (`2` = trace), `DM_TOUCH_LOG=1`, `DM_FS=1`, `DM_THROWLOG=1`, `DM_HLECOUNT=<file>` | Movie, touch, file system, managed exception and HLE call logging |
 | `DM_MEMSTAT=<tsv>` | Memory accounting once a second: footprint, distance to the iOS memory limit, Metal allocated, kernel ledgers, memory by kind (the guest's alias region, stack region and heap, malloc, code, GPU, …), alias region mapped and the host pages it keeps in use; on iOS a relative name is under Documents |

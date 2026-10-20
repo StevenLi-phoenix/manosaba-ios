@@ -11,6 +11,7 @@
 void hlecount_flush(void);
 int dm_fs_save_pending(void);   // hle_fs.c: a save transaction written and not committed yet
 int dm_oe_exit_section(void);   // hle_oe.c: the game is inside its exit-request section
+__attribute__((weak)) void dm_exit_note(void) {}   // the iOS shell's (ios/Sources/main.m): an orderly exit clears its run marker (host/rundiag.h)
 // Waits until no save is pending and the game is outside its exit-request section (manosaba brackets its saves with one: Enter, writes, commit,
 // Leave), at most max_s; returns the seconds waited, *save / *sec = what still held then. Unit test tests/t_quitwait.c
 static double quit_wait(double max_s, int *save, int *sec) {
@@ -29,6 +30,7 @@ static double quit_wait(double max_s, int *save, int *sec) {
 }
 void dm_host_shutdown(const char *why) {
     static _Atomic int once; if (atomic_exchange(&once, 1)) return;
+    dm_exit_note();
     uint64_t t0 = now_ns(); LOG("%s received: exiting", why);
     // A save in progress (written, not committed) and the exit-request section are waited for first: up to 15 s on the Mac, 3 s on iOS, which ends
     // a terminating app soon after

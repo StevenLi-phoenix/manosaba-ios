@@ -28,8 +28,8 @@ This working copy uses `DM_ROOT=<repo>/work` (git ignores `work/`).
 Keep `keys/`, the dump, the backups and the device saves in a separate private backup (for example an encrypted external disk); they stay
 out of git by design.
 
-Check the result: `make -C host/tests run`, `make -C gfx/tests run`, `make -C gfx/tests run-m3`, `make -C gfx/tex/tests run`,
-`verify/regress.sh --fuzz`, then a Mac run (README, Getting started) and `ios/run.sh build`.
+Check the result: `make -C host/tests run`, `make -C host/tests run-ubsan`, `make -C gfx/tests run`, `make -C gfx/tests run-m3`,
+`make -C gfx/tex/tests run`, `verify/regress.sh --fuzz`, `tools/audit_public.py`, then a Mac run (README, Getting started) and `ios/run.sh build`.
 
 ## Testing
 
@@ -1478,12 +1478,44 @@ Tier 3b, iOS and tooling:
 - [x] batch 26 · 105 the command channel follows a replaced file (a new inode, as a copy pushed to a device; T5eng's TOTK_INPUT_REOPEN) or one cut
   shorter than what was read from its start again (`cmdchan.c` `cmd_reopen`, at the end of the file). `t_cmdchan`: 26 checks (the file renamed
   over by another, whose line runs); the first file followed for good (`-DDM_TEST_CMD_NO_REOPEN`) misses it and never reaches quit (2 fail)
-- [ ] 106 run diagnostics: an interrupted-run marker, a log export, an fps / GPU line, timestamps
-- [ ] 107 a thread dump when frames stop, without ending the game
-- [ ] 108 `-mcpu=apple-a14` for the Metal 4 iOS build
-- [ ] 109 touch camera sensitivity and inversion
-- [ ] 110 resumable data transfer to the device
-- [ ] 111 UBSan for the C parsers and a public-content audit in CI; LDC.64 vectors in `t_xlate_ops.py`
+- [x] batch 27 · 106 run diagnostics (lordran-native f5834c5 / 9567c94, MIT; the code is ours): log lines carry UTC milliseconds (`host/logstamp.h`:
+  stderr becomes a stream that stamps each line however it arrives, crash dumps included; on in the iOS app, `DM_LOG_TIME=1` on the Mac;
+  only lines from before `main` stay bare); `Documents/boot.running` marks a session in the foreground (`host/rundiag.h`, written on entering
+  it, removed on leaving it and in `dm_host_shutdown` through `dm_exit_note`), so the next launch logs a red line and keeps that session's log
+  as `boot.interrupted.txt`; the home screen quick action Export Diagnostics (`ios/Sources/diag_export.m`; also a button on the missing-data
+  page) shares one file with the device, GPU, memory, thermal state, shader chain, fps line and switches and the last 8 MiB of each log
+  (launched that way, it exports before the host starts); the fps / GPU line (`gfx/nvn/nvn_perfline.h`: the game's presents a second and the
+  frames on screen a second over the last second, the GPU time over 32 frames, "no frame for N s" after 1.5 s) is drawn by the iOS overlay
+  (Settings: Show frame rate), in the Mac window's title with `DM_PERF_LINE=1`, and logged every 300 frames (the prologue: "30 fps · GPU
+  5.4-7.4 ms"). Tests: `t_rundiag` (16; not keeping the log fails 2, the start of a long log instead of its end 2), `t_logstamp` (6; a stamp
+  per write fails 2), `t_perfline` (8; since the start instead of the last second fails 2). The device check (a foreground kill, then the red
+  line and the export) is for the user
+- [x] batch 27 · 107 the frames-stopped dump (justr4mzi's mush8 fork 979317e, GPL: the idea only): `crash.c`'s watch thread now runs in the product
+  too; `DM_FREEZE_DUMP` seconds (6) without a present after the first one, in the foreground and with no system keyboard up, give one dump of
+  what every thread waits on per freeze and "frames came back after N s"; the game goes on. The thread dump gathered each thread's backtrace
+  while it was suspended and printed it before resuming it: a thread stopped while holding the stderr lock (in the middle of a log line) would
+  have hung the dumper and itself for good; it now prints after resuming (`hle_thread.c` `thr_bt`). In the game: `DM_TEST_PRESENT_STALL=900:8`
+  in the prologue gave one dump at 6.2 s (105 backtraces) and "frames came back after 8.3 s", the run went on to frame 1500. Tests: `t_freeze`
+  (5; no watch without a test watchdog, as before, fails 2), `t_threaddump` (2; printing while suspended, as before, never ends: 2 fail)
+- [x] batch 27 · 108 the Metal 4 iOS build compiles for `apple-a14` (was a18; lordran 78dd33d): one IPA for every Metal 4 device. Measured before
+  the change: the a18 build's host code (`__TEXT,__text`, 253 distinct instructions) had no BF16 / I8MM / SME / WFxT instruction either
+  (`bfi` / `bfxil` are ARMv8.0 bitfield moves); a14 refuses BF16 intrinsics outright. `tools/tests/t_ios_cpu.py` (4 with an app binary:
+  project.yml, the iOS 18 variant, the free-account variant, no later instruction in the binary; the old spec fails 2)
+- [x] batch 27 · 109 touch camera sensitivity (0.25-3×, applied before the turn speed saturates: 0.5× still turns at full speed with a fast swipe,
+  a 6 pt/s drift stays still at 3×) and X / Y inversion (lordran 42ad4cf, MIT: the idea; `touchpad.c` `tp_look_tuning`): Settings → Touch
+  Camera, or `DM_TOUCH_LOOK=<s>[,x][,y]`. In the game (the cliff save, the look test): a drag right turns the camera one way, with x inverted
+  the other. `t_touchpad` (41; the sensitivity applied after saturation fails 1)
+- [-] batch 27 · 110 not needed: `devicectl device copy to` already skips the files that are on the device unchanged (its help, devicectl 642.16),
+  measured in its temporary domain on the iPhone 17 Pro: a 30 MB tree 6.0 s, again unchanged 0.8 s; one file changed is copied; a 1 GB copy
+  stopped after 3 s left 16.7 MB of the file, the re-run (23 s) completed it, byte for byte. `ios/run.sh push-data` now says so when a copy fails
+- [x] batch 27 · 111 `make -C host/tests run-ubsan`: the parsers of outside input (env.txt, the command channel, DM_KEYS, mods, code options,
+  RomFS checks, controller maps, the keyboard's text, the run marker, the log stamps) built again with UBSan, fatal; all 10 clean;
+  `t_ubsan_on` shows the sanitizer is on (its overflow variant must stop with a runtime error). `tools/audit_public.py` (bayonetta3-mobile's
+  idea, MIT): every tracked file checked for private paths, game-container / executable / archive starts, key and token patterns and binary
+  content, values never printed; the index passes (707 files); `--history` refuses only 4 PNGs from upstream d2r-mobile's own history (its
+  "II MOBILE" icon and touch art, still in upstream/main; removed here in 27cd6ca). Both run in CI. `t_audit_public.py` (12; without the
+  content rules 4 fail). LDC.64 with the address register among its destinations (LASRecomp a179452's cases, MIT) in `t_xlate_ops.py`: 5
+  more, all right (ours copies the address first); the wrong order, emulated (`DM_TEST_LDC_BUG=1`), fails 1
 
 Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, before Tier 4). Correctness, small:
 - [ ] 115 pipeline keys without the blend state of targets whose blending is off (TotK 729 → 397 keys)

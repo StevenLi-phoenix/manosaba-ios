@@ -222,6 +222,11 @@ void front_run(void (*guest)(void)) {
         NSWindow *win = [[NSWindow alloc] initWithContentRect:r styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
         win.title = @(dm_game.title); win.restorable = NO; g_win = win;
+        if (getenv("DM_PERF_LINE") && strcmp(getenv("DM_PERF_LINE"), "0")) {   // the fps / GPU line in the title, twice a second (gfx/nvn/nvn_perfline.h)
+            int dm_perf_line(char *out, size_t n);
+            [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; char b[128]; dm_perf_line(b, sizeof b);
+                g_win.title = [NSString stringWithFormat:@"%s — %s", dm_game.title, b]; }];
+        }
         NSView *v = win.contentView; g_view = v;
         v.wantsLayer = YES; v.layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary; win.contentMinSize = NSMakeSize(640, floor(640 / g_aspect));

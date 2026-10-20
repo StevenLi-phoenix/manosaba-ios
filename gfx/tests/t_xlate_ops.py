@@ -7,6 +7,10 @@ t_xlate_run.m and compared with the value worked out from the instruction's defi
   without .FMZ, and with .FTZ alone, IEEE (NaN).
   I2I and SHF: LASRecomp d4c2ff6's vectors (MIT; I2I .SAT compares in the source's signedness, narrowing without .SAT keeps the low bits
   zero-extended; SHF .W wraps the shift, otherwise it is clamped to the width, 32 or 64), plus shifts of 0 and of exactly 32.
+  LDC.64 with the address register among its destinations (Rd or Rd+1; LASRecomp a179452's cases, MIT; plan item 111; 2,069 of Tears of the
+  Kingdom's shaders use the form): both words come from the address as it was. Bank 3 holds 8, 0x11111111, 0x22222222, 4, 0x44444444 at words 0-4,
+  so c[3][8 + 4] is 4 and the high word 0x44444444; a translation that overwrote the address first would read the high word at 4 + 4 + 4: 4 again.
+  DM_TEST_LDC_BUG=1 runs that wrong order instead (two 32-bit loads, the second from the address register after the first wrote it): 1 fails.
 Usage: t_xlate_ops.py [work dir]; XLATE = the translator (default $DM_ROOT/build/gfx/dmsh_xlate/dmsh_xlate; DOTNET_ROOT defaults to Homebrew's),
 needs spirv-cross, clang and a Metal GPU."""
 import os, re, struct, subprocess, sys, tempfile, json
@@ -19,6 +23,10 @@ MSL = ['--msl', '--msl-version', '20300', '--msl-texture-buffer-native', '--msl-
 PT = 7 << 16   # predicate guard PT
 def mov_c(d, word): return 0x4C98000000000000 | 0xF << 39 | 3 << 34 | word << 20 | PT | d   # MOV Rd, c[3][4 * word]
 EXIT = 0xE30000000007000F
+def mov_r(d, b): return 0x5C98000000000000 | 0xF << 39 | b << 20 | PT | d   # MOV Rd, Rb
+def ldc(d, a, idx, off, size): return 0xEF90000000000000 | PT | d | a << 8 | (off & 0xFFFF) << 20 | idx << 36 | size << 48   # size 4: 32-bit, 5: .64 (Rd, Rd+1)
+def ldc64(d, a, idx, off):   # LDC.64, or with DM_TEST_LDC_BUG=1 the wrong order: the low word written before the high word's address is read
+    return [ldc(d, a, idx, off, 4), ldc(d + 1, a, idx, off + 4, 4)] if os.environ.get('DM_TEST_LDC_BUG') == '1' else [ldc(d, a, idx, off, 5)]
 def fmul(d, a, b, fmz=0, sat=False): return 0x5C68000000000000 | PT | d | a << 8 | b << 20 | fmz << 44 | sat << 50
 def ffma(d, a, b, c, fmz=0, sat=False): return 0x5980000000000000 | PT | d | a << 8 | b << 20 | c << 39 | sat << 50 | fmz << 53
 def fmul32i(d, a, imm, fmz=0): return 0x1E00000000000000 | PT | d | a << 8 | imm << 20 | fmz << 53
@@ -32,6 +40,7 @@ FMZ, FTZ = 2, 1
 ZERO, NEG0, INF, NAN, ONE, TWO, THREE, FIVE, SIX, SEVEN = 0, 0x80000000, 0x7F800000, 0x7FC00000, 0x3F800000, 0x40000000, 0x40400000, 0x40A00000, 0x40C00000, 0x40E00000
 LO, HI = 0x89ABCDEF, 0x01234567
 HI0 = 0x76543210   # shares no bit with LO: a funnel shift of 0 that ORs both words in gives 0xffffffff
+LDCB = [8, 0x11111111, 0x22222222, 4, 0x44444444]   # bank 3 for the LDC cases (R1-R5 too)
 
 def is_zero(v): return v & 0x7FFFFFFF == 0
 def is_nan(v): return v & 0x7F800000 == 0x7F800000 and v & 0x7FFFFF != 0
@@ -84,6 +93,11 @@ CASES = [
     ('SHF.L.U64 0', [LO, HI0, 0], [shf(False, 0, 1, 3, 0, 2, 2, False)], HI0),
     ('SHF.R imm 0', [LO, HI0], [shf(True, 0, 1, -1, 0, 2, 0, False)], LO),
     ('SHF.L.W 32 (wraps to 0)', [LO, HI0, 32], [shf(False, 0, 1, 3, 0, 2, 0, True)], HI0),
+    ('LDC.64 R0, c[3][R0+4] (low)', LDCB, [mov_r(0, 1), *ldc64(0, 0, 3, 4)], 4),
+    ('LDC.64 R0, c[3][R0+4] (high, from the address as it was)', LDCB, [mov_r(0, 1), *ldc64(0, 0, 3, 4), mov_r(0, 1)], 0x44444444),
+    ('LDC.64 R0, c[3][R1+4] (low)', LDCB, [*ldc64(0, 1, 3, 4)], 4),
+    ('LDC.64 R0, c[3][R1+4] (high, address in Rd+1)', LDCB, [*ldc64(0, 1, 3, 4), mov_r(0, 1)], 0x44444444),
+    ('LDC R0, c[3][R0+4]', LDCB, [mov_r(0, 1), ldc(0, 0, 3, 4, 4)], 4),
 ]
 
 def program(inputs, insns):

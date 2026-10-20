@@ -22,6 +22,8 @@ run: \
 	$(B)/t_waitsync \
 	$(B)/t_crash_stderr \
 	$(B)/t_envfile \
+	$(B)/t_freeze \
+	$(B)/t_freeze_none \
 	$(B)/t_fs \
 	$(B)/t_fs_case \
 	$(B)/t_fs_index \
@@ -36,6 +38,8 @@ run: \
 	$(B)/t_hstack_old \
 	$(B)/t_ktrace \
 	$(B)/t_loader_weak \
+	$(B)/t_logstamp \
+	$(B)/t_logstamp_every \
 	$(B)/t_memsnap \
 	$(B)/t_mods \
 	$(B)/t_mods_case \
@@ -49,18 +53,24 @@ run: \
 	$(B)/t_quitwait \
 	$(B)/t_quitwait_old \
 	$(B)/t_romfs_validate \
+	$(B)/t_rundiag \
+	$(B)/t_rundiag_nokeep \
+	$(B)/t_rundiag_head \
 	$(B)/t_sead \
 	$(B)/t_sead_broken \
 	$(B)/t_sleep \
 	$(B)/t_swkbd \
 	$(B)/t_sysevent \
 	$(B)/t_threadcpu \
+	$(B)/t_threaddump \
+	$(B)/t_threaddump_suspended \
 	$(B)/t_thread_exit \
 	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
 	$(B)/t_touch \
 	$(B)/t_touchpad \
 	$(B)/t_touchpad_rehit \
+	$(B)/t_touchpad_sensafter \
 	$(B)/t_watchdog \
 	$(B)/t_watchdog_nobg
 	$(B)/t_altstack
@@ -93,6 +103,11 @@ run: \
 	$(B)/t_waitsync
 	$(B)/t_crash_stderr
 	TMPDIR="$(abspath $(B))" $(B)/t_envfile
+	$(B)/t_freeze
+	@status=0; $(B)/t_freeze_none > $(B)/t_freeze_none.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ freeze: one dump" $(B)/t_freeze_none.log; then \
+	   cat $(B)/t_freeze_none.log; echo "t_freeze_none: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_freeze_none: without a test watchdog no freeze is dumped, as expected"
 	$(B)/t_fs 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_case 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_index 2>/dev/null
@@ -121,6 +136,11 @@ run: \
 	 fi; echo "t_hstack_old: the context as before misses the guest's stack in all three pauses, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_ktrace 2>/dev/null
 	$(B)/t_loader_weak 2>/dev/null
+	$(B)/t_logstamp
+	@status=0; $(B)/t_logstamp_every > $(B)/t_logstamp_every.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ no stamp inside a line" $(B)/t_logstamp_every.log; then \
+	   cat $(B)/t_logstamp_every.log; echo "t_logstamp_every: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_logstamp_every: a stamp before every write lands inside a line written in two goes, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_memsnap 2>/dev/null
 	TMPDIR="$(abspath $(B))" $(B)/t_mods 2>/dev/null
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_mods_case > $(B)/t_mods_case.log 2>/dev/null || status=$$?; \
@@ -146,6 +166,15 @@ run: \
 	   cat $(B)/t_quitwait_old.log; echo "t_quitwait_old: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_quitwait_old: a quit that waits for the save alone leaves inside the exit-request section, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
+	TMPDIR="$(abspath $(B))" $(B)/t_rundiag
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rundiag_nokeep > $(B)/t_rundiag_nokeep.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ its log kept as boot.interrupted.txt" $(B)/t_rundiag_nokeep.log; then \
+	   cat $(B)/t_rundiag_nokeep.log; echo "t_rundiag_nokeep: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_rundiag_nokeep: an interrupted session whose log is not kept leaves nothing to report, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rundiag_head > $(B)/t_rundiag_head.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ ... and gives its last 8 MiB exactly" $(B)/t_rundiag_head.log; then \
+	   cat $(B)/t_rundiag_head.log; echo "t_rundiag_head: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_rundiag_head: the start of a long log misses its last lines, as expected"
 	$(B)/t_sead 2>/dev/null
 	@status=0; $(B)/t_sead_broken > $(B)/t_sead_broken.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ an address past A's end" $(B)/t_sead_broken.log; then \
@@ -155,6 +184,11 @@ run: \
 	$(B)/t_swkbd
 	$(B)/t_sysevent 2>/dev/null
 	$(B)/t_threadcpu 2>/dev/null
+	$(B)/t_threaddump
+	@status=0; $(B)/t_threaddump_suspended > $(B)/t_threaddump_suspended.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ the dump ends" $(B)/t_threaddump_suspended.log; then \
+	   cat $(B)/t_threaddump_suspended.log; echo "t_threaddump_suspended: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_threaddump_suspended: printing while the thread is stopped waits forever for the lock it holds, as expected"
 	$(B)/t_thread_exit
 	DM_HSTACK=0 $(B)/t_thread_exit 2>/dev/null
 	@status=0; DM_HSTACK=0 $(B)/t_thread_exit_old > $(B)/t_thread_exit_old.log 2>&1 || status=$$?; \
@@ -168,6 +202,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ slid off A" $(B)/t_touchpad_rehit.log; then \
 	   cat $(B)/t_touchpad_rehit.log; echo "t_touchpad_rehit: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_touchpad_rehit: a finger that takes the button it slides onto loses A, as expected"
+	@status=0; $(B)/t_touchpad_sensafter > $(B)/t_touchpad_sensafter.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ sensitivity 0.5×" $(B)/t_touchpad_sensafter.log; then \
+	   cat $(B)/t_touchpad_sensafter.log; echo "t_touchpad_sensafter: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_touchpad_sensafter: a sensitivity applied after saturation never lets 0.5× turn at full speed, as expected"
 	$(B)/t_watchdog
 	@status=0; $(B)/t_watchdog_nobg > $(B)/t_watchdog_nobg.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ away" $(B)/t_watchdog_nobg.log; then \
@@ -176,6 +214,56 @@ run: \
 
 $(GEN):
 	$(MAKE) -C .. GAME=$(GAME) profile
+
+# Parsers of outside input under the undefined-behavior sanitizer (plan item 111; MacNativeGames runs its parsers so in CI; ASan hangs in dyld on
+# macOS 26): env.txt, the command channel, DM_KEYS scripts, mods, code options, RomFS checks, controller maps, the software keyboard's text, the run
+# marker and the log stamps, each built again with UBSan (fatal) into build/ubsan; t_ubsan_on first shows the sanitizer is on and stops a run
+U = $(B)/ubsan
+UBSAN = -fsanitize=undefined -fno-sanitize-recover=undefined -g
+UBSAN_T = t_envfile t_cmdchan t_hid_script t_mods t_options t_romfs_validate t_padmap t_swkbd t_rundiag t_logstamp
+run-ubsan: $(U)/t_ubsan_on $(U)/t_ubsan_on_ub $(addprefix $(U)/,$(UBSAN_T))
+	$(U)/t_ubsan_on
+	@status=0; $(U)/t_ubsan_on_ub > $(U)/t_ubsan_on_ub.log 2>&1 || status=$$?; \
+	 if [ "$$status" -eq 0 ] || ! grep -q "runtime error" $(U)/t_ubsan_on_ub.log; then \
+	   cat $(U)/t_ubsan_on_ub.log; echo "t_ubsan_on_ub: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_ubsan_on_ub: a signed overflow stops the run with a runtime error, as expected"
+	TMPDIR="$(abspath $(U))" $(U)/t_envfile
+	TMPDIR="$(abspath $(U))" $(U)/t_cmdchan 2>/dev/null
+	$(U)/t_hid_script 2>/dev/null
+	TMPDIR="$(abspath $(U))" $(U)/t_mods 2>/dev/null
+	TMPDIR="$(abspath $(U))" $(U)/t_options 2>/dev/null
+	TMPDIR="$(abspath $(U))" $(U)/t_romfs_validate
+	$(U)/t_padmap
+	$(U)/t_swkbd
+	TMPDIR="$(abspath $(U))" $(U)/t_rundiag
+	$(U)/t_logstamp
+	@echo "run-ubsan: $(words $(UBSAN_T)) parser tests clean under the undefined-behavior sanitizer"
+$(U):
+	mkdir -p $@
+$(U)/t_ubsan_on: t_ubsan_on.c | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -o $@ t_ubsan_on.c
+$(U)/t_ubsan_on_ub: t_ubsan_on.c | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -DDM_TEST_UB -o $@ t_ubsan_on.c
+$(U)/t_envfile: t_envfile.c ../envfile.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_envfile.c
+$(U)/t_cmdchan: t_cmdchan.c ../cmdchan.c ../dm.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_cmdchan.c
+$(U)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(U)
+	clang -O1 -Wno-unused-function $(UBSAN) -I.. -o $@ t_hid_script.c ../touchpad.c
+$(U)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_mods.c
+$(U)/t_options: t_options.c ../options.c ../dm.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_options.c
+$(U)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c | $(U)
+	clang -O1 -Wall -Wno-unused-function $(UBSAN) -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
+$(U)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_padmap.c
+$(U)/t_swkbd: t_swkbd.c ../hle_swkbd.c | $(U)
+	clang -O1 -Wno-unused-function $(UBSAN) -I.. -o $@ t_swkbd.c ../hle_swkbd.c
+$(U)/t_rundiag: t_rundiag.c ../rundiag.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_rundiag.c
+$(U)/t_logstamp: t_logstamp.c ../logstamp.h | $(U)
+	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_logstamp.c
 
 $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../crash.c
@@ -203,6 +291,14 @@ $(B)/t_cmdchan_noreopen: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_CMD_NO_REOPEN -I.. -o $@ t_cmdchan.c
 $(B)/t_cmdchan_partial: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_CMD_PARTIAL -I.. -o $@ t_cmdchan.c
+$(B)/t_freeze: t_freeze.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_freeze.c t_altstack_stub.c ../crash.c
+$(B)/t_freeze_none: t_freeze.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_FREEZE_NONE -I.. -o $@ t_freeze.c t_altstack_stub.c ../crash.c
+$(B)/t_threaddump: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_threaddump_suspended: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_BT_PRINT_SUSPENDED -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
 $(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
@@ -231,6 +327,10 @@ $(B)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mods.c
 $(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MODS_CASE -I.. -o $@ t_mods.c
+$(B)/t_logstamp: t_logstamp.c ../logstamp.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_logstamp.c
+$(B)/t_logstamp_every: t_logstamp.c ../logstamp.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_LOGSTAMP_EVERY_WRITE -I.. -o $@ t_logstamp.c
 $(B)/t_memsnap: t_memsnap.c ../memsnap.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_memsnap.c ../memsnap.c
 $(B)/t_sysevent: t_sysevent.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
@@ -270,6 +370,8 @@ $(B)/t_touchpad: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h 
 	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad.c
 $(B)/t_touchpad_rehit: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_REHIT -I.. -o $@ t_touchpad.c
+$(B)/t_touchpad_sensafter: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_TP_SENS_AFTER -I.. -o $@ t_touchpad.c
 $(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
 $(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)
@@ -286,6 +388,12 @@ $(B)/t_quitwait_old: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_QUIT_NO_SECTION -I.. -o $@ t_quitwait.c
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
+$(B)/t_rundiag: t_rundiag.c ../rundiag.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_rundiag.c
+$(B)/t_rundiag_nokeep: t_rundiag.c ../rundiag.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_NO_KEEP -I.. -o $@ t_rundiag.c
+$(B)/t_rundiag_head: t_rundiag.c ../rundiag.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_HEAD -I.. -o $@ t_rundiag.c
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_swkbd.c ../hle_swkbd.c
 T_THREAD_EXIT_SRC = t_thread_exit.c t_thread_exit_guest.S ../hle_thread.c ../thread.c ../entry.S ../hstack.S ../hstack.c

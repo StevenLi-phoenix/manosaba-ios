@@ -37,6 +37,8 @@ t_fpcontract: t_fpcontract.m
 	clang -O1 -Wall -fobjc-arc -o $@ t_fpcontract.m -framework Metal -framework Foundation
 t_aniso: t_aniso.c ../nvn/nvn_aniso.h
 	clang -O1 -Wall -Werror -o $@ t_aniso.c
+t_perfline: t_perfline.c ../nvn/nvn_perfline.h
+	clang -O1 -Wall -Werror -o $@ t_perfline.c
 t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
 	clang -O1 -Wall -Werror -I../nvn/include -o $@ t_sync_order.c
 t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
@@ -174,6 +176,7 @@ run: \
 	t_pace \
 	t_passgpu \
 	t_pend \
+	t_perfline \
 	t_pfv \
 	t_pool_find \
 	t_poolcache \
@@ -224,6 +227,7 @@ run: \
 	./t_warm_list
 	./t_sync_order
 	./t_aniso
+	./t_perfline
 	./t_poolcache
 	./t_poolcheck
 	./t_tex_auto

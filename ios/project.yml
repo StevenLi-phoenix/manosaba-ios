@@ -47,6 +47,11 @@ targets:
         GCSupportsGameMode: true   # the same for iOS / iPadOS 18.0-18.5, which only read this one (BotWRecomp sets both)
         ITSAppUsesNonExemptEncryption: false
         CADisableMinimumFrameDurationOnPhone: true   # without it iPhone caps apps at 60 Hz
+        UIApplicationShortcutItems:                # touch and hold the icon → Export Diagnostics (Sources/diag_export.m; the type is checked in Sources/main.m)
+          - UIApplicationShortcutItemType: export-diagnostics
+            UIApplicationShortcutItemTitle: Export Diagnostics
+            UIApplicationShortcutItemIconSymbolName: square.and.arrow.up
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeShare
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:
@@ -76,6 +81,6 @@ targets:
       DM_DEVICE_FAMILY: "1,2"
       ENABLE_BITCODE: NO
       GCC_C_LANGUAGE_STANDARD: gnu11
-      OTHER_CFLAGS: $(inherited) -mcpu=apple-a18   # the host's assembly uses LSE atomics; tools/project_m3.py lowers this for the iOS 18 build
+      OTHER_CFLAGS: $(inherited) -mcpu=apple-a14   # every Metal 4 device (A14 / M1 and newer; lordran 78dd33d); the host's assembly uses LSE atomics, which A14 has; tools/project_m3.py adds DM_NVN_M3 for the iOS 18 build
       CLANG_ENABLE_OBJC_ARC: YES
       DEBUG_INFORMATION_FORMAT: dwarf

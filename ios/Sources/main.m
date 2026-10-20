@@ -7,9 +7,14 @@
 //   (romfs_validate.c); when missing, a page says what is missing and where it goes.
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
 //   Mods (host/mods.c): Documents/mods when it exists (Files app; one folder per mod, or an SD card's atmosphere folder).
+//   Run diagnostics (plan item 106): log lines carry UTC milliseconds (host/logstamp.h; DM_LOG_TIME=0 in env.txt turns it off); Documents/boot.running
+//   marks a session in the foreground, so a launch knows when the last one ended there without an orderly exit and keeps its log as
+//   boot.interrupted.txt (host/rundiag.h); the home screen quick action Export Diagnostics shares the logs with the device's details (diag_export.m).
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #include "envfile.h"
+#include "logstamp.h"
+#include "rundiag.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <mach/mach.h>
@@ -34,6 +39,7 @@ unsigned long long mtl_gpu_allocated_mb(void);
 void plog(const char *fmt, ...);
 void dm_log_overlay_attach(UIView *view);   // log_overlay.m
 void dm_log_overlay_refresh(void);
+void dm_diag_export(UIViewController *vc, void (^done)(void));   // diag_export.m
 
 // ---------- Log ----------
 static int g_log = -1, g_log_tee, g_log_pipe[2] = {-1, -1};
@@ -42,11 +48,11 @@ int dm_log_fd(void) { return g_log; }   // log_overlay.m reads the same file
 static void write_all(int fd, const char *p, size_t n) {
     while (n) { ssize_t w = write(fd, p, n); if (w > 0) { p += w; n -= (size_t)w; } else if (w < 0 && errno == EINTR) continue; else break; }
 }
-void plog(const char *fmt, ...) {
+void plog(const char *fmt, ...) {   // through stderr, so the line is stamped like the host's
     char b[1024]; va_list ap; va_start(ap, fmt); int n = vsnprintf(b, sizeof b - 1, fmt, ap); va_end(ap);
     if (n < 0) return;
     if (n > (int)sizeof b - 2) n = sizeof b - 2;
-    b[n++] = '\n'; write_all(2, b, (size_t)n);
+    b[n++] = '\n'; fwrite(b, 1, (size_t)n, stderr);
 }
 // DM_LOG_PORT: one client at a time; on connect it gets the log so far, then every new line. The tee thread writes the file and the client under one
 // lock, so the replay neither misses nor repeats a line
@@ -135,6 +141,16 @@ static void log_promote(void) {
     if (rename(cur, prev) != 0 && errno != ENOENT) { plog("boot: could not keep the previous log (%s); this log stays boot.launch.txt", strerror(errno)); return; }
     if (rename(g_log_path, cur) != 0) plog("boot: could not rename the log to boot.txt (%s)", strerror(errno));
 }
+// The run marker (host/rundiag.h): written while the session is in the foreground, naming its log as it is called now
+static char g_docs[1024], g_launch_note[700] = "the last session ended in order, or this is the first launch";
+const char *dm_diag_launch_note(void) { return g_launch_note; }
+static void run_mark(int on) {
+    if (!on) { rundiag_unmark(g_docs); return; }
+    char lp[PATH_MAX]; const char *name = "boot.launch.txt";
+    if (g_log >= 0 && fcntl(g_log, F_GETPATH, lp) == 0) { const char *b = strrchr(lp, '/'); name = b ? b + 1 : lp; }
+    if (rundiag_mark(g_docs, name)) plog("[red] boot: could not write the run marker: %s", strerror(errno));
+}
+void dm_exit_note(void) { run_mark(0); }   // host/hle_lifecycle.c dm_host_shutdown: an orderly exit (the scene, SIGTERM, a quit command)
 
 // ---------- Game data ----------
 static NSString *support_dir(void) { return NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0]; }
@@ -172,6 +188,7 @@ static void exclude_from_backup(NSString *d) {
 // ---------- Host ----------
 static char *g_argv[16]; static int g_argc;
 static int g_host_up;
+int dm_diag_host_up(void) { return g_host_up; }
 static void boot_prepare(NSString *romfs) {
     NSFileManager *fm = NSFileManager.defaultManager; NSString *doc = docs_dir();
     NSString *res = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"];
@@ -259,13 +276,17 @@ static void host_start(NSString *romfs) {
     self.label.font = [UIFont systemFontOfSize:15]; [self.view addSubview:self.label];
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:@"Retry" forState:UIControlStateNormal]; b.tag = 1;
     [b addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:b];
+    UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem]; [x setTitle:@"Export Diagnostics" forState:UIControlStateNormal]; x.tag = 2;
+    [x addTarget:self action:@selector(exportDiag) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:x];
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews]; CGRect r = CGRectInset(self.view.bounds, 40, 30);
     self.label.frame = CGRectMake(r.origin.x, r.origin.y, r.size.width, r.size.height - 50);
-    [self.view viewWithTag:1].frame = CGRectMake(CGRectGetMidX(r) - 60, CGRectGetMaxY(r) - 44, 120, 44);
+    [self.view viewWithTag:1].frame = CGRectMake(CGRectGetMidX(r) - 160, CGRectGetMaxY(r) - 44, 120, 44);
+    [self.view viewWithTag:2].frame = CGRectMake(CGRectGetMidX(r) + 0, CGRectGetMaxY(r) - 44, 180, 44);
 }
 - (void)tap { if (self.retry) self.retry(); }
+- (void)exportDiag { dm_diag_export(self, nil); }
 @end
 
 // The GPU this build needs: Metal 4 (A14 / M1 and newer on iOS 26; iOS 26 also runs on A13, where creating the Metal 4 queue fails and the app
@@ -288,6 +309,7 @@ static int gpu_supported(char *why, size_t n) {
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @property (strong) NSString *romfs;
+@property BOOL exportFirst;   // launched by the Export Diagnostics quick action: export before the host starts
 @end
 @implementation SceneDelegate
 - (void)showGameOrMissing:(BOOL)retry {
@@ -326,29 +348,45 @@ static int gpu_supported(char *why, size_t n) {
                     @(dm_game.title), @(dm_game.version), @(why)];
 }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
-    (void)s; (void)o;
+    (void)s;
+    self.exportFirst = [o.shortcutItem.type isEqualToString:@"export-diagnostics"];
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.backgroundColor = UIColor.blackColor;
     [self showGameOrMissing:NO];
     [self.window makeKeyAndVisible];
 }
 - (void)sceneWillResignActive:(UIScene *)s { (void)s; if (g_host_up) front_ios_focus_event(0); }
-- (void)sceneDidEnterBackground:(UIScene *)s { (void)s; if (g_host_up) front_ios_focus_event(1); }
+- (void)sceneDidEnterBackground:(UIScene *)s { (void)s; run_mark(0); if (g_host_up) front_ios_focus_event(1); }
 - (void)sceneWillEnterForeground:(UIScene *)s {
-    (void)s; log_promote();
-    if (!self.romfs) return;
+    (void)s; log_promote(); run_mark(1);
+    if (!self.romfs || self.exportFirst) return;
     if (!g_host_up) host_start(self.romfs);
     front_ios_focus_event(2);
 }
-- (void)sceneDidBecomeActive:(UIScene *)s { (void)s; dm_log_overlay_refresh(); gfx_settings_refresh(); if (g_host_up) front_ios_focus_event(3); }
+- (void)sceneDidBecomeActive:(UIScene *)s {
+    (void)s; dm_log_overlay_refresh(); gfx_settings_refresh(); if (g_host_up) front_ios_focus_event(3);
+    if (self.exportFirst) {
+        self.exportFirst = NO; __weak SceneDelegate *me = self;
+        dm_diag_export(self.window.rootViewController, ^{
+            if (!me.romfs || g_host_up) return;
+            host_start(me.romfs); front_ios_focus_event(2); front_ios_focus_event(3);
+        });
+    }
+}
+// The Export Diagnostics quick action while the app runs (Info.plist UIApplicationShortcutItems, ios/project.yml)
+- (void)windowScene:(UIWindowScene *)ws performActionForShortcutItem:(UIApplicationShortcutItem *)item completionHandler:(void (^)(BOOL))done {
+    (void)ws; BOOL ours = [item.type isEqualToString:@"export-diagnostics"];
+    if (ours) dm_diag_export(self.window.rootViewController, nil);
+    done(ours);
+}
 // Scene gone / app terminating: orderly host shutdown. (Swiping away a suspended app is a SIGKILL: neither of these runs.)
-- (void)sceneDidDisconnect:(UIScene *)s { (void)s; if (g_host_up) dm_host_shutdown("iOS scene disconnected"); }
+- (void)sceneDidDisconnect:(UIScene *)s { (void)s; run_mark(0); if (g_host_up) dm_host_shutdown("iOS scene disconnected"); }
 @end
 
 @interface App : UIResponder <UIApplicationDelegate>
 @end
 @implementation App
-- (void)applicationWillTerminate:(UIApplication *)a { (void)a; if (g_host_up) dm_host_shutdown("iOS app terminating"); }
+- (void)applicationWillTerminate:(UIApplication *)a { (void)a; run_mark(0); if (g_host_up) dm_host_shutdown("iOS app terminating"); }
 // Memory warning: one log line (the system gives no other notice before ending the app for memory)
 - (void)applicationDidReceiveMemoryWarning:(UIApplication *)a {
     static int n; if (++n > 50) return;
@@ -362,11 +400,19 @@ static int gpu_supported(char *why, size_t n) {
 
 static void env_said(const char *name, const char *value) { plog("boot: env.txt: %s=%s", name, value); }
 int main(int argc, char *argv[]) {
+    strlcpy(g_docs, docs_dir().fileSystemRepresentation, sizeof g_docs);
+    char last[512]; int intr = rundiag_launch(g_docs, last, sizeof last);   // before this session's log is opened
     log_open();
     // Switches without a debugger (host/envfile.h): the bundle's dm/env.txt (ios/run.sh DM_ENV_FILE), then Documents/env.txt (Files app) over it
     { NSString *b = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/env.txt"], *d = [docs_dir() stringByAppendingPathComponent:@"env.txt"];
       int nb = dm_env_file_apply(b.fileSystemRepresentation, env_said), nd = dm_env_file_apply(d.fileSystemRepresentation, env_said);
       if (nb >= 0 || nd >= 0) plog("boot: env.txt: %d switch(es) from the bundle, %d from Documents", nb > 0 ? nb : 0, nd > 0 ? nd : 0); }
+    logstamp_stderr();   // UTC milliseconds on every line from here on (after env.txt, which can say DM_LOG_TIME=0)
+    if (intr) {
+        snprintf(g_launch_note, sizeof g_launch_note, intr > 0 ? "the last session (%s) ended in the foreground without an orderly exit (killed for memory, a crash, or a "
+                 "hang the system ended): its log is kept as " RUNDIAG_KEPT : "the last session ended in the foreground without an orderly exit, but its log was not kept: %s", last);
+        plog("[red] boot: %s", g_launch_note);
+    }
     // The default soft limit of 256 descriptors is about what a game keeps open; raise it (not above the hard limit)
     { struct rlimit rl; if (!getrlimit(RLIMIT_NOFILE, &rl)) { rlim_t was = rl.rlim_cur, want = 4096; if (rl.rlim_max != RLIM_INFINITY && want > rl.rlim_max) want = rl.rlim_max;
         if (was < want) { rl.rlim_cur = want; int rc = setrlimit(RLIMIT_NOFILE, &rl); plog("boot: descriptor soft limit %llu → %llu%s", (unsigned long long)was, (unsigned long long)want, rc ? " failed" : ""); } } }

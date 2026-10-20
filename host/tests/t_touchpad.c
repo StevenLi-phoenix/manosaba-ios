@@ -2,8 +2,10 @@
 // the controller at 30 fps on a fake clock. BotWRecomp's input checks (touch.cpp plan_check: stick, A with the stick, a camera drag at 250 pt/s,
 // resting, release, the base following, the D-pad sliding, several buttons, a second left finger ignored) with their limits, then this host's own:
 // a finger keeps its button when it slides off it, a tap between two reads is seen once, the eye collapses the controls, off releases every finger,
-// a read after a pause gives the camera no spike, every control's centre reaches its own button. Negative control: -DDM_TEST_TP_REHIT (a sliding
-// finger takes the button under it) fails "slid off A".
+// a read after a pause gives the camera no spike, every control's centre reaches its own button. Camera tuning (plan item 109): 2× turns faster than
+// 1× for the same swipe, 0.5× still reaches full speed with a fast swipe, a slow drift stays 0 at 3×, each axis inverts alone, out-of-range values
+// are clamped, DM_TOUCH_LOOK is read. Negative controls: -DDM_TEST_TP_REHIT (a sliding finger takes the button under it) fails "slid off A";
+// -DDM_TEST_TP_SENS_AFTER (the sensitivity scales the saturated output) fails 1: 0.5× never turns at full speed.
 #include "../touchpad.c"
 #include <stdio.h>
 uint64_t g_t0_ns;
@@ -21,6 +23,12 @@ static float cx(const char *l) { float x, y, r; return tp_find(l, &x, &y, &r) ? 
 static float cy(const char *l) { float x, y, r; return tp_find(l, &x, &y, &r) ? y : -1000; }
 static void down(long id, const char *l, float dx, float dy) { tp_touch(id, TP_DOWN, cx(l) + dx, cy(l) + dy); }
 static void up(long id) { tp_touch(id, TP_UP, 0, 0); }
+static pad drag(long id, float speed, float ux, float uy) {   // a camera finger dragged at speed (pt/s) along (ux, uy) for 0.4 s, the last read
+    float u = g.u, x0 = 844 * 0.62f, y0 = 390 * 0.5f; tp_touch(id, TP_DOWN, x0, y0); double start = T;
+    while (T < start + 0.4 - 1e-9) { T += 1 / 60.0; float d = (float)(T - start) * speed * u; tp_touch(id, TP_MOVE, x0 + ux * d, y0 + uy * d);
+        if (((int)lround((T - start) * 60)) % 2 == 0) rd(); }
+    pad r = S; up(id); T += 0.2; rd(); return r;
+}
 #define PAD(name, pred) CHECK(pred(&S), "%-24s buttons %05llx  L %+.2f %+.2f  R %+.2f %+.2f", name, (unsigned long long)S.b, S.lx, S.ly, S.rx, S.ry)
 
 int main(void) {
@@ -115,6 +123,27 @@ int main(void) {
     tp_layout(844, 390, 0, 0, 0, 21); T += 1 / 30.0; rd();
     CHECK(S.b == 0, "a new safe area: every finger released");
     up(41); tp_layout(844, 390, 47, 0, 47, 21); tp_find("stick", &px, &py, &r);
+    // Camera tuning
+    { T = 12; rd();
+      pad a = drag(50, 200, 1, 0); tp_look_tuning(2, 0, 0); pad b = drag(51, 200, 1, 0);
+      CHECK(a.rx > 0.2f && b.rx > a.rx + 0.15f && b.rx <= 1, "sensitivity 2×: a 200 pt/s swipe turns faster than at 1× (%.2f → %.2f)", a.rx, b.rx);
+      tp_look_tuning(0.5f, 0, 0); pad c = drag(52, 2000, 1, 0);
+      CHECK(c.rx > 0.99f, "sensitivity 0.5×: a fast swipe (2000 pt/s) still turns at full speed (%.2f)", c.rx);
+      pad c2 = drag(53, 200, 1, 0);
+      CHECK(c2.rx > 0.1f && c2.rx < a.rx - 0.1f, "... and a 200 pt/s swipe slower than at 1× (%.2f < %.2f)", c2.rx, a.rx);
+      tp_look_tuning(3, 0, 0); pad e = drag(54, 6, 1, 0);
+      CHECK(e.rx == 0 && e.ry == 0, "sensitivity 3×: a drift of 6 pt/s stays a resting finger (%.2f)", e.rx);
+      tp_look_tuning(1, 1, 0); pad f = drag(55, 250, 1, 0), f2 = drag(56, 250, 0, -1);
+      CHECK(f.rx < -0.45f && f2.ry > 0.45f, "horizontal inverted: a swipe right turns left (%.2f), up still up (%.2f)", f.rx, f2.ry);
+      tp_look_tuning(1, 0, 1); pad h = drag(57, 250, 0, -1), h2 = drag(58, 250, 1, 0);
+      CHECK(h.ry < -0.45f && h2.rx > 0.45f, "vertical inverted: a swipe up turns down (%.2f), right still right (%.2f)", h.ry, h2.rx);
+      float sv; int ix, iy; tp_look_tuning(10, 0, 0); tp_look_tuning_get(&sv, &ix, &iy); float s1 = sv;
+      tp_look_tuning(0.01f, 0, 0); tp_look_tuning_get(&sv, &ix, &iy); float s2 = sv;
+      tp_look_tuning(NAN, 0, 0); tp_look_tuning_get(&sv, &ix, &iy);
+      CHECK(s1 == 3 && s2 == 0.25f && sv == 1, "out of range: 10 → 3, 0.01 → 0.25, NaN → 1");
+      look_parse("1.5,y"); tp_look_tuning_get(&sv, &ix, &iy);
+      CHECK(sv == 1.5f && !ix && iy, "DM_TOUCH_LOOK=1.5,y: 1.5×, vertical inverted");
+      tp_look_tuning(1, 0, 0); }
     // dm_touchpad_read: the hid scale (±32767, up positive)
     clock_ns = 20000000000ull; tp_touch(40, TP_DOWN, px, py); tp_touch(40, TP_MOVE, px, py - 200 * u);
     { uint64_t b; int32_t a[4]; int on = dm_touchpad_read(&b, &a[0], &a[1], &a[2], &a[3]); CHECK(on && a[0] == 0 && a[1] == 32767, "dm_touchpad_read: stick fully up = ly 32767 (%d, %d)", a[0], a[1]); }
