@@ -1338,11 +1338,29 @@ Tier 3, medium:
   no-ops fails it)
 
 Tier 3b, from the wider review of 2026-10-20 (sources and evidence in that section; before Tier 4). Correctness, small:
-- [ ] 78 the pipeline warm-up from the player's own list without a seed list; then a title list first (measure the first frame and the submit
-  thread's pipeline count before and after)
-- [ ] 79 the prediction table: untaken guesses freed, the scan bounded, kicked / taken / freed / full counts in the power line
-- [ ] 80 the present's command buffer with the residency set committed
-- [ ] 81 a sync's fence stored before its flag (release / acquire)
+- [x] batch 22 · 78 the pipeline warm-up from the player's own list without a seed list (`gfx/nvn/nvn_warm_list.h`: the lists that exist, each
+  on its own; before, a missing `pso_manifest.tsv` ended the warm-up). Rows of an earlier translation are skipped and counted, not reported
+  in red (Tears of the Kingdom's list: 3,628 of its 4,357 render rows have an earlier key layout, 224 libraries are not in this chain). The
+  prologue with the same list, before → after: pipelines built on the submit thread 698 / 129 ms → 1 / 0.2 ms, libraries loaded there 443 → 2,
+  the warm-up 1,841 shaders, 729 render and 43 compute pipelines in 0.3-1.2 s in the background; frame 217 (the scene's first frame) 425 →
+  131 ms, long frames 82 → 51, first frame 1.05 → 0.89 s; footprint at 75 s 2,613 → 2,596 MB. manosaba, a second run on the list of the
+  first: 36 libraries and 23 pipelines on the submit thread → 2 and 1 (the warm-up 4 ms), the same pictures. The title list is not made: with the warm-up
+  done by 1.2 s here, long before the first frame that needs its pipelines (9 s), there is nothing for a title list to win on this Mac; with a
+  cold system cache (a new install) the list's own order puts the title's rows first (they were recorded first). `t_warm_list`: 6 checks;
+  the old rule (`-DDM_TEST_WARM_NEED_SEED`) fails 2
+- [x] batch 22 · 79 the prediction table (after MacNativeGames PR #29, MIT): a guess no draw took is freed two submissions after its kick once
+  its compile has finished (one still compiling keeps its slot), each scan stops at 8,192 commands, 32 keys or 2 ms, its likely keys are
+  kicked as they are found, and it guesses only from programs whose shaders are loaded (`prog_peek`: before, a scan could read libraries from
+  disk for a guess). The power line has a `pipeline prediction` line: the prologue without the warm-up, frames 300-900, 15 scans, 186
+  kicked, 65 taken, 120 freed untaken, 0 refused (the old table freed a slot only on a take, so the untaken attach modes filled its 384 for
+  good). Its pipelines are cheap on this Mac with the system cache warm (698 in 39-129 ms), so the worst frame does not move (166.9 against the
+  old 165.6 ms); the cold case is a device's. `t_ppred`: 13 checks; a slot freed only by a take (`-DDM_TEST_PP_NO_RECLAIM`) fails 4
+- [x] batch 22 · 80 the present's command buffer committed with the residency set committed (MacNativeGames PR #30, open: a GPU page fault in 4
+  of 14 boots when nothing had rendered into the presented texture yet): `present_now` may make the source texture itself. `t_present_res`: a
+  present into an offscreen layer of a texture made by it, 6 checks, Metal 4 and Metal 3; without the commit 1 fails
+- [x] batch 22 · 81 a sync's fence stored before its flag, release / acquire (`nvn_obj.h` `sync_fence_store` / `sync_fence_load`; GirlNet
+  f2faa5f): `nvnQueueFenceSync`, the acquire sync and `nvnSyncWait`. `t_sync_order`: a million fences against a poller on another thread, none
+  seen with a fence other than its own; the old order (`-DDM_TEST_SYNC_FLAG_FIRST`) is seen with fence 0 in 15,547-19,636 of them
 - [ ] 82 NVN texture layout per the SDK: a census of cube arrays, LINEAR_RENDER_TARGET alone, MINIMAL_LAYOUT and packaged 3D in both games first;
   then the rules with driver vectors (`t_tex_auto`; totk-mobile's eight TotK SDK sizes, see the deep review)
 - [ ] 83 the format's own swizzle (R/B of the RGB 16-bit family, alpha 1 of the X formats): which formats the games sample first

@@ -73,6 +73,19 @@ typedef struct { uint32_t magic; samp_par p; } samp_t;                          
 typedef struct { uint32_t magic, nstage; uint64_t serial; uint8_t key[6][8]; uint8_t kstage[6]; } prog_t;     FITS(prog_t, NVNprogram);   // serial: table key for the replay layer's resolved result
 
 typedef struct { uint32_t magic, fenced; uint64_t fence; } sync_t;                            FITS(sync_t, NVNsync);
+// A sync's fence is published value first, then the flag (release); a waiter on another thread reads the flag (acquire), then the value. Flag first,
+// a waiter between the two stores saw a fenced sync with fence 0 and reported ALREADY_SIGNALED early (GirlNet f2faa5f; unit test tests/t_sync_order.c)
+static inline void sync_fence_store(sync_t *s, uint64_t fence) {
+#ifndef DM_TEST_SYNC_FLAG_FIRST   // negative control of t_sync_order only: the old order
+    __atomic_store_n(&s->fence, fence, __ATOMIC_RELAXED); __atomic_store_n(&s->fenced, 1, __ATOMIC_RELEASE);
+#else
+    s->fenced = 1; __atomic_signal_fence(__ATOMIC_SEQ_CST); s->fence = fence;
+#endif
+}
+static inline int sync_fence_load(const sync_t *s, uint64_t *fence) {   // 0: never fenced
+    if (!__atomic_load_n(&s->fenced, __ATOMIC_ACQUIRE)) return 0;
+    *fence = __atomic_load_n(&s->fence, __ATOMIC_RELAXED); return 1;
+}
 typedef struct { const pool_t *pool; int64_t off; } ev_builder_t;                             FITS(ev_builder_t, NVNeventBuilder);
 typedef struct { uint32_t magic; volatile uint32_t *val; } ev_t;                              FITS(ev_t, NVNevent);
 

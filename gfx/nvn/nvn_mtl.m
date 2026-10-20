@@ -3332,6 +3332,7 @@ static void shmap_load(void) {
     id<MTLLibrary> alib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *afn; } @end   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
 @implementation NvShader @end
 #include "nvn_pso_skey.h"
+#include "nvn_warm_list.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; int sum_ok, sum_img, sum_imgw; uint32_t sum_cmask; } @end   // sum_*: udc_note_draw's per-program summary
 @implementation NvProg @end
 // What udc_note_draw needs of a program, worked out once (upstream d2r-mobile 44a6770 caches it per program): any image binding, any writable one,
@@ -3391,7 +3392,7 @@ static _Atomic int g_warm_ready;
 static int g_warm_started;
 static uint64_t g_warm_t0;
 static _Atomic int g_warm_running;   // Background warm-up has not finished yet (the loading screen on entering a run waits a little longer based on this, see mtl_warm_wait)
-static uint64_t g_warm_shaders, g_warm_rps, g_warm_cps, g_warm_skip_fz;
+static uint64_t g_warm_shaders, g_warm_rps, g_warm_cps, g_warm_skip_fz, g_warm_old_rows;
 static uint64_t g_warm_claim_shaders, g_warm_claim_rps, g_warm_claim_cps;
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap);
 static id<MTLFunction> alpha_plain(id<MTLLibrary> lib, NSString *entry);
@@ -3537,6 +3538,20 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
     }
     if (p->serial) serial_put(p->serial, o);
     return o;
+}
+// A program for the pipeline prediction scan, without loading anything there: resolved already, or every shader of it in the library cache; else
+// nil (a program not met yet would have its libraries read from disk on the submit thread, for a guess)
+static __unsafe_unretained NvProg *prog_peek(const prog_t *p) {
+    if (!p) return nil;
+    __unsafe_unretained NvProg *have = p->serial ? serial_get(p->serial) : nil;
+    if (have) return have;
+    shmap_load();
+    for (unsigned i = 0; i < p->nstage; i++) {
+        const uint8_t *md = p->key[i];
+        NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
+        if (!g_shmap[k] || !g_shcache[[k stringByAppendingString:@"_b"]]) return nil;
+    }
+    return prog_get(p);
 }
 void mtl_prog_release(prog_t *p) { @autoreleasepool { if (p->serial) serial_del(p->serial); } }
 
@@ -4084,20 +4099,43 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
 // ---- Parallel precompile: pipelines met for the first time used to be compiled synchronously one by one on the submit thread; 9 misses in a row in one frame = 284 ms (heavy scene on a real device).
 // Now: on the first pipeline miss in a submission, scan ahead once along the remaining commands (replaying state only, no drawing) and kick all the normal-pass pipelines that will also miss later to the background to compile in parallel;
 // when the submit thread reaches that draw it only waits for 'the remaining time not yet compiled'. The compiled pipelines are identical to synchronously compiled ones (same descriptor). Pipeline keys of merged passes / specialized fragments depend on the planning result at replay time, are not predicted, and are compiled synchronously as before.
+// The table (after MacNativeGames PR #29, MIT): a guess no draw took is freed two submissions after it was kicked, once its compile has finished (a
+// compile still running keeps its slot: its worker writes into it). Before, a slot was freed only when its pipeline was taken, so the guesses for
+// the attach modes not used filled the 384 slots and kicks stopped for good. Each scan is bounded (PP_SCAN_OPS commands, PP_SCAN_KEYS keys per
+// queue, PP_SCAN_NS), its likely keys are kicked as they are found, and it guesses only from programs whose shaders are loaded (prog_peek).
 #define PSO_PEND_MAX 384
-static struct { pso_key k; id<MTLRenderPipelineState> ps; int used, done; } g_pp[PSO_PEND_MAX];
+enum { PP_SCAN_OPS = 8192, PP_SCAN_KEYS = 32, PP_STALE_SUBMITS = 2 };
+#define PP_SCAN_NS 2000000ull
+static struct { pso_key k; id<MTLRenderPipelineState> ps; uint64_t submit; int used, done; } g_pp[PSO_PEND_MAX];
 static pthread_mutex_t g_pp_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_pp_cv = PTHREAD_COND_INITIALIZER;
 static uint64_t g_pp_submit_mark, g_pp_kicked, g_pp_taken;   // Whether this submission has already been predicted (by submission serial); cumulative kicked / taken counts
+static uint64_t g_pp_freed, g_pp_full, g_pp_scans, g_pp_stop[3];   // guesses freed untaken, kicks refused with the table full, scans and the bound that ended them (commands, keys, time)
 static void pso_predict_rest(void);
 static int pso_pend_find(const pso_key *k) { for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && !memcmp(&g_pp[i].k, k, sizeof *k)) return i; return -1; }
+static void pso_pend_reclaim(uint64_t submit) {   // g_pp_mu held
+#ifndef DM_TEST_PP_NO_RECLAIM   // negative control of t_ppred only: the old table, a slot freed only by a take
+    for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && g_pp[i].done && submit - g_pp[i].submit > PP_STALE_SUBMITS) { g_pp[i].ps = nil; g_pp[i].used = 0; g_pp_freed++; }
+#else
+    (void)submit;
+#endif
+}
+static int pso_pend_claim(const pso_key *k, uint64_t submit) {   // g_pp_mu held: a slot for k kicked in this submission, or -1 when k is there already or the table is full (counted)
+    pso_pend_reclaim(submit);
+    if (pso_pend_find(k) >= 0) return -1;
+    for (int i = 0; i < PSO_PEND_MAX; i++) if (!g_pp[i].used) { g_pp[i].k = *k; g_pp[i].ps = nil; g_pp[i].done = 0; g_pp[i].used = 1; g_pp[i].submit = submit; return i; }
+    g_pp_full++; return -1;
+}
+void mtl_pp_stats(uint64_t out[9]) {   // power line (hle_nvn.c): kicked, taken, freed, refused full, scans, ended by commands / keys / time, in the table now
+    pthread_mutex_lock(&g_pp_mu); int busy = 0; for (int i = 0; i < PSO_PEND_MAX; i++) busy += g_pp[i].used;
+    out[0] = g_pp_kicked; out[1] = g_pp_taken; out[2] = g_pp_freed; out[3] = g_pp_full; out[4] = g_pp_scans; out[5] = g_pp_stop[0]; out[6] = g_pp_stop[1]; out[7] = g_pp_stop[2]; out[8] = (uint64_t)busy;
+    pthread_mutex_unlock(&g_pp_mu);
+}
 static void pso_pend_kick(const pso_key *k, NvShader *vs, NvShader *fs) {   // Called by the submit thread: kick only if it is neither in the cache nor in the table
     if (hm_get_id(&g_pso, k)) return;
     pthread_mutex_lock(&g_pp_mu);
-    int at = pso_pend_find(k), slot = -1;
-    if (at < 0) for (int i = 0; i < PSO_PEND_MAX; i++) if (!g_pp[i].used) { slot = i; break; }
-    if (at < 0 && slot >= 0) { g_pp[slot].k = *k; g_pp[slot].ps = nil; g_pp[slot].done = 0; g_pp[slot].used = 1; }
+    int slot = pso_pend_claim(k, g_sub_serial);
     pthread_mutex_unlock(&g_pp_mu);
-    if (at >= 0 || slot < 0) return;
+    if (slot < 0) return;
     MTLRenderPipelineDescriptor *d = pso_desc(k, vs, fs, nil, 0); g_pp_kicked++;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *e = nil; id<MTLRenderPipelineState> ps = [g_dev newRenderPipelineStateWithDescriptor:d error:&e];
@@ -4171,9 +4209,18 @@ static NSString *warm_key(const char *s, size_t n) {
     size_t z = strnlen(s, n);
     return [[NSString alloc] initWithBytes:s length:z encoding:NSUTF8StringEncoding];
 }
+static NSMutableSet<NSString *> *g_warm_missing;   // libraries a list names that this translation does not have (warm queue only)
 static NvShader *warm_shader(NSMutableDictionary<NSString *, NvShader *> *dict, NSString *key, int stage) {
     NvShader *sh = dict[key];
-    if (!sh) { sh = shader_load(key, stage); if (sh) dict[key] = sh; }
+    if (sh) return sh;
+    // The player's list is kept across translation chain versions: a row whose library this one does not have (Tears of the Kingdom's list has 240
+    // such shaders from its first runs) is skipped and counted, not reported in red like a shader the game asks for
+    if ([g_warm_missing containsObject:key]) return nil;
+    if (access([NSString stringWithFormat:@"%@/%@.metallib", g_msl_dir, key].fileSystemRepresentation, F_OK)) {
+        if (!g_warm_missing) g_warm_missing = [NSMutableSet set];
+        [g_warm_missing addObject:key]; return nil;
+    }
+    sh = shader_load(key, stage); if (sh) dict[key] = sh;
     return sh;
 }
 static void warm_enqueue(WarmItem *item) {
@@ -4200,7 +4247,7 @@ static void warm_worker(NSArray<NSString *> *paths) {
                     WarmItem *item = [WarmItem new]; item->kind = 0; item->key = key; item->shader = sh;
                     warm_enqueue(item); g_warm_shaders++;
                 } else if ([c[0] isEqualToString:@"R"] && c.count >= 2) {
-                    pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) continue;
+                    pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) { g_warm_old_rows++; continue; }   // a key of an earlier layout
                     NSString *vkey = warm_key(sk.vs, sizeof sk.vs), *fkey = warm_key(sk.fs, sizeof sk.fs);
                     NvShader *vs = vkey.length ? warm_shader(dict, vkey, sk.vs_stage) : nil;
                     NvShader *fs = fkey.length ? warm_shader(dict, fkey, sk.fs_stage) : nil;
@@ -4226,8 +4273,8 @@ static void warm_worker(NSArray<NSString *> *paths) {
                 }
             }
         }
-        MLOG("pipeline warm-up complete: %llu shaders / %llu render pipelines (%llu specialized fragments skipped) / %llu compute pipelines, background time %.1f ms",
-             g_warm_shaders, g_warm_rps, g_warm_skip_fz, g_warm_cps, (bp_now() - g_warm_t0) / 1e6);
+        MLOG("pipeline warm-up complete: %llu shaders / %llu render pipelines (%llu specialized fragments skipped) / %llu compute pipelines, background time %.1f ms; skipped: %llu render rows of an earlier key layout, rows of %lu libraries not in this translation",
+             g_warm_shaders, g_warm_rps, g_warm_skip_fz, g_warm_cps, (bp_now() - g_warm_t0) / 1e6, g_warm_old_rows, (unsigned long)g_warm_missing.count);
     }
     atomic_store(&g_warm_running, 0);
 }
@@ -4239,6 +4286,7 @@ int mtl_warm_wait(int timeout_ms) { @autoreleasepool {
     while (atomic_load(&g_warm_running) && (bp_now() - t0) / 1000000ull < (uint64_t)timeout_ms) usleep(2000);
     return (int)((bp_now() - t0) / 1000000ull) + 1;
 } }
+static int warm_path_exists(const char *path) { return access(path, F_OK) == 0; }
 static void warm_start(void) {
     if (g_warm_started++) return;
     const char *e = getenv("DM_PSO_MANIFEST");
@@ -4246,12 +4294,14 @@ static void warm_start(void) {
     NSArray<NSString *> *paths;
     if (e && *e) {
         paths = @[@(e)];
-    } else {
-        NSString *seed = [g_shmap_path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"];
-        NSMutableArray<NSString *> *all = [NSMutableArray arrayWithObject:seed];
-        NSString *user = pso_user_path();
-        if (user && [NSFileManager.defaultManager fileExistsAtPath:user]) [all addObject:user];
-        if (![NSFileManager.defaultManager fileExistsAtPath:seed]) return;
+    } else {   // the seed manifest, then the player's own list; either one alone is warmed (nvn_warm_list.h)
+        NSString *seed = [g_shmap_path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"], *user = pso_user_path();
+        NSString *cand[2] = {seed, user}; const char *fs[2] = {seed.fileSystemRepresentation, user.fileSystemRepresentation}; int got[2];
+        int n = warm_lists(fs, 2, warm_path_exists, got);
+        if (!n) return;
+        NSMutableArray<NSString *> *all = [NSMutableArray array]; NSMutableString *desc = [NSMutableString string];
+        for (int i = 0; i < n; i++) { [all addObject:cand[got[i]]]; [desc appendFormat:@"%@%@", i ? @", " : @"", cand[got[i]]]; }
+        MLOG("pipeline warm-up lists: %s", desc.UTF8String);
         paths = all;
     }
     if (!g_warm_items) g_warm_items = [NSMutableArray array];
@@ -4988,9 +5038,13 @@ static void pso_predict_rest(void) {
     int pso_dirty = g_pso_dirty, dss_dirty = g_dss_dirty;
     uint32_t cf[8]; memcpy(cf, g_pass.cfmt, sizeof cf); uint32_t df = g_pass.dfmt, sf = g_pass.sfmt, samples = g_pass.samples, dfull = df, sfull = sf; int kicked0 = (int)g_pp_kicked, draws = 0;
     fz_cursor cur = {.p = g_exec_next};
-    // Collect them all first, then dispatch: keys for "attachments attached as-is" go first (most likely to be used), the other attach modes after -- background concurrency is limited, and what is dispatched first is compiled first
-    enum { QN = 160 }; static struct { pso_key k; void *vs, *fs; } qa[QN], qb[QN]; int na = 0, nb = 0;
-    for (int guard = 0; guard < 200000 && na < QN; guard++) {
+    // Keys for "attachments attached as-is" are kicked as they are found (most likely to be used), the other attach modes after the scan -- background concurrency is limited, and what is dispatched first is compiled first
+    enum { QN = PP_SCAN_KEYS }; static struct { pso_key k; void *vs, *fs; } qa[QN], qb[QN]; int na = 0, nb = 0, stop = 0;
+    uint64_t t0 = bp_now();
+    for (int guard = 0; ; guard++) {
+        if (guard >= PP_SCAN_OPS) { stop = 1; break; }
+        if (na >= QN) { stop = 2; break; }
+        if (bp_now() - t0 > PP_SCAN_NS) { stop = 3; break; }
         const uint8_t *q; op_hdr hq; const void *aq;
         if (!fz_next(&cur, &q, &hq, &aq)) break;
         if (hq.op == OP_SET_RT) {
@@ -5003,7 +5057,7 @@ static void pso_predict_rest(void) {
         }
         if (hq.op == OP_DRAW || hq.op == OP_DRAW_IDX) {
             draws++;
-            __unsafe_unretained NvProg *pr = S.prog ? prog_get(S.prog) : nil; if (!pr || !pr->sh[0]) continue;
+            __unsafe_unretained NvProg *pr = prog_peek(S.prog); if (!pr || !pr->sh[0]) continue;
             __unsafe_unretained NvShader *vs = pr->sh[0], *fs = pr->sh[1];
             const uint32_t dv[4] = {dfull, 0, 0, dfull}, sv[4] = {sfull, 0, sfull, 0};
             for (int v = 0; v < 4; v++) {
@@ -5013,7 +5067,7 @@ static void pso_predict_rest(void) {
                 if (hm_get_id(&g_pso, &k)) continue;
                 int dup = 0; for (int i = 0; i < (v ? nb : na) && !dup; i++) dup = !memcmp(&(v ? qb : qa)[i].k, &k, sizeof k);
                 if (dup) continue;
-                if (!v && na < QN) { qa[na].k = k; qa[na].vs = (__bridge void *)vs; qa[na].fs = (__bridge void *)fs; na++; }
+                if (!v && na < QN) { qa[na].k = k; qa[na].vs = (__bridge void *)vs; qa[na].fs = (__bridge void *)fs; na++; pso_pend_kick(&k, vs, fs); }
                 else if (v && nb < QN) { qb[nb].k = k; qb[nb].vs = (__bridge void *)vs; qb[nb].fs = (__bridge void *)fs; nb++; }
             }
             continue;
@@ -5022,8 +5076,8 @@ static void pso_predict_rest(void) {
         state_op(hq.op, aq);
     }
     (void)df; (void)sf;
-    for (int i = 0; i < na; i++) pso_pend_kick(&qa[i].k, (__bridge NvShader *)qa[i].vs, (__bridge NvShader *)qa[i].fs);
     for (int i = 0; i < nb; i++) pso_pend_kick(&qb[i].k, (__bridge NvShader *)qb[i].vs, (__bridge NvShader *)qb[i].fs);
+    pthread_mutex_lock(&g_pp_mu); g_pp_scans++; if (stop) g_pp_stop[stop - 1]++; pthread_mutex_unlock(&g_pp_mu);
     memcpy(&S, &Ssave, sizeof S); args_dirty_all(); g_pso_dirty = pso_dirty; g_dss_dirty = dss_dirty; R.sc = sc0; R.has_sc = hsc0;
     static int logged; if (g_pp_kicked > (uint64_t)kicked0 && logged++ < 20) MLOG("parallel precompile: %d draws left in this submit, %d pipelines handed to the background", draws, (int)g_pp_kicked - kicked0);
 }
@@ -7614,6 +7668,9 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     }];
 #if !DM_NVN_M3
     CBUF buffers[] = {cb};
+#endif
+#ifndef DM_TEST_PRESENT_NO_RESCOMMIT   // negative control of t_present_res only
+    res_commit();   // the source texture may have been made just now (tex_mtl → res_add), the scaler's output too: resident before this command buffer runs (MacNativeGames PR #30: a GPU page fault in 4 of 14 boots without it)
 #endif
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
 #if !DM_NVN_M3

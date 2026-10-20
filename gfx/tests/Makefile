@@ -29,6 +29,10 @@ t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
 	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c
 t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
 	clang -O1 -Wall -Werror -o $@ t_pool_find.c
+t_warm_list: t_warm_list.c ../nvn/nvn_warm_list.h
+	clang -O1 -Wall -Werror -o $@ t_warm_list.c
+t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
+	clang -O1 -Wall -Werror -I../nvn/include -o $@ t_sync_order.c
 t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_tex_fit.m -framework Metal -framework Foundation
 t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -69,6 +73,10 @@ t_uppool: t_uppool.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_retire: t_retire.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_retire.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ppred: t_ppred.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ppred.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -153,8 +161,10 @@ run: \
 	t_pool_find \
 	t_poolcache \
 	t_poolcheck \
+	t_ppred \
 	t_present_crop \
 	t_present_fx \
+	t_present_res \
 	t_pso_skey \
 	t_refl \
 	t_restart \
@@ -168,6 +178,7 @@ run: \
 	t_samp \
 	t_snapreap \
 	t_stor \
+	t_sync_order \
 	t_tex_auto \
 	t_tex_fit \
 	t_texcheck \
@@ -179,6 +190,7 @@ run: \
 	t_vfmt \
 	t_ussort \
 	t_visibility \
+	t_warm_list \
 	t_wb \
 	t_xv \
 	t_zskip
@@ -191,6 +203,8 @@ run: \
 	./t_cover
 	./t_copy_pitch
 	./t_pool_find
+	./t_warm_list
+	./t_sync_order
 	./t_poolcache
 	./t_poolcheck
 	./t_tex_auto
@@ -228,6 +242,8 @@ run: \
 	./t_live
 	./t_wb
 	./t_pend
+	./t_ppred
+	MTL_DEBUG_LAYER=1 ./t_present_res
 	./t_keepalive
 	MTL_DEBUG_LAYER=1 ./t_chunk
 	./t_chunk --no-chunks

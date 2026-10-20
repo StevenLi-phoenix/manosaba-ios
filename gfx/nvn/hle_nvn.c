@@ -629,14 +629,14 @@ NVN_NOPROTO(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const sha
 NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t *)s = (sync_t){MAGIC('S', 'Y', 'N', 'C'), 0, 0}; return 1; }
 NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
-NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = mtl_last_fence(); }
+NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; sync_fence_store((sync_t *)s, mtl_last_fence()); }
 // A sync object that was never fenced waits until timeout, as on a real device; a fenced one is released only after the GPU has actually completed up to that fence value
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     NVN_BLOCKING();
-    const sync_t *o = (const sync_t *)s;
-    if (!o->fenced) return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
-    if (mtl_wait(o->fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
-    return mtl_wait(o->fence, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+    uint64_t fence;
+    if (!sync_fence_load((const sync_t *)s, &fence)) return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+    if (mtl_wait(fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
+    return mtl_wait(fence, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 }
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { *(ev_builder_t *)b = (ev_builder_t){(const pool_t *)p, off}; }
@@ -1301,7 +1301,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // CPU here until the whole previous frame had run, so the replay of a frame and the GPU work of the one before never overlapped (MacNativeGames,
     // MIT: TOTK_ACQ_SYNC). DM_NVN_ACQ_SYNC=newest restores that (A/B)
     if (s) { static int newest = -1; if (newest < 0) { const char *e = getenv("DM_NVN_ACQ_SYNC"); newest = e && !strcmp(e, "newest"); if (newest) LOG("[nvn] DM_NVN_ACQ_SYNC=newest: the acquire sync waits for the newest submission"); }
-             ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = newest ? mtl_last_fence() : 0; }
+             sync_fence_store((sync_t *)s, newest ? mtl_last_fence() : 0); }
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
 
@@ -1379,9 +1379,10 @@ void mtl_vis_state(int *open, uint64_t *folded);
 void mtl_counts(uint64_t out[13]);
 void mtl_pkg_age(uint64_t out[5]);
 void mtl_fbx_stats(uint64_t out[3]);
+void mtl_pp_stats(uint64_t out[9]);
 __attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle.c; the graphics unit tests link without it
 static void power_line(uint64_t frame) {
-    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3], ppr[9]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     static int counts = -1; if (counts < 0) counts = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0");
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
@@ -1403,6 +1404,10 @@ static void power_line(uint64_t frame) {
         { uint64_t fx[3]; mtl_fbx_stats(fx);
           if (fx[0] > pfx[0] || fx[2] > pfx[2]) LOG("[nvn] attachment copies up to frame %llu: %.1f draws a frame sample what their pass draws, %.1f copies, %.1f not copied (merged, layered or range pass)",
                                                    frame, (fx[0] - pfx[0]) / nf, (fx[1] - pfx[1]) / nf, (fx[2] - pfx[2]) / nf); }
+        { uint64_t pr[9]; mtl_pp_stats(pr);   // the pipeline prediction (nvn_mtl.m pso_predict_rest) over the window, when it scanned
+          if (pr[4] > ppr[4]) LOG("[nvn] pipeline prediction up to frame %llu: %llu scans (ended by commands %llu / keys %llu / time %llu), %llu pipelines kicked, %llu taken by draws, "
+                                  "%llu freed untaken, %llu refused with the table full, %llu in the table", frame, pr[4] - ppr[4], pr[5] - ppr[5], pr[6] - ppr[6], pr[7] - ppr[7],
+                                  pr[0] - ppr[0], pr[1] - ppr[1], pr[2] - ppr[2], pr[3] - ppr[3], pr[8]); }
         if (counts) { uint64_t c[13], g[4]; mtl_counts(c); dm_gate_counts(g);   // DM_NVN_COUNTS (plan items 42-45)
             LOG("[nvn] counts up to frame %llu, a frame: %.1f draws sample the levels and layers their own pass draws (%.1f after other draws of the Metal pass, %.1f of them after a barrier); "
                 "%.1f timestamp reports, %.2f submissions with two or more; %.1f ClearTexture; %.1f render passes without a draw; a second: %.0f counter reads, %.0f svcs",
@@ -1418,6 +1423,7 @@ static void power_line(uint64_t frame) {
     pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; pf = frame; mtl_bw(&pld, &pst, &pfu); pudc = mtl_udc_saved_bytes();
     { uint64_t rep[32], rst[32]; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &pfold); prep = rep[NVN_COUNTER_TYPE_SAMPLES_PASSED]; prst = rst[NVN_COUNTER_TYPE_SAMPLES_PASSED]; }
     if (counts) { mtl_counts(pc); dm_gate_counts(pg); }
+    mtl_pp_stats(ppr);
     mtl_fbx_stats(pfx);
 }
 static void tsummary(uint64_t frame) {

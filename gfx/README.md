@@ -117,7 +117,8 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_MSL_DIR=<dir>` | Shader library root; libraries are loaded from `<dir>/b-<V>/` |
 | `DM_SHDUMP=<dir>` | Capture every shader the game creates (`<key>.ctl` / `<key>.data`) |
 | `DM_PSO_RECORD=<file>` | Append the pipelines used in this run (format of `pso_manifest.tsv`, the optional background warm-up list) |
-| `DM_PSO_MANIFEST=<file>` or `off` | Use another warm-up list, or none |
+| `DM_PSO_MANIFEST=<file>` or `off` | Use another warm-up list, or none. By default the warm-up reads `pso_manifest.tsv` next to the shader map and the player's own list, whichever exist |
+| `DM_PSO_USER=<file>` | The player's own list: pipelines and shaders built on the submit thread are appended to it and warmed at the next launch (default `pso_user.tsv` beside the save directory) |
 | `DM_NVN_LOG=1` | Log NVN object creation |
 | `DM_NVN_FRAMES=N` | Print the per-frame call table for the first N frames (default 3) |
 | `DM_NVN_TSV=<file>` | Per-frame call table and timings as TSV (`DM_NVN_TSV_CALLS=0`: timings only) |
