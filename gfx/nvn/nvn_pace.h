@@ -32,6 +32,17 @@ static inline unsigned nvn_link_step(unsigned itv, unsigned hz, unsigned link_hz
 #endif
 }
 
+// A frame-rate hold (plan item 130): while the host holds the game at hold_fps (hle_oe.c: Tears of the Kingdom's pre-rendered movies at 30),
+// a frame takes at least the present interval that gives that rate at the present rate hz, rounded up (never faster than the hold): 2 at 60 Hz,
+// 3 at 90, 4 at 120. A longer interval of the game's own stays. hold_fps 0 = no hold. Unit test tests/t_pace.c
+static inline int nvn_hold_interval(int itv, int hz, int hold_fps) {
+    if (itv < 1) itv = 1;
+#ifndef DM_TEST_HOLD_IGNORED   // negative control of t_pace only: the game's interval whatever the hold
+    if (hold_fps > 0 && hz > 0) { int h = (hz + hold_fps - 1) / hold_fps; if (h > itv) itv = h; }
+#endif
+    return itv;
+}
+
 // Uncapped pacing (plan item 53, after MacNativeGames' TOTK_UNCAPPED, ly05010419/MacNativeGames, MIT): for a game whose step follows the measured
 // frame time (the host's dm_game_realtime_step), the game does not wait for the display. Our own clock paces it at up to `cap` Hz (its present
 // interval × 1 / cap a frame) and the display link shows the newest finished frame at each refresh, so a scene slower than 60 fps shows at its own

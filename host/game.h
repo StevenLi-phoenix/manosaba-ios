@@ -48,6 +48,9 @@ void dm_game_save_precommit(const char *workdir);
 // the host): once per game frame
 void dm_game_present(void);
 int dm_game_realtime_step(void);            // 1: the game's step follows the measured frame time now (uncapped pacing may pace it, gfx/nvn/nvn_pace.h)
+// nn::oe::SetUserInactivityDetectionTimeExtended(on) from the guest return address ra (host/hle_oe.c): the frame rate to hold until the next call,
+// 0 = none (weak default: 0). Tears of the Kingdom holds its pre-rendered movies at 30 (games/totk/movie_fps.c, plan item 130)
+int dm_game_inactivity_fps(int on, uint64_t ra);
 
 // Services for game hooks (hle_fs.c)
 const char *dm_save_workdir(void);            // working directory of the transactional save (the copy the game reads and writes); NULL when none is mounted

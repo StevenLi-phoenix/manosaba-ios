@@ -59,6 +59,23 @@ int main(void) {
         unsigned got = nvn_link_step(k[i].itv, k[i].hz, k[i].lhz); int ok = got == k[i].want; n++;
         printf("%-72s expected %3u → got %3u %s\n", k[i].why, k[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
+    // The frame-rate hold (nvn_hold_interval, plan item 130: Tears of the Kingdom's pre-rendered movies at 30 fps); the game's interval whatever the
+    // hold (-DDM_TEST_HOLD_IGNORED) fails 4
+    struct { int itv, hz, hold, want; const char *why; } h[] = {
+        {1, 60, 30, 2, "the 60 fps product in a movie: interval 2 (30 fps)"},
+        {2, 60, 30, 2, "the 30 fps product: its own 2"},
+        {3, 60, 30, 3, "the game's longer interval stays (3: 20 fps)"},
+        {1, 90, 30, 3, "DM_PRESENT_HZ=90: 3"},
+        {1, 120, 30, 4, "uncapped pacing at 120: 4"},
+        {1, 100, 30, 4, "100 Hz: 4 (25 fps, never faster than the hold)"},
+        {1, 60, 0, 1, "no hold: the game's interval"},
+        {0, 60, 0, 1, "interval 0 counts as 1"},
+        {1, 0, 30, 1, "present rate 0 (DM_PRESENT_HZ=0, profiling): no hold"},
+    };
+    for (int i = 0; i < (int)(sizeof h / sizeof *h); i++) {
+        int got = nvn_hold_interval(h[i].itv, h[i].hz, h[i].hold), ok = got == h[i].want; n++;
+        printf("%-72s expected %3d → got %3d %s\n", h[i].why, h[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

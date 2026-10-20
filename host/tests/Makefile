@@ -58,6 +58,9 @@ run: \
 	$(B)/t_net \
 	$(B)/t_net_bsd \
 	$(B)/t_oe \
+	$(B)/t_oe_noop \
+	$(B)/t_movie_fps \
+	$(B)/t_movie_fps_any \
 	$(B)/t_options \
 	$(B)/t_options_nocheck \
 	$(B)/t_padmap \
@@ -203,6 +206,15 @@ run: \
 	   cat $(B)/t_net_bsd.log; echo "t_net_bsd: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_net_bsd: the FreeBSD errno numbers are not nn::socket's, as expected"
 	$(B)/t_oe 2>/dev/null
+	@status=0; $(B)/t_oe_noop > $(B)/t_oe_noop.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL inactivity time extended" $(B)/t_oe_noop.log; then \
+	   cat $(B)/t_oe_noop.log; echo "t_oe_noop: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_oe_noop: the old stub never holds the frame rate, as expected"
+	$(B)/t_movie_fps
+	@status=0; $(B)/t_movie_fps_any > $(B)/t_movie_fps_any.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "main+0x770f04 .*✗" $(B)/t_movie_fps_any.log; then \
+	   cat $(B)/t_movie_fps_any.log; echo "t_movie_fps_any: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_movie_fps_any: holding every cutscene holds the prologue's real-time one too, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_options 2>/dev/null
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_options_nocheck > $(B)/t_options_nocheck.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ c with a row" $(B)/t_options_nocheck.log; then \
@@ -276,7 +288,7 @@ run: \
 	   cat $(B)/t_watchdog_nobg.log; echo "t_watchdog_nobg: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_watchdog_nobg: a watchdog that counts the background kills the app away from the screen, as expected"
 
-$(GEN):
+$(GEN): ../../games/$(GAME)/game.json ../../tools/gen_game.py   # (without these the tests kept a profile from before a new field)
 	$(MAKE) -C .. GAME=$(GAME) profile
 
 # Parsers of outside input under the undefined-behavior sanitizer (plan item 111; MacNativeGames runs its parsers so in CI; ASan hangs in dyld on
@@ -476,6 +488,12 @@ $(B)/t_net_bsd: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_NET_BSD_ERRNO -I.. -o $@ t_net.c
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_oe_noop: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_movie_fps: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ ../../games/totk/tests/t_movie_fps.c
+$(B)/t_movie_fps_any: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_MOVIE_ANY_CUTSCENE -I.. -o $@ ../../games/totk/tests/t_movie_fps.c
 $(B)/t_quitwait: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_quitwait.c
 $(B)/t_quitwait_old: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)

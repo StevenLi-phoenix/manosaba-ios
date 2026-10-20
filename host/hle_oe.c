@@ -164,8 +164,24 @@ HLE_FORCE_OPT("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "no launch parameter", u
     (void)buf; (void)n; if (out) *out = 0; return 0;
 }
 HLE_FORCE_OPT("_ZN2nn2oe17FinishStartupLogoEv", "the host shows no startup logo", void, h_oe_FinishLogo, void) {}
-HLE_FORCE_OPT("_ZN2nn2oe38SetUserInactivityDetectionTimeExtendedEb", "the host does not dim the screen", void, h_oe_Inactivity, unsigned on) { (void)on; }
-HLE_FORCE_OPT("_ZN2nn2oe44SetUserInactivityDetectionTimeExtendedUnsafeEb", "the host does not dim the screen", void, h_oe_InactivityU, unsigned on) { (void)on; }
+// The host does not dim the screen. A game may hold its frame rate meanwhile (plan item 130): the game hook dm_game_inactivity_fps gets the call and the
+// guest's return address and gives the rate (0 = none): Tears of the Kingdom extends the time for every cutscene and holds only its pre-rendered
+// movies at 30 fps (games/totk/movie_fps.c). DM_INACTIVITY_FPS replaces a rate the hook gives (0 = no hold)
+void nvn_fps_hold(int fps);   // gfx/nvn/hle_nvn.c
+static void oe_inactivity(unsigned on, uint64_t ra) {   // a bool: only the low 8 bits count (below)
+#ifdef DM_TEST_INACTIVITY_NOOP   // negative control of t_oe only: the old stub, which ignored it
+    (void)on; (void)ra; return;
+#endif
+    on &= 0xff;
+    int fps = dm_game_inactivity_fps(on != 0, ra); const char *e = getenv("DM_INACTIVITY_FPS");
+    if (fps > 0 && e) fps = atoi(e);
+    module_t *m = module_of((const void *)ra);
+    LOG("oe::SetUserInactivityDetectionTimeExtended(%d) from %s+%#llx%s", on != 0, m ? m->name : "?", m ? (unsigned long long)(ra - (uint64_t)m->base) : (unsigned long long)ra,
+        fps > 0 ? ": frame rate held" : "");
+    nvn_fps_hold(fps > 0 ? fps : 0);
+}
+HLE_FORCE_OPT("_ZN2nn2oe38SetUserInactivityDetectionTimeExtendedEb", "the host does not dim the screen; the game hook may hold the frame rate meanwhile", void, h_oe_Inactivity, unsigned on) { oe_inactivity(on, DM_GUEST_RA()); }
+HLE_FORCE_OPT("_ZN2nn2oe44SetUserInactivityDetectionTimeExtendedUnsafeEb", "the host does not dim the screen; the game hook may hold the frame rate meanwhile", void, h_oe_InactivityU, unsigned on) { oe_inactivity(on, DM_GUEST_RA()); }
 HLE_FORCE_OPT("_ZN2nn2oe24GetExpectedVolumeBalanceEPfS1_", "system / application volume balance: always 1:1", void, h_oe_GetVolBal, float *sys, float *app) { *sys = 1.0f; *app = 1.0f; }
 HLE_FORCE_OPT("_ZN2nn2oe24SetExpectedVolumeBalanceEff", "volume balance: ignored", void, h_oe_SetVolBal, float sys, float app) { (void)sys; (void)app; }
 // Applet resource user ID (the number am gives this process): the SDK's own getter returns 0 without am, and SDK 20's OpenAudioRenderer aborts on 0

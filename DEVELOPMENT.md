@@ -970,7 +970,8 @@ Tears of the Kingdom:
 - **Pre-rendered cutscenes held at 30 fps** (FPSLocker's TotK file and totk-mobile `game_timing.py:84-96`): a movie flag set at main 0x2b36100 and
   cleared at 0x2b33918 (FPSLocker stores the bool passed to `nn::oe::SetUserInactivityDetectionTimeExtended` there); FPSLocker marks TotK's cutscenes
   "must be blocked to certain framerate to not cause issues". Ours paces them like play. Our blood moon crash follows a skipped pre-rendered movie: a
-  hypothesis to test (the skip with the cap, without it, and with the 30 fps product). The cap can come from our own oe HLE, no code change.
+  hypothesis to test (the skip with the cap, without it, and with the 30 fps product). The cap can come from our own oe HLE, no code change
+  (checked in item 130: not alone, the call is made for every cutscene; the hold keys on its caller).
 - **Dynamic resolution's time budget stays at 30 fps** (FPSLocker: main 0xA1B94 loads a factor of target / 30000; README "must be adjusted to target
   other FPS"): at 60 fps the game still budgets 33 ms, so it never lowers the resolution to hold 60 (and item 46 never saw it move). A HOSTREFS pair.
 - **The HeapDef values for a 1080p scene** (for 95): totk-mobile patches `Product.Nin_NX_NVN.HeapDef.byml.zs` (source SHA b84a6a64…) at decompressed
@@ -1593,7 +1594,17 @@ Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, 
   rewriter stamp, `verify/regress.sh --fuzz` OK for both
 
 Tier 3c, Tears of the Kingdom:
-- [ ] 130 pre-rendered cutscenes at 30 fps, and the blood moon skip with and without the cap (72)
+- [x] batch 32 · 130 pre-rendered movies held at 30 fps: the game extends the user inactivity time (`nn::oe::SetUserInactivityDetectionTimeExtended`)
+  for every cutscene, not only movies (checked in the 60 fps product's prologue: true from main+0x770f04, false from +0x770ad0, a real-time
+  cutscene that the oe call alone held at 30 fps for 70 s); main 0x772fd8 makes the call (except for `Dm_ED_0007_PreRender`) and is called by
+  0x770f00 (a real-time cutscene) and 0x2b36100 (a pre-rendered movie, FPSLocker's flag), false comes from 0x770acc and from 0x2b33914 via 0x2b36770.
+  So the oe HLE hands the call and the guest's return address (`DM_GUEST_RA`) to a new game hook `dm_game_inactivity_fps`, and Tears of the
+  Kingdom's (`games/totk/movie_fps.c`) holds only the call that returns to main+0x2b36104; `gfx/nvn` holds the rate through `nvn_hold_interval`
+  (every pacing interval at least the one that gives the rate: 2 at 60 Hz, 3 at 90, 4 at 120), and the log names each call's caller.
+  `DM_INACTIVITY_FPS` replaces the held rate (0 = no hold, for the blood moon comparison of 72); `DM_TEST_FPS_HOLD=<from>:<to>:<fps>` holds without
+  a movie (60 fps product: frame time p50 33.5 ms during the hold, 8.3 outside). Tests: `t_pace` (9 hold cases; the game's interval alone fails 4),
+  `t_oe` (8; the old stub fails 8), `t_movie_fps` (6; every cutscene held fails 3). `host/tests`' profile rule now depends on game.json and
+  `gen_game.py` (it kept a profile from before a new field)
 - [ ] 131 dynamic resolution's time budget from the frame rate
 - [ ] 132 the wave program's wide lines
 - [ ] 133 FPSLocker's frame step measured against ours; double buffering and the world clock probed (71c)
@@ -1698,4 +1709,5 @@ Tier 6, optional (seen, not planned before; listed at the user's request 2026-10
 - [ ] 154 the ultrawide aspect patch on the Mac (MacNativeGames `aspect_patch.h`)
 
 Open:
-- [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; the cutscene cap of 130 first
+- [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the
+  hold, without it (`DM_INACTIVITY_FPS=0`) and with the 30 fps product (needs a blood moon in play: the user)

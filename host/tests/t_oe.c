@@ -12,6 +12,11 @@ uint64_t guest_ns(void) { return 0; }
 void *guest_sym(const char *name) { (void)name; return NULL; }
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 void hle_signal_system_event(void *g) { (void)g; }
+module_t *module_of(const void *p) { (void)p; return NULL; }
+char dm_hcall_ret[4];   // host/hstack.S in the host (DM_GUEST_RA compares with it)
+static int g_hold = -1, g_hook_rate = 30, g_hook_on = -1; static uint64_t g_hook_ra;
+void nvn_fps_hold(int fps) { g_hold = fps; }   // gfx/nvn/hle_nvn.c in the host
+int dm_game_inactivity_fps(int on, uint64_t ra) { g_hook_on = on; g_hook_ra = ra; return on ? g_hook_rate : 0; }   // the game's (games/totk/movie_fps.c)
 static int checks, fails;
 #define CHECK(c, s) do { checks++; int ok = !!(c); fails += !ok; printf("%s %s\n", ok ? "ok" : "FAIL", s); } while (0)
 static void reset(void) { g_mqh = g_mqn = 0; g_focus = 1; g_opmode = 1; g_ntf_opmode = g_ntf_perfmode = 0; }
@@ -100,5 +105,16 @@ int main(void) {
     h_oe_LeaveExitSec(); CHECK(!dm_oe_exit_section(), "left twice: outside");
     h_oe_LeaveExitSec(); h_oe_EnterExitSec(); CHECK(dm_oe_exit_section(), "a Leave too many is ignored: one Enter is inside again");
     h_oe_LeaveExitSec();
+    // The frame rate held while the game extends the user inactivity time, as the game hook says (plan item 130; Tears of the Kingdom's pre-rendered
+    // movies). The old stub that ignored the call (-DDM_TEST_INACTIVITY_NOOP) fails 8
+    unsetenv("DM_INACTIVITY_FPS");
+    h_oe_Inactivity(1); CHECK(g_hold == 30 && g_hook_on == 1 && g_hook_ra, "inactivity time extended (true): the hook gets it with the caller, its 30 is held");
+    h_oe_Inactivity(0); CHECK(g_hold == 0 && g_hook_on == 0, "false: hold released");
+    h_oe_Inactivity(0x101); CHECK(g_hold == 30, "a bool is its low 8 bits: 0x101 is true");
+    h_oe_Inactivity(0x100); CHECK(g_hold == 0, "... and 0x100 false");
+    h_oe_InactivityU(1); CHECK(g_hold == 30, "the Unsafe variant holds as well"); h_oe_InactivityU(0);
+    g_hook_rate = 0; h_oe_Inactivity(1); CHECK(g_hold == 0 && g_hook_on == 1, "the hook gives 0 (a real-time cutscene): no hold"); g_hook_rate = 30;
+    setenv("DM_INACTIVITY_FPS", "0", 1); h_oe_Inactivity(1); CHECK(g_hold == 0, "DM_INACTIVITY_FPS=0: no hold");
+    setenv("DM_INACTIVITY_FPS", "24", 1); h_oe_Inactivity(1); CHECK(g_hold == 24, "DM_INACTIVITY_FPS=24 replaces the hook's rate"); h_oe_Inactivity(0); unsetenv("DM_INACTIVITY_FPS");
     printf("t_oe: %d checks, %d failed\n", checks, fails); return fails != 0;
 }

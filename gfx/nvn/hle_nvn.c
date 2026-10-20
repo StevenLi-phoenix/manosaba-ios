@@ -1354,6 +1354,16 @@ uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
 static int g_display_mode;   // present_cfg (tentative definition: the variable is defined with the present rate further down)
 static int g_uncapped;       // present_cfg: our own clock paces the game (nvn_uncapped_hz), not the display link
+static int g_hz;             // present_cfg: the present rate (tentative definition, as g_display_mode)
+// The frame-rate hold (plan item 130): host/hle_oe.c holds the game at a rate while it extends the user inactivity time (Tears of the Kingdom's
+// pre-rendered movies at 30 fps); every pacing interval goes through nvn_hold_interval (gfx/nvn/nvn_pace.h). 0 = no hold
+static _Atomic int g_fps_hold;
+void nvn_fps_hold(int fps) {
+    if (fps < 0) fps = 0;
+    int old = atomic_exchange(&g_fps_hold, fps);
+    if (old != fps) { if (fps) LOG("[nvn] frame rate held at %d fps (the game extends the user inactivity time)", fps); else LOG("[nvn] frame rate hold released"); }
+}
+static int win_interval(const win_t *o) { return nvn_hold_interval(g_display_mode ? 1 : o->interval, g_hz, atomic_load(&g_fps_hold)); }
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     NVN_BLOCKING();
     win_t *o = (win_t *)w;
@@ -1365,7 +1375,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
         static uint64_t rt_period; uint64_t period = present_period(o);
         if (period && rt_period != period) { rt_period = period; set_time_constraint(period); }
         rt_comp_tick(period);
-        if (mtl_link_active() && !g_uncapped) { void mtl_link_set_interval(int n); mtl_link_set_interval(g_display_mode ? 1 : o->interval);   // game interval mode: as many ticks as the interval (it waited one: 60 fps at interval 2, the game ran twice as fast)
+        if (mtl_link_active() && !g_uncapped) { void mtl_link_set_interval(int n); mtl_link_set_interval(win_interval(o));   // game interval mode: as many ticks as the interval (it waited one: 60 fps at interval 2, the game ran twice as fast)
             if (!mtl_link_wait_tick(period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the next display-link tick when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
     } else {   // DM_DETCLOCK_PACE=1 (used by the screenshot gate): while the guest clock advances per frame, each frame's wall clock is no shorter than one step -- frame count and in-game time are deterministic, and the background loading thread has at least one step of wall clock available per frame;
@@ -1645,7 +1655,7 @@ static void present_cfg(const win_t *o) {
 }
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);
-    int itv = g_display_mode ? 1 : o->interval > 0 ? o->interval : 1, hz = g_hz;
+    int itv = win_interval(o), hz = g_hz;
     return hz > 0 ? (uint64_t)itv * 1000000000ull / (uint64_t)hz : 0;
 }
 int (*g_nvn_loadscreen_up)(void);   // optional game hook: is a loading screen up right now (waits for the pipeline warm-up there; marks long frames hidden behind it)
@@ -1663,7 +1673,11 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
       if (!gate && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { gate = 1; int ms = mtl_warm_wait(15000); if (ms) LOG("[nvn] run-entry loading screen waited %d ms for pipeline warm-up", ms); } }
     present_cfg(o);
     { static long sf = -1; static double ss; if (sf < 0) { const char *e = getenv("DM_TEST_PRESENT_STALL"); sf = 0; if (e) { sf = atol(e); const char *c = strchr(e, ':'); ss = c ? atof(c + 1) : 8; } }
-      if (sf > 0 && g_frame == (uint64_t)sf) { LOG("DM_TEST_PRESENT_STALL: present held for %.1f s at frame %llu", ss, (unsigned long long)g_frame); usleep((useconds_t)(ss * 1e6)); } }   // a freeze on purpose (host/crash.c's frames-stopped watch)
+      if (sf > 0 && g_frame == (uint64_t)sf) { LOG("DM_TEST_PRESENT_STALL: present held for %.1f s at frame %llu", ss, (unsigned long long)g_frame); usleep((useconds_t)(ss * 1e6)); } }
+    { static long ha = -1, hb; static int hf;   // DM_TEST_FPS_HOLD=<from>:<to>:<fps>: the frame-rate hold of plan item 130 between two frames, without a movie
+      if (ha < 0) { const char *e = getenv("DM_TEST_FPS_HOLD"); ha = 0; if (e && sscanf(e, "%ld:%ld:%d", &ha, &hb, &hf) != 3) ha = 0; }
+      if (ha > 0 && g_frame == (uint64_t)ha) nvn_fps_hold(hf);
+      if (ha > 0 && g_frame == (uint64_t)hb) nvn_fps_hold(0); }   // a freeze on purpose (host/crash.c's frames-stopped watch)
     gfx_enter();
     uint64_t t0 = now_ns();
     gfx_mt_enter("PresentTexture");
