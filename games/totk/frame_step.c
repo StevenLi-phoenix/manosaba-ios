@@ -8,15 +8,18 @@
 // Host page: +0 ratio = seconds × 30, +4 ticks = seconds × 60, written with one 64-bit store so the game never reads the two from different frames.
 // DM_FRAME_STEP_MS=<ms> pins the step (diagnostics: a pinned 16.667 at 90 fps makes the game run 1.5 times too fast).
 // +16 / +20: the scene render size as floats (rules.py, plan item 52: main 0x585e48-0x585e60 store it to the renderer instead of the graphics
-// parameter's): DM_RENDER_RES=<w>x<h> (64 up to 1920x1080, the output size: 2560x1440 and 3200x1800 crashed the game at main+0x1c2f20 in its first
-// seconds; larger needs item 63's heap), else the parameter's own size for the operation mode, which a probe at main 0x585e4c read once at boot
-// (docked 1600x900, handheld 1280x720), so the game looks as before unless asked.
+// parameter's): DM_RENDER_RES=<w>x<h> (64 up to 1920x1080, the output size; 2560x1440 and 3200x1800 ran the game's texture heap out at main+0x1c2f20
+// in its first seconds), else the parameter's own size for the operation mode, which a probe at main 0x585e4c read once at boot (docked 1600x900,
+// handheld 1280x720), so the game looks as before unless asked. Above 1920x1080 with the RomFS overlay games/totk/heapdef.py writes (plan item 95):
+// its HeapDef grows the heap for a scene size it notes beside it (.dm_scene), up to which DM_RENDER_RES is then taken.
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "dm.h"
 #include "game.h"
 int dm_opmode(void);   // hle_oe.c
+int dm_overlay_file(const char *rel, char *out, size_t n);   // hle_fs.c: the file in the RomFS overlay layers
 
 typedef struct { uint64_t last_ns; double dt[5]; unsigned n, next; } frame_mean;
 // Feeds one present time; returns the step in seconds, or 0 when the step stays as it is
@@ -30,12 +33,16 @@ static double frame_mean_add(frame_mean *m, uint64_t now_ns) {
     double sum = 0; for (unsigned i = 0; i < m->n; i++) sum += m->dt[i];
     return sum / m->n;
 }
-// The scene size for the page; returns 1 when it comes from env (DM_RENDER_RES), 0 for the game's own, -1 for a value it refused (the game's own)
-static int scene_size(const char *env, int opmode, float out[2]) {
+// The scene size for the page; returns 1 when it comes from env (DM_RENDER_RES), 0 for the game's own, -1 for a value it refused (the game's own).
+// max: the largest the heap allows, "<w>x<h>" (the overlay's note), NULL for the output size 1920x1080
+static int scene_size(const char *env, int opmode, const char *max, float out[2]) {
     out[0] = opmode ? 1600 : 1280; out[1] = opmode ? 900 : 720;
     if (!env || !*env || !strcmp(env, "0")) return 0;
-    unsigned w, h; char extra;
-    if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 64 || h < 64 || w > 1920 || h > 1080) return -1;
+    unsigned w, h, mw = 1920, mh = 1080; char extra;
+#ifndef DM_TEST_SCENE_NO_HEAP   // negative control of t_frame_step only: the overlay's note ignored
+    if (max && (sscanf(max, "%ux%u%c", &mw, &mh, &extra) != 2 || mw < 1920 || mh < 1080 || mw > 3840 || mh > 2160)) { mw = 1920; mh = 1080; }
+#endif
+    if (sscanf(env, "%ux%u%c", &w, &h, &extra) != 2 || w < 64 || h < 64 || w > mw || h > mh) return -1;
     out[0] = (float)w; out[1] = (float)h; return 1;
 }
 static void frame_step_store(_Atomic uint64_t *page, double seconds) {
@@ -54,8 +61,12 @@ void dm_game_boot(void) {
     const char *e = getenv("DM_FRAME_STEP_MS"); g_pin = e ? atof(e) / 1000 : 0;
     frame_step_store(g_page, g_pin > 0 ? g_pin : 1.0 / 30);   // the controller starts at interval 2
     if (dm_option_on("scene")) {
-        float sz[2]; int from = scene_size(getenv("DM_RENDER_RES"), dm_opmode(), sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
-        if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, from 64x64 up to 1920x1080; the game's own size", getenv("DM_RENDER_RES"));
+        char note[1024], max[32] = ""; FILE *f = dm_overlay_file("System/HeapSize/Product.Nin_NX_NVN.HeapDef.dm_scene", note, sizeof note) ? fopen(note, "r") : NULL;
+        if (f) { if (!fgets(max, sizeof max, f)) max[0] = 0; fclose(f); max[strcspn(max, "\r\n")] = 0; }
+        float sz[2]; int from = scene_size(getenv("DM_RENDER_RES"), dm_opmode(), max[0] ? max : NULL, sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
+        if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, from 64x64 up to %s; the game's own size", getenv("DM_RENDER_RES"),
+                          max[0] ? max : "1920x1080 (more needs the heap overlay of games/totk/heapdef.py)");
+        else if (max[0]) LOG("[scene size] the RomFS overlay's heap allows up to %s", max);
         LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? "DM_RENDER_RES" : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
     } else if (getenv("DM_RENDER_RES")) LOG("[red] DM_RENDER_RES needs the option scene (DM_OPTIONS)");
     if (!(g_realtime = dm_option_on("realtime"))) { LOG("[frame step] the game's own (option realtime not on: DM_OPTIONS or the product's options.default)"); return; }

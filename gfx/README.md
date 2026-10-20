@@ -135,6 +135,8 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_PROF=1` | Time every implemented NVN function |
 | `DM_NVN_PASSGPU=<file>` | GPU time of each render pass and dispatch as TSV (timestamps: an `MTL4CounterHeap` on Metal 4, stage-boundary samples on Metal 3); every 300 frames a line with the GPU time a frame and the kinds of pass that took the most |
 | `DM_NVN_TEXCENSUS=1` | One line per new texture shape of the kinds whose layout or sampling rules came from outside checks: cube arrays, LINEAR_RENDER_TARGET without LINEAR, MINIMAL_LAYOUT, packaged 3D, linear block-compressed, formats with their own swizzle (sampled or as render targets) |
+| `DM_NVN_WB_IDLE=1` | An experiment (plan item 94): a texture the GPU wrote in a CPU-visible pool and left alone for 30 submissions is written back to its storage, and one whose storage the CPU writes afterwards is uploaded from it again. Off: it changes more than the terrain it is for (94a) |
+| `DM_NVN_ANISO=<2..16>` | Anisotropic filtering raised to that on mipmapped linear samplers without a depth compare or a reduction (most of Tears of the Kingdom's ask for 1); off by default, which keeps the shots comparable with the console's |
 | `DM_NVN_COUNTS=1` | Counters in the power summary: draws sampling their own attachment, timestamp reports, ClearTexture, passes without a draw, passes drawing only a top-left part, counter reads and svcs a second |
 | `DM_NVN_TS_LATE_US=<µs>` | Report counter timestamps that much later (the game sees a slower GPU) |
 | `DM_NVN_FBX=all` or `0` | Copy the attachment for every draw that samples it (default: only after a texture barrier), or never |

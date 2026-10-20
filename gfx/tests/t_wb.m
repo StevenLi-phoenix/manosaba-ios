@@ -1,6 +1,9 @@
 // GPU results written back on nvnMemoryPoolInvalidateMappedRange (nvn_mtl.m wb_note / mtl_pool_invalidate; MacNativeGames): a CPU-filled texture in a
 // CPU-visible pool that the GPU then renders into keeps the result only in its MTLTexture; an invalidate over its storage writes it back in the NVN
 // layout, unless the CPU wrote the storage after the rendering (then the CPU's bytes stay).
+// --idle (with DM_NVN_WB_IDLE=1, the experiment of item 94): a texture the GPU rendered and then left alone for 30 submissions is written back to its
+// storage without an invalidate; when the CPU then writes the storage, the next submission hands the texture back (not GPU-owned, watched from
+// before the write), and its next fetch is an upload of the CPU's bytes.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -20,8 +23,10 @@ static void render_clear(const tex_t *t, float r, float g, float b) {   // one s
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p); mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 static uint32_t texel(const tex_t *t, unsigned x, unsigned y) { uint32_t lin[64]; nvn_deswizzle(&t->d, 0, 0, t->mem, lin, 32); return lin[y * 8 + x]; }
-int main(void) { @autoreleasepool {
+static void empty_sub(void) { state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_wait(mtl_sub_commit(), 5000000000ull); }
+int main(int argc, char **argv) { @autoreleasepool {
     setvbuf(stdout, NULL, _IONBF, 0); mtl_init();
+    int idle = argc > 1 && !strcmp(argv[1], "--idle");
     uint8_t *mem; if (posix_memalign((void **)&mem, getpagesize(), 1 << 20)) abort(); memset(mem, 0, 1 << 20); mtl_pool_add(mem, 1 << 20);
     nvn_dirty_add_range(mem, 1 << 20);   // as nvnMemoryPoolInitialize registers a CPU-visible pool (an untracked range counts as written)
     static pool_t pl; pl.mem = mem; pl.size = 1 << 20; pl.flags = NVN_MEMORY_POOL_FLAGS_CPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_CACHED;
@@ -29,6 +34,19 @@ int main(void) { @autoreleasepool {
     nvn_texlayout L; nvn_tex_layout(&t.d, &L); t.size = (uint32_t)L.size; t.mem = mem; t.pool = &pl;
     uint32_t lin[64]; for (int i = 0; i < 64; i++) lin[i] = 0x11223344; nvn_swizzle(&t.d, 0, 0, lin, 32, t.mem);   // the CPU fills it
     render_clear(&t, 0, 1, 0);
+    if (idle) {
+        EXPECT("idle: the GPU rendered green, memory still the CPU's", 0x11223344, texel(&t, 3, 5));
+        for (int i = 0; i < 12; i++) empty_sub();
+        EXPECT("idle: 12 submissions later, not written back yet", 0x11223344, texel(&t, 3, 5));
+        for (int i = 0; i < 28; i++) empty_sub();
+        EXPECT("idle: 40 submissions without a GPU write: green written back", 0xff00ff00, texel(&t, 3, 5));
+        EXPECT("idle: ... still the GPU's texture", 1, gpu_owned(t.serial));
+        for (int i = 0; i < 64; i++) lin[i] = 0x55667788; dm_guest_write_prepare(t.mem, t.size); nvn_swizzle(&t.d, 0, 0, lin, 32, t.mem);   // a tile copied in
+        empty_sub();
+        EXPECT("idle: the CPU wrote it: handed back (not GPU-owned)", 0, gpu_owned(t.serial));
+        EXPECT("idle: ... and its next fetch takes the CPU's bytes (watched, written)", 1, cpuf_written(&t));
+        printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
+    }
     EXPECT("after the GPU rendered green: memory still holds what the CPU wrote", 0x11223344, texel(&t, 3, 5));
     mtl_pool_invalidate(&pl, 0, t.size);
     EXPECT("after an invalidate over it: green written back (texel 3,5)", 0xff00ff00, texel(&t, 3, 5));

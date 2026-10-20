@@ -31,6 +31,8 @@ t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
 	clang -O1 -Wall -Werror -o $@ t_pool_find.c
 t_warm_list: t_warm_list.c ../nvn/nvn_warm_list.h
 	clang -O1 -Wall -Werror -o $@ t_warm_list.c
+t_aniso: t_aniso.c ../nvn/nvn_aniso.h
+	clang -O1 -Wall -Werror -o $@ t_aniso.c
 t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
 	clang -O1 -Wall -Werror -I../nvn/include -o $@ t_sync_order.c
 t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
@@ -135,6 +137,7 @@ t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 run: \
 	t_alpha \
+	t_aniso \
 	t_chunk \
 	t_copy_pitch \
 	t_cover \
@@ -208,6 +211,7 @@ run: \
 	./t_pool_find
 	./t_warm_list
 	./t_sync_order
+	./t_aniso
 	./t_poolcache
 	./t_poolcheck
 	./t_tex_auto
@@ -244,6 +248,7 @@ run: \
 	DM_NVN_UB_RENAME=0 ./t_ubren --expect-split
 	./t_live
 	./t_wb
+	DM_NVN_WB_IDLE=1 ./t_wb --idle
 	./t_pend
 	./t_ppred
 	MTL_DEBUG_LAYER=1 ./t_present_res

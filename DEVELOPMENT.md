@@ -1398,12 +1398,45 @@ Tier 3b, from the wider review of 2026-10-20 (sources and evidence in that secti
   blend factor (the shaders have no second output), an unimplemented import (`UNIMPL`, now with its caller: `DM_UNIMPL_GUEST_RA`, `t_hstack` 4)
   and an unknown svc (with the svc's module and offset). None fires in Tears of the Kingdom's prologue or the cliff save, nor in manosaba
 Tier 3b, Tears of the Kingdom:
-- [ ] 91 shrines at 60 fps: the five words of nxnative PR #11 as part of `fps60`, checked in Unicorn, then a shrine
-- [ ] 92 the two BNSH files inside `main` in the offline extraction
-- [ ] 93 the half-step selector measured against the interval
-- [ ] 94 GPU-rendered textures in CPU-cached pools: count them, compare the grass with the console footage; a write-back if the tiles are wrong
-- [ ] 95 `DM_RENDER_RES` above the output size through the HeapDef overlay and the application pool (totk-mobile's 1080p values first)
-- [ ] 96 anisotropic filtering as a switch, off by default
+- [x] batch 24 · 91 shrines at 60 fps: nxnative PR #11's five words (digitalhivehub 97172c1 / a6b7191, MIT; at 1.4.3 their originals all match)
+  joined `fps60` (now 12 words): the apply step 0xb00f4c and its inlined copy 0x1ff6104 never take the forced fixed interval a shrine sets (owner
+  +0x4f8 bit 0, +0x508 = 2: 30 fps there however light the frame), and leaving a fixed interval re-arms the lowering from the minimum 1 in the
+  helper 0x2b3d268 and both inlined copies (0xb00f64, 0x1ff6138; before, from 2 it never tried 1 again). `check_frame_rate.py`: 25 checks, 8 new
+  in Unicorn (a shrine is not forced, the re-arming in all three places), the original main the negative control, and the previous product60
+  fails the 4 patched ones. `work/build/totk/product60` rebuilt (`tools/build_product.sh`): the images and every other table byte for byte the
+  same, only the option table and the rewriter stamp differ; the previous one is `product60.prev91`; the prologue as before (120 fps uncapped,
+  p50 8.3 ms). Not run in a shrine here: no save inside one (the first is Ukouh Shrine, after the cliff save)
+- [x] batch 24 · 92 the BNSH files inside the game's modules (`shader_extract.py --modules <product>`, the `*.patched.bin` images; MacNativeGames
+  2f9e707, MIT): Tears of the Kingdom 1.4.3's main has two, 40 shaders (11 vertex, 29 pixel) and 45 pairs, all before only from run-time captures
+  (the 45 pairs were known from them); the workspace's capture-only shaders 178 → 138. `tools/tests/t_shader_module.py`: a synthetic image with an
+  embedded BNSH, 5 checks; the RomFS walk's visit in place of the scan fails 3
+- [-] batch 24 · 93 measured: the half-step selector (sys+0x1da bit 0, ×0.5 in the step) does not follow the interval. A probe reading it with
+  the interval at every present (the system object from the controller's saved registers when it sets the present interval): the prologue on
+  product60 with `DM_TEST_WORK_MS=14`, 191 interval changes between 1 and 2 in 90 s, and the Great Sky Island cliff save (7,800 frames at
+  intervals 1-3, 14 changes): the byte stayed 0 throughout, so the step is never halved; nothing to change (T5eng's note does not hold here)
+- [x] batch 24 · 94 GPU-rendered textures in CPU-cached pools, counted (`DM_NVN_TEXCENSUS`): on the cliff save 107 (the RG8 260x260
+  minimal-layout terrain normal maps among them), 6 of whose storage the CPU then wrote, and what it wrote was zeros (0.0 % non-zero), but for one.
+  The experiment `DM_NVN_WB_IDLE=1` (after totk-mobile's write-back, Apache-2.0, reimplemented): a texture the GPU left alone for 30 submissions
+  is written back to its storage, and one whose storage the CPU writes afterwards is handed back to the CPU (its next fetch uploads it). With it
+  the terrain slots the CPU writes hold 84 % non-zero bytes: the game does move GPU-rendered tiles with CPU copies, which the default (the CPU's
+  writes to a GPU-written texture ignored) never shows. But it also hands back an RG8 256x256 texture the CPU rewrites every few submissions
+  (1,300 times in a minute), and Link close to the camera, a translucent ghost by default (the game's near-camera fade), is drawn solid with it.
+  Which is the console's picture is open: off by default, 94a. `t_wb --idle`: the write-back after 30 idle submissions and the hand-back, 6
+  checks; without the switch 3 fail
+- [ ] 94a the write-back's other half per region: what the RG8 256x256 texture the CPU rewrites every few submissions is (zeros each time; its
+  hand-back changes Link's near-camera fade), console footage of Link close to the camera and of the Great Sky Island grass, then
+  `DM_NVN_WB_IDLE` on by default or a narrower rule (hand back only what was written back, or only whole-texture copies)
+- [x] batch 24 · 95 `DM_RENDER_RES` above the output size: `games/totk/heapdef.py <RomFS> <overlay> <w>x<h>` writes a HeapDef into a RomFS
+  overlay with DynamicTextureAllocatorMem and Graphics grown by the shipped 113,664 KiB × the scene's pixels over 1600x900, rounded up to whole MiB
+  (found by name in the BYML, as MacNativeGames' make_output_res_overlay.py reads it, MIT; 1920x1080 gives exactly totk-mobile's 163,840 /
+  251,904 KiB, its source asset the same SHA b84a6a64…), and notes the size beside it, up to which `frame_step.c` then takes `DM_RENDER_RES`
+  (3840x2160 at most; without the note 1920x1080 as before). The host's application pool already has 512 MiB over the console's. On the cliff
+  save through the inventory and system menus: 1920x1080 needs no overlay; 2560x1440 with it runs (no red line), with only the note (the heap as
+  shipped) it crashes at main+0x1c2f20 as before. `t_frame_step`: 5 more checks (31), the note ignored (`-DDM_TEST_SCENE_NO_HEAP`) fails 1;
+  `tools/tests/t_heapdef.py`: 9 checks on a synthetic BYML; fixed offsets in place of the lookup by name end it in an error
+- [x] batch 24 · 96 anisotropic filtering as a switch, off by default (`DM_NVN_ANISO=<2..16>`, `nvn_aniso.h`; tvc97's TOTK_ANISO): raised only on
+  mipmapped samplers that minify linearly, without a depth compare or a reduction, never lowered. `t_aniso`: 10 checks; raising every sampler
+  (`-DDM_TEST_ANISO_ALL`) fails 3
 
 Tier 3b, performance and power (measure first):
 - [ ] 97 a present with a deadline against the GPU clock drop (`powermetrics`, the 30 fps product)

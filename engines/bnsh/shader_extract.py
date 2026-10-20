@@ -14,8 +14,10 @@
 # control sections but point at different code (Tears of the Kingdom's agl_technique_pfx, agl_technique_shdw, agl_common, agl_technique_lght, ...),
 # so every entry is read: entries are found anywhere below the pool and taken only where the control magic, the sizes and the code area's stage
 # agree (after seedds/nxnative's shader_split.py bahs_shaders, MIT; reading only the entry right before each control section, 0x60 bytes back,
-# missed the shaders sharing it). Which program pairs which shaders is not read, so these add no pairs. Not covered: shaders built into main (32
-# control sections, code elsewhere), which come from run-time captures.
+# missed the shaders sharing it). Which program pairs which shaders is not read, so these add no pairs.
+# The game's modules (--modules <product dir>: its *.patched.bin images; the rewriter leaves the data where it was) embed whole BNSH files too:
+# Tears of the Kingdom 1.4.3's main two, 40 shaders (11 vertex, 29 pixel) and 45 pairs, all among the 178 that only run-time captures had (MacNativeGames
+# 2f9e707 reads the module images, MIT). iOS captures nothing at run time, so these were missing there.
 # BNSH (little-endian, offsets from the BNSH's start): "BNSH" @0, byte order mark ff fe @12, size u32 @28, "grsc" @96, variation count u32 @124,
 #   variation table u64 @128 (64-byte records; program record u64 at +16). Program record (56 bytes): stage records u64 at +8 vertex, +40 pixel,
 #   +48 compute (0 = none; the other slots are not read). Stage record: control section u64 @+8, code area u64 @+16, code size u32 @+24, control size
@@ -28,7 +30,7 @@
 # program record that has both: the pairs dmsh_build.py pads vertex shaders for; the 2272 run-time pairs whose shaders are found are all among them).
 # The output may be an existing capture directory (the host's DM_SHDUMP): shaders already there are kept (they must be byte-identical up to the code
 # area's length: DM_SHDUMP also writes what follows it in memory) and pairs.tsv gets only the pairs it lacks.
-# Usage: shader_extract.py <RomFS dir> <output dir>
+# Usage: shader_extract.py <RomFS dir> <output dir> [--modules <product dir>]
 import collections, compression.zstd as zstd, hashlib, os, struct, sys
 
 romfs = out = None   # main(): the command line
@@ -117,6 +119,13 @@ def visit(d, where):
             n = struct.unpack_from('<I', rng(d, p + 28, 4, where))[0]
             bnsh(rng(d, p, n, where), f'{where}@{p:#x}'); p += n
 
+def module(d, name):
+    """A game module's image: every embedded BNSH file, each addressed from its own start (source module:<name>@<offset>)"""
+    p = 0
+    while (p := d.find(b'BNSH\0\0\0\0', p)) >= 0:
+        n = struct.unpack_from('<I', rng(d, p + 28, 4, name))[0]
+        bnsh(rng(d, p, n, name), f'module:{name}@{p:#x}'); p += max(n, 8)
+
 def read(rel):
     with open(os.path.join(romfs, rel), 'rb') as f: return f.read()
 dicts = {}   # zstd dictionaries of Pack/ZsDic.pack.zs (main)
@@ -130,6 +139,7 @@ def unzs(raw, where):
 def main():
     global romfs, out
     romfs, out = sys.argv[1:3]
+    mods = sys.argv[sys.argv.index('--modules') + 1] if '--modules' in sys.argv else None
     for raw in sarc(zstd.decompress(read('Pack/ZsDic.pack.zs')), 'Pack/ZsDic.pack.zs').values():
         zd = zstd.ZstdDict(raw); dicts[zd.dict_id] = zd
     names = ['Pack/Bootup.Nin_NX_NVN.pack.zs']
@@ -143,6 +153,10 @@ def main():
         if not os.path.exists(os.path.join(romfs, rel)): sys.exit(f'[red] {rel} is not in {romfs}')
         raw = read(rel); visit(unzs(raw, rel) if rel.endswith('.zs') else raw, rel)
         if not rel.startswith('Effect/'): print(f'{len(recs)} shaders after {rel}', flush=True)
+    for fn in sorted(os.listdir(mods)) if mods else []:
+        if not fn.endswith('.patched.bin'): continue
+        with open(os.path.join(mods, fn), 'rb') as f: module(f.read(), fn[:-len('.patched.bin')])
+        print(f'{len(recs)} shaders after module {fn}', flush=True)
 
     os.makedirs(out, exist_ok=True)
     new = 0

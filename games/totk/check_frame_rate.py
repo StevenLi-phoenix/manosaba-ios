@@ -64,6 +64,38 @@ expect('original (negative control): light frames stay at 2', (2, 30), o[39])
 expect('original (negative control): never 1', True, all(v[0] >= 2 for v in o))
 expect('original and patched agree on the heavy frames', (o[79], o[119]), (p[79], p[119]))
 
+# Shrines (fps60's last five words, nxnative PR #11): the apply step 0xb00f3c (x0 = the owner: +0xa8 -> +0x20 = the system object, controller at
+# +0x200) forces the fixed interval of +0x508 when bit 0 of +0x4f8 is set (shrines) by a tail call at 0xb00fd0; leaving a fixed interval (sys+0x258)
+# re-arms the lowering (stored candidate ctl+0x44 = current - 1) only when the minimum ctl+0 is below the current interval. The same leaving path
+# runs in the helper 0x2b3d24c (x0 = ctl, w1 = 0) and inlined in 0x1ff60cc (owner from the global at 0x3adbaa8, bit 0 cleared before the test)
+OWN, OBJ2, GLOBAL_OWNER = 0x80020000, 0x80030000, 0x3adbaa8
+def fixed(img, entry, shrine, x0_is_ctl=False):
+    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    size = (len(img) + 0xFFFF) & ~0xFFFF
+    uc.mem_map(BASE, size); uc.mem_write(BASE, bytes(img))
+    for a in (SYS, OBJ, OWN, OBJ2, STACK - 0x10000, RET): uc.mem_map(a, 0x10000)
+    w = lambda a, fmt, *v: uc.mem_write(a, struct.pack(fmt, *v))
+    ctl = SYS + 0x200
+    w(ctl + 0x00, '<ii', 2, 3); w(ctl + 0x14, '<i', 10); w(ctl + 0x28, '<i', 0)   # ctl+0x28 0: the fps check after re-arming returns at once
+    w(ctl + 0x40, '<iiii', 2, 2, 0, 0); w(ctl + 0x50, '<i', 30); w(ctl + 0x58, '<B', 1)   # current 2, candidate 2, inside a fixed interval
+    w(OWN + 0xa8, '<Q', OBJ); w(OBJ + 0x20, '<Q', SYS); w(OWN + 0x4f8, '<I', 1 if shrine else 0); w(OWN + 0x508, '<b', 2); w(OWN + 0x50a, '<B', 0)
+    w(BASE + GLOBAL_OWNER, '<Q', OWN)
+    hit = []
+    uc.hook_add(UC_HOOK_CODE, lambda u, a, n, d: (hit.append(1), u.emu_stop()), begin=BASE + 0xb00fd0, end=BASE + 0xb00fd0)
+    uc.reg_write(UC_ARM64_REG_X0, ctl if x0_is_ctl else (OBJ2 if entry == 0x1ff60cc else OWN)); uc.reg_write(UC_ARM64_REG_X1, 0)
+    uc.reg_write(UC_ARM64_REG_SP, STACK - 0x100); uc.reg_write(UC_ARM64_REG_LR, RET)
+    uc.emu_start(BASE + entry, RET, count=10000)
+    if not hit and uc.reg_read(UC_ARM64_REG_PC) != RET: raise SystemExit(f'{entry:#x} did not return')
+    return bool(hit), struct.unpack('<i', uc.mem_read(ctl + 0x44, 4))[0]
+expect('patched: a shrine (owner+0x4f8 bit 0) no longer forces the fixed interval', False, fixed(prod, 0xb00f3c, 1)[0])
+expect('original (negative control): a shrine forces it (0xb00fd0)', True, fixed(orig, 0xb00f3c, 1)[0])
+expect('patched: leaving a fixed interval at 2 re-arms the lowering to 1 (apply step)', 1, fixed(prod, 0xb00f3c, 0)[1])
+expect('original (negative control): from 2 it does not (the minimum is 2)', 2, fixed(orig, 0xb00f3c, 0)[1])
+expect('patched: the helper 0x2b3d24c re-arms it to 1', 1, fixed(prod, 0x2b3d24c, 0, True)[1])
+expect('original (negative control): the helper does not', 2, fixed(orig, 0x2b3d24c, 0, True)[1])
+expect('patched: the copy inlined in 0x1ff60cc re-arms it to 1', 1, fixed(prod, 0x1ff60cc, 1)[1])
+expect('original (negative control): the inlined copy does not', 2, fixed(orig, 0x1ff60cc, 1)[1])
+
 # Real-time frame step (rules.py HOSTREFS): the two producers run from just after the controller, with sys+0x250 = 30 (interval 2) and the host
 # page holding the step of a 90 fps frame; the original main computes 60 / 30 from the interval and ignores the page.
 from unicorn.arm64_const import UC_ARM64_REG_X8, UC_ARM64_REG_X19, UC_ARM64_REG_X22, UC_ARM64_REG_S8, UC_ARM64_REG_S9

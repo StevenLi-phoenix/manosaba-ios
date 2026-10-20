@@ -3,7 +3,7 @@
 
 # Tears of the Kingdom's changes are options (plan item 57: one product for 30 and 60 fps), applied at load when DM_OPTIONS or the product's
 # options.default names them; with none the code is the game's as shipped (the 30 fps product):
-#   fps60     the frame-rate controller's minimum interval 1
+#   fps60     the frame-rate controller's minimum interval 1, also in shrines and after a fixed interval
 #   realtime  the real-time frame step (host page +0 / +4, games/totk/frame_step.c)
 #   scene     the scene render size from the host page +16 (DM_RENDER_RES)
 CUTS = {}
@@ -28,6 +28,17 @@ OPTIONS = {
             (0x2db34c, 'f5030a2a', '55a59f1a', 'frame-rate controller lowering: mov w21, w10 → csinc w21, w10, wzr, ge (new interval at least 1)'),
             (0x2db360, 'bf01086b', 'bf050071', 'frame-rate controller raising: cmp w13, w8 (minimum) → cmp w13, #1'),
             (0x2db36c, 'acc1881a', 'acc59f1a', 'frame-rate controller raising: csel w12, w13, w8, gt → csinc w12, w13, wzr, gt (next lower candidate at least 1)'),
+            # Shrines (nxnative PR #11, digitalhivehub 97172c1 / a6b7191 patch_nso.py, MIT; checked in Unicorn by check_frame_rate.py): entering
+            # one sets bit 0 of owner+0x4f8 and owner+0x508 = 2, and the apply step 0xb00f3c then forces that fixed interval (0xb00fd0 → 0x2b3cfc0):
+            # 30 fps there however light the frame. The apply step and its inlined copy (in 0x1ff60cc, which clears the bit first and so only
+            # applies a racing set) now always take the "not forced" branch, so the controller decides as outside
+            (0xb00f4c, '69000036', '03000014', 'shrine fixed interval: tbz w9, #0, 0xb00f58 → b 0xb00f58 (never forced)'),
+            (0x1ff6104, '6a000036', '03000014', 'shrine fixed interval (inlined copy): tbz w10, #0, 0x1ff6110 → b 0x1ff6110'),
+            # Leaving a fixed interval re-arms the lowering only when the minimum (ctl+0, 2 as data) is below the current interval: from 2 it
+            # never tried 1 again. The helper (0x2b3d268) and its two inlined copies read the minimum: now 1
+            (0x2b3d268, '0a0040b9', '2a008052', 'leaving a fixed interval: ldr w10, [x0] (minimum) → mov w10, #1'),
+            (0xb00f64, '0a0042b9', '2a008052', 'leaving a fixed interval (inlined in the apply step): ldr w10, [x0, #0x200] → mov w10, #1'),
+            (0x1ff6138, '0a0142b9', '2a008052', 'leaving a fixed interval (inlined in 0x1ff60cc): ldr w10, [x8, #0x200] → mov w10, #1'),
         ],
         # Real-time frame step: method from MacNativeGames' game_patches_v143.c (patch_realtime; MIT, see above): the two producers of the step take
         # the measured frame time from a page the host writes at every present (games/totk/frame_step.c), so the game keeps its speed at any frame rate

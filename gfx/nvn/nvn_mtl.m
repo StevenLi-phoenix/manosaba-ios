@@ -82,6 +82,9 @@
 
 static void warm_start(void);
 static void warm_claim(void);
+static void wb_census_tick(void);
+static void wb_idle_pass(void);
+static void wb_cpu_pass(void);
 
 static id<MTLDevice> g_dev;
 static int g_nvn_deswz_gpu;
@@ -830,6 +833,7 @@ void mtl_sub_begin(void) {
     // retired objects they release went into the thread's implicit pool and lived for good (nxnative 0fc0ce4: Metroid Dread's GPU memory grew by
     // gigabytes; t_retire)
     @autoreleasepool { defer_drain(); defer_reset(); fin_drain(); warm_claim(); }
+    wb_census_tick(); wb_cpu_pass(); wb_idle_pass();
     if (g_cb) MDIE("submit re-entered");
     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
     atomic_store(&g_last_commit_error, 0);
@@ -2010,7 +2014,7 @@ static int tex_membacked(const tex_t *t) {
 // block by block). Each GPU write of such a texture is noted (storage protected, a reference kept until its serial is released); an invalidate over
 // its storage waits for the GPU and writes every level and layer back in the NVN layout, unless the CPU wrote that memory since (its bytes are newer)
 // or a later rendering of the same memory supersedes it (t_wb)
-typedef struct { tex_t t; uint64_t stamp; void *obj; } wb_ent;
+typedef struct { tex_t t; uint64_t stamp; void *obj; uint64_t sub, idle_stamp; } wb_ent;   // sub: submission of the last GPU write; idle_stamp: written back after it (DM_NVN_WB_IDLE), 0 = not yet
 static nvn_hmap g_wb = {.klen = 8}; static pthread_mutex_t g_wb_mu = PTHREAD_MUTEX_INITIALIZER; static uint64_t g_wb_done, g_wb_skip_cpu, g_wb_bytes;
 static void wb_free(wb_ent *e) { if (!e) return; if (e->obj) { defer_obj_unref((__bridge id)e->obj); CFRelease(e->obj); } free(e); }
 static id<MTLTexture> tex_mtl(const tex_t *ct);
@@ -2021,10 +2025,93 @@ static void wb_note(const tex_t *t) {   // submit thread: the GPU writes t in th
     uint64_t stamp = nvn_dirty_now(), k = t->serial;
     pthread_mutex_lock(&g_wb_mu);
     wb_ent *e = nvn_hm_get(&g_wb, &k);
-    if (e) { e->stamp = stamp; e->t = *t; }
-    else if (g_wb.n < 8192) { e = calloc(1, sizeof *e); if (!e) MDIE("write-back record"); e->t = *t; e->stamp = stamp; e->obj = (void *)CFBridgingRetain(o); nvn_hm_put(&g_wb, &k, e); }
+    if (e) { e->stamp = stamp; e->t = *t; e->sub = g_sub_serial; e->idle_stamp = 0; }
+    else if (g_wb.n < 8192) { e = calloc(1, sizeof *e); if (!e) MDIE("write-back record"); e->t = *t; e->stamp = stamp; e->sub = g_sub_serial; e->obj = (void *)CFBridgingRetain(o); nvn_hm_put(&g_wb, &k, e); }
     else RED_ONCE(87, "GPU write-back table full (8192 textures): texture %llu is not written back on an invalidate", (unsigned long long)t->serial);
     pthread_mutex_unlock(&g_wb_mu);
+}
+// DM_NVN_TEXCENSUS (item 94): textures the GPU writes in CPU-visible pools (exactly the write-back table's), each new shape logged; then, every 300
+// submissions, those whose storage the CPU wrote after the GPU did (a tile moved into a rendered slot), and at a CPU-filled texture's first use one
+// whose storage lies on a GPU-written texture's (a tile copied out of one: its pages hold what the CPU last left there, not what the GPU drew)
+static int wb_census_on(void) { static int on = -1; if (on < 0) on = getenv("DM_NVN_TEXCENSUS") && strcmp(getenv("DM_NVN_TEXCENSUS"), "0"); return on; }
+static void wb_census_shape(const char *what, const tex_t *t, uint64_t n) {
+    static struct { uint32_t w, h, f, flags; const char *what; } seen[48]; static int ns;
+    for (int i = 0; i < ns; i++) if (seen[i].what == what && seen[i].w == t->d.width && seen[i].h == t->d.height && seen[i].f == (uint32_t)t->d.format && seen[i].flags == (uint32_t)t->d.flags) return;
+    if (ns < 48) seen[ns++] = (typeof(seen[0])){t->d.width, t->d.height, (uint32_t)t->d.format, (uint32_t)t->d.flags, what};
+    MLOG("[texture census] %s #%llu: %ux%ux%u format %#x flags %#x levels %u, pool flags %#x, size %#x", what, (unsigned long long)n, t->d.width, t->d.height, t->d.depth,
+         t->d.format, t->d.flags, t->d.levels, t->pool ? t->pool->flags : 0u, t->size);
+}
+static uint64_t g_wbc_gpu, g_wbc_cpu_after, g_wbc_over;
+static void wb_census_tick(void) {   // submit thread, every 300 submissions
+    if (!wb_census_on() || g_sub_serial % 300) return;
+    static CFMutableSetRef counted; if (!counted) counted = CFSetCreateMutable(NULL, 0, NULL);   // serials already counted (the table's stamps are left alone)
+    pthread_mutex_lock(&g_wb_mu); uint64_t n = g_wb.n, hit = 0;
+    for (uint32_t i = 0; i < g_wb.cap; i++) { wb_ent *e = g_wb.vals ? g_wb.vals[i] : NULL;
+        if (!e || CFSetContainsValue(counted, (const void *)(uintptr_t)e->t.serial) || !nvn_dirty_since(e->t.mem, e->t.size, e->stamp)) continue;
+        hit++; CFSetAddValue(counted, (const void *)(uintptr_t)e->t.serial); wb_census_shape("the CPU wrote the storage of a GPU-written texture", &e->t, ++g_wbc_cpu_after);
+        size_t nz = 0; for (uint32_t b = 0; b < e->t.size; b++) nz += e->t.mem[b] != 0;   // what it wrote: real texels, or the zeros of storage no GPU write ever reached
+        MLOG("[texture census] ... serial %llu: %.1f %% of its storage bytes not zero now", (unsigned long long)e->t.serial, e->t.size ? 100.0 * (double)nz / e->t.size : 0); }
+    pthread_mutex_unlock(&g_wb_mu);
+    MLOG("[texture census] at submission %llu: %llu GPU-written textures in CPU-visible pools now (%llu seen), %llu more written by the CPU since, %llu CPU-filled ones on GPU-written storage",
+         (unsigned long long)g_sub_serial, (unsigned long long)n, (unsigned long long)g_wbc_gpu, (unsigned long long)hit, (unsigned long long)g_wbc_over);
+}
+static void wb_census_first(const tex_t *t) {   // a CPU-filled texture's first use: on a GPU-written texture's storage?
+    if (!wb_census_on()) return;
+    pthread_mutex_lock(&g_wb_mu); int over = 0;
+    for (uint32_t i = 0; i < g_wb.cap && !over; i++) { wb_ent *e = g_wb.vals ? g_wb.vals[i] : NULL;
+        over = e && e->t.serial != t->serial && e->t.mem < t->mem + t->size && t->mem < e->t.mem + e->t.size; }
+    pthread_mutex_unlock(&g_wb_mu);
+    if (over) wb_census_shape("a CPU-filled texture on a GPU-written texture's storage", t, ++g_wbc_over);
+}
+// DM_NVN_WB_IDLE=1 (item 94, an experiment): a texture the GPU wrote in a CPU-visible pool and then left alone for 30 submissions is written back to
+// its storage once (totk-mobile's nvn_texture_writeback.inc writes back the first GPU write after 30 frames without one), so a CPU copy out of it
+// carries the texels the GPU drew
+static int wb_level(const tex_t *t, id<MTLTexture> mt, unsigned level, unsigned layer);
+static uint64_t g_wb_idle_n;
+static void wb_idle_pass(void) {   // submit thread, before the submission's command buffer exists
+    static int on = -1; if (on < 0) on = getenv("DM_NVN_WB_IDLE") && atoi(getenv("DM_NVN_WB_IDLE"));
+    if (!on || g_sub_serial % 8) return;
+    wb_ent *list[16]; int nl = 0;
+    pthread_mutex_lock(&g_wb_mu);
+    for (uint32_t i = 0; i < g_wb.cap && nl < 16; i++) { wb_ent *e = g_wb.vals ? g_wb.vals[i] : NULL;
+        if (e && !e->idle_stamp && g_sub_serial - e->sub >= 30 && !nvn_dirty_since(e->t.mem, e->t.size, e->stamp)) { e->idle_stamp = 1; list[nl++] = e; } }
+    pthread_mutex_unlock(&g_wb_mu);
+    for (int i = 0; i < nl; i++) {
+        wb_ent *e = list[i]; const tex_t *t = &e->t; id o = (__bridge id)e->obj; id<MTLTexture> mt = [o isKindOfClass:[NvPkg class]] ? ((NvPkg *)o)->tex : o; uint32_t upf; int ubpp;
+        if (!mt || bc_unpack(t->d.format, &upf, &ubpp) || t->d.target == 2 || t->d.samples > 1) continue;
+        dm_guest_write_prepare(t->mem, t->size);
+        unsigned layers = t->d.target == NVN_TEXTURE_TARGET_2D || !t->layer_size ? 1 : t->size / t->layer_size, ok = 1;
+        for (unsigned l = 0; l < (t->d.levels ? t->d.levels : 1) && ok; l++) for (unsigned y = 0; y < layers && ok; y++) ok = wb_level(t, mt, l, y);
+        nvn_dirty_protect(t->mem, t->size);
+        pthread_mutex_lock(&g_wb_mu); e->idle_stamp = nvn_dirty_now(); e->stamp = e->idle_stamp; pthread_mutex_unlock(&g_wb_mu);   // a later CPU write shows against this
+        uint64_t n = ++g_wb_idle_n; if (n <= 4 || !(n % 100)) MLOG("idle write-back: texture %llu %ux%u format %#x (%llu so far, %s)", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (unsigned long long)n, ok ? "ok" : "failed");
+    }
+}
+// With it, the other half: a texture the GPU wrote whose storage the CPU wrote since (a tile copied in) takes the CPU's bytes, as on the console where
+// both write the same memory: it leaves the GPU-owned set and is watched from its last GPU write, so its next use uploads it from storage
+// (tex_mtl: cpuf_written); the GPU writing it again makes it the GPU's once more
+static uint64_t g_wb_cpu_n;
+static void wb_cpu_pass(void) {   // submit thread, before the submission
+    static int on = -1; if (on < 0) on = getenv("DM_NVN_WB_IDLE") && atoi(getenv("DM_NVN_WB_IDLE"));
+    if (!on) return;
+    wb_ent *list[64]; int nl = 0;
+    pthread_mutex_lock(&g_wb_mu);
+    for (int again = 1; again && nl < 64;) { again = 0;   // a deletion shifts entries: scan again
+        for (uint32_t i = 0; i < g_wb.cap && nl < 64; i++) { wb_ent *e = g_wb.vals ? g_wb.vals[i] : NULL;
+            if (!e || !nvn_dirty_since(e->t.mem, e->t.size, e->stamp)) continue;
+            uint64_t k = e->t.serial; nvn_hm_del(&g_wb, &k); list[nl++] = e; again = 1; break; } }
+    pthread_mutex_unlock(&g_wb_mu);
+    for (int i = 0; i < nl; i++) {
+        wb_ent *e = list[i]; uint64_t ser = e->t.serial;
+        pthread_mutex_lock(&g_cpuf_mu);
+        if (g_gpu_owned) CFSetRemoveValue(g_gpu_owned, (const void *)(uintptr_t)ser);
+        if (!g_cpuf_watch) g_cpuf_watch = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
+        CFDictionarySetValue(g_cpuf_watch, (const void *)(uintptr_t)ser, (const void *)(uintptr_t)(e->stamp + 1));   // written since its last GPU write: cpuf_written
+        pthread_mutex_unlock(&g_cpuf_mu);
+        ser_bump(ser);   // its texture IDs fetch it again
+        uint64_t n = ++g_wb_cpu_n; if (n <= 4 || !(n % 100)) MLOG("CPU-written GPU texture taken from storage: %llu %ux%u format %#x (%llu so far)", (unsigned long long)ser, e->t.d.width, e->t.d.height, e->t.d.format, (unsigned long long)n);
+        wb_free(e);
+    }
 }
 static void wb_released(uint64_t serial) { pthread_mutex_lock(&g_wb_mu); wb_ent *e = nvn_hm_del(&g_wb, &serial); pthread_mutex_unlock(&g_wb_mu); wb_free(e); }   // fin_drain
 static int wb_level(const tex_t *t, id<MTLTexture> mt, unsigned level, unsigned layer) {
@@ -2075,6 +2162,7 @@ static void tex_gpu_write(const tex_t *t) {
     int had = CFSetContainsValue(g_gpu_owned, (const void *)(uintptr_t)t->serial);
     if (!had) { CFSetAddValue(g_gpu_owned, (const void *)(uintptr_t)t->serial); if (g_cpuf_watch) CFDictionaryRemoveValue(g_cpuf_watch, (const void *)(uintptr_t)t->serial); }
     pthread_mutex_unlock(&g_cpuf_mu);
+    if (!had && wb_census_on()) wb_census_shape("GPU-written texture in a CPU-visible pool", t, ++g_wbc_gpu);
     if (!had) {
         id have = serial_get(t->serial);
         if ([have isKindOfClass:[NvPkg class]]) { id<MTLTexture> tx = ((NvPkg *)have)->tex; ((NvPkg *)have)->tex = nil; if (tx) serial_put(t->serial, tx); }   // NvPkg's dealloc would take tx out of residency
@@ -2101,7 +2189,7 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
     id have = serial_get(t->serial);
     if (!packaged && tex_cpu_candidate(t) && !gpu_owned(t->serial) && on_sub_thread()) {   // CPU-filled (see above); uploads run on the submit thread only
         if (have) packaged = [have isKindOfClass:[NvPkg class]] || cpuf_written(t);
-        else { packaged = storage_filled(t); if (!packaged) cpuf_watch(t); }
+        else { packaged = storage_filled(t); if (!packaged) cpuf_watch(t); wb_census_first(t); }
     }
     if (packaged) {
         NvPkg *pk = [have isKindOfClass:[NvPkg class]] ? have : nil;   // a watched GPU-only texture the CPU filled later gets its first upload here (serial_put retires the old one)
@@ -3332,6 +3420,7 @@ static void shmap_load(void) {
 @implementation NvShader @end
 #include "nvn_pso_skey.h"
 #include "nvn_warm_list.h"
+#include "nvn_aniso.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; int sum_ok, sum_img, sum_imgw; uint32_t sum_cmask; } @end   // sum_*: udc_note_draw's per-program summary
 @implementation NvProg @end
 // What udc_note_draw needs of a program, worked out once (upstream d2r-mobile 44a6770 caches it per program): any image binding, any writable one,
@@ -3792,7 +3881,8 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.mipFilter = p.minf <= 1 ? MTLSamplerMipFilterNotMipmapped : (p.minf == 2 || p.minf == 3) ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterLinear;
     d.sAddressMode = wrapm(p.ws); d.tAddressMode = wrapm(p.wt); d.rAddressMode = wrapm(p.wr);
     d.lodMinClamp = p.lod_min < 0 ? 0 : p.lod_min; d.lodMaxClamp = p.lod_max;
-    d.maxAnisotropy = p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso;
+    static int force = -1; if (force < 0) { const char *e = getenv("DM_NVN_ANISO"); force = e ? atoi(e) : 0; if (force > 1) MLOG("DM_NVN_ANISO=%d: anisotropic filtering raised on mipmapped linear samplers", force); }
+    d.maxAnisotropy = nvn_aniso(p.aniso, p.minf, p.cmp_mode, p.reduction, force);
     if (p.cmp_mode) d.compareFunction = (MTLCompareFunction)(p.cmp_func - 1);
     // LOD bias and min / max reduction (NVN values 0 average, 1 min, 2 max = MTLSamplerReductionMode's) came with macOS / iOS 26: the bias was stored
     // and never applied (Tears of the Kingdom sets it on 861 samplers). Metal ignores the reduction with nearest filtering, as NVN does
