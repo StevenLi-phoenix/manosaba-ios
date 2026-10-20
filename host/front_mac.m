@@ -250,6 +250,7 @@ void front_run(void (*guest)(void)) {
             NSApp.mainMenu = bar;
         }
         dm_gamepad_start();   // game controllers (ios/Sources/dm_gamepad.m, shared with iOS)
+        { void dm_procon_start(void); dm_procon_start(); }   // a Switch Pro Controller's IMU and HD rumble over its HID device (procon_mac.m, plan item 67b)
         [win makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {

@@ -40,6 +40,7 @@ SRC = \
 	movie_av.m \
 	movie_webm.c \
 	options.c \
+	procon_mac.m \
 	romfs_parts.c \
 	romfs_validate.c \
 	sdktest.c \
@@ -53,7 +54,7 @@ GFX = $(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S 
 GFX_H = $(sort $(wildcard ../gfx/nvn/*.h ../gfx/nvn/include/*.h ../gfx/tex/*.h))
 HDR = $(wildcard *.h) $(GFX_H) $(wildcard $(GAMEDIR)/*.h)
 FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework CoreAudio -framework ImageIO \
-	-framework UniformTypeIdentifiers -framework GameController -framework CoreHaptics -framework Network -framework AVFoundation -framework CoreMedia -framework CoreVideo
+	-framework UniformTypeIdentifiers -framework GameController -framework CoreHaptics -framework IOKit -framework Network -framework AVFoundation -framework CoreMedia -framework CoreVideo
 INCLUDES = -I. -I../gfx/nvn/include -I$(GAMEDIR)
 # VP8 / VP9 movies (hle_movie.c: Tears of the Kingdom's cutscenes) decode with libvpx when it is installed (brew install libvpx; the static library is
 # linked in, BSD-3-Clause). -isystem and the archive are not taken over by the iOS app (ios/tools/gen_build.py): it links its own, built by

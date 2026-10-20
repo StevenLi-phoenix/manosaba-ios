@@ -97,6 +97,7 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_PAD_LOG=1` | Log each haptics engine's starts and stops (`gamepad.m`, plan item 67c) |
 | `DM_PAD_MOTION_LOG=1` | Log a controller's motion as GameController reports it, twice a second (gravity, user acceleration, rotation): for measuring its axes before they feed the six-axis sensor (plan item 67d) |
 | `DM_PHONE_HAPTICS=0` | iOS: no pulses on the phone's own haptics when no controller has haptics (plan item 67c) |
+| `DM_PROCON=0` | Mac: leave a Switch Pro Controller to GameController (no IMU or HD rumble over its HID device, `procon_mac.m`, plan item 67b) |
 | `DM_SURVEY=1` | Tears of the Kingdom: `survey pos <tag>` / `survey move <tag> X Y Z <frames>` on the command channel read Link's place and move him through the game's own forceSetMatrix, between two frames (`games/totk/survey.c`) |
 | `DM_MODS=<dir>` | Mods: each entry's `romfs`, `contents/<program id>/romfs` or `atmosphere/contents/<program id>/romfs` (or loose files) in front of the RomFS, in name order, the first winning; names starting with `.` or `-` are off; code mods are not applied (iOS: `Documents/mods`) |
 | `DM_CRASH_HEAP=<reg>,...`, `DM_LIST_WATCH=[heap+]<addr>,...` | sead games: on a crash, the heaps and block holding each register's address; watch intrusive lists and dump the threads when one gets a null next (`sead.c`) |

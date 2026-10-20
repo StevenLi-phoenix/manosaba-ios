@@ -67,6 +67,8 @@ run: \
 	$(B)/t_haptics \
 	$(B)/t_haptics_nogap \
 	$(B)/t_motion \
+	$(B)/t_procon \
+	$(B)/t_procon_raw \
 	$(B)/t_motion_allstyles \
 	$(B)/t_motion_nobias \
 	$(B)/t_motion_nograv \
@@ -256,6 +258,11 @@ run: \
 	   cat $(B)/t_haptics_nogap.log; echo "t_haptics_nogap: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_haptics_nogap: pulses as often as asked fail the gap check, as expected"
 	$(B)/t_motion 2>/dev/null
+	$(B)/t_procon
+	@status=0; $(B)/t_procon_raw > $(B)/t_procon_raw.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_procon_raw.log)" -ne 3 ]; then \
+	   cat $(B)/t_procon_raw.log; echo "t_procon_raw: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_procon_raw: the raw axes as they come fail the three axis checks, as expected"
 	@for v in allstyles nobias nograv nopeak; do status=0; $(B)/t_motion_$$v > $(B)/t_motion_$$v.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_motion_$$v.log)" -ne 1 ]; then \
 	   cat $(B)/t_motion_$$v.log; echo "t_motion_$$v: unexpected negative-control result ($$status)"; exit 1; \
@@ -688,6 +695,10 @@ $(B)/t_haptics: t_haptics.c ../haptics_map.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_haptics.c
 $(B)/t_haptics_nogap: t_haptics.c ../haptics_map.h | $(B)
 	clang -O1 -Wall -I.. -DDM_TEST_PULSE_NO_GAP -o $@ t_haptics.c
+$(B)/t_procon: t_procon.c ../procon.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_procon.c
+$(B)/t_procon_raw: t_procon.c ../procon.h | $(B)
+	clang -O1 -Wall -I.. -DDM_TEST_PROCON_RAW_AXES -o $@ t_procon.c
 MOTION_DEPS = t_motion.c ../hle_hid.c ../hle_motion.c ../hle.h ../dm.h ../dm_input.h ../front.h
 $(B)/t_motion: $(MOTION_DEPS) | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_motion.c

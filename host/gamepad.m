@@ -64,7 +64,8 @@ void dm_gamepad_unplug(int n) { LOG("gamepad: virtual controller %d unplugged", 
 
 // ---------- Haptics ----------
 enum { NHAP = 4 };
-typedef struct { __weak GCController *c; const void *who; int n; __strong CHHapticEngine *eng[2]; __strong id<CHHapticPatternPlayer> pl[2]; int dead[2], qi[2], qs[2], started[2]; } hap_t;
+typedef struct { __weak GCController *c; const void *who; int n, pro; __strong CHHapticEngine *eng[2]; __strong id<CHHapticPatternPlayer> pl[2]; int dead[2], qi[2], qs[2], started[2]; } hap_t;
+void (*dm_pad_hd_sink)(const float v[2][4]);   // a Switch Pro Controller's HD rumble over its HID device (procon_mac.m) while it is open
 static hap_t g_hap[NHAP];
 static dispatch_queue_t g_hq; static dispatch_source_t g_htimer;
 #if TARGET_OS_IPHONE
@@ -122,10 +123,13 @@ static void hap_phone(float peak, uint64_t now) {
 }
 static void hap_tick(void) {
     float v[2][4]; dm_vibration_take(v); uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); int any_pad = 0;
+    void (*hd)(const float v[2][4]) = dm_pad_hd_sink;
+    if (hd) { hd(v); any_pad = 1; }
     for (int i = 0; i < NHAP; i++) {
         hap_t *h = &g_hap[i]; if (!h->who) continue;
         if (!h->c) { *h = (hap_t){0}; continue; }   // gone (ARC releases its engines)
         any_pad = 1;
+        if (h->pro && hd) continue;   // its HD rumble goes out over its HID device
         if (h->n == 2) { hap_set(h, 0, v[0]); hap_set(h, 1, v[1]); }
         else { int lo = v[1][0] > v[0][0], hi = v[1][2] > v[0][2];   // each band from the side that has it larger
                float m[4] = {v[lo][0], v[lo][1], v[hi][2], v[hi][3]}; hap_set(h, 0, m); }
@@ -145,6 +149,7 @@ static void hap_add(GCController *c) {   // on hq
         int slot = -1; for (int i = 0; i < NHAP; i++) { if (g_hap[i].who == (__bridge const void *)c) return; if (slot < 0 && !g_hap[i].who) slot = i; }
         if (slot < 0) return;
         hap_t *h = &g_hap[slot]; *h = (hap_t){0}; h->c = c; h->who = (__bridge const void *)c;
+        h->pro = c.productCategory && [c.productCategory rangeOfString:@"pro controller" options:NSCaseInsensitiveSearch].location != NSNotFound;   // as macOS names a Switch Pro Controller (atone)
         NSSet<GCHapticsLocality> *loc = hp.supportedLocalities;
         if ([loc containsObject:GCHapticsLocalityLeftHandle] && [loc containsObject:GCHapticsLocalityRightHandle]) {
             h->eng[0] = [hp createEngineWithLocality:GCHapticsLocalityLeftHandle]; h->eng[1] = [hp createEngineWithLocality:GCHapticsLocalityRightHandle]; h->n = 2;
@@ -161,6 +166,7 @@ static void hap_add(GCController *c) {   // on hq
         hap_start_timer();
     }
 }
+void dm_gamepad_haptics_on(void) { dispatch_async(g_hq, ^{ hap_start_timer(); }); }   // the tick runs (procon_mac.m: HD rumble without a GameController engine)
 static void hap_init(void) {
     g_hq = dispatch_queue_create("dm.haptics", DISPATCH_QUEUE_SERIAL);
     const char *e = getenv("DM_PAD_LOG"); g_hlog = e && strcmp(e, "0");

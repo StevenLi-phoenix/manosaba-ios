@@ -33,5 +33,6 @@ for s in srcs:
     os.symlink(s, f'{gen}/src/{flat}')
 print('HEADER_SEARCH_PATHS = $(inherited) ' + ' '.join(f'"{d}"' for d in incs + dirs) + ' $(DM_VPX_INC)')   # DM_VPX_INC: ios/run.sh (the iOS libvpx, plan item 62b)
 print('OTHER_CFLAGS = $(inherited) ' + ' '.join(defs))
-print('DM_FRAMEWORKS = ' + ' '.join(f'-framework {f}' for f in fws if f != 'Cocoa'))
-print('DM_FRAMEWORKS[sdk=iphonesimulator*] = ' + ' '.join(f'-framework {f}' for f in fws if f not in ('Cocoa', 'MetalFX')))   # the Simulator SDK has no MetalFX (plan item 114)
+MAC_ONLY = ('Cocoa', 'IOKit')   # (IOKit: procon_mac.m, a Mac-only source)
+print('DM_FRAMEWORKS = ' + ' '.join(f'-framework {f}' for f in fws if f not in MAC_ONLY))
+print('DM_FRAMEWORKS[sdk=iphonesimulator*] = ' + ' '.join(f'-framework {f}' for f in fws if f not in MAC_ONLY + ('MetalFX',)))   # the Simulator SDK has no MetalFX (plan item 114)

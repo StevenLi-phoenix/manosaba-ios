@@ -2379,7 +2379,7 @@ Tier 4, large:
 Tier 5, needs the user's devices, controller or account:
 - [ ] 65 increased-memory-limit with a free account (one signing attempt)
 - [ ] 66 a Switch Pro controller check of 2
-- [ ] 67 gyro and rumble (implemented here, checked with the controller)
+- [x] batch 59 · 67 gyro and rumble (implemented here; the checks with the controller and the phone are on the device list)
   - [x] batch 58 · 67a vibration handles per style, only the connected style forwarded, bool arguments masked: `host/hle_motion.c` (new). Handles
     as Tears of the Kingdom 1.4.3's own sdk makes them (read from `utility::GetVibrationDeviceHandles` sdk+0x51e2b0 and
     `utility::GetSixAxisSensorHandle` sdk+0x51dd20, which `GetVibrationDeviceHandles` / `GetSixAxisSensorHandles` reach through the PLT;
@@ -2395,7 +2395,18 @@ Tier 5, needs the user's devices, controller or account:
     order), mounted for the connected controller's. Tears of the Kingdom's prologue now gets 2 vibration handles and 1 six-axis handle (it got
     none). `host/tests/t_motion.c` (25, with totk-mobile's captured landing pulse and the landing value {0.1, 198.7 Hz, 0, 299.9 Hz} as data;
     every style forwarded, no peak hold: 1 fails each)
-  - [ ] 67b the Pro Controller's IMU and HD rumble over IOHID on the Mac (atone), the fallback when GameController reports zero motion
+  - [x] batch 59 · 67b the Pro Controller's IMU and HD rumble over IOHID on the Mac (atone): `host/procon_mac.m` (Mac only) opens a Switch
+    Pro Controller's HID device (0x057e / 0x2009) alongside the system driver when it appears, switches its IMU on (output report 0x01,
+    subcommand 0x40 with 1) and turns the IMU of each input report 0x30 into the six-axis sensor's samples (`host/procon.h`: three samples
+    at 13 / 25 / 37 averaged, 4096 LSB per G and 16.384 per degree a second, raw x forward / y left / z up to nn::hid's acceleration (y, -x,
+    -z) and gyro (-y, x, z), as atone measured on a Pro Controller and checked with Breath of the Wild's bow aiming). The game's vibration
+    goes out as HD rumble (output report 0x10, every 15 ms while on or just changed, four silent ones after): gamepad.m's haptics tick hands
+    the values over (`dm_pad_hd_sink`) and leaves that controller's CoreHaptics engines alone (its productCategory names a Pro Controller, as
+    atone found macOS names it); each band through haptics_map.h's gain, then dekuNukem's encoding (frequency code round(log2(f / 10) * 32),
+    the high band's 4 * (code - 0x60), the low band's code - 0x40; the amplitude code from its table, at most 100, under the rows its table
+    marks unsafe; checked here against the fetched table). `DM_PROCON=0` leaves it to GameController. `host/tests/t_procon.c` (6: the IMU's
+    axes, averaging and refusals; the amplitude code of all 101 rows of the table; a motor's bytes; the raw axes as they come: 3 fail).
+    Device checks: with the user's Pro Controller, aiming and Ultrahand rotation by motion, and the landing pulse felt
   - [x] batch 58 · 67c CoreHaptics with plain players; phone haptics rate-limited and off at a serious thermal state: `host/gamepad.m` (Mac and
     iOS) takes the values every 15 ms on a queue of its own; per controller with haptics an engine per handle when it has a left and a right
     (else one, each band from the side that has it larger); GameController's engines take plain players only (atone f6dba3d on a Pro
@@ -2407,7 +2418,7 @@ Tier 5, needs the user's devices, controller or account:
     least 120 ms apart, at most 8 in a 1.5 s burst, under 0.03 none, a value older than 200 ms none), none at a serious thermal state or with
     `DM_PHONE_HAPTICS=0`. `host/tests/t_haptics.c` (8; pulses as often as asked: 1 fails). The feel (the gain, the sharpness) is a device check
     with the user's controller and phone
-  - [x] batch 58 · 67d gyro fusion with the rest bias learned: the six-axis state (0x60: the SDK's members and units, the direction at 0x34 as
+  - [x] batch 58 · 67d gyro fusion with the rest bias learned (fed by a Pro Controller since 67b): the six-axis state (0x60: the SDK's members and units, the direction at 0x34 as
     atone's and SkyRecomp's) from the front end's samples (`dm_motion_set`: acceleration in G, angular velocity in revolutions a second, in
     nn::hid's frame); the orientation by atone/nxnative 185cfda's method (Mahony's filter, the gyro turning a quaternion, the accelerometer
     pulling the gravity estimate back; its axis order and signs, which they checked with Breath of the Wild's bow aiming on a Pro Controller;
