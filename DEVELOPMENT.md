@@ -1034,6 +1034,57 @@ D-pad background fix (ours: the overlay); bayonetta3's two signed main images, V
 copy (the SDK says ignored), conditional ledger, pool cache; dr3's program snapshot, socket facts (to 84 / 64); blade2's HLE mixer; VA-11 as a whole;
 super-mario-odyssey-ios's audio ring and touch ABI; armyja's system clock context (ours better).
 
+### Evening sync of 2026-10-20 (to do)
+
+At the user's request ("before going on, sync the upstreams so we do not build what they have just built"): every reference clone fetched again
+in the evening, and only what was new since the morning's reviews read (four read-only reviewers; reports in the session scratchpad
+`review5/`). New since the morning: seedds/nxnative 7e2c741..b932024 (15 commits, PRs #11-#20), ly05010419/MacNativeGames 15b1afd..b75be8c (6,
+40 PRs / 25 issues updated), jhaizhou-ops/d2r-mobile 6996690..53e7c5b (PRs #96, #97, #100), huajiaoshu520/acnh-mobile ..bd2e176, Apolinario-coder/
+SkyRecomp ..c8de7ab, catoncat/d2r-port-radar ..7bffcbd (264 entries), side branches of GirlNet/d2r-mobile (`codex/p5r-runtime` 639cf35),
+hyc1743/super-mario-odyssey-ios (`codex/nxnative-verify-once` ea19678), Nishikori-Yui/lordran-native (main ecb74d5) and peiikai/LASRecomp (MIT for its
+own code; `beta_5` f2c6fb4, `test-perf-7` 13f54af); and a new project, MZhao-ouo/Touchable 5cab3ac (MIT, on upstream 2eb5758; Rhythm Heaven and
+Silksong). OJZen/totk-mobile had nothing new after 510d95b. "Checked here" = confirmed in our code when merging; the rest is the reviewer's
+reading.
+
+Changes to planned items:
+- **131**: the two values main 0xa1b8c subtracts come from one NVN function pointer (main+0x396e420) called with the device and a counter
+  address, are multiplied by 0.001 (ns → µs, main+0x2d02608) and divided by 16,666.666 µs (main+0x2d02094): the game's GPU time as a share of a
+  60 Hz frame (checked here). Our counter timestamps are the submission's completion time for every report in it and `DM_NVN_TS_LATE_US` adds
+  one constant to all, so the difference can read about 0 and item 46 did not test this path. Probe s0 / s1 at 0xa1bb8 (and the multiplier
+  after main 0xd5d80, nxnative's render-scale site) first; if the input is 0, timestamps at the command buffer's GPU start / end (nxnative
+  `rep_ticks`, its BotW mode) before the budget factor. GPU times taken while held at 30 fps read high from the clock drop (LASRecomp 4e77c26:
+  15.9 against 9-11 ms). nxnative does not touch 0xA1B94.
+- **133**: nxnative now decides TotK's step on the host in whole vsyncs and holds each frame exactly that long (`nvn_fstep.h`, `hle_nvn.c`
+  `fstep_tick`, `t_fstep.c` about 19 checks: hysteresis, a trial at k−1 after 30 frames that fit, debt paid back): the step equals the time on
+  screen, and its kmin follows the movie hold. Ours steps by a mean of five intervals and, uncapped, renders up to 120 fps on a 60 Hz panel
+  (half never shown) or lets the game's controller flap on 120 Hz displays (543 interval changes in 120 s, item 53). Same producers (our
+  `realtime` HOSTREFS), so it is a switch beside ours; theirs stops at 60 fps.
+- **134**: nxnative b301431: an AudioOut with no device callback for 200 ms moves to the silent sink and retries after 1-8 s, a failed Start
+  falls back instead of dropping the unit for good (ours `host/hle_audio.c:244`), and the media-services reset rebuilds every unit.
+- **94a**: the Great Sky Island grass has a second, proven cause (border colours below, 161): fix that first, then judge the write-back.
+- **100**: integer outputs belong to (shader, target kind), not to the shader (162).
+- **62b**: libvpx as the iOS VP9 path; GirlNet removed VideoToolbox's VP9 probe, which faulted in movie start on its iOS target (76ca341;
+  libvpx 1.15.2 recipe in 4fc3114).
+- **67**: Touchable's design (`ss_haptics.c`, `Haptics.m`, `test_haptics.c`: the stronger side per band, intensity √(low²+high²), sharpness from
+  log2(f/40)/5, values cleaned, suspend reasons and an epoch so old pulses never replay, a muted 30 s looping player on the phone, a plain player
+  on `GCController.haptics`, device-confirmed on a DualSense); its handles are made up and it has no batch send, which TotK uses.
+- **151**: two more long-play crashes at the same site (MacNativeGames #57: main+0x1561c through 0x1bd01c4 after 72 min and 2 h 13 min), plus
+  GPU memory at a 5 GB budget after 2 h 43 min (#72) and a footprint of 3.4 → 6.5 GB in 110 min (#74): run our own long soak first (166).
+- **139**: hair and cloth at 60 fps (163) is a second TotK user of code caves.
+
+New references (port radar and the reviewers): yokeyhh/switch-port-to-apple (a porting playbook on d2r-mobile and totk-mobile, MIT),
+DanielZhangyc/smbw-mobile (Super Mario Bros. Wonder on the Mac, calibrated Switch 2 Pro controller input and dual-band rumble, MIT),
+CODPHISH/ns2app (Silksong on iOS), WangTingYeYe/rtg-mobile, rootrd/dontstarve-harmony (NVN → Vulkan), two A12Z iPad Pro D2R ports with per-slot
+bindings (aerolithink, bluewater0121), dodola's `codex/zelda-echoes-of-wisdom-android` and its ordered NVN worker (61). TypeSafe's Jev model
+(d2r-mobile's author drives multi-game iPhone tests with it: which key to press on each screen; not published yet) is noted for the test
+automation question.
+
+Checked, not better or already here: nxnative's BC render targets (our `blk_aux`), attachment-less passes, render scale (our `DM_RENDER_RES` is
+absolute and keeps the dynamic multiplier), translator phi fix (no texture-array binding in our 31,392 reflections); MacNativeGames' UIScene
+lifecycle, audio ring trim, shader list (its 492 1.4.3 survey shaders are all in our set); SkyRecomp's 120 fps step (ours does the same) and jump
+tables; Touchable's texture paths, fs, audio mixer, Python NCA extraction; GirlNet's linear R8 / RG8 views (it rounds unaligned strides),
+compressed atlas re-uploads; lordran's in-place re-upload (reverted; ours waits for the fence).
+
 ### Plan: all of the wider review, simple to complex (2026-10-19)
 
 Everything above is to be done, in this order. `[ ]` open, `[x] batch N` done in the commit whose subject starts with "Plan batch N", `[-]` measured and not needed (with the number). Each item gets a
@@ -1605,12 +1656,14 @@ Tier 3c, Tears of the Kingdom:
   a movie (60 fps product: frame time p50 33.5 ms during the hold, 8.3 outside). Tests: `t_pace` (9 hold cases; the game's interval alone fails 4),
   `t_oe` (8; the old stub fails 8), `t_movie_fps` (6; every cutscene held fails 3). `host/tests`' profile rule now depends on game.json and
   `gen_game.py` (it kept a profile from before a new field)
-- [ ] 131 dynamic resolution's time budget from the frame rate
+- [ ] 131 dynamic resolution's time budget from the frame rate (evening sync: probe its GPU-time input first; it may read 0 with our timestamps)
 - [ ] 132 the wave program's wide lines
-- [ ] 133 FPSLocker's frame step measured against ours; double buffering and the world clock probed (71c)
+- [ ] 133 FPSLocker's frame step measured against ours; double buffering and the world clock probed (71c); evening sync: nxnative's host-decided
+  whole-vsync step as the candidate
 
 Tier 3c, iOS:
-- [ ] 134 the audio session's sample rate and I/O buffer, an underrun counter, the unit rebuilt after a media services reset
+- [ ] 134 the audio session's sample rate and I/O buffer, an underrun counter, the unit rebuilt after a media services reset (evening sync:
+  nxnative b301431's callback watchdog and Start fallback)
 - [ ] 135 Low Power Mode and thermal Serious → 30 fps; `ENABLE_DEBUG_DYLIB: NO`
 - [ ] 136 patches always applied, chosen by the page (no option pages on iOS)
 
@@ -1641,6 +1694,45 @@ Tier 3c, smaller items listed at the user's request (2026-10-20: every finding o
 - [ ] 146 NCZ (solid zstd) input in the game extraction, restored to NCA with its hash checked
 - [ ] 147 tests that run the game's own SDK code against the host (time, vibration, fonts; needs the game, not CI)
 - [ ] 148 an in-game settings panel and a control layout editor for the touch controls (BotWRecomp menu, lordran)
+
+Tier 3d, from the evening sync of 2026-10-20 (sources in that section; after 3c, before Tier 4). Correctness, small:
+- [ ] 155 the present viewport rounded before it is centred (Touchable: with contraction `floor((dh - ch*s)/2)` gives -1 at 2868x1320 and at
+  3456x2234, the Mac's full screen; `nvn_mtl.m` Metal 3 and `present_vp`)
+- [ ] 156 dropped frames and slow frames judged against each frame's hold (present period × interval), not 16.7 / 25 ms (nxnative e7a84c7,
+  Touchable; ours counts 299 of 300 dropped at 30 fps)
+- [ ] 157 the oe notification event set and cleared under the queue lock (nxnative ee51071; ours clears it after unlocking, so a push in between
+  leaves it clear with a message queued)
+- [ ] 158 the user clock context in Horizon's layout (nxnative a35e964: offset from the steady time point, then the point and its source)
+- [ ] 159 the Metal 4 feedback queue drains its autorelease pool per work item (lordran 6145d1d, with its test)
+- [ ] 160 GetInfo of an unknown type: Horizon's result, checked against Atmosphère first (Touchable answers 0xF001; ours succeeds with 0)
+
+Tier 3d, Tears of the Kingdom:
+- [ ] 161 sampler border colours Metal lacks: a census of (wrap mode, colour), then shader variants that return the colour outside [0, 1]
+  (MacNativeGames b6231e6 / 874a32d, #49: the grass interaction map's border 0.5 read as transparent black, grass flat and uncuttable; ours maps
+  every colour to black or white, checked here); before 94a
+- [ ] 162 one pixel shader bound to float and to uint targets: a second library by target kind (MacNativeGames' shared list: 23 of our keys)
+- [ ] 163 hair and cloth at 60 / 120 fps: the four sites of MacNativeGames PR #79 with its Unicorn table (after 139)
+- [ ] 164 a mod that carries one of our RomFS overlay files: a red line, or the overlay's member patch applied to the mod's copy (MacNativeGames #73)
+- [ ] 165 decals that read their own G-buffer pass: one split per run (MacNativeGames PR #67), judged in motion against footage (with 42 / 113)
+- [ ] 166 a three-hour soak of the 60 fps product before 151 (MacNativeGames #57, #72, #74; upstream #90)
+- [ ] 167 a teleport command for fixed-point soaks and shader coverage (MacNativeGames d164868 `world_survey.c`; needs an overworld save)
+- [ ] 168 a second BC4 encoder in the agl library, as nxnative found in Breath of the Wild (b932024)
+
+Tier 3d, iOS, Mac and tooling:
+- [ ] 169 shader functional keys: what the translator reads (stage, sizes, code, workgroup) as a fallback key (Touchable; manosaba's 2,740 shaders
+  are 1,299 functionally, measured on our capture)
+- [ ] 170 the game language from iOS Settings' per-app language, mapped to Nintendo's codes (Touchable)
+- [ ] 171 the touch controls below the iPadOS 26 window controls, hidden only after a controller key press, tested on a table of device sizes
+  (Touchable; with 148)
+- [ ] 172 ProMotion 120 Hz for a game that steps by real time (Touchable; manosaba to check first)
+- [ ] 173 install: profile expiry and device checks, the saves backed up first (Touchable's launcher)
+- [ ] 174 the iOS shader directory checked complete before packing (acnh-mobile 67afe52)
+- [ ] 175 the game data verified once, then a marker (super-mario-odyssey-ios ea19678; for 62e), keeping the key-file checks
+- [ ] 176 the Metal 3 gfx tests in CI on GitHub's paravirtual GPU, with residency-set creation falling back (GirlNet's CI run 39352965249)
+- [ ] 177 the GPU one frame behind the game, measured first (LASRecomp dc1d28f: 27.6 → 60 fps at 5K on an M3 Max; for 97 / 142 / 153)
+- [ ] 178 the diagnostics export redacted (lordran 40a9a72); memory sampled every 60 frames with the command allocators (lordran 24740d4; 62f)
+- [ ] 179 tests to take: overlapping `UpdateUniformBuffer` writes (Touchable), a 512 re-upload soak (lordran), the pass-continuation cases
+  (GirlNet `t_p5r_rt_continue_gpu.m`)
 
 Tier 4, large:
 - [ ] 61 NVN translation on a thread of its own (after 5, 47 and 49, to measure it; the render-queue cases and job queue of 2026-10-20 first)

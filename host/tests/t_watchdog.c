@@ -24,21 +24,28 @@ static void child(int kind) {
     if (kind == 1) { sleep(4); _exit(0); }
     atomic_store(&g_bg, 1); sleep(4); atomic_store(&g_bg, 0); sleep(3); _exit(0);
 }
-static int run(int kind, char *out, size_t n) {
-    int pf[2]; if (pipe(pf)) return -1;
-    pid_t p = fork(); if (!p) { dup2(pf[1], 2); close(pf[0]); close(pf[1]); child(kind); }
-    close(pf[1]); int st; waitpid(p, &st, 0);
-    ssize_t k = 0, r; while (k < (ssize_t)n - 1 && (r = read(pf[0], out + k, n - 1 - k)) > 0) k += r; out[k] = 0; close(pf[0]);
+// The three cases run at the same time (they mostly sleep: about 6 s in all instead of 12), each child's stderr into its own temporary file
+typedef struct { pid_t pid; FILE *f; } kid;
+static kid start(int kind) {
+    kid k = {-1, tmpfile()}; if (!k.f) return k;
+    fflush(stdout); k.pid = fork(); if (!k.pid) { dup2(fileno(k.f), 2); child(kind); }
+    return k;
+}
+static int finish(kid k, char *out, size_t n) {
+    out[0] = 0; if (!k.f || k.pid < 0) return -1;
+    int st; waitpid(k.pid, &st, 0);
+    rewind(k.f); size_t got = fread(out, 1, n - 1, k.f); out[got] = 0; fclose(k.f);
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    static char out[65536]; int code;
-    code = run(0, out, sizeof out);
+    static char out[65536]; int code; kid k[3];
+    for (int i = 0; i < 3; i++) k[i] = start(i);
+    code = finish(k[0], out, sizeof out);
     CHECK(code == 0 && !strstr(out, "[red] watchdog"), "away: 4 s in the background without progress, back with progress: not killed (exit %d)", code);
-    code = run(1, out, sizeof out);
+    code = finish(k[1], out, sizeof out);
     CHECK(code == 128 + SIGALRM && strstr(out, "[red] watchdog: no progress"), "stuck: 4 s without progress in the foreground: killed (exit %d)", code);
-    code = run(2, out, sizeof out);
+    code = finish(k[2], out, sizeof out);
     CHECK(code == 128 + SIGALRM && strstr(out, "[red] watchdog: no progress"), "after: no progress after the return: killed (exit %d)", code);
     printf("t_watchdog: %d checks, %d failed\n", checks, fails); return fails != 0;
 }
