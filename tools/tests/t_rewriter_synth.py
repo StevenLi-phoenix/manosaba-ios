@@ -10,7 +10,9 @@ files, so CI runs tools/patch_nso.py, verify/structck.py and verify/equiv.py on 
   0x500  a compare-and-swap whose store comes before its load (entered at the load, cbz status, x18 the pair load's second register), 0x600 an
          earlier store next to a section that must stay out of it, 0x700 `mov sp, x18` after `mov x9, sp; sub x18, x9, x1` (the words of these
          three are bayonetta3-mobile's tests/test_rewriter.py, enginefuture/bayonetta3-mobile e5ce116, MIT)
-  and a second module with `mrs x0, cntfrq_el0`, which the rewriter must refuse.
+  0x800  `mov w0, #7; ret`, which a second run turns into a code cave (CAVES, plan item 139): x16 borrowed through the red zone, w0 loaded from
+         the host page; run in Unicorn it must give the page's value with x16 and the flags kept, and structck must pass it
+  and a module with `mrs x0, cntfrq_el0`, which the rewriter must refuse.
 Checked: the exact sites, both jump tables with their targets, the sections (0x300, 0x408 and 0x604 windows, 0x500 one piece [0x504, 0x520)
 entered at 0x50c), the svc gate; STRUCT OK; EQUIV OK (with its own mutation
 self-check); structck refuses the product with one site put back to the original word; equiv flags the 0x300 window when its success exit lands one
@@ -19,7 +21,7 @@ Broken variants: DM_TEST_JT_NO_SWAP=1 (only the anchor first) stops the rewriter
 (stream decoding stops at the data word) leaves 0x400's section as plain sites: 2 fail (structck and equiv still pass then: each plain site is
 right taken alone, only the exclusive monitor breaks); DM_TEST_EQUIV_CBZ_NOP=1 (cbz status as nop): 2 fail (the 0x300 exit is missed, and the clean run differs: 0x500's forced compare-equal path
 loops back to its load until the step limit, which each side reaches at another instruction);
-DM_TEST_EQUIV_TSD_WIDE=1 (every write into the slot area dropped): 1 fail.
+DM_TEST_EQUIV_TSD_WIDE=1 (every write into the slot area dropped): 1 fail; DM_TEST_CAVE_NO_BACK=1 (a routine without its branch back): 2 fail.
 Needs capstone, lz4, unicorn (the venv: work/build/cache/dm/venv/bin/python) and llvm-objdump (Xcode)."""
 import os, re, struct, subprocess, sys, tempfile
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
@@ -67,6 +69,7 @@ def text_words():
     at(0x500, 0x14000003, 0xC831B5D0, 0x34000111, 0xC87FC9D1, 0xCA0F0252, 0xCA100231, 0xAA120231, 0xB4FFFF51, 0xD5033F5F, RET, MOVX(0, 1), RET)
     at(0x600, 0xC831B5D0, 0xC87FC9D1, 0xCA0F0252, 0xAA120231, 0xC831B5D0, 0x35FFFF91, RET)
     at(0x700, 0x910003E9, 0xCB010132, 0x9100025F, 0x9100013F, RET)
+    at(0x800, 0x528000E0, RET)   # mov w0, #7: the code cave's site
     return W
 WANT = {0x100: 'svc #0x40', 0x104: 'mrs x0, tpidr_el0', 0x108: 'mov w18, #5', 0x10c: 'adrp x16, #0x1000', 0x110: 'add x16, x16, #0x80',
         0x114: 'sub w18, w1, #1', 0x118: 'cmp w18, #3', 0x11c: 'b.hi #0x150', 0x120: 'ldrsw x18, [x16, x18, lsl #2]', 0x124: 'add x18, x18, x16',
@@ -77,8 +80,8 @@ WANT = {0x100: 'svc #0x40', 0x104: 'mrs x0, tpidr_el0', 0x108: 'mov w18, #5', 0x
         0x50c: 'ldaxp x17, x18, [x14]', 0x510: 'eor x18, x18, x15', 0x514: 'eor x17, x17, x16', 0x518: 'orr x17, x17, x18', 0x51c: 'cbz x17, #0x504',
         0x520: 'clrex', 0x600: 'stlxp w17, x16, x13, [x14]', 0x604: 'ldaxp x17, x18, [x14]', 0x608: 'eor x18, x18, x15', 0x60c: 'orr x17, x17, x18',
         0x610: 'stlxp w17, x16, x13, [x14]', 0x614: 'cbnz w17, #0x604', 0x700: 'mov x9, sp', 0x704: 'sub x18, x9, x1', 0x708: 'mov sp, x18',
-        0x70c: 'mov sp, x9'}
-FUNCS = (0x100, 0x200, 0x300, 0x400, 0x500, 0x600, 0x700)
+        0x70c: 'mov sp, x9', 0x800: 'mov w0, #7'}
+FUNCS = (0x100, 0x200, 0x300, 0x400, 0x500, 0x600, 0x700, 0x800)
 T0, T1 = [0x12C, 0x134, 0x13C, 0x144], [0x220, 0x228, 0x230]
 
 def build(words):
@@ -180,6 +183,34 @@ with tempfile.TemporaryDirectory() as td:
     check('equiv compares writes into the slot area: a block that also stores into a wrong slot differs', 0x108 in diffs(eo),
           eo.strip().splitlines()[-1])
 
+    # A code cave (CAVES): 0x800's `mov w0, #7` becomes stur x16, [sp, #-16]; adrp x16, host page; ldr w0, [x16, #0x40]; ldur x16, [sp, #-16]; b 0x804
+    STUR16, LDUR16, LDRW0 = 0xF81F03F0, 0xF85F03F0, 0xB9404200
+    bid = bytes(range(16)).hex()
+    def cave_run(name, routine, extra_env=None):
+        rp = os.path.join(td, name + '_rules.py'); open(rp, 'w').write(f'CAVES = {{{bid!r}: [(0x800, "528000e0", {routine!r}, "test: w0 from the host page")]}}\n')
+        o = os.path.join(td, name); e = dict(env, DM_RULES=rp, **(extra_env or {}))
+        return o, run('-I', PATCH, nso, o, 'm', env=e)
+    co, (code, log) = cave_run('cave', [STUR16, ('adrp_host', 16), LDRW0, LDUR16])
+    check('a code cave: the rewriter takes it', code == 0 and "'cave': 1" in log, log.strip().splitlines()[-1] if log.strip() else '')
+    def cave_unicorn(outdir):
+        from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UcError
+        from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X16, UC_ARM64_REG_SP, UC_ARM64_REG_NZCV, UC_ARM64_REG_PC
+        img = open(os.path.join(outdir, 'm.patched.bin'), 'rb').read()
+        hp = next(int(l.split()[2], 16) for l in open(os.path.join(outdir, 'm.fixups.tsv')) if l.startswith('# HOST_PAGE_OFF'))
+        u = Uc(UC_ARCH_ARM64, UC_MODE_ARM); size = (len(img) + 0xFFFF) & ~0xFFFF
+        u.mem_map(0, size); u.mem_write(0, img); u.mem_write(hp + 0x40, struct.pack('<I', 0x1234))
+        u.mem_map(0x4000000, 0x10000); u.reg_write(UC_ARM64_REG_SP, 0x4008000); u.reg_write(UC_ARM64_REG_X16, 0xAAAA); u.reg_write(UC_ARM64_REG_NZCV, 0x60000000)
+        try: u.emu_start(0x800, 0x804, count=50)
+        except UcError: pass
+        return u.reg_read(UC_ARM64_REG_PC), u.reg_read(UC_ARM64_REG_X0) & 0xFFFFFFFF, u.reg_read(UC_ARM64_REG_X16), u.reg_read(UC_ARM64_REG_NZCV)
+    if code == 0:
+        pc, x0, x16, nzcv = cave_unicorn(co)
+        check('... run in Unicorn: back at 0x804 with w0 = the host page value, x16 and the flags kept', pc == 0x804 and x0 == 0x1234 and x16 == 0xAAAA and nzcv == 0x60000000,
+              f'pc {pc:#x} w0 {x0:#x} x16 {x16:#x} nzcv {nzcv:#x}')
+        c2, so = run(STRUCTCK, co, 'm', nso, env=env)
+        check('... structck passes it (⑬: words, branch back, exits)', c2 == 0 and 'CAVES m caves=1' in so, so.strip().splitlines()[-1])
+    _, (code, log) = cave_run('cave_pcrel', [0x10000000])   # adr x0, #0
+    check('a code cave with a PC-relative word: refused', code != 0 and 'cannot run in the patch area' in log, log.strip().splitlines()[-1] if log.strip() else '')
     w2 = dict(words); w2[0x104] = 0xD53BE000   # mrs x0, cntfrq_el0
     check('0x104 of the second module decodes as mrs x0, cntfrq_el0', next(md.disasm(struct.pack('<I', w2[0x104]), 0x104)).op_str == 'x0, cntfrq_el0')
     nso2 = os.path.join(td, 'm2'); open(nso2, 'wb').write(build(w2))

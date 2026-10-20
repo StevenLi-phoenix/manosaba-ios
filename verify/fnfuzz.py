@@ -58,6 +58,10 @@ for a, k in sites.items():
 starts = nsoimg.func_starts(bytes(orig), TE)
 def func_of(a): return starts[bisect.bisect_right(starts, a) - 1]
 funcs = sorted({func_of(a) for a in sites})
+# Code caves (caves.tsv, plan item 139) change what their function does on purpose: those functions are the game's tests' to check, not compared here
+_cp = f'{A.dir}/{A.mod}.caves.tsv'
+cave_funcs = {func_of(int(l.split()[0], 16)) for l in open(_cp) if not l.startswith('#')} if os.path.exists(_cp) else set()
+funcs = [f for f in funcs if f not in cave_funcs]
 if A.funcs: funcs = [int(x, 16) for x in A.funcs.split(',')]
 
 def btarget(b, o):

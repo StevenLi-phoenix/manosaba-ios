@@ -1702,12 +1702,20 @@ Tier 3c, iOS:
   thermal state changes, with the reason logged; `ENABLE_DEBUG_DYLIB: NO` in `ios/project.yml` (kept by project_m3.py). `t_pace` (7 policy cases;
   the setting alone fails 3), `t_ios_cpu.py` (2 more checks; the spec without the line fails 2). On a device (the user): Low Power Mode on and
   off while playing logs "frame rate 30 fps (Low Power Mode)" and back
-- [ ] 136 patches always applied, chosen by the page (no option pages on iOS)
+- [ ] 136 patches always applied, chosen by the page (no option pages on iOS); after 139: fps60's 13 sites write immediates (`mov w8, #1`, `cmp w10, #1`),
+  and a load from the page needs a second instruction there, so a code cave each (realtime and scene already read the page)
 
 Tier 3c, larger:
 - [ ] 137 one varying interface as a fallback library, pairs noted at bind time (a chain rebuild)
 - [ ] 138 render targets of virtual pools in a heap (memory for 62)
-- [ ] 139 code caves in the rewriter (for 63)
+- [x] batch 38 · 139 code caves in the rewriter (`CAVES` in a game's rules.py; totk-mobile's routines appended to the patch area, written anew):
+  one instruction (asserted) becomes `b <routine>`, the routine is emitted into the patch area from instruction words and forms (`('orig',)`,
+  `('adrp_host', d)`, `('b' | 'bl', target)`) and branches back to the next instruction unless it leaves itself; words that cannot run elsewhere
+  (PC-relative, x18, svc, system registers, register branches) are refused, as is a cave on another change; `<module>.caves.tsv` lists each
+  routine's words and exits. structck ⑬ checks the original word, the branch, the routine word by word, its last word branching back and every
+  exit listed; fnfuzz leaves cave functions out (an intended change, the game's tests check it). `t_rewriter_synth` (4 more: a cave that loads w0
+  from the host page with x16 borrowed through the red zone, run in Unicorn: back at the next instruction with x16 and the flags kept; structck
+  passes it; a PC-relative word refused; without the branch back 2 fail). Both games' products unchanged but for the stamp and an empty caves.tsv
 - [ ] 140 FIFO frame consumption for games that step per frame (manosaba)
 - [ ] 141 IL2CPP class names in crash reports and memory snapshots (manosaba)
 

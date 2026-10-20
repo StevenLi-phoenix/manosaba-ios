@@ -46,6 +46,13 @@ IMG.extend(bytes(0x4000))
 #            Asserted against the original here but not written into the image; listed in <name>.options.tsv with their final bytes. They must not
 #            overlap a cut and must stay outside the rewritten code (asserted after the rewrite: the host writes them where the original still is).
 #            A host page form gives the module the page as HOSTREFS does
+#   CAVES    {build ID: [(offset, original instruction word hex, routine, reason)]}: code caves (plan item 139; totk-mobile's routines appended to
+#            the patch area, written anew): the word at offset (asserted) becomes `b <routine>`, the routine is emitted into the patch area and ends
+#            with `b <offset + 4>` unless its last form already leaves. Routine forms: an int (an instruction word, which must not be PC-relative: it
+#            no longer sits where it was assembled), ('orig',) (the replaced word, same rule), ('adrp_host', d) (adrp xd, host page: the module gets
+#            the page as HOSTREFS gives it), ('b', target) / ('bl', target) (to a text address). A routine may borrow registers through the red zone
+#            (stur / ldur below sp) as the rewrite blocks do. Listed in <name>.caves.tsv with the words emitted; structck checks them word by word and
+#            their exits, fnfuzz leaves their functions out (an intended change of behaviour, checked by the game's own tests)
 # A module whose build ID has no entry gets the generic rewrite only.
 def rules_path():
     path = os.environ.get('DM_RULES')
@@ -53,16 +60,17 @@ def rules_path():
     return path
 def load_rules():
     path = rules_path()
-    if not path: return {}, {}, {}, {}, {}
+    if not path: return {}, {}, {}, {}, {}, {}
     import importlib.util
     sys.dont_write_bytecode = True   # no __pycache__ next to the game's rules
     spec = importlib.util.spec_from_file_location('game_rules', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-    return getattr(m, 'CUTS', {}), getattr(m, 'OBS', {}), getattr(m, 'PARAMS', {}), getattr(m, 'HOSTREFS', {}), getattr(m, 'OPTIONS', {})
-CUTS, OBS, PARAMS, HOSTREFS, OPTIONS = load_rules()
+    return getattr(m, 'CUTS', {}), getattr(m, 'OBS', {}), getattr(m, 'PARAMS', {}), getattr(m, 'HOSTREFS', {}), getattr(m, 'OPTIONS', {}), getattr(m, 'CAVES', {})
+CUTS, OBS, PARAMS, HOSTREFS, OPTIONS, CAVES = load_rules()
 BUILD_ID = d[0x40:0x50].hex()
 cuts = list(CUTS.get(BUILD_ID, []))
 hostrefs = HOSTREFS.get(BUILD_ID, [])
 options = OPTIONS.get(BUILD_ID, {})
+caves = CAVES.get(BUILD_ID, [])
 HOST_PAGE_OFF = 0
 def hostref_word(off, ow, form):   # the instruction a host page reference becomes (the original word asserted)
     w = struct.unpack_from('<I', IMG, off)[0]
@@ -74,7 +82,7 @@ def hostref_word(off, ow, form):   # the instruction a host page reference becom
         t, n, bo = form[1:]; assert bo % 4 == 0 and 0 <= bo < 0x4000
         return w, 0xBD400000 | ((bo // 4) << 10) | (n << 5) | t
     raise AssertionError(f'host page reference {off:#x}: unknown form {form}')
-if hostrefs or any(isinstance(e[2], tuple) for rows in options.values() for e in rows):
+if hostrefs or any(isinstance(e[2], tuple) for rows in options.values() for e in rows) or any(isinstance(f, tuple) and f[0] == 'adrp_host' for c in caves for f in c[2]):
     HOST_PAGE_OFF = KEY_PAGE_OFF + 0x4000
     IMG.extend(bytes(max(0, HOST_PAGE_OFF + 0x4000 - len(IMG))))
     for off, ow, form, why in hostrefs:
@@ -131,6 +139,9 @@ def ADDR(dd, n, m): return 0x8B000000 | (m << 16) | (n << 5) | dd
 def SUBI(dd, n, imm12, sh=0): return 0xD1000000 | (sh << 22) | (imm12 << 10) | (n << 5) | dd
 def BR(n): return 0xD61F0000 | (n << 5)
 def BLR(n): return 0xD63F0000 | (n << 5)
+def BL(frm, to):
+    off = to - frm; assert -(1 << 27) <= off < (1 << 27) and off % 4 == 0
+    return 0x94000000 | ((off >> 2) & 0x3FFFFFF)
 def SUBR(dd, n, m): return 0xCB000000 | (m << 16) | (n << 5) | dd   # sub xd, xn, xm (flags untouched)
 def CBZ(t, frm, to):
     off = to - frm; assert -(1 << 20) <= off < (1 << 20) and off % 4 == 0
@@ -829,6 +840,37 @@ for oa, wa, ob_, wb, r, key, why in params:
     emit(STUR(tmp, 31, -16)); emit(MRS_TPIDRRO(r)); emit_slot_addr(r, tmp, key); emit(LDRX(r, r)); emit(LDUR(tmp, 31, -16)); emit(B(here(), oa + 4))
     struct.pack_into('<I', IMG, oa, B(oa, start)); struct.pack_into('<I', IMG, ob_, NOP); stat('param')
 
+# ---- Code caves (CAVES, see the rules section at the top): one instruction becomes a branch to a routine in the patch area ----
+PCREL = ('adr', 'adrp', 'b', 'bl', 'cbz', 'cbnz', 'tbz', 'tbnz')
+def cave_word_ok(ins):   # a word that may run in the patch area as it is: not PC-relative, nothing the rewrite would have to change
+    m = ins.mnemonic
+    return not (m in PCREL or m.startswith('b.') or (m.startswith('ldr') or m == 'prfm') and '[' not in ins.op_str or has18(ins)
+                or m in ('svc', 'mrs', 'msr', 'br', 'blr', 'ret'))
+busy_cave = set(kinds) | done | {o for o, *_ in obs} | {o for row in params for o in (row[0], row[2])}
+busy_cave |= {(c[0] + k) & ~3 for c in cuts for k in range(len(bytes.fromhex(c[1])))} | {(o[1] + k) & ~3 for o in opts for k in range(len(bytes.fromhex(o[2])))}
+cave_rows = []
+for off, ow, routine, why in caves:
+    w = struct.unpack_from('<I', IMG, off)[0]
+    assert f'{w:08x}' == ow, f'code cave {off:#x}: original instruction differs ({w:08x})'
+    assert off < TEXT_END and off % 4 == 0 and off not in busy_cave and why.strip(), f'code cave {off:#x}: outside text, on another change, or no reason'
+    busy_cave.add(off)
+    start = here(); exits, left = set(), False
+    for f in routine:
+        if isinstance(f, int) or f == ('orig',):
+            x = w if f == ('orig',) else f; ins = dis(x, here())
+            assert cave_word_ok(ins), f'code cave {off:#x}: {ins.mnemonic} {ins.op_str} cannot run in the patch area (PC-relative, x18, svc, a system register or a branch: use a form)'
+            emit(x); left = False
+        elif f[0] == 'adrp_host': emit(ADRP(f[1], here(), HOST_PAGE_OFF)); left = False
+        elif f[0] in ('b', 'bl'):
+            assert 0 <= f[1] < TEXT_END and f[1] % 4 == 0, f'code cave {off:#x}: {f[0]} to {f[1]:#x} outside text'
+            if f[0] == 'b': emit(B(here(), f[1])); exits.add(f[1]); left = True
+            else: emit(BL(here(), f[1])); left = False
+        else: raise AssertionError(f'code cave {off:#x}: unknown form {f}')
+    if not left and not os.environ.get('DM_TEST_CAVE_NO_BACK'):   # (the env: negative control of t_rewriter_synth only)
+        emit(B(here(), off + 4)); exits.add(off + 4)
+    put_branch(off, start); stat('cave')
+    cave_rows.append((off, ow, start, bytes(patch[start - PATCH_OFF:here() - PATCH_OFF]), sorted(exits), why))
+
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
 for name, off, ob, nb, why in opts:   # the host writes an option where the original still is: the rewrite must not have touched it
@@ -862,7 +904,11 @@ with open(P('options.tsv'), 'w') as f:   # columns: option, offset, original byt
 with open(P('params.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for oa, wa, ob_, wb, r, key, why in params: f.write(f'{oa:#x}\t{ob_:#x}\tx{r}\t{key}\t{why}\n')
+with open(P('caves.tsv'), 'w') as f:   # columns: offset, original word, routine start, its words, its exits back to text, reason (structck ⑬)
+    f.write(f'# BUILD_ID\t{BUILD_ID}\n')
+    for off, ow, start, wb, ex, why in cave_rows:
+        f.write(f'{off:#x}\t{ow}\t{start:#x}\t' + ' '.join(f'{v:08x}' for v in struct.unpack(f'<{len(wb) // 4}I', wb)) + '\t' + ','.join(f'{e:#x}' for e in ex) + f'\t{why}\n')
 with open(P('obs.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, oid, ow, why in obs: f.write(f'{off:#x}\t{oid}\t{ow}\t{why}\n')
-print(NAME, stats, 'cuts', len(cuts), 'options', len(opts), 'obs', len(obs), 'patch', len(patch), 'PATCH_OFF', hex(PATCH_OFF), 'slot_refs', len(fix), 'gates', len(gates))
+print(NAME, stats, 'cuts', len(cuts), 'options', len(opts), 'caves', len(cave_rows), 'obs', len(obs), 'patch', len(patch), 'PATCH_OFF', hex(PATCH_OFF), 'slot_refs', len(fix), 'gates', len(gates))
