@@ -1,8 +1,8 @@
 // Live command channel (cmdchan.c, DM_CMD): the parser on a table of good and malformed lines, then the loop following a file a writer appends to:
 // a line written in two parts runs once, whole, when its newline comes; a key is held for its time and released; "wait 3" holds the next line
 // until three frames are presented; a malformed line and an over-long line are skipped and the lines after them run; "quit" ends the loop.
-// Negative control: -DDM_TEST_CMD_PARTIAL (a line run as far as it was written, as a reader with fgets at the end of the file would) fails the
-// line written in two parts.
+// Negative controls: -DDM_TEST_CMD_PARTIAL (a line run as far as it was written, as a reader with fgets at the end of the file would) fails the
+// line written in two parts; -DDM_TEST_CMD_NO_REOPEN (the first file followed for good) misses the replaced file's lines.
 #include "../cmdchan.c"
 #include <stdatomic.h>
 static int n, fail;
@@ -34,7 +34,8 @@ static int g_fd;
 static void put(const char *s) { if (write(g_fd, s, strlen(s)) != (ssize_t)strlen(s)) abort(); }
 static int until(_Atomic int *v, int want, int ms) { for (int i = 0; i < ms / 5; i++) { if (*v >= want) return 1; usleep(5000); } return *v >= want; }
 static long g_ran = -1;
-static void *loop_thread(void *a) { g_ran = cmd_loop((int)(intptr_t)a); return NULL; }
+static const char *g_path;
+static void *loop_thread(void *a) { g_ran = cmd_loop((int)(intptr_t)a, g_path); return NULL; }
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -56,6 +57,7 @@ int main(void) {
     printf("loop, following a file:\n");
     char path[1024]; snprintf(path, sizeof path, "%s/t_cmdchan_%d.txt", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", getpid());
     g_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644); int rd = open(path, O_RDONLY); if (g_fd < 0 || rd < 0) { printf("cannot open %s\n", path); return 2; }
+    g_path = path;
     pthread_t t; pthread_create(&t, NULL, loop_thread, (void *)(intptr_t)rd);
     put("# a test\nthr"); usleep(300000);
     CHECK(g_threads == 0, "a line without its newline has not run yet");
@@ -76,11 +78,17 @@ int main(void) {
     CHECK(until(&g_threads, 2, 2000), "a malformed line is skipped, the next one runs");
     char big[1500]; memset(big, 'x', sizeof big - 2); big[sizeof big - 2] = '\n'; big[sizeof big - 1] = 0; put(big); put("threads\n");
     CHECK(until(&g_threads, 3, 2000) && g_threads == 3, "a line over 1023 bytes is skipped, the next one runs");
+    // The file replaced by another (a new inode, as a copy pushed to a device): its lines are followed from its start
+    char repl[1100]; snprintf(repl, sizeof repl, "%s.new", path); int nf = open(repl, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (nf < 0 || write(nf, "threads\n", 8) != 8 || rename(repl, path)) { printf("cannot replace %s\n", path); return 2; }
+    close(g_fd); g_fd = nf;
+    CHECK(until(&g_threads, 4, 2000) && g_threads == 4, "the file replaced by another: its first line runs (threads %d)", (int)g_threads);
     put("passdump 4\nhlecount\nquit\nthreads\n");
     CHECK(until(&g_quit, 1, 2000), "quit");
+    if (!g_quit) { printf("== %d checks, %d failed (the loop never reached quit) ==\n", n, fail); unlink(path); _exit(1); }
     pthread_join(t, NULL);
     CHECK(g_pd == 4 && g_hlecount == 1, "passdump 4 and hlecount ran before it");
-    CHECK(g_ran == 9 && g_threads == 3, "the loop ended at quit: 9 lines run, the line after quit not (%ld)", g_ran);
-    close(g_fd); close(rd); unlink(path);
+    CHECK(g_ran == 10 && g_threads == 4, "the loop ended at quit: 10 lines run, the line after quit not (%ld)", g_ran);
+    close(g_fd); unlink(path);
     printf("== %d checks, %d failed ==\n", n, fail); return fail != 0;
 }

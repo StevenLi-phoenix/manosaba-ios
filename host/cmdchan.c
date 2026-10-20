@@ -17,11 +17,13 @@
 //   heap <addr>          the sead heaps holding addr (0x...) and the block it is in
 //   quit                 the orderly exit of SIGTERM (hle_lifecycle.c)
 // Blank lines and lines starting with # are skipped; an unknown or malformed line is logged in red and skipped. Each line run is logged
-// ("[cmd] ..."). Checked by host/tests/t_cmdchan.c.
+// ("[cmd] ..."). A file replaced by another (a copy pushed to a device is a new inode: T5eng's TOTK_INPUT_REOPEN) or cut shorter than what was read
+// is followed again from its start. Checked by host/tests/t_cmdchan.c.
 #include "dm.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/stat.h>
 #include <unistd.h>
 uint32_t hid_key_mask(const char *name);                // hle_hid.c
 void hid_cmd_keys(uint64_t down, uint64_t up);
@@ -99,16 +101,28 @@ static void cmd_run(const dm_cmd *c) {
     }
 }
 
-// Follows fd until a quit; returns the number of lines run (the unit test reads it)
-static long cmd_loop(int fd) {
+// At the end of the file: 1 when path now names another file (*fd reopened on it) or one shorter than what was read (rewound)
+static int cmd_reopen(int *fd, const char *path) {
+#ifndef DM_TEST_CMD_NO_REOPEN   // negative control of t_cmdchan only: the first file followed for good
+    struct stat now, open_; if (!path || stat(path, &now) || fstat(*fd, &open_)) return 0;
+    if (now.st_ino != open_.st_ino || now.st_dev != open_.st_dev) { int nfd = open(path, O_RDONLY); if (nfd < 0) return 0; close(*fd); *fd = nfd; return 1; }
+    if (now.st_size < lseek(*fd, 0, SEEK_CUR)) { lseek(*fd, 0, SEEK_SET); return 1; }
+#else
+    (void)fd; (void)path;
+#endif
+    return 0;
+}
+// Follows fd (path: to notice a replaced file, NULL not to) until a quit; returns the number of lines run (the unit test reads it); closes fd
+static long cmd_loop(int fd, const char *path) {
     char buf[CMD_LINE + 1]; size_t n = 0; int skip = 0; long ran = 0;
     for (;;) {
         ssize_t r = read(fd, buf + n, CMD_LINE - n);
         if (r < 0 && errno == EINTR) continue;
-        if (r < 0) { LOG("[red] command channel: read failed (%s), stopping", strerror(errno)); return ran; }
+        if (r < 0) { LOG("[red] command channel: read failed (%s), stopping", strerror(errno)); close(fd); return ran; }
+        if (r == 0 && cmd_reopen(&fd, path)) { LOG("[cmd] the file was replaced or cut short: following it from its start"); n = 0; skip = 0; continue; }
         if (r == 0) {
 #ifdef DM_TEST_CMD_PARTIAL   // negative control of t_cmdchan only: a line is run as far as it was written, newline or not
-            if (n) { buf[n] = 0; dm_cmd c; const char *why; if (!cmd_parse(buf, &c, &why) && c.kind) { cmd_run(&c); ran++; if (c.kind == CMD_QUIT) return ran; } else if (why) LOG("[red] command channel: %s: %s", why, buf); n = 0; }
+            if (n) { buf[n] = 0; dm_cmd c; const char *why; if (!cmd_parse(buf, &c, &why) && c.kind) { cmd_run(&c); ran++; if (c.kind == CMD_QUIT) { close(fd); return ran; } } else if (why) LOG("[red] command channel: %s: %s", why, buf); n = 0; }
 #endif
             usleep(50000); continue;
         }
@@ -120,20 +134,20 @@ static long cmd_loop(int fd) {
             if (!skip) {
                 dm_cmd c; const char *why;
                 if (cmd_parse(buf, &c, &why)) LOG("[red] command channel: %s: %s", why, buf);
-                else if (c.kind) { LOG("[cmd] %s", buf); cmd_run(&c); ran++; if (c.kind == CMD_QUIT) return ran; }
+                else if (c.kind) { LOG("[cmd] %s", buf); cmd_run(&c); ran++; if (c.kind == CMD_QUIT) { close(fd); return ran; } }
             }
             skip = 0; memmove(buf, buf + used, n - used); n -= used;
         }
     }
 }
 
-static void *cmd_thread(void *arg) {
-    int fd = (int)(intptr_t)arg; cmd_loop(fd); close(fd); return NULL;
-}
+static int g_cmd_fd; static const char *g_cmd_path;
+static void *cmd_thread(void *arg) { (void)arg; cmd_loop(g_cmd_fd, g_cmd_path); return NULL; }
 void dm_cmd_start(void) {
     const char *p = getenv("DM_CMD"); if (!p || !*p) return;
     int fd = open(p, O_RDONLY | O_CREAT, 0644);
     if (fd < 0) { LOG("[red] DM_CMD: cannot open %s (%s)", p, strerror(errno)); return; }
-    pthread_t t; if (pthread_create(&t, NULL, cmd_thread, (void *)(intptr_t)fd)) { LOG("[red] DM_CMD: cannot start its thread"); close(fd); return; }
+    g_cmd_fd = fd; g_cmd_path = p;
+    pthread_t t; if (pthread_create(&t, NULL, cmd_thread, NULL)) { LOG("[red] DM_CMD: cannot start its thread"); close(fd); return; }
     pthread_detach(t); LOG("command channel: following %s", p);
 }

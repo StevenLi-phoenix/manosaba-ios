@@ -3426,6 +3426,7 @@ static void shmap_load(void) {
 #include "nvn_pso_skey.h"
 #include "nvn_warm_list.h"
 #include "nvn_aniso.h"
+#include "nvn_retry.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; int sum_ok, sum_img, sum_imgw; uint32_t sum_cmask; } @end   // sum_*: udc_note_draw's per-program summary
 @implementation NvProg @end
 // What udc_note_draw needs of a program, worked out once (upstream d2r-mobile 44a6770 caches it per program): any image binding, any writable one,
@@ -3541,6 +3542,16 @@ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
     if (fd < 0 || fstat(fd, &st) || st.st_size <= 0) { if (fd >= 0) close(fd); if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@", path]}]; return nil; }
     size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
     if (m == MAP_FAILED) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"mmap failed %@", path]}]; return nil; }
+    // iOS (DM_NVN_LIB_COPY=1 elsewhere, for t_libcopy): the library is copied into memory and the mapping dropped at once, since a mapping holds a vnode
+    // as long as the library lives and the device has one table for everything (MacNativeGames e099353, MIT: about 8,800 of Tears of the Kingdom's
+    // libraries kept by its warm-up filled an A16 iPad's 11,400 and jetsam killed the game, reason vnode-limit; all of them are about 110 MB)
+    static int copy = -1;
+#if TARGET_OS_IPHONE
+    if (copy < 0) copy = 1;
+#else
+    if (copy < 0) { const char *e = getenv("DM_NVN_LIB_COPY"); copy = e && atoi(e); }
+#endif
+    if (copy) { void *c = malloc(len); if (c) { memcpy(c, m, len); munmap(m, len); return [g_dev newLibraryWithData:dispatch_data_create(c, len, NULL, DISPATCH_DATA_DESTRUCTOR_FREE) error:err]; } }
     dispatch_data_t d = dispatch_data_create(m, len, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(m, len); });
     return [g_dev newLibraryWithData:d error:err];
 }
@@ -4299,7 +4310,8 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRen
     else {
         if (g_pp_submit_mark != g_sub_serial) { g_pp_submit_mark = g_sub_serial; pso_predict_rest(); }   // First miss in this submission: first kick the later ones out to compile in parallel, then synchronously compile the one at hand
         MTLRenderPipelineDescriptor *d = pso_desc(&k, vs, fs, g_pso_fsfn, g_pso_lmap != NULL);
-        ps = [g_dev newRenderPipelineStateWithDescriptor:d error:&e];
+        int gave_up; ps = mtl_retry(^id(NSError **er) { return [g_dev newRenderPipelineStateWithDescriptor:d error:er]; }, &e, &gave_up);
+        if (!ps && gave_up) { g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt; MLOG("[red] render pipeline not made, the compiler service kept failing (vertex %s, fragment %s): tried again at its next use", vs->key, fs ? fs->key : "-"); return nil; }
     }
     g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
     if (!ps) { MLOG("[red] failed to create render pipeline (vertex %s, fragment %s): %s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String);
@@ -6650,7 +6662,8 @@ static void dispatch(const p_dispatch *dp) {
     const void *k = (__bridge const void *)cs;
     id<MTLComputePipelineState> ps = hm_get_id(&g_cps, &k);
     if (!ps) {
-        NSError *e = nil; uint64_t bt = bp_now(); ps = [g_dev newComputePipelineStateWithFunction:cs->fn error:&e];
+        NSError *e = nil; uint64_t bt = bp_now(); int gave_up; id<MTLFunction> fn = cs->fn;
+        ps = mtl_retry(^id(NSError **er) { return [g_dev newComputePipelineStateWithFunction:fn error:er]; }, &e, &gave_up);
         g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
         if (!ps) { MLOG("[red] failed to create compute pipeline: %s", e.localizedDescription.UTF8String); return; }
         pso_record("C\t%s\n", cs->key);

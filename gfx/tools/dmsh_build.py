@@ -15,7 +15,7 @@ import ast, inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tem
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
 cap_dir, out = sys.argv[1:3]; want = set(sys.argv[3:]); cache_root = out
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain, dmsh_fetch, dmsh_mtlcache   # translation chain: the tools are checked against the lock file; output goes into b-<V>/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain, dmsh_fetch, dmsh_mtlcache, msl_helpers   # translation chain: the tools are checked against the lock file; output goes into b-<V>/
 _bad = dmsh_chain.check_tools()
 if _bad: sys.exit('\n'.join('[red] translation chain tool differs from the lock file: ' + b for b in _bad) + '\n(after changing a tool: dmsh_chain.py --update-lock and commit it; if only the translator was not rebuilt: rebuild it)')
 CHAIN = dmsh_chain.version(); out = os.path.join(out, 'b-' + CHAIN)
@@ -464,13 +464,16 @@ if os.path.exists(os.path.join(cap_dir, 'pairs.tsv')):
 # shader writes float to an integer colour attachment (nvn_mtl.m; DM_SHDUMP). The translator then declares that output integer and stores the
 # register bits unchanged (Ryujinx answers QueryGraphicsState's fragment output types from the render target formats the same way). Tears of the
 # Kingdom's BC4 encoder writes RGBA16UI. Part of the shader's cache key
+# The game profile's games/<DM_GAME>/fout.tsv is read too (the same format): outputs known without a run that failed (plan item 100: Tears of the
+# Kingdom's Ultrahand mask shader, from nxnative PR #11's shader_fout.tsv), so a new workspace builds them right the first time
 FOUT = collections.defaultdict(dict)
-if os.path.exists(os.path.join(cap_dir, 'fout.tsv')):
-    for _ln in open(os.path.join(cap_dir, 'fout.tsv')):
+for _fp in (os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'games', GAME_ID, 'fout.tsv'), os.path.join(cap_dir, 'fout.tsv')):
+    if not os.path.exists(_fp): continue
+    for _ln in open(_fp):
         _f = _ln.split()
         if _ln.startswith('#') or len(_f) != 3: continue
-        if not _f[1].isdigit() or not 0 <= int(_f[1]) < 8 or _f[2] not in ('uint', 'sint'): sys.exit(f'[red] fout.tsv: bad line {_ln.strip()!r}')
-        if FOUT[_f[0]].get(_f[1], _f[2]) != _f[2]: sys.exit(f'[red] fout.tsv: {_f[0]} target {_f[1]} is both uint and sint')
+        if not _f[1].isdigit() or not 0 <= int(_f[1]) < 8 or _f[2] not in ('uint', 'sint'): sys.exit(f'[red] {_fp}: bad line {_ln.strip()!r}')
+        if FOUT[_f[0]].get(_f[1], _f[2]) != _f[2]: sys.exit(f'[red] {_fp}: {_f[0]} target {_f[1]} is both uint and sint')
         FOUT[_f[0]][_f[1]] = _f[2]
 
 def vs_pad_locs(key):
@@ -530,7 +533,10 @@ def finish(key, w, j, c1):
     r = subprocess.run(['spirv-cross', *XC, os.path.join(w, key + '.spv'), '--output', msl], capture_output=True, text=True)
     if r.returncode: return 'MSL failed', r.stderr.strip()[:160], None
     src, iq = img_size_queries(open(msl).read())
-    if iq: open(msl, 'w').write(src); res['notes'].append('image size queries moved to the image argument: ' + ' '.join(iq))
+    if iq: res['notes'].append('image size queries moved to the image argument: ' + ' '.join(iq))
+    inl = msl_helpers.inline_helpers(src)   # the NoContraction helpers inlined, not called (msl_helpers.py)
+    if inl != src: res['notes'].append('NoContraction helpers inlined')
+    if iq or inl != src: src = inl; open(msl, 'w').write(src)
     pad = []
     if j['stage'] == 'vs' and j.get('pad_want'):   # outputs the paired pixel shaders read but this one does not write get (0, 0, 0, 1) (see vs_pad)
         src, pad = vs_pad(src, j['pad_want'])

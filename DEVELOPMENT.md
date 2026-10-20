@@ -1455,14 +1455,29 @@ Tier 3b, performance and power (measure first):
   checks; without the switch 2 fail
 
 Tier 3b, one shader chain rebuild for all three:
-- [ ] 100 the Ultrahand mask shader's integer output
-- [ ] 101 the `[[clang::optnone]]` arithmetic helpers inlined, bit for bit, GPU p50 A/B
-- [ ] 102 dual-source blending, if 90 finds SRC1 factors in either game
+- [x] batch 26 · 100 the Ultrahand mask shader's integer output: `games/<id>/fout.tsv`, read by `dmsh_build.py` beside the capture directory's,
+  holds the outputs known without a failed run (Tears of the Kingdom: the BC4 encoder and `e3fb0bb58a691e10 0 uint`, nxnative PR #11's
+  shader_fout.tsv, MIT); its MSL now declares `uint4` at colour 0 (was `float4`, which Metal refuses on an R8Uint target)
+- [x] batch 26 · 101 the NoContraction helpers inlined (`gfx/tools/msl_helpers.py`, in the chain's files): SPIRV-Cross's `[[clang::optnone]]
+  T spvFAdd` (the only such helper here: 3,047 of Tears of the Kingdom's files, 41 of manosaba's) becomes always-inline with FP contraction off in
+  its body (totk-mobile turns it off for the whole file and the math mode with it; the idea only). Bit for bit: `t_fpcontract` (65,536 random
+  triples and 1,024 crafted ones where a fused sum gives other bits: the same as the optnone helper; measured on the way, our safe math mode fuses
+  not even a plain a * b + c, and the inlined fma(1, l, r) stays unfused under fast math too; a plain l + r under fast math, the broken variant,
+  fails 1), `tools/tests/t_msl_helpers.py` (5; an empty rewrite fails 3). GPU p50 over the prologue, two runs each, per 300-frame window: old
+  5.4-7.4 ms, new 5.1-6.9 ms, inside the run-to-run spread: no measurable gain on the M5. Chain bab8d4746968 → 4236b355e989 (with 100): every
+  shader of both games builds, the c1 list the same 49, shots and brightness inside the console footage's ranges
+- [-] batch 26 · 102 not needed: 90's red line for dual-source factors fired in neither game (the prologue, the cliff save, manosaba)
 
 Tier 3b, iOS and tooling:
-- [ ] 103 metallibs copied into memory on iOS (vnode limit)
-- [ ] 104 a pipeline retried after a compiler-service interruption
-- [ ] 105 the command channel reopened when its file is replaced
+- [x] batch 26 · 103 metallibs copied into memory on iOS (`lib_from_file`; `DM_NVN_LIB_COPY=1` elsewhere; MacNativeGames e099353, MIT): the mapping is
+  dropped at once, so a library holds no vnode (theirs filled an A16 iPad's 11,400 with about 8,800 libraries; ours keeps 1,841 after item 78's
+  warm-up of the prologue's list). `t_libcopy`: the library works and no memory region maps the file; the mapping path (the Mac's) fails 1
+- [x] batch 26 · 104 a pipeline retried after a compiler-service interruption (`nvn_retry.h`, after MacNativeGames 39048ca, MIT: up to 4 attempts,
+  100 / 200 / 300 ms apart, for "XPC_ERROR_CONNECTION_INTERRUPTED"; render pipelines in `pso_get` and compute ones): one that still fails for an
+  interruption is not recorded as failed, its next use tries again. `t_retry`: 3 checks; one attempt (`-DDM_TEST_RETRY_NONE`) fails 2
+- [x] batch 26 · 105 the command channel follows a replaced file (a new inode, as a copy pushed to a device; T5eng's TOTK_INPUT_REOPEN) or one cut
+  shorter than what was read from its start again (`cmdchan.c` `cmd_reopen`, at the end of the file). `t_cmdchan`: 26 checks (the file renamed
+  over by another, whose line runs); the first file followed for good (`-DDM_TEST_CMD_NO_REOPEN`) misses it and never reaches quit (2 fail)
 - [ ] 106 run diagnostics: an interrupted-run marker, a log export, an fps / GPU line, timestamps
 - [ ] 107 a thread dump when frames stop, without ending the game
 - [ ] 108 `-mcpu=apple-a14` for the Metal 4 iOS build

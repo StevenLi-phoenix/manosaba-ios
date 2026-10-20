@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Version of the shader translation chain (the build result must be determined by the sources alone).
 # V = the first 12 hex digits of sha256 over the contents of these files plus the translation options: this script, dmsh_build.py, dmsh_fetch.py,
-# the dmsh_xlate sources (Program.cs, dmsh_xlate.csproj), the iOS compile convention ios_metal.py and the tool lock dmsh_chain.lock (fingerprints of
+# the dmsh_xlate sources (Program.cs, dmsh_xlate.csproj), the iOS compile convention ios_metal.py, the MSL rewrite msl_helpers.py and the tool lock dmsh_chain.lock (fingerprints of
 # the translator, spirv-cross and the Metal compilers). dmsh_build.py writes into <cache root>/b-<V>/ and records chain = V in every reflection
 # JSON; the host takes V from nvn/dmsh_chain.h and loads only from b-<V>/.
 # Usage: dmsh_chain.py                 print V (default options)
@@ -13,7 +13,7 @@ import os, sys, hashlib, subprocess
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HERE = os.path.dirname(os.path.abspath(__file__)); GFX = os.path.dirname(HERE); HOME = os.path.expanduser('~')
 FILES = ['tools/dmsh_chain.py', 'tools/dmsh_build.py', 'tools/dmsh_fetch.py', 'tools/dmsh_xlate/Program.cs', 'tools/dmsh_xlate/dmsh_xlate.csproj',
-         'tools/ios_metal.py', 'tools/dmsh_chain.lock']
+         'tools/ios_metal.py', 'tools/dmsh_chain.lock', 'tools/msl_helpers.py']
 LOCK = os.path.join(HERE, 'dmsh_chain.lock'); HEADER = os.path.join(GFX, 'nvn/dmsh_chain.h')
 XLATE_DIR = os.path.dirname(os.environ.get('XLATE', f'{DM_ROOT}/build/gfx/dmsh_xlate/dmsh_xlate'))
 

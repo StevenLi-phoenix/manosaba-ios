@@ -31,6 +31,10 @@ t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
 	clang -O1 -Wall -Werror -o $@ t_pool_find.c
 t_warm_list: t_warm_list.c ../nvn/nvn_warm_list.h
 	clang -O1 -Wall -Werror -o $@ t_warm_list.c
+t_retry: t_retry.m ../nvn/nvn_retry.h
+	clang -O1 -Wall -fobjc-arc -o $@ t_retry.m -framework Foundation
+t_fpcontract: t_fpcontract.m
+	clang -O1 -Wall -fobjc-arc -o $@ t_fpcontract.m -framework Metal -framework Foundation
 t_aniso: t_aniso.c ../nvn/nvn_aniso.h
 	clang -O1 -Wall -Werror -o $@ t_aniso.c
 t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
@@ -83,6 +87,8 @@ t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_depth_plain: t_depth_plain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_depth_plain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_libcopy: t_libcopy.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_libcopy.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -154,12 +160,14 @@ run: \
 	t_extent \
 	t_findrain \
 	t_fmt_swz \
+	t_fpcontract \
 	t_fbx \
 	t_fuse_check \
 	t_gputime \
 	t_hmap \
 	t_keepalive \
 	t_layer \
+	t_libcopy \
 	t_live \
 	t_mip_extent \
 	t_nvn \
@@ -177,6 +185,7 @@ run: \
 	t_pso_skey \
 	t_refl \
 	t_restart \
+	t_retry \
 	t_rstream \
 	t_retire \
 	t_reorder_chain \
@@ -276,6 +285,9 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_samp
 	MTL_DEBUG_LAYER=1 ./t_fmt_swz
 	DM_NVN_DEPTH_PLAIN=1 ./t_depth_plain
+	DM_NVN_LIB_COPY=1 ./t_libcopy
+	./t_retry 2>/dev/null
+	python3 -I ../tools/msl_helpers.py t_fpcontract.metal > t_fpcontract_inl.metal && ./t_fpcontract t_fpcontract.metal t_fpcontract_inl.metal
 	./t_refl
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view
@@ -283,5 +295,5 @@ run: \
 .PHONY: run
 # The older-API build (DM_NVN_M3=1, macOS 15.0): the same tests built and run in a sibling tests_m3 directory
 run-m3:
-	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py ../tests_m3/
+	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py t_fpcontract.metal ../tests_m3/
 	$(MAKE) -C ../tests_m3 run CFLAGS="$(CFLAGS) -DDM_NVN_M3=1 -mmacosx-version-min=15.0"
