@@ -30,7 +30,7 @@ int dm_pcmout_wait(void *k, int64_t ns);
 
 // P_SIZE: bytes of the game's AudioRendererParameter copied before the two fields are changed (SDK 16's struct is 0x38 bytes, SDK 8's has its
 // revision at +0x38; the SDK reads only its own size of the copy)
-enum { P_DEVICE = 0x2c, P_MODE = 0x30, P_SIZE = 0x40, FRAME_MAX = 1024, NBUF = 4 };
+enum { P_DEVICE = 0x2c, P_MODE = 0x30, P_SIZE = 0x40, FRAME_MAX = 1024, NBUF = 6, PREQ = 3 };
 static void *gsym(const char *n) { void *p = guest_sym(n); if (!p) die("audren: no SDK symbol %s", n); return p; }
 static void cpu_manual(uint8_t *dst, const uint8_t *src) { memcpy(dst, src, P_SIZE); *(int32_t *)(dst + P_DEVICE) = 1; *(int32_t *)(dst + P_MODE) = 1; }
 
@@ -55,6 +55,8 @@ static _Atomic uint64_t g_frames, g_nonsilent;
 enum { CQ = 4 }; static int16_t g_cq[CQ][FRAME_MAX * 2]; static int g_cq_n[CQ]; static _Atomic uint32_t g_cq_head, g_cq_tail;   // catch-up frames waiting for output
 
 typedef struct { void *ptr; uint64_t cap, size; } gbuf;       // the front of hle_audio.c's AudioOutBuffer
+static uint64_t g_frame_ns = 5000000;   // one frame's duration (frame samples / rate, from OpenAudioRenderer)
+#include "audren_pace.h"
 static void render_main(void *arg) {
     (void)arg;
     void (*exec)(void *, void *) = gsym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE");
@@ -62,9 +64,15 @@ static void render_main(void *arg) {
     static int16_t data[NBUF][FRAME_MAX * 2]; static gbuf bufs[NBUF]; gbuf *free_list[NBUF]; int nfree = NBUF;
     for (int i = 0; i < NBUF; i++) { bufs[i] = (gbuf){data[i], sizeof data[i], 0}; free_list[i] = &bufs[i]; }
     dm_pcmout_start(out);
-    LOG("audren: render thread started (%d buffers in flight, paced by the output)", NBUF);
+    int pre = (int)(g_frame_ns * 48000 / 1000000000ull); if (pre < 1 || pre > FRAME_MAX) pre = 240;
+    for (int i = 0; i < PREQ; i++) { gbuf *b = free_list[--nfree]; memset(b->ptr, 0, (size_t)pre * 4); b->size = (uint64_t)pre * 4; if (!dm_pcmout_append(out, b)) free_list[nfree++] = b; }   // the device's buffering
+    LOG("audren: render thread started (%d buffers in flight, a frame every %.2f ms on its own clock)", NBUF, g_frame_ns / 1e6);
+    audren_pace pace = {0};
     while (atomic_load(&g_open)) {
-        while (!nfree) {   // wait for the output to hand a buffer back (silent sink / sound card)
+        for (gbuf *b; nfree < NBUF && (b = dm_pcmout_released(out)); ) free_list[nfree++] = b;   // what the output handed back
+        uint64_t w = pace_wait(&pace, now_ns(), g_frame_ns, NBUF - nfree);
+        if (w) { dm_pcmout_wait(out, (int64_t)w); continue; }   // until the deadline, or earlier when the output hands one back
+        while (!nfree) {   // the output holds all of them: wait for one (silent sink / sound card)
             gbuf *b = dm_pcmout_released(out);
             if (b) { free_list[nfree++] = b; break; }
             dm_pcmout_wait(out, 5000000);   // until the output hands one back (5 ms: g_open is checked again)
@@ -95,6 +103,8 @@ HLE_FORCE_OPT("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2o
     Result r = orig(handle, ev, p, work, sz);
     if (r) { LOG("[red] audren: SDK OpenAudioRenderer failed %#x", r); return r; }
     if (atomic_load(&g_open)) { LOG("[red] audren: a second renderer (the host drives only one)"); return r; }
+    int rate = *(int32_t *)param, fr = *(int32_t *)(param + 4);
+    g_frame_ns = rate > 0 && fr > 0 && fr <= FRAME_MAX ? (uint64_t)fr * 1000000000ull / (uint64_t)rate : 5000000;
     g_handle[0] = handle[0]; g_handle[1] = handle[1]; atomic_store(&g_open, 1);
     g_render_tt = dm_guest_thread_spawn(render_main, NULL, 9, 0x10000);
     return r;
@@ -200,9 +210,13 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     uint64_t proc[16] __attribute__((aligned(16))) = {0};   // CommandListProcessor (0x58 bytes)
     tmax(proc, 0xffffffffu); setup(proc, cl, n); process(proc);
     if (dst) *nout = capture(cl, dst);
-    // render time per frame (budget 5 ms): mean / max every 2000 frames
-    static uint64_t sum, mx, cnt; uint64_t d = now_ns() - t0; sum += d; if (d > mx) mx = d;
-    if (++cnt == 2000) { LOG("audren: render time mean %.2f ms / max %.2f ms (5 ms budget per frame, last 2000 frames); catch-up frames so far %llu", sum / 2000 / 1e6, mx / 1e6, (unsigned long long)atomic_load(&g_catchups)); sum = mx = cnt = 0; }
+    // render time per frame (budget 5 ms): mean / max every 2000 frames; and the gaps between frame starts (the renderer event's pacing: the real
+    // renderer makes one every 5 ms; SkyRecomp 0620de9 found a sound card callback handing back several buffers at once, 53 of 79 gaps under 1 ms)
+    static uint64_t sum, mx, cnt, last, gaps[5]; uint64_t d = now_ns() - t0; sum += d; if (d > mx) mx = d;
+    if (last) { uint64_t g = t0 - last; gaps[g < 1000000 ? 0 : g < 3000000 ? 1 : g < 7000000 ? 2 : g < 12000000 ? 3 : 4]++; } last = t0;
+    if (++cnt == 2000) { LOG("audren: render time mean %.2f ms / max %.2f ms (5 ms budget per frame, last 2000 frames); catch-up frames so far %llu; gaps between frames: "
+                             "< 1 ms %llu, 1-3 %llu, 3-7 %llu, 7-12 %llu, > 12 ms %llu", sum / 2000 / 1e6, mx / 1e6, (unsigned long long)atomic_load(&g_catchups),
+                             gaps[0], gaps[1], gaps[2], gaps[3], gaps[4]); sum = mx = cnt = 0; memset(gaps, 0, sizeof gaps); }
     pthread_mutex_unlock(&g_render_mu);
     return RES_OK;
 }

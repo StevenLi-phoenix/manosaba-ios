@@ -1439,9 +1439,20 @@ Tier 3b, Tears of the Kingdom:
   (`-DDM_TEST_ANISO_ALL`) fails 3
 
 Tier 3b, performance and power (measure first):
-- [ ] 97 a present with a deadline against the GPU clock drop (`powermetrics`, the 30 fps product)
-- [ ] 98 the audio renderer's pacing (event gaps against the game's updates)
-- [ ] 99 depth textures uncompressed, an A/B with the shot brightness check
+- [ ] 97 a present with a deadline against the GPU clock drop (`powermetrics`, the 30 fps product). Needs the user: the presents only happen with a
+  window (headless runs have no drawable) and `powermetrics` asks for the password; mode 0 (`DM_PRESENT_LINK=0`, the rescue path) is the one
+  without a deadline, the display link's default presents with one
+- [x] batch 25 · 98 the audio renderer paced by its own clock (`host/audren_pace.h`, after SkyRecomp 0620de9, MIT): a frame every frame period, three
+  silent frames queued first as the device's buffering, at once only when the queue is empty, a stall restarting the deadline. Measured with the
+  sound card (`DM_AUDIO=1 DM_AUDIO_MUTE=1`, the prologue): before, 55 % of the gaps between frames under 1 ms and 44 % at 7-12 ms (pairs every
+  10 ms), a catch-up frame before 27 % of the game's updates (3,731 in 75 s); after, 89 % at 3-7 ms, under 1 ms 0-7 per 2,000, catch-ups 10 (as
+  with the silent sink, whose pacing was already even). The renderer logs the gap histogram every 2,000 frames now. `t_audren_pace`: a
+  simulated 10 ms sound card, 5 checks; paced by the output (`-DDM_TEST_AUDREN_PACE_OUTPUT`) 2 fail
+- [-] batch 25 · 99 measured: depth textures with or without the GPU's lossless compression look the same. `DM_NVN_DEPTH_PLAIN=1` (an A/B switch,
+  off) describes depth / stencil textures with allowGPUOptimizedContents NO (LASRecomp PR #204). The prologue: shots within run-to-run noise
+  (s1300 28 %, s1800 7.5 % against 32 / 11 % between two default runs), brightness inside the console footage's ranges both ways (s1300 mean 53.0
+  / 50.9 against 43.3-56.0, s1800 79.8 / 79.1 against 74.3-81.6), GPU p50 6.33 / 6.72 ms; the default stays compressed. `t_depth_plain`: 3
+  checks; without the switch 2 fail
 
 Tier 3b, one shader chain rebuild for all three:
 - [ ] 100 the Ultrahand mask shader's integer output

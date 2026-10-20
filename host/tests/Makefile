@@ -9,6 +9,8 @@ run: \
 	$(B)/t_audio \
 	$(B)/t_audio_spsc \
 	$(B)/t_audren \
+	$(B)/t_audren_pace \
+	$(B)/t_audren_pace_out \
 	$(B)/t_cloudlist \
 	$(B)/t_cloudlist_old \
 	$(B)/t_cloudsync \
@@ -65,6 +67,11 @@ run: \
 	$(B)/t_audio
 	$(B)/t_audio_spsc
 	$(B)/t_audren 2>/dev/null
+	$(B)/t_audren_pace
+	@status=0; $(B)/t_audren_pace_out > $(B)/t_audren_pace_out.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "no two frames under 1 ms apart *✗" $(B)/t_audren_pace_out.log; then \
+	   cat $(B)/t_audren_pace_out.log; echo "t_audren_pace_out: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_audren_pace_out: frames paced by the output come in pairs, as expected"
 	$(B)/t_cloudlist 2>/dev/null
 	@status=0; $(B)/t_cloudlist_old > $(B)/t_cloudlist_old.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "before the call returned *✗" $(B)/t_cloudlist_old.log; then \
@@ -169,7 +176,11 @@ $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../crash.c
 $(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
-$(B)/t_audren: t_audren.c ../hle_audren.c ../hle.h ../dm.h | $(B)
+$(B)/t_audren_pace: t_audren_pace.c ../audren_pace.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_audren_pace.c
+$(B)/t_audren_pace_out: t_audren_pace.c ../audren_pace.h | $(B)
+	clang -O1 -Wall -DDM_TEST_AUDREN_PACE_OUTPUT -I.. -o $@ t_audren_pace.c
+$(B)/t_audren: t_audren.c ../hle_audren.c ../audren_pace.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audren.c
 $(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation

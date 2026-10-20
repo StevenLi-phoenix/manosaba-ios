@@ -81,6 +81,8 @@ t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_depth_plain: t_depth_plain.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_depth_plain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -144,6 +146,7 @@ run: \
 	t_d16clear \
 	t_defer_chain \
 	t_drvseg \
+	t_depth_plain \
 	t_deswz_gpu \
 	t_dirty_race \
 	t_dirty_slots \
@@ -272,6 +275,7 @@ run: \
 	./t_pso_skey
 	MTL_DEBUG_LAYER=1 ./t_samp
 	MTL_DEBUG_LAYER=1 ./t_fmt_swz
+	DM_NVN_DEPTH_PLAIN=1 ./t_depth_plain
 	./t_refl
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view
