@@ -94,6 +94,7 @@ run: \
 	$(B)/t_touchpad \
 	$(B)/t_touchpad_rehit \
 	$(B)/t_touchpad_sensafter \
+	$(B)/t_touchpad_custom \
 	$(B)/t_watchdog \
 	$(B)/t_watchdog_nobg
 	$(B)/t_altstack
@@ -294,6 +295,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ sensitivity 0.5×" $(B)/t_touchpad_sensafter.log; then \
 	   cat $(B)/t_touchpad_sensafter.log; echo "t_touchpad_sensafter: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_touchpad_sensafter: a sensitivity applied after saturation never lets 0.5× turn at full speed, as expected"
+	@status=0; $(B)/t_touchpad_custom > $(B)/t_touchpad_custom.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "t_touchpad: 53 checks, 5 failed" $(B)/t_touchpad_custom.log; then \
+	   cat $(B)/t_touchpad_custom.log; echo "t_touchpad_custom: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_touchpad_custom: the default layout whatever the customization fails 5 layout checks, as expected"
 	$(B)/t_watchdog
 	@status=0; $(B)/t_watchdog_nobg > $(B)/t_watchdog_nobg.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ away" $(B)/t_watchdog_nobg.log; then \
@@ -496,6 +501,8 @@ $(B)/t_touchpad_rehit: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_in
 	clang -O1 -Wall -Werror -DDM_TEST_TP_REHIT -I.. -o $@ t_touchpad.c
 $(B)/t_touchpad_sensafter: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_SENS_AFTER -I.. -o $@ t_touchpad.c
+$(B)/t_touchpad_custom: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_TP_CUSTOM_IGNORED -I.. -o $@ t_touchpad.c
 $(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
 $(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)

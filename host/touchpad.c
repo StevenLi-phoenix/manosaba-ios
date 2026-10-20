@@ -16,6 +16,10 @@
 // Camera tuning (plan item 109; lordran-native 42ad4cf's idea, MIT): a sensitivity of 0.25-3× scales the drag speed before the output saturates
 // (0.5× still turns at full speed with a fast enough swipe; a resting finger stays 0 at 3×), and each axis can be inverted. The iOS Settings page
 // (dm.look_sensitivity, dm.look_invert_x / _y; front_ios.m) or DM_TOUCH_LOOK=<sensitivity>[,x][,y] (x / y: inverted) set it.
+// Layout (plan item 148; lordran-native's control editor and BotWRecomp's settings button, MIT, the ideas): each control (and the stick's home) can
+// be moved and sized (0.5-2×) from its default place, kept inside the safe area; the front end keeps the spec (tp_custom_get / _set) and an opacity.
+// In the editor (tp_edit) a finger drags the control under it, tp_edit_scale sizes the one touched last, and nothing reaches the game. The menu
+// button between - and + only asks the front end for its panel (tp_menu_take).
 // DM_TEST_TOUCHPAD=<test>[:<s>][,...] (any game, the Mac too), s seconds after start (default 30), on a 844x390 layout when the front end has none:
 //   check  BotWRecomp's input checks;  hide  its eye checks;  look  only a camera finger dragged right for 1 s (to see the camera turn in shots)
 // Each check logs "touch pad test: <name> ok|FAIL" with the controller the game last read (hle_hid.c); the frame numbers of each test are logged.
@@ -50,7 +54,11 @@ static struct {
     int look; long look_id; float lpx, lpy, vx, vy;
     float look_sens; int look_inv_x, look_inv_y;
     double last_t; uint64_t latch;
-} g = {.enabled = 1, .eye = -1, .dpad = -1, .look_sens = 1};
+    tp_item def[20]; float def_hx, def_hy, def_sr; int menu, menu_req;   // the default layout (before customization); the menu button
+    int editing, sel; long edit_id; float grab_x, grab_y; float opacity;  // the editor: the control held (-1, TP_SEL_STICK) and where it was grabbed
+} g = {.enabled = 1, .eye = -1, .dpad = -1, .menu = -1, .sel = -1, .look_sens = 1, .opacity = 1};
+typedef struct { char label[8]; float dx, dy, s; } tp_cust;   // a control moved (design points) and sized from its default
+static tp_cust g_cust[24]; static int g_ncust;
 void tp_look_tuning(float sens, int inv_x, int inv_y) {
     if (!(sens > 0)) sens = 1;   // NaN or unset
     pthread_mutex_lock(&g_mu); g.look_sens = sens < 0.25f ? 0.25f : sens > 3 ? 3 : sens; g.look_inv_x = !!inv_x; g.look_inv_y = !!inv_y; pthread_mutex_unlock(&g_mu);
@@ -66,6 +74,30 @@ static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ?
 static void release_all(void) { g.nf = 0; g.stick = g.look = 0; g.vx = g.vy = 0; }
 static void add(int shape, float x, float y, float r, float hh, const char *label, uint32_t mask) {
     if (g.nc < 20) g.c[g.nc++] = (control){{shape, x, y, r, hh, label, 0, 0}, mask};
+}
+static tp_cust *cust_of(const char *label, int make) {
+    for (int i = 0; i < g_ncust; i++) if (!strcmp(g_cust[i].label, label)) return &g_cust[i];
+    if (!make || g_ncust == 24) return NULL;
+    tp_cust *c = &g_cust[g_ncust++]; memset(c, 0, sizeof *c); strlcpy(c->label, label, sizeof c->label); c->s = 1; return c;
+}
+// The default layout with the customization over it, every control kept inside the safe area (g_mu held, laid out)
+static void apply_custom(void) {
+    float L = g.safe[0], T = g.safe[1], R = g.w - g.safe[2], B = g.h - g.safe[3];
+    for (int i = 0; i < g.nc; i++) {
+        tp_item *it = &g.c[i].d; const tp_item *df = &g.def[i]; *it = *df;
+#ifndef DM_TEST_TP_CUSTOM_IGNORED   // negative control of t_touchpad only: the default layout whatever the customization
+        tp_cust *c = cust_of(df->label, 0);
+        if (c) { it->x = df->x + c->dx * g.u; it->y = df->y + c->dy * g.u; it->r = df->r * c->s; it->hh = df->hh * c->s; }
+#endif
+        float ex = it->r, ey = it->shape == TP_PILL ? it->hh : it->r;
+        it->x = clampf(it->x, L + ex, R - ex > L + ex ? R - ex : L + ex); it->y = clampf(it->y, T + ey, B - ey > T + ey ? B - ey : T + ey);
+    }
+    g.home_x = g.def_hx; g.home_y = g.def_hy; g.stick_r = g.def_sr;
+#ifndef DM_TEST_TP_CUSTOM_IGNORED
+    tp_cust *c = cust_of("stick", 0);
+    if (c) { g.home_x += c->dx * g.u; g.home_y += c->dy * g.u; g.stick_r *= c->s; }
+#endif
+    g.home_x = clampf(g.home_x, L + g.stick_r, R - g.stick_r); g.home_y = clampf(g.home_y, T + g.stick_r, B - g.stick_r);
 }
 void tp_layout(float W, float H, float sl, float st, float sr, float sb) {
     look_env();
@@ -83,15 +115,18 @@ void tp_layout(float W, float H, float sl, float st, float sr, float sb) {
         float pw = 37 * u, ph = 16 * u, gap = 8 * u;   // shoulders: ZL / ZR in the top corners, L / R under them
         add(TP_PILL, L + m + pw, T + m + ph, pw, ph, "ZL", DM_BTN_ZL); add(TP_PILL, L + m + pw, T + m + 3 * ph + gap, pw, ph, "L", DM_BTN_L);
         add(TP_PILL, R - m - pw, T + m + ph, pw, ph, "ZR", DM_BTN_ZR); add(TP_PILL, R - m - pw, T + m + 3 * ph + gap, pw, ph, "R", DM_BTN_R);
-        float sr2 = 16 * u, ty = T + m + sr2;   // top centre: - and +, the eye (BotWRecomp's settings menu button between - and + is not here)
+        float sr2 = 16 * u, ty = T + m + sr2;   // top centre: - and +, the menu button between them, the eye
         add(TP_CIRCLE, W * 0.5f - 62 * u, ty, sr2, 0, "-", DM_BTN_MINUS); add(TP_CIRCLE, W * 0.5f + 62 * u, ty, sr2, 0, "+", DM_BTN_PLUS);
+        g.menu = g.nc; add(TP_MENU, W * 0.5f, ty, 14 * u, 0, "menu", 0);   // the front end's panel (plan item 148), where BotWRecomp has its settings button
         g.eye = g.nc; add(TP_EYE, W * 0.5f + 124 * u, ty, 14 * u, 0, "eye", 0);
         float dr = 40 * u;   // D-pad on the left, under L, above the stick's area
         g.dpad = g.nc; add(TP_DPAD, L + m + dr + 4 * u, T + m + 4 * ph + gap + 16 * u + dr, dr, 0, "dpad", 0);
         float r3 = 18 * u;   // stick clicks
         add(TP_CIRCLE, W * 0.5f - 122 * u, B - m - r3, r3, 0, "L3", DM_BTN_LS); add(TP_CIRCLE, W * 0.5f + 122 * u, B - m - r3, r3, 0, "R3", DM_BTN_RS);
         g.stick_r = kStickRadius * u; g.home_x = L + m + 20 * u + g.stick_r; g.home_y = B - m - 14 * u - g.stick_r;   // the stick drawn at home while idle
-        g.laid_out = 1;
+        for (int i = 0; i < g.nc; i++) g.def[i] = g.c[i].d;
+        g.def_hx = g.home_x; g.def_hy = g.home_y; g.def_sr = g.stick_r;
+        g.laid_out = 1; apply_custom();
         LOG("touch pad: layout %.0fx%.0f pt, %.2f pt per design point, safe area l %.0f t %.0f r %.0f b %.0f", W, H, u, sl, st, sr, sb);
     }
     pthread_mutex_unlock(&g_mu);
@@ -125,9 +160,27 @@ static void stick_to(float x, float y) {   // the base follows a thumb that leav
     g.kx = x; g.ky = y;
 }
 static finger *find(long id) { for (int i = 0; i < g.nf; i++) if (g.f[i].id == id) return &g.f[i]; return NULL; }
+static void edit_touch(long id, int phase, float x, float y) {   // the layout editor: one finger drags the control under it
+    if (phase == TP_DOWN) {
+        if (g.edit_id) return;
+        int c = hit(x, y);
+        if (c >= 0) { g.sel = c; g.grab_x = x - g.c[c].d.x; g.grab_y = y - g.c[c].d.y; }
+        else if (hypotf(x - g.home_x, y - g.home_y) <= g.stick_r) { g.sel = TP_SEL_STICK; g.grab_x = x - g.home_x; g.grab_y = y - g.home_y; }
+        else return;
+        g.edit_id = id;
+    } else if (id == g.edit_id && phase == TP_MOVE) {
+        int st = g.sel == TP_SEL_STICK; const char *label = st ? "stick" : g.def[g.sel].label;
+        float bx = st ? g.def_hx : g.def[g.sel].x, by = st ? g.def_hy : g.def[g.sel].y;
+        tp_cust *c = cust_of(label, 1); if (!c) return;
+        c->dx = (x - g.grab_x - bx) / g.u; c->dy = (y - g.grab_y - by) / g.u;
+        apply_custom();   // kept inside the safe area: the move stored is where it ended up
+        c->dx = ((st ? g.home_x : g.c[g.sel].d.x) - bx) / g.u; c->dy = ((st ? g.home_y : g.c[g.sel].d.y) - by) / g.u;
+    } else if (id == g.edit_id) g.edit_id = 0;
+}
 static void touch_locked(long id, int phase, float x, float y) {
     finger *fg = find(id);
     if (!g.laid_out || !g.enabled) return;
+    if (g.editing) { edit_touch(id, phase, x, y); return; }
     if (phase == TP_DOWN) {
         if (fg || g.nf == 16) return;
         finger n = {id, ROLE_CTRL, -1, 0, x, y};
@@ -140,6 +193,7 @@ static void touch_locked(long id, int phase, float x, float y) {
                 g.hidden = !g.hidden; if (g.hidden) { g.stick = g.look = 0; g.vx = g.vy = 0; }
                 LOG("touch pad: controls %s", g.hidden ? "hidden" : "shown");
             }
+            if (c == g.menu) g.menu_req = 1;
             g.latch |= c == g.dpad ? n.dir : g.c[c].mask;
         } else if (x < g.w * 0.5f) {
             if (g.stick) return;   // one stick finger at a time
@@ -184,7 +238,7 @@ int tp_read(double t, uint64_t *buttons, float *lx, float *ly, float *rx, float 
     g.last_t = t;
     finger *lf = g.look ? find(g.look_id) : NULL;
     if (gap > 0.1f && lf) { g.lpx = lf->x; g.lpy = lf->y; g.vx = g.vy = 0; }   // the first read after a pause: no velocity spike
-    if (g.hidden) { g.latch = 0; pthread_mutex_unlock(&g_mu); return 1; }
+    if (g.hidden || g.editing) { g.latch = 0; pthread_mutex_unlock(&g_mu); return 1; }   // collapsed, or the layout editor: nothing reaches the game
     uint64_t b = g.latch; g.latch = 0;
     for (int i = 0; i < g.nf; i++) if (g.f[i].role == ROLE_CTRL) b |= g.f[i].ctrl == g.dpad ? g.f[i].dir : g.c[g.f[i].ctrl].mask;
     *buttons = b;
@@ -213,8 +267,9 @@ void tp_draw(tp_draw_state *d) {
     memset(d, 0, sizeof *d);
     pthread_mutex_lock(&g_mu);
     d->visible = g.laid_out && g.enabled;
+    d->sel = -1; d->opacity = g.opacity;
     if (d->visible) {
-        d->u = g.u;
+        d->u = g.u; d->editing = g.editing; d->sel = g.editing ? g.sel : -1;
         for (int i = 0; i < g.nc; i++) d->items[i] = g.c[i].d;
         for (int i = 0; i < g.nf; i++) if (g.f[i].role == ROLE_CTRL) { d->items[g.f[i].ctrl].pressed = 1; d->items[g.f[i].ctrl].dir |= g.f[i].dir; }
         if (g.hidden) { d->items[0] = d->items[g.eye]; d->n = 1; d->collapsed = 1; }
@@ -233,6 +288,45 @@ int tp_find(const char *label, float *x, float *y, float *r) {   // "stick": the
     if (!ok && !strcmp(label, "stick") && g.laid_out) { *x = g.home_x; *y = g.home_y; *r = g.stick_r; ok = 1; }
     pthread_mutex_unlock(&g_mu); return ok;
 }
+
+int tp_custom_set(const char *spec) {
+    tp_cust t[24]; int n = 0; char buf[1024]; strlcpy(buf, spec ? spec : "", sizeof buf);
+    for (char *sv, *e = strtok_r(buf, ";", &sv); e; e = strtok_r(NULL, ";", &sv)) {
+        char *c = strrchr(e, ':'); float dx, dy, sz; char tail;
+        if (!c || c == e || c - e >= 8 || n == 24 || sscanf(c + 1, "%f,%f,%f%c", &dx, &dy, &sz, &tail) != 3 || !isfinite(dx) || !isfinite(dy) || !(sz > 0)) return 0;
+        memset(&t[n], 0, sizeof t[n]); memcpy(t[n].label, e, (size_t)(c - e));
+        t[n].dx = clampf(dx, -2000, 2000); t[n].dy = clampf(dy, -2000, 2000); t[n].s = clampf(sz, 0.5f, 2); n++;
+    }
+    pthread_mutex_lock(&g_mu);
+    memcpy(g_cust, t, sizeof t[0] * (size_t)n); g_ncust = n;
+    if (g.laid_out) { release_all(); apply_custom(); }
+    pthread_mutex_unlock(&g_mu);
+    return 1;
+}
+void tp_custom_get(char *out, unsigned long n) {
+    pthread_mutex_lock(&g_mu); size_t o = 0; if (n) out[0] = 0;
+    for (int i = 0; i < g_ncust && o < n; i++) if (g_cust[i].dx || g_cust[i].dy || g_cust[i].s != 1)
+        o += (size_t)snprintf(out + o, n - o, "%s:%.1f,%.1f,%.2f;", g_cust[i].label, g_cust[i].dx, g_cust[i].dy, g_cust[i].s);
+    pthread_mutex_unlock(&g_mu);
+}
+void tp_custom_reset(void) { pthread_mutex_lock(&g_mu); g_ncust = 0; if (g.laid_out) apply_custom(); pthread_mutex_unlock(&g_mu); }
+void tp_edit(int on) {
+    pthread_mutex_lock(&g_mu); release_all(); g.latch = 0; g.editing = !!on; g.edit_id = 0; g.sel = -1; if (on) g.hidden = 0;   // the editor shows every control
+    LOG("touch pad: layout editor %s", on ? "on" : "off");
+    pthread_mutex_unlock(&g_mu);
+}
+int tp_edit_scale(float size) {
+    pthread_mutex_lock(&g_mu); int ok = g.editing && g.sel >= 0;
+    if (ok) { tp_cust *c = cust_of(g.sel == TP_SEL_STICK ? "stick" : g.def[g.sel].label, 1); if (c) { c->s = clampf(size, 0.5f, 2); apply_custom(); } else ok = 0; }
+    pthread_mutex_unlock(&g_mu); return ok;
+}
+float tp_edit_scale_get(void) {
+    pthread_mutex_lock(&g_mu); float s = 0;
+    if (g.editing && g.sel >= 0) { tp_cust *c = cust_of(g.sel == TP_SEL_STICK ? "stick" : g.def[g.sel].label, 0); s = c ? c->s : 1; }
+    pthread_mutex_unlock(&g_mu); return s;
+}
+void tp_opacity(float a) { pthread_mutex_lock(&g_mu); g.opacity = a > 0 ? clampf(a, 0.15f, 1) : 1; pthread_mutex_unlock(&g_mu); }
+int tp_menu_take(void) { pthread_mutex_lock(&g_mu); int r = g.menu_req; g.menu_req = 0; pthread_mutex_unlock(&g_mu); return r; }
 
 // ---------- hle_hid.c and DM_TEST_TOUCHPAD ----------
 static int32_t axis(float v) { return (int32_t)lroundf(clampf(v, -1, 1) * DM_STICK_MAX); }

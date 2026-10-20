@@ -5,7 +5,11 @@
 // a read after a pause gives the camera no spike, every control's centre reaches its own button. Camera tuning (plan item 109): 2× turns faster than
 // 1× for the same swipe, 0.5× still reaches full speed with a fast swipe, a slow drift stays 0 at 3×, each axis inverts alone, out-of-range values
 // are clamped, DM_TOUCH_LOOK is read. Negative controls: -DDM_TEST_TP_REHIT (a sliding finger takes the button under it) fails "slid off A";
-// -DDM_TEST_TP_SENS_AFTER (the sensitivity scales the saturated output) fails 1: 0.5× never turns at full speed.
+// -DDM_TEST_TP_SENS_AFTER (the sensitivity scales the saturated output) fails 1: 0.5× never turns at full speed. Layout (plan item 148): a spec moves and
+// sizes A (pressed at its new place, not at the old), B pushed off the screen stays inside the safe area, the stick's home moves and shrinks, the
+// spec read back gives the same layout, one that does not parse changes nothing, reset; the editor drags and sizes X with nothing reaching the
+// game, and X then works there; the menu button asks for the panel once and presses nothing; opacity clamped. The customization ignored
+// (-DDM_TEST_TP_CUSTOM_IGNORED): 5 fail.
 #include "../touchpad.c"
 #include <stdio.h>
 uint64_t g_t0_ns;
@@ -148,6 +152,41 @@ int main(void) {
     clock_ns = 20000000000ull; tp_touch(40, TP_DOWN, px, py); tp_touch(40, TP_MOVE, px, py - 200 * u);
     { uint64_t b; int32_t a[4]; int on = dm_touchpad_read(&b, &a[0], &a[1], &a[2], &a[3]); CHECK(on && a[0] == 0 && a[1] == 32767, "dm_touchpad_read: stick fully up = ly 32767 (%d, %d)", a[0], a[1]); }
     up(40);
+    // Layout customization and the editor (plan item 148)
+    { T += 1; rd();
+      float ax0 = cx("A"), ay0 = cy("A"), ar0, x, y; tp_find("A", &x, &y, &ar0);
+      CHECK(tp_custom_set("A:-100,-20,1.5"), "a spec that parses is taken");
+      float ax = cx("A"), ay = cy("A"), ar; tp_find("A", &x, &y, &ar);
+      CHECK(fabsf(ax - (ax0 - 100 * u)) < 0.01f && fabsf(ay - (ay0 - 20 * u)) < 0.01f && fabsf(ar - ar0 * 1.5f) < 0.01f, "A moved 100 left and 20 up, 1.5× its size (%.1f, %.1f, r %.1f)", ax, ay, ar);
+      tp_touch(60, TP_DOWN, ax, ay); T += 1 / 30.0; rd(); uint64_t at_new = S.b; up(60); T += 1 / 30.0; rd();
+      tp_touch(61, TP_DOWN, ax0 + ar0 * 0.9f, ay0); T += 1 / 30.0; rd(); uint64_t at_old = S.b; up(61); T += 1 / 30.0; rd();
+      CHECK(at_new == DM_BTN_A && !(at_old & DM_BTN_A), "a finger on A's new place presses it, one on the old edge does not (%05llx / %05llx)", (unsigned long long)at_new, (unsigned long long)at_old);
+      tp_custom_set("B:5000,0,1;stick:200,-50,0.8");
+      float bx = cx("B"), br; tp_find("B", &x, &y, &br); float hx, hy, hr; tp_find("stick", &hx, &hy, &hr);
+      CHECK(fabsf(bx + br - (844 - 47)) < 0.01f && fabsf(hx - (px + 200 * u)) < 0.01f && fabsf(hr - r * 0.8f) < 0.01f, "B pushed far right stays inside the safe area; the stick's home moved and 0.8× (%.1f, %.1f)", bx + br, hr);
+      char spec[512]; tp_custom_get(spec, sizeof spec); float b1 = cx("B");
+      tp_custom_reset(); float b0 = cx("B"); tp_custom_set(spec);
+      CHECK(b0 != b1 && cx("B") == b1 && strstr(spec, "stick:200.0,-50.0,0.80;"), "the spec read back gives the same layout (%s)", spec);
+      CHECK(!tp_custom_set("A:1,2") && cx("B") == b1, "a spec that does not parse changes nothing");
+      tp_custom_reset();
+      CHECK(cx("A") == ax0 && cy("A") == ay0, "reset: the default layout");
+      // the editor: a finger on X drags it 30 right and 40 down, nothing reaches the game, the size of X set; then X works where it was put
+      float xx = cx("X"), xy = cy("X"), xr; tp_find("X", &x, &y, &xr);
+      tp_edit(1); tp_touch(62, TP_DOWN, xx + 3, xy); tp_touch(62, TP_MOVE, xx + 33, xy + 40); T += 1 / 30.0; rd(); uint64_t during = S.b; float dl = S.lx;
+      tp_touch(62, TP_UP, 0, 0); int scaled = tp_edit_scale(1.3f); float sz = tp_edit_scale_get(); tp_draw(&d); int ed = d.editing;
+      tp_edit(0);
+      float nx = cx("X"), ny = cy("X"), nr; tp_find("X", &x, &y, &nr);
+      CHECK(fabsf(nx - (xx + 30)) < 0.01f && fabsf(ny - (xy + 40)) < 0.01f && fabsf(nr - xr * 1.3f) < 0.01f && scaled && sz == 1.3f && ed,
+            "the editor: X dragged 30 right, 40 down and sized 1.3× (%.1f, %.1f, r %.1f)", nx - xx, ny - xy, nr / xr);
+      CHECK(!during && dl == 0, "... nothing reaches the game while it is on");
+      tp_touch(63, TP_DOWN, nx, ny); T += 1 / 30.0; rd(); CHECK(S.b == DM_BTN_X, "... and X works where it was put (%05llx)", (unsigned long long)S.b); up(63); T += 1 / 30.0; rd();
+      tp_custom_reset();
+      // the menu button: asks for the panel once, presses nothing
+      tp_touch(64, TP_DOWN, cx("menu"), cy("menu")); T += 1 / 30.0; rd(); uint64_t mb = S.b; up(64);
+      int m1 = tp_menu_take(), m2 = tp_menu_take();
+      CHECK(m1 && !m2 && !mb, "the menu button: the panel asked for once, no button pressed");
+      tp_opacity(0.4f); tp_draw(&d); float o1 = d.opacity; tp_opacity(0.01f); tp_draw(&d); float o2 = d.opacity; tp_opacity(1);
+      CHECK(o1 == 0.4f && o2 == 0.15f, "opacity 0.4 drawn as such, 0.01 held at 0.15"); }
     printf("t_touchpad: %d checks, %d failed\n", n, fail);
     return fail != 0;
 }

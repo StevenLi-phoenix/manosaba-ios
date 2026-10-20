@@ -103,16 +103,33 @@ static void pad_look_settings(void) {
     tp_look_tuning(s, x, y); float a; int ax, ay; tp_look_tuning_get(&a, &ax, &ay);
     LOG("front: touch camera sensitivity %.2f×%s%s (Settings)", a, ax ? ", horizontal inverted" : "", ay ? ", vertical inverted" : "");
 }
-@interface DmPadView : UIView
+// The controls' layout and opacity (plan item 148): dm.touch_layout (tp_custom_get's spec, written by the layout editor) and dm.touch_opacity (0.15-1,
+// the panel or the Settings page), applied at start and whenever they change
+static NSString *g_layout_spec; static float g_pad_alpha = -1;
+static void pad_layout_settings(void) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults; NSString *spec = [d stringForKey:@"dm.touch_layout"] ?: @""; float a = [d floatForKey:@"dm.touch_opacity"];
+    if (![spec isEqualToString:g_layout_spec ?: @"-"]) { g_layout_spec = spec; if (!tp_custom_set(spec.UTF8String)) LOG("[red] front: dm.touch_layout does not parse: %s", spec.UTF8String); }
+    if (a != g_pad_alpha) { g_pad_alpha = a; tp_opacity(a > 0 ? a : 1); }
+}
+static void front_panel_open(void);
+static UIViewController *top_controller(void);
+@class DmPadView;
+@interface DmEditBar : UIView
+- (instancetype)initWithPad:(DmPadView *)pad;
+- (void)selectionChanged;
 @end
-@implementation DmPadView { int _hidden; NSTimer *_test; }
+@interface DmPadView : UIView
+- (void)startEdit;
+- (void)endEdit:(BOOL)save;
+@end
+@implementation DmPadView { int _hidden; NSTimer *_test; DmEditBar *_bar; }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.multipleTouchEnabled = YES; self.opaque = NO; self.backgroundColor = UIColor.clearColor; self.contentMode = UIViewContentModeRedraw;
     _hidden = [NSUserDefaults.standardUserDefaults boolForKey:@"dm.touch_hidden"]; tp_set_hidden(_hidden);
-    pad_look_settings();
+    pad_look_settings(); pad_layout_settings();
     [NSNotificationCenter.defaultCenter addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:NSOperationQueue.mainQueue
-                                                usingBlock:^(NSNotification *n) { (void)n; pad_look_settings(); }];
+                                                usingBlock:^(NSNotification *n) { (void)n; pad_look_settings(); pad_layout_settings(); [self setNeedsDisplay]; }];
     if (getenv("DM_TEST_TOUCHPAD")) _test = [NSTimer scheduledTimerWithTimeInterval:1 / 15.0 repeats:YES block:^(NSTimer *t) { (void)t; [self setNeedsDisplay]; }];   // the self-test's fingers
     return self;
 }
@@ -127,6 +144,8 @@ static void pad_look_settings(void) {
     for (UITouch *t in ts) { CGPoint p = [t locationInView:self]; tp_touch((long)(__bridge void *)t, ph, (float)p.x, (float)p.y); }
     int h = tp_hidden();
     if (h != _hidden) { _hidden = h; [NSUserDefaults.standardUserDefaults setBool:h forKey:@"dm.touch_hidden"]; }
+    if (tp_menu_take()) front_panel_open();
+    [_bar selectionChanged];
     [self setNeedsDisplay];
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { (void)e; [self send:ts phase:TP_DOWN]; }
@@ -141,7 +160,8 @@ static void pad_label(const char *s, CGFloat x, CGFloat y, CGFloat size, CGFloat
 - (void)drawRect:(CGRect)r {
     (void)r; tp_draw_state d; tp_draw(&d);
     if (!d.visible) return;
-    UIColor *line = [UIColor colorWithWhite:1 alpha:0.45], *fill = [UIColor colorWithWhite:0 alpha:0.18], *down = [UIColor colorWithWhite:1 alpha:0.35];
+    CGFloat A = d.opacity > 0 ? d.opacity : 1;   // plan item 148: the controls' opacity
+    UIColor *line = [UIColor colorWithWhite:1 alpha:0.45 * A], *fill = [UIColor colorWithWhite:0 alpha:0.18 * A], *down = [UIColor colorWithWhite:1 alpha:0.35 * A];
     for (int i = 0; i < d.n; i++) {
         tp_item *it = &d.items[i]; UIBezierPath *p;
         if (it->shape == TP_PILL) p = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(it->x - it->r, it->y - it->hh, 2 * it->r, 2 * it->hh) cornerRadius:it->hh];
@@ -161,7 +181,16 @@ static void pad_label(const char *s, CGFloat x, CGFloat y, CGFloat size, CGFloat
             UIBezierPath *e = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(it->x - it->r * 0.6, it->y - it->r * 0.32, it->r * 1.2, it->r * 0.64)];
             [line setStroke]; [e stroke]; [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(it->x - it->r * 0.16, it->y - it->r * 0.16, it->r * 0.32, it->r * 0.32)] fill];
             if (d.collapsed) { UIBezierPath *s = [UIBezierPath bezierPath]; [s moveToPoint:CGPointMake(it->x - it->r * 0.6, it->y + it->r * 0.6)]; [s addLineToPoint:CGPointMake(it->x + it->r * 0.6, it->y - it->r * 0.6)]; [s stroke]; }
-        } else pad_label(it->label, it->x, it->y, it->shape == TP_PILL ? it->hh * 1.0 : it->r * 0.8, it->pressed ? 1 : 0.8);
+        } else if (it->shape == TP_MENU) {   // three bars: the settings panel
+            for (int k = -1; k <= 1; k++) { UIBezierPath *b = [UIBezierPath bezierPath]; [b moveToPoint:CGPointMake(it->x - it->r * 0.5, it->y + k * it->r * 0.32)];
+                [b addLineToPoint:CGPointMake(it->x + it->r * 0.5, it->y + k * it->r * 0.32)]; b.lineWidth = 1.5; [line setStroke]; [b stroke]; }
+        } else pad_label(it->label, it->x, it->y, it->shape == TP_PILL ? it->hh * 1.0 : it->r * 0.8, (it->pressed ? 1 : 0.8) * A);
+        if (d.editing) {   // the layout editor: every control outlined, the one held in yellow
+            CGFloat ex = it->r + 3, ey = (it->shape == TP_PILL ? it->hh : it->r) + 3;
+            UIBezierPath *o = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(it->x - ex, it->y - ey, 2 * ex, 2 * ey) cornerRadius:6];
+            CGFloat dash[2] = {4, 3}; [o setLineDash:dash count:2 phase:0]; o.lineWidth = i == d.sel ? 2.5 : 1;
+            [(i == d.sel ? UIColor.systemYellowColor : [UIColor colorWithWhite:1 alpha:0.8]) setStroke]; [o stroke];
+        }
     }
     if (d.collapsed) return;
     // the stick: its ring at home while idle, else the base where the thumb is and the knob under it; a small ring under a camera finger
@@ -170,10 +199,131 @@ static void pad_label(const char *s, CGFloat x, CGFloat y, CGFloat size, CGFloat
     [fill setFill]; [ring fill]; [line setStroke]; ring.lineWidth = 1.5; [ring stroke];
     CGFloat kr = sr * 0.42; UIBezierPath *knob = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(kx - kr, ky - kr, 2 * kr, 2 * kr)];
     [(d.stick ? down : fill) setFill]; [knob fill]; [knob stroke];
+    if (d.editing) { UIBezierPath *o = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(bx - sr - 3, by - sr - 3, 2 * sr + 6, 2 * sr + 6)]; CGFloat dash[2] = {4, 3};
+        [o setLineDash:dash count:2 phase:0]; o.lineWidth = d.sel == TP_SEL_STICK ? 2.5 : 1; [(d.sel == TP_SEL_STICK ? UIColor.systemYellowColor : [UIColor colorWithWhite:1 alpha:0.8]) setStroke]; [o stroke]; }
     if (d.look) { CGFloat lr = 22 * d.u; UIBezierPath *l = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(d.look_x - lr, d.look_y - lr, 2 * lr, 2 * lr)]; [line setStroke]; [l stroke]; }
+}
+- (void)startEdit {
+    if (_bar) return;
+    tp_edit(1); [self setNeedsDisplay];
+    _bar = [[DmEditBar alloc] initWithPad:self];
+    [self.superview addSubview:_bar];
+}
+- (void)endEdit:(BOOL)save {
+    tp_edit(0);
+    if (save) { char spec[1024]; tp_custom_get(spec, sizeof spec); g_layout_spec = @(spec); [NSUserDefaults.standardUserDefaults setObject:g_layout_spec forKey:@"dm.touch_layout"];
+        LOG("front: controls layout saved: %s", spec[0] ? spec : "(the default)"); }
+    [_bar removeFromSuperview]; _bar = nil; [self setNeedsDisplay];
 }
 @end
 static __weak DmPadView *g_pad;
+
+// The layout editor's bar (plan item 148), at the top of the screen while the editor is on: the size of the control touched last, Reset, Done
+@implementation DmEditBar { __weak DmPadView *_pad; UISlider *_size; UILabel *_hint; }
+- (instancetype)initWithPad:(DmPadView *)pad {
+    CGRect b = pad.bounds; UIEdgeInsets in = pad.safeAreaInsets;
+    if (!(self = [super initWithFrame:CGRectMake(b.size.width / 2 - 220, in.top + 8, 440, 44)])) return nil;
+    _pad = pad; self.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.85]; self.layer.cornerRadius = 10;
+    self.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    _hint = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 44)]; _hint.textColor = UIColor.whiteColor; _hint.font = [UIFont systemFontOfSize:13]; _hint.text = @"Drag a control";
+    _size = [[UISlider alloc] initWithFrame:CGRectMake(132, 7, 150, 30)]; _size.minimumValue = 0.5; _size.maximumValue = 2; _size.enabled = NO;
+    [_size addTarget:self action:@selector(sized) forControlEvents:UIControlEventValueChanged];
+    UIButton *reset = [UIButton systemButtonWithPrimaryAction:[UIAction actionWithTitle:@"Reset" image:nil identifier:nil handler:^(UIAction *a) { (void)a; tp_custom_reset(); [self selectionChanged]; [pad setNeedsDisplay]; }]];
+    UIButton *done = [UIButton systemButtonWithPrimaryAction:[UIAction actionWithTitle:@"Done" image:nil identifier:nil handler:^(UIAction *a) { (void)a; [pad endEdit:YES]; }]];
+    reset.frame = CGRectMake(290, 7, 64, 30); done.frame = CGRectMake(362, 7, 64, 30);
+    for (UIView *v in @[_hint, _size, reset, done]) [self addSubview:v];
+    return self;
+}
+- (void)sized { tp_edit_scale(_size.value); [_pad setNeedsDisplay]; }
+- (void)selectionChanged { float s = tp_edit_scale_get(); _size.enabled = s > 0; if (s > 0) { _size.value = s; _hint.text = @"Size"; } }
+@end
+
+// The settings panel (plan item 148; BotWRecomp's in-game settings and lordran-native's floating menu, MIT, the ideas): the Settings page's choices
+// while the game runs, from the menu button between - and + or a three-finger tap (any game). It writes the same user defaults, so what applies
+// while the game runs (frame rate, MetalFX, the frame rate line, the camera, the controls' opacity) applies at once; the render resolution at the
+// next launch. The game goes on behind it.
+@interface DmPanel : UIViewController
+@end
+@implementation DmPanel
+static UIStackView *panel_row(NSString *title, UIView *ctl) {
+    UILabel *l = [UILabel new]; l.text = title; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:15];
+    UIStackView *r = [[UIStackView alloc] initWithArrangedSubviews:@[l, ctl]]; r.axis = UILayoutConstraintAxisHorizontal; r.spacing = 12; r.alignment = UIStackViewAlignmentCenter;
+    [l setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    return r;
+}
+static UISwitch *panel_switch(NSString *key) {
+    UISwitch *s = [UISwitch new]; s.on = [NSUserDefaults.standardUserDefaults boolForKey:key];
+    [s addAction:[UIAction actionWithHandler:^(UIAction *a) { [NSUserDefaults.standardUserDefaults setBool:((UISwitch *)a.sender).on forKey:key]; }] forControlEvents:UIControlEventValueChanged];
+    return s;
+}
+static UISegmentedControl *panel_choice(NSString *key, NSArray<NSString *> *titles, NSArray<NSNumber *> *values) {
+    UISegmentedControl *c = [[UISegmentedControl alloc] initWithItems:titles]; NSInteger v = [NSUserDefaults.standardUserDefaults integerForKey:key];
+    c.selectedSegmentIndex = MAX(0, (NSInteger)[values indexOfObject:@(v)] == NSNotFound ? 0 : (NSInteger)[values indexOfObject:@(v)]);
+    [c addAction:[UIAction actionWithHandler:^(UIAction *a) { [NSUserDefaults.standardUserDefaults setInteger:values[((UISegmentedControl *)a.sender).selectedSegmentIndex].integerValue forKey:key]; }]
+        forControlEvents:UIControlEventValueChanged];
+    return c;
+}
+static UISlider *panel_slider(NSString *key, float lo, float hi, float def, NSArray<NSNumber *> *steps) {   // steps: the values the Settings page lists
+    UISlider *s = [UISlider new]; s.minimumValue = lo; s.maximumValue = hi; float v = [NSUserDefaults.standardUserDefaults floatForKey:key]; s.value = v > 0 ? v : def;
+    [s.widthAnchor constraintEqualToConstant:160].active = YES;
+    [s addAction:[UIAction actionWithHandler:^(UIAction *a) { UISlider *x = (UISlider *)a.sender; float best = x.value, bd = 1e9f;
+        for (NSNumber *n in steps) if (fabsf(n.floatValue - x.value) < bd) { bd = fabsf(n.floatValue - x.value); best = n.floatValue; }
+        [NSUserDefaults.standardUserDefaults setFloat:best forKey:key]; }] forControlEvents:UIControlEventValueChanged];
+    return s;
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    UIView *card = [UIView new]; card.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.95]; card.layer.cornerRadius = 14; card.translatesAutoresizingMaskIntoConstraints = NO;
+    UIScrollView *sc = [UIScrollView new]; sc.translatesAutoresizingMaskIntoConstraints = NO;
+    UIStackView *st = [UIStackView new]; st.axis = UILayoutConstraintAxisVertical; st.spacing = 10; st.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:card]; [card addSubview:sc]; [sc addSubview:st];
+    UILabel *t = [UILabel new]; t.text = @"Settings"; t.textColor = UIColor.whiteColor; t.font = [UIFont boldSystemFontOfSize:18]; [st addArrangedSubview:t];
+    [st addArrangedSubview:panel_row(@"Frame rate", panel_choice(@"dm.fps", @[@"60", @"30"], @[@60, @30]))];
+    [st addArrangedSubview:panel_row(@"Render resolution (next launch)", panel_choice(@"dm.render_height", @[@"Game", @"900", @"720", @"540"], @[@0, @900, @720, @540]))];
+    [st addArrangedSubview:panel_row(@"MetalFX upscaling", panel_switch(@"dm.metalfx"))];
+    [st addArrangedSubview:panel_row(@"Show frame rate", panel_switch(@"dm.perf_line"))];
+    if (g_pad) {
+        [st addArrangedSubview:panel_row(@"Camera sensitivity", panel_slider(@"dm.look_sensitivity", 0.25f, 3, 1, @[@0.25, @0.5, @0.75, @1, @1.25, @1.5, @2, @2.5, @3]))];
+        [st addArrangedSubview:panel_row(@"Invert horizontal", panel_switch(@"dm.look_invert_x"))];
+        [st addArrangedSubview:panel_row(@"Invert vertical", panel_switch(@"dm.look_invert_y"))];
+        [st addArrangedSubview:panel_row(@"Controls opacity", panel_slider(@"dm.touch_opacity", 0.15f, 1, 1, @[@0.3, @0.5, @0.75, @1]))];
+        __weak DmPanel *ws = self;
+        UIButton *edit = [UIButton systemButtonWithPrimaryAction:[UIAction actionWithTitle:@"Edit controls layout" image:nil identifier:nil handler:^(UIAction *a) { (void)a;
+            [ws dismissViewControllerAnimated:YES completion:^{ [g_pad startEdit]; }]; }]];
+        UIButton *reset = [UIButton systemButtonWithPrimaryAction:[UIAction actionWithTitle:@"Reset controls layout" image:nil identifier:nil handler:^(UIAction *a) { (void)a;
+            tp_custom_reset(); g_layout_spec = @""; [NSUserDefaults.standardUserDefaults setObject:@"" forKey:@"dm.touch_layout"]; [g_pad setNeedsDisplay]; }]];
+        [st addArrangedSubview:edit]; [st addArrangedSubview:reset];
+    }
+    __weak DmPanel *ws = self;
+    UIButton *done = [UIButton systemButtonWithPrimaryAction:[UIAction actionWithTitle:@"Done" image:nil identifier:nil handler:^(UIAction *a) { (void)a; [ws dismissViewControllerAnimated:YES completion:nil]; }]];
+    [st addArrangedSubview:done];
+    UILayoutGuide *g = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [card.centerXAnchor constraintEqualToAnchor:g.centerXAnchor], [card.centerYAnchor constraintEqualToAnchor:g.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:460], [card.heightAnchor constraintLessThanOrEqualToAnchor:g.heightAnchor constant:-16],
+        [sc.topAnchor constraintEqualToAnchor:card.topAnchor constant:14], [sc.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14],
+        [sc.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18], [sc.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-18],
+        [st.topAnchor constraintEqualToAnchor:sc.contentLayoutGuide.topAnchor], [st.bottomAnchor constraintEqualToAnchor:sc.contentLayoutGuide.bottomAnchor],
+        [st.leadingAnchor constraintEqualToAnchor:sc.contentLayoutGuide.leadingAnchor], [st.trailingAnchor constraintEqualToAnchor:sc.contentLayoutGuide.trailingAnchor],
+        [st.widthAnchor constraintEqualToAnchor:sc.frameLayoutGuide.widthAnchor],
+    ]];
+    NSLayoutConstraint *h = [card.heightAnchor constraintEqualToAnchor:st.heightAnchor constant:28]; h.priority = UILayoutPriorityDefaultHigh; h.active = YES;
+}
+@end
+static void front_panel_open(void) {   // main thread
+    UIViewController *top = top_controller();
+    if (!top || [top isKindOfClass:DmPanel.class]) return;
+    DmPanel *p = [DmPanel new]; p.modalPresentationStyle = UIModalPresentationOverFullScreen; p.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    LOG("front: settings panel");
+    [top presentViewController:p animated:YES completion:nil];
+}
+@interface DmPanelTap : NSObject
+@end
+@implementation DmPanelTap
+- (void)tap:(UITapGestureRecognizer *)r { if (r.state == UIGestureRecognizerStateEnded) front_panel_open(); }
+@end
+static DmPanelTap *g_panel_tap;
 static int pad_wanted(void) {
     const char *e = getenv("DM_TOUCH");
     if (e && !strcmp(e, "pad")) return 1;
@@ -223,6 +373,9 @@ UIView *front_ios_view(CGRect frame, CGFloat scale) {
         pad_follow_controllers();
         LOG("front: on-screen controls (touch \"pad\"%s)", getenv("DM_TOUCH") ? ", from DM_TOUCH" : "");
     }
+    g_panel_tap = [DmPanelTap new];   // a three-finger tap opens the settings panel in any game (plan item 148); the touches still reach the game
+    UITapGestureRecognizer *tap3 = [[UITapGestureRecognizer alloc] initWithTarget:g_panel_tap action:@selector(tap:)]; tap3.numberOfTouchesRequired = 3; tap3.cancelsTouchesInView = NO;
+    [box addGestureRecognizer:tap3];
     g_layer = (CAMetalLayer *)v.layer;
     g_layer.device = MTLCreateSystemDefaultDevice();
     g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;

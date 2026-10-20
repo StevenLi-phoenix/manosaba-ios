@@ -1815,7 +1815,17 @@ Tier 3c, smaller items listed at the user's request (2026-10-20: every finding o
   offset, the SDK libc's own time(); font: shared font 0 loaded with a TrueType header, and the SDK's font engine (nn::fontll) loads it and draws
   'A' at 30 px. Tears of the Kingdom and manosaba: 8 of 8 each. Vibration waits for 67 (the host has no vibration yet). The user clock an hour
   ahead (`DM_TEST_SDK_TIME_SKEW=1`, `hle_time.c`): 2 fail (the user and network clocks)
-- [ ] 148 an in-game settings panel and a control layout editor for the touch controls (BotWRecomp menu, lordran)
+- [x] batch 48 · 148 an in-game settings panel and a layout editor for the on-screen controls (BotWRecomp's settings button and lordran-native's
+  control editor, MIT, the ideas): `touchpad.c` moves and sizes (0.5-2×) any control and the stick's home from its default place, each kept inside
+  the safe area, from a spec the front end keeps (`dm.touch_layout`), draws them at an opacity (`dm.touch_opacity`, 0.15-1), and in its editor
+  (`tp_edit`) a finger drags the control under it while nothing reaches the game; a menu button between - and + asks for the panel. iOS
+  (`front_ios.m`): the panel opens from that button or a three-finger tap in any game (the touches still reach the game) and writes the Settings
+  page's keys, so frame rate, MetalFX, the frame rate line, the camera and the opacity apply at once (render resolution at the next launch);
+  "Edit controls layout" shows every control outlined and a bar with the size of the one touched last, Reset and Done (Done saves the spec).
+  The Settings page gains the opacity. `t_touchpad` (12 more: a spec moves and sizes A, pressed at its new place and not the old, B pushed off
+  stays inside, the stick's home moves and shrinks, the spec read back, a bad one ignored, reset, the editor drags and sizes X with nothing
+  reaching the game and X works there, the menu button presses nothing, opacity clamped; the customization ignored fails 5). On a device (the
+  user): the panel from the button and from three fingers, a layout edited, saved and kept across a launch
 
 Tier 3d, from the evening sync of 2026-10-20 (sources in that section; after 3c, before Tier 4). Correctness, small:
 - [ ] 155 the present viewport rounded before it is centred (Touchable: with contraction `floor((dh - ch*s)/2)` gives -1 at 2868x1320 and at

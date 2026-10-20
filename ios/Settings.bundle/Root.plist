@@ -132,6 +132,38 @@
 			<key>Type</key>
 			<string>PSGroupSpecifier</string>
 			<key>Title</key>
+			<string>On-screen Controls</string>
+			<key>FooterText</key>
+			<string>In the game, a three-finger tap (or the menu button between − and +) opens these settings; the controls' layout is edited there.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Key</key>
+			<string>dm.touch_opacity</string>
+			<key>Title</key>
+			<string>Opacity</string>
+			<key>DefaultValue</key>
+			<real>1</real>
+			<key>Titles</key>
+			<array>
+				<string>100 %</string>
+				<string>75 %</string>
+				<string>50 %</string>
+				<string>30 %</string>
+			</array>
+			<key>Values</key>
+			<array>
+				<real>1</real>
+				<real>0.75</real>
+				<real>0.5</real>
+				<real>0.3</real>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
 			<string>Diagnostics</string>
 			<key>FooterText</key>
 			<string>Shows the last lines of the app's log, or the game's frame rate, the frames reaching the screen and the GPU time per frame, over the game. Touches pass through them. To share the logs with the device's details, touch and hold the app's icon and choose Export Diagnostics.</string>
