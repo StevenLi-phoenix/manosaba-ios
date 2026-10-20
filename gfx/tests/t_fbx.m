@@ -8,6 +8,11 @@
 //   e   drawing level 1 while sampling a view of level 0 only: C + 0.25 in level 1, no copy
 // DM_NVN_FBX=all (every such draw; tomodachi-native's choice): a and c without barriers (B + 0.25, B + 0.5), b (the first draw of a pass reads
 // what earlier passes left), f (a clear still pending when the reading draw opens the pass is in the copy), e.
+// DM_NVN_FBX=split (plan item 165, after MacNativeGames PR #67): no copies, the pass stored and reopened before a draw that samples an attachment
+// cleared or written by a plain draw of its pass: sa (B, the reading draw: B + 0.25, one split), sc (two reading draws in a row share one split:
+// B + 0.25), sd (B, reading, C, reading: C + 0.25, two splits), sb (the first draw of a pass: what earlier passes left, no split), sf (a clear
+// pending when the reading draw opens the pass: flushed first, 0.3 + 0.25), sg (reading, a texture barrier, reading: the second sees the first,
+// C + 0.5, one split), e. A split before every reading draw (-DDM_TEST_FBX_SPLIT_EACH) fails sc.
 // After tomodachi-native's attachment copies (4dbd30f / da08d11, MIT), written for this replay. Negative control: DM_NVN_FBX=0 fails a, c2
 // (and in the all set a, c, f).
 #include "../nvn/nvn_mtl.m"
@@ -66,6 +71,7 @@ static int near(uint32_t got, float r, float g, float b) {   // within 2 of each
     return 1;
 }
 static uint64_t copies(void) { uint64_t s[3]; mtl_fbx_stats(s); return s[1]; }
+static uint64_t splits(void) { uint64_t s[2]; mtl_fbx_split_stats(s); return s[0] + s[1]; }
 
 static void barrier(chain *c) { int32_t b = NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_INVALIDATE_TEXTURE_BIT; emit(c, OP_BARRIER, &b, 8); }
 static void begin_b(chain *c, tex_t *T) { set_rt(c, T, 0); clear_color(c, 0.1f); ds_off(c); bind_prog(c, &g_pB); draw_cmd(c); }
@@ -73,9 +79,43 @@ static void reading(chain *c, int v0) { bind_prog(c, &g_pAdd); bind_tex(c, v0); 
 
 int main(void) { @autoreleasepool {
     setvbuf(stdout, NULL, _IONBF, 0); mtl_init(); setup();
-    const char *m = getenv("DM_NVN_FBX"); int all = m && !strcmp(m, "all");
+    const char *m = getenv("DM_NVN_FBX"); int all = m && !strcmp(m, "all"), split = m && !strcmp(m, "split");
     printf("attachment copies: %s\n", !m ? "after a texture barrier (default)" : m);
-    if (!all) {
+    if (split) {
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t s0 = splits(), c0 = copies(); begin_b(&c, &T); reading(&c, v0);
+          uint32_t px = run(&c, &T, 0); printf("     sa: %06x\n", px);
+          EXPECT("sa  (split) the reading draw after B in its pass sees B (B + 0.25)", 1, near(px, 0.75f, 0.5f, 0.375f));
+          EXPECT("sa  ... one split, no copy", 1, (splits() - s0) * 10 + copies() - c0 == 10); }
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t s0 = splits(); begin_b(&c, &T); reading(&c, v0); reading(&c, v0);
+          uint32_t px = run(&c, &T, 0); printf("     sc: %06x\n", px);
+          EXPECT("sc  (split) two reading draws in a row share one split: B + 0.25", 1, near(px, 0.75f, 0.5f, 0.375f));
+          EXPECT("sc  ... one split", 1, splits() - s0); }
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t s0 = splits(); begin_b(&c, &T); reading(&c, v0); bind_prog(&c, &g_pC); draw_cmd(&c); reading(&c, v0);
+          uint32_t px = run(&c, &T, 0); printf("     sd: %06x\n", px);
+          EXPECT("sd  (split) B, reading, C, reading: the second reads C (C + 0.25)", 1, near(px, 0.45f, 0.65f, 0.85f));
+          EXPECT("sd  ... two splits", 2, splits() - s0); }
+        { tex_t T = tex(), U = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t s0 = splits();
+          set_rt(&c, &T, 0); clear_color(&c, 0); ds_off(&c); bind_prog(&c, &g_pC); draw_cmd(&c);
+          set_rt(&c, &U, 0); clear_color(&c, 0); draw_cmd(&c);
+          set_rt(&c, &T, 0); reading(&c, v0);
+          uint32_t px = run(&c, &T, 0); printf("     sb: %06x\n", px);
+          EXPECT("sb  (split) the first draw of a pass reads what earlier passes left (C + 0.25)", 1, near(px, 0.45f, 0.65f, 0.85f));
+          EXPECT("sb  ... no split", 0, splits() - s0); }
+        { tex_t T = tex(), U = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t s0 = splits();
+          set_rt(&c, &T, 0); clear_color(&c, 0); ds_off(&c); bind_prog(&c, &g_pC); draw_cmd(&c);
+          set_rt(&c, &U, 0); clear_color(&c, 0); draw_cmd(&c);
+          set_rt(&c, &T, 0); clear_color(&c, 0.3f); reading(&c, v0);
+          uint32_t px = run(&c, &T, 0); printf("     sf: %06x\n", px);
+          EXPECT("sf  (split) a clear pending when the reading draw opens the pass: flushed first (0.3 + 0.25)", 1, near(px, 0.55f, 0.55f, 0.55f));
+          EXPECT("sf  ... one flush", 1, splits() - s0); }
+        { tex_t T = tex(), U = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t s0 = splits();
+          set_rt(&c, &T, 0); clear_color(&c, 0); ds_off(&c); bind_prog(&c, &g_pC); draw_cmd(&c);
+          set_rt(&c, &U, 0); clear_color(&c, 0); draw_cmd(&c);
+          set_rt(&c, &T, 0); reading(&c, v0); barrier(&c); reading(&c, v0);
+          uint32_t px = run(&c, &T, 0); printf("     sg: %06x\n", px);
+          EXPECT("sg  (split) reading, barrier, reading: the second sees the first (C + 0.5)", 1, near(px, 0.7f, 0.9f, 1.0f));
+          EXPECT("sg  ... one split", 1, splits() - s0); }
+    } else if (!all) {
         { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t c0 = copies(); begin_b(&c, &T); barrier(&c); reading(&c, v0);
           uint32_t px = run(&c, &T, 0); printf("     a: %06x\n", px);
           EXPECT("a   after a barrier the reading draw sees the earlier draw (B + 0.25)", 1, near(px, 0.75f, 0.5f, 0.375f));

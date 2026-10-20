@@ -23,6 +23,8 @@ void hlecount_flush(void) { g_hlecount++; }
 void dm_host_shutdown(const char *why) { (void)why; g_quit++; }
 void sead_heaps_print(void) {}
 void sead_heap_of(uint64_t addr) { (void)addr; }
+static int g_game_checked, g_game_ran; static char g_game_line[256];   // the game's commands (plan item 167): lines starting with "survey" are its
+int dm_game_command(const char *line, int run) { if (strncmp(line, "survey", 6)) return 0; if (run) { g_game_ran++; strlcpy(g_game_line, line, sizeof g_game_line); } else g_game_checked++; return 1; }
 
 static int parse_ok(const char *line, int kind, uint32_t mask, long v, const char *path) {
     dm_cmd c; const char *why; if (cmd_parse(line, &c, &why)) return 0;
@@ -53,6 +55,9 @@ int main(void) {
     CHECK(parse_bad("key A 0", "1-5000") && parse_bad("key A 6000", "1-5000"), "key times outside 1-5000 ms");
     CHECK(parse_bad("wait 0", "1-100000") && parse_bad("wait x", "1-100000") && parse_bad("wait 3x", "1-100000") && parse_bad("passdump 601", "1-600"), "wait and passdump out of range or not numbers");
     CHECK(parse_bad("shot", "path") && parse_bad("threads now", "no argument") && parse_bad("jump", "unknown command") && parse_bad("keyboard A", "unknown command"), "no path, an extra argument, unknown commands");
+    { dm_cmd c; const char *why; int ok = !cmd_parse("  survey pos here  ", &c, &why) && c.kind == CMD_GAME && !strcmp(c.path, "survey pos here") && g_game_checked == 1 && !g_game_ran;
+      if (ok) cmd_run(&c);
+      CHECK(ok && g_game_ran == 1 && !strcmp(g_game_line, "survey pos here"), "a line the game takes: checked when read, run as the game's, trimmed"); }
 
     printf("loop, following a file:\n");
     char path[1024]; snprintf(path, sizeof path, "%s/t_cmdchan_%d.txt", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", getpid());

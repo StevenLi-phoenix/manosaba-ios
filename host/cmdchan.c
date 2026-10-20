@@ -16,6 +16,7 @@
 //   heaps                every sead heap in the guest's heap and alias regions (sead.c)
 //   heap <addr>          the sead heaps holding addr (0x...) and the block it is in
 //   quit                 the orderly exit of SIGTERM (hle_lifecycle.c)
+//   anything else the game takes (dm_game_command, host/game.h): Tears of the Kingdom's survey pos / survey move (games/totk/survey.c, DM_SURVEY=1)
 // Blank lines and lines starting with # are skipped; an unknown or malformed line is logged in red and skipped. Each line run is logged
 // ("[cmd] ..."). A file replaced by another (a copy pushed to a device is a new inode: T5eng's TOTK_INPUT_REOPEN) or cut shorter than what was read
 // is followed again from its start. Checked by host/tests/t_cmdchan.c.
@@ -36,7 +37,8 @@ void dm_host_shutdown(const char *why);                 // hle_lifecycle.c
 void sead_heaps_print(void);                            // sead.c
 void sead_heap_of(uint64_t addr);
 
-enum { CMD_NONE, CMD_KEY, CMD_DOWN, CMD_UP, CMD_WAIT, CMD_SLEEP, CMD_SHOT, CMD_PASSDUMP, CMD_THREADS, CMD_MEMSNAP, CMD_HLECOUNT, CMD_QUIT, CMD_HEAPS, CMD_HEAP };
+enum { CMD_NONE, CMD_KEY, CMD_DOWN, CMD_UP, CMD_WAIT, CMD_SLEEP, CMD_SHOT, CMD_PASSDUMP, CMD_THREADS, CMD_MEMSNAP, CMD_HLECOUNT, CMD_QUIT, CMD_HEAPS, CMD_HEAP, CMD_GAME };
+int dm_game_command(const char *line, int run);   // host/game.h: the game's own commands (Tears of the Kingdom: survey, plan item 167)
 #define CMD_LINE 1024
 typedef struct { int kind; uint32_t mask; long n; char path[CMD_LINE]; } dm_cmd;
 
@@ -56,7 +58,9 @@ static int cmd_parse(const char *line, dm_cmd *c, const char **why) {
         {"sleep", CMD_SLEEP}, {"shot", CMD_SHOT}, {"passdump", CMD_PASSDUMP}, {"threads", CMD_THREADS}, {"memsnap", CMD_MEMSNAP},
         {"hlecount", CMD_HLECOUNT}, {"quit", CMD_QUIT}, {"heaps", CMD_HEAPS}, {"heap", CMD_HEAP}};
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) if (!strcmp(w, names[i].name)) c->kind = names[i].kind;
-    if (!c->kind) { *why = "unknown command"; return -1; }
+    if (!c->kind) {   // the game's own (it checks the line now and logs what running it does)
+        if (len < sizeof c->path) { memcpy(c->path, line, len); c->path[len] = 0; if (dm_game_command(c->path, 0)) { c->kind = CMD_GAME; return 0; } }
+        *why = "unknown command"; return -1; }
     switch (c->kind) {
     case CMD_KEY: case CMD_DOWN: case CMD_UP: {
         char key[16], extra[2]; long ms = 200; int got = sscanf(arg, "%15s %ld %1s", key, &ms, extra);
@@ -98,6 +102,7 @@ static void cmd_run(const dm_cmd *c) {
     case CMD_QUIT: dm_host_shutdown("command channel quit"); break;
     case CMD_HEAPS: sead_heaps_print(); break;
     case CMD_HEAP: sead_heap_of((uint64_t)c->n); break;
+    case CMD_GAME: dm_game_command(c->path, 1); break;
     }
 }
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Soak and fixed-scene measurement (plan item 50, after MacNativeGames' mac_v143_soak.py / mac_v143_smoke.py, MIT; written for this host).
 
-  soak.py run --out DIR --minutes M [--shots K] [--env NAME=VALUE ...] -- <host command ...>
+  soak.py run --out DIR --minutes M [--shots K] [--input FILE [--input-after S]] [--env NAME=VALUE ...] -- <host command ...>
       Runs the host headless for M minutes and reports what drifts: memory after the boot (phys_footprint and Metal, a straight line through the
       samples after the warm-up, MB an hour), frame time and GPU time early against late, red lines first seen after the warm-up. K screenshots
-      are taken on the way through the command channel (DM_CMD), which also ends the run with "quit".
+      are taken on the way through the command channel (DM_CMD), which also ends the run with "quit". --input (plan item 166): a cycle of
+      command channel lines (key / down / up / sleep: it is timed in ms) repeated for the whole run around the screenshots, so the game is played
+      rather than left standing (games/totk/soak_walk.cmd); --input-after: from that second on (after the boot and the save's load).
   soak.py window --out DIR --frames A-B [--repeat N] [--clean DIR ...] [--env ...] -- <host command ...>
       Runs the host N times up to frame B and gives each run's frame time and GPU time over frames A-B (the "[nvn] timing" lines of the 300
       frames ending in that window), and their spread: the noise an A/B comparison of a fixed scene has to beat. --clean empties a directory
@@ -132,14 +134,49 @@ def spread(runs, key):
     return {'min': min(v), 'median': statistics.median(v), 'max': max(v)} if v else None
 
 
-def schedule(minutes, shots, shot_dir):
-    """The command channel's lines for a soak: a screenshot every minutes/shots, then quit (sleep in ms; the last shot is taken at the next
-    present, so a few frames are waited for before quitting)"""
-    lines, step = [], minutes * 60000 / max(shots, 1)
-    for i in range(shots):
-        lines += [f'sleep {int(step)}', f'shot {shot_dir}/soak{i + 1}.png']
-    if not shots:
-        lines.append(f'sleep {int(minutes * 60000)}')
+def input_cycle(lines):
+    """--input's lines as [(ms the line takes, line)]: key (its time, 200 ms by default: the channel waits for it), down / up (none), sleep
+    (its time; it only spaces the others). wait counts frames, which a schedule in ms cannot place: refused, as is a cycle that takes no time"""
+    out = []
+    for l in lines:
+        l = l.split('#')[0].strip()
+        if not l:
+            continue
+        w = l.split()
+        if w[0] == 'sleep' and len(w) == 2:
+            out.append((int(w[1]), None))
+        elif w[0] == 'key' and len(w) in (2, 3):
+            out.append((0 if os.environ.get('DM_TEST_SOAK_KEY_NO_TIME') else int(w[2]) if len(w) == 3 else 200, l))   # (the env: t_soak's negative control)
+        elif w[0] in ('down', 'up') and len(w) == 2:
+            out.append((0, l))
+        else:
+            raise ValueError(f'--input: {l!r}: only key, down, up and sleep (the cycle is timed in ms)')
+    if not sum(ms for ms, _ in out):
+        raise ValueError('--input: the cycle takes no time')
+    return out
+
+
+def schedule(minutes, shots, shot_dir, cycle=None, after_s=0):
+    """The command channel's lines for a soak: a screenshot every minutes/shots, the input cycle (input_cycle) repeated until the end, then quit
+    (sleep in ms; the last shot is taken at the next present, so a few frames are waited for before quitting). The lines run one after the other,
+    so a shot due while a key is held comes right after it"""
+    end, step = minutes * 60000, minutes * 60000 / max(shots, 1)
+    ev = [(step * (i + 1), 1, f'shot {shot_dir}/soak{i + 1}.png', 0) for i in range(shots)]   # (due ms, shots after input at one time, line, ms it takes)
+    t = after_s * 1000
+    while cycle and t < end:
+        for ms, l in cycle:
+            if t >= end:
+                break
+            if l:
+                ev.append((t, 0, l, ms))
+            t += ms
+    lines, now = [], 0
+    for due, _, l, ms in sorted(ev, key=lambda e: (e[0], e[1])):
+        if due > now:
+            lines.append(f'sleep {int(due - now)}'); now = due
+        lines.append(l); now += ms
+    if now < end:
+        lines.append(f'sleep {int(end - now)}')
     lines += ['wait 3', 'quit']
     return lines
 
@@ -173,7 +210,9 @@ def main(argv):
     ap = argparse.ArgumentParser(description='Soak and fixed-scene measurement of the host')
     sub = ap.add_subparsers(dest='mode', required=True)
     r = sub.add_parser('run'); r.add_argument('--out', required=True); r.add_argument('--minutes', type=float, required=True)
-    r.add_argument('--shots', type=int, default=4); r.add_argument('--env', action='append'); r.add_argument('--clean', action='append'); r.add_argument('cmd', nargs='+')
+    r.add_argument('--shots', type=int, default=4); r.add_argument('--input'); r.add_argument('--input-after', type=float, default=0)
+    r.add_argument('--env', action='append'); r.add_argument('--clean', action='append')
+    r.add_argument('cmd', nargs='+')
     w = sub.add_parser('window'); w.add_argument('--out', required=True); w.add_argument('--frames', required=True)
     w.add_argument('--repeat', type=int, default=3); w.add_argument('--env', action='append'); w.add_argument('--clean', action='append'); w.add_argument('cmd', nargs='+')
     p = sub.add_parser('report'); p.add_argument('dir')
@@ -182,7 +221,8 @@ def main(argv):
         d = a.dir if a.mode == 'report' else a.out
         if a.mode == 'run':
             os.makedirs(d, exist_ok=True); clean(a.clean)
-            rc, wall = launch(a.cmd, d, env_pairs(a.env), schedule(a.minutes, a.shots, os.path.abspath(d)), a.minutes * 60 + 600)
+            cycle = input_cycle(open(a.input).read().splitlines()) if a.input else None
+            rc, wall = launch(a.cmd, d, env_pairs(a.env), schedule(a.minutes, a.shots, os.path.abspath(d), cycle, a.input_after), a.minutes * 60 + 600)
             print(f'host exit {rc} after {wall / 60:.1f} min')
         mem = read_memstat(os.path.join(d, 'mem.tsv')) if os.path.exists(os.path.join(d, 'mem.tsv')) else []
         timing, red = read_log(os.path.join(d, 'log.txt'))

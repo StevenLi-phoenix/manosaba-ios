@@ -69,7 +69,7 @@ int main(void) {
     // On-screen controls (touchpad.c): buttons ORed; their stick after the front end's, before the controller's
     { NpadState s; uint64_t lb; int32_t la[4];
       CHECK(hle_hid_last(&lb, &la[0], &la[1], &la[2], &la[3]) && lb == 0 && !la[0], "hle_hid_last: what the game last read (nothing held)");
-      tp_layout(844, 390, 47, 0, 47, 21); float sx, sy, ax, ay, r; tp_find("stick", &sx, &sy, &r); tp_find("A", &ax, &ay, &r);
+      tp_layout(844, 390, 47, 0, 47, 21, 0); float sx, sy, ax, ay, r; tp_find("stick", &sx, &sy, &r); tp_find("A", &ax, &ay, &r);
       at(20); tp_touch(1, TP_DOWN, ax, ay); s = rd(); CHECK(s.buttons == DM_BTN_A && s.lx == 0, "on-screen A");
       dm_pad_set(DM_BTN_B, 1000, 0, 0, 0); tp_touch(2, TP_DOWN, sx, sy); tp_touch(2, TP_MOVE, sx, sy - 200); at(20.05); s = rd();
       CHECK(s.buttons == (DM_BTN_A | DM_BTN_B | DM_BTN_STICK_L_UP) && s.lx == 0 && s.ly == 32767, "with a controller: buttons ORed, the on-screen stick before the controller's");

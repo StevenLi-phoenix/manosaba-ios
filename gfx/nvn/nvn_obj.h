@@ -97,7 +97,10 @@ typedef struct { uint32_t magic; samp_par p; } samp_t;                          
 
 // key[i]: first 8 bytes of the sha256 of stage i's control section, computed at SetShaders -- NVN only requires the control section to be valid during the SetShaders call; Unity frees / reuses that memory right after,
 // so reading it later at draw time in the replay layer reads other data (D2R's control sections stay in its shader package, which is why this used to happen to work)
+// (Nothing more fits here: a game may allocate NVNprogram smaller than the header's 0xC0, lordran-native 94a6307 saw it in Mario, and a larger prog_t
+// writes into the next object. The functional keys of plan item 169 live in a side table by serial: nvn_mtl.m mtl_prog_fkeys)
 typedef struct { uint32_t magic, nstage; uint64_t serial; uint8_t key[6][8]; uint8_t kstage[6]; } prog_t;     FITS(prog_t, NVNprogram);   // serial: table key for the replay layer's resolved result
+void mtl_prog_fkeys(uint64_t serial, const uint8_t fk[6][8]);   // nvn_mtl.m: a program's functional keys (all zero: none), until mtl_prog_release
 
 typedef struct { uint32_t magic, fenced; uint64_t fence; } sync_t;                            FITS(sync_t, NVNsync);
 // A sync's fence is published value first, then the flag (release); a waiter on another thread reads the flag (acquire), then the value. Flag first,

@@ -606,6 +606,21 @@ static void shader_key(const NVNshaderData *sd, uint8_t key[8]) {
     if (sd->data && len && len < (1u << 24)) CC_SHA256_Update(&h, (const void *)(uintptr_t)sd->data, len);
     CC_SHA256_Final(md, &h); memcpy(key, md, 8);
 }
+// The functional key (mtl_prog_fkeys, plan item 169; Touchable's internal/tools/shader_keys.py, MIT, written anew): control +0x700 the constants' start,
+// +0x704 the end of the code area, +0x708 its start, +0x714 the stage (0 vertex, 1 pixel, 5 compute), +0x748 a compute shader's workgroup; the hash of
+// {stage, constants' start - start, end - constants' start, workgroup x y z} as six u32 and the bytes from start to end. Shaders the game ships twice
+// with other metadata in the control section get one functional key (manosaba's capture: 2,740 shaders, 1,299 functional keys)
+static void shader_fkey(const NVNshaderData *sd, uint8_t out[8]) {
+    memset(out, 0, 8);
+    const uint8_t *c = (const uint8_t *)sd->control; if (!c || !sd->data) return;
+    uint32_t cst, end, start, stage, local[3] = {0, 0, 0}; memcpy(&cst, c + 0x700, 4); memcpy(&end, c + 0x704, 4); memcpy(&start, c + 0x708, 4); memcpy(&stage, c + 0x714, 4);
+    if ((stage != 0 && stage != 1 && stage != 5) || start >= cst || cst > end || end >= (1u << 24)) return;
+    if (stage == 5) memcpy(local, c + 0x748, 12);
+    uint32_t hdr[6] = {stage, cst - start, end - cst, local[0], local[1], local[2]};
+    uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX h; CC_SHA256_Init(&h);
+    CC_SHA256_Update(&h, hdr, sizeof hdr); CC_SHA256_Update(&h, (const uint8_t *)(uintptr_t)sd->data + start, end - start);
+    CC_SHA256_Final(md, &h); memcpy(out, md, 8);
+}
 // DM_SHDUMP=directory (sampling for offline translation): for each new shader write <key>.ctl (the 0x880-byte control section) and <key>.data (from data: 0x30 + the length recorded at control +0x704 + 0x100 bytes).
 // The .ctl marks a capture as done (a shader with one is skipped), so it is written last and each file whole (to .tmp, then renamed; plan item 125,
 // bayonetta3-mobile writes atomically): the .ctl used to come first, and a run ended between the two left a capture without its code that later
@@ -652,7 +667,9 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     if (n < 0 || n > 6) { LOG("[red] ProgramSetShaders: stage count %d", n); return 0; }
     for (int i = 0; i < n; i++) shdump(&sd[i]);
     mtl_prog_release(o); o->nstage = n; o->serial = nvn_new_serial();
-    for (int i = 0; i < n; i++) { shader_key(&sd[i], o->key[i]); o->kstage[i] = shader_stage(&sd[i]); }
+    uint8_t fk[6][8] = {{0}};
+    for (int i = 0; i < n; i++) { shader_key(&sd[i], o->key[i]); shader_fkey(&sd[i], fk[i]); o->kstage[i] = shader_stage(&sd[i]); }
+    mtl_prog_fkeys(o->serial, fk);
     // DM_SHDUMP also records which vertex and pixel shaders the game puts in one program (<dir>/pairs.tsv, one "vertex key<TAB>pixel key" line per
     // new pair): the offline build pads a vertex shader with the outputs its paired pixel shaders read but it does not write (dmsh_build.py vs_pad;
     // Metal refuses to link such a pair). Duplicates are filtered here as long as the process runs; the build deduplicates the file anyway. The pairs
@@ -691,7 +708,26 @@ NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f)
 // A sync object that was never fenced: FAILED, as the SDK's NVNsyncWaitResult says (plan item 116; it was TIMEOUT_EXPIRED; dr3-mobile follows the
 // SDK too). Counted and logged: neither game does it (the prologue, the cliff save, manosaba: 0). A fenced one is released only after the GPU has
 // actually completed up to that fence value
+// The sync of the last nvnWindowAcquireTexture: a wait on it is the game's thread between two frames (dm_game_frame_sync, plan item 167)
+static const void *_Atomic g_acq_sync_last;
+__attribute__((weak)) void dm_game_frame_sync(void) {}
+static NVNsyncWaitResult sync_wait(const NVNsync *s, uint64_t timeout);
+// CPU waits on syncs (plan item 177, measured before LASRecomp's dc1d28f: a game that waits for its newest submission right after presenting it
+// never overlaps a frame's CPU work with the last one's GPU work): how many, how many on the newest submission still running, how long. The
+// timing summary prints them a frame
+static _Atomic uint64_t g_sw_n, g_sw_newest, g_sw_ns;
+void nvn_syncwait_stats(uint64_t out[3]) { out[0] = atomic_load(&g_sw_n); out[1] = atomic_load(&g_sw_newest); out[2] = atomic_load(&g_sw_ns); }
 NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
+    uint64_t f0 = 0, t0 = now_ns(); int newest = s && sync_fence_load((const sync_t *)s, &f0) && f0 && f0 == mtl_last_fence() && mtl_done_fence() < f0;
+#ifdef DM_TEST_SYNCWAIT_DONE_TOO   // negative control of t_nvn only: a wait on the newest fence counted even when it is done
+    newest = s && f0 && f0 == mtl_last_fence();
+#endif
+    NVNsyncWaitResult r = sync_wait(s, timeout);
+    atomic_fetch_add(&g_sw_n, 1); if (newest) atomic_fetch_add(&g_sw_newest, 1); atomic_fetch_add(&g_sw_ns, now_ns() - t0);
+    if (s && s == atomic_load_explicit(&g_acq_sync_last, memory_order_relaxed)) dm_game_frame_sync();
+    return r;
+}
+static NVNsyncWaitResult sync_wait(const NVNsync *s, uint64_t timeout) {
     NVN_BLOCKING();
     uint64_t fence;
     if (!sync_fence_load((const sync_t *)s, &fence)) {
@@ -1413,6 +1449,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
       if (rf && mtl_done_fence() < rf) { g_acq_early++; if (acq_gpu_wait()) { uint64_t w0 = now_ns(); mtl_wait(rf, 5000000000ull); g_acq_gpu_ns += now_ns() - w0; } }
 #endif
     }
+    if (s) atomic_store_explicit(&g_acq_sync_last, (const void *)s, memory_order_relaxed);
     // The acquire sync means "the display path no longer reads this texture": mtl_present_wait above waited for its last present to be committed, and
     // every later use of the texture is ordered after that present on the one Metal queue. Fencing it to the newest submission instead held the game's
     // CPU here until the whole previous frame had run, so the replay of a frame and the GPU work of the one before never overlapped (MacNativeGames,
@@ -1457,7 +1494,9 @@ static void dump_frame(void) {
     g_frame++; cs_dump();
     // Every 300 frames read resident memory and hand it to the graphics layer to print the memory readout line (mtl_mem_stat, low frequency, capped). Memory watchdog: when resident memory exceeds the cap, log a failure and exit on its own. On by default only on the Mac host (24 GB: runaway host memory
     // drags the whole machine into a kernel panic, which happened twice with other programs on the same machine), or set for tests with DM_MEM_CAP_GB=<integer>; the player's iOS app has no cap (exiting before the system kills it is pointless and only adds another kind of crash)
-    if (g_frame % 300 == 0) { task_vm_info_data_t vi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
+    // Read every 60 frames (plan item 178, lordran-native 24740d4, MIT: a short spike, a movie's buffers, is caught); the line is still printed only on
+    // a change of 64 MB or more, or every 3000 frames (mtl_mem_stat)
+    if (g_frame % 60 == 0) { task_vm_info_data_t vi; mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
         if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &cnt) == KERN_SUCCESS) { unsigned long long mb = (unsigned long long)(vi.phys_footprint >> 20); unsigned long long ht = 0, hf = 0, hm = 0; int dm_guest_heap_stat(unsigned long long *, unsigned long long *, unsigned long long *); int hok = dm_guest_heap_stat(&ht, &hf, &hm);
             void mtl_mem_stat(unsigned long long, unsigned long long, int, unsigned long long, unsigned long long, unsigned long long); mtl_mem_stat(g_frame, mb, hok, ht, hf, hm);
             static long cap = -1; if (cap < 0) { const char *e = getenv("DM_MEM_CAP_GB"); cap = e ? atol(e) : DM_MEM_CAP_DEFAULT_GB; }
@@ -1508,11 +1547,11 @@ void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]);
 void mtl_vis_state(int *open, uint64_t *folded);
 void mtl_counts(uint64_t out[13]);
 void mtl_pkg_age(uint64_t out[5]);
-void mtl_fbx_stats(uint64_t out[3]);
+void mtl_fbx_stats(uint64_t out[3]); void mtl_fbx_split_stats(uint64_t out[2]);
 void mtl_pp_stats(uint64_t out[9]);
 __attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle.c; the graphics unit tests link without it
 static void power_line(uint64_t frame) {
-    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3], ppr[9]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3], psp[2], psw[3], ppr[9]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     static int counts = -1; if (counts < 0) counts = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0");
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
@@ -1533,7 +1572,13 @@ static void power_line(uint64_t frame) {
                 (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prep) / nf, (rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prst) / nf, open, (fold - pfold) / nf);
         { uint64_t fx[3]; mtl_fbx_stats(fx);
           if (fx[0] > pfx[0] || fx[2] > pfx[2]) LOG("[nvn] attachment copies up to frame %llu: %.1f draws a frame sample what their pass draws, %.1f copies, %.1f not copied (merged, layered or range pass)",
-                                                   frame, (fx[0] - pfx[0]) / nf, (fx[1] - pfx[1]) / nf, (fx[2] - pfx[2]) / nf); }
+                                                   frame, (fx[0] - pfx[0]) / nf, (fx[1] - pfx[1]) / nf, (fx[2] - pfx[2]) / nf);
+          uint64_t sp[2]; mtl_fbx_split_stats(sp);
+          if (sp[0] > psp[0] || sp[1] > psp[1]) LOG("[nvn] pass splits up to frame %llu: %.1f a frame before draws that sample what their pass wrote, %.1f pending clears flushed (DM_NVN_FBX=split)",
+                                                   frame, (sp[0] - psp[0]) / nf, (sp[1] - psp[1]) / nf); }
+        { uint64_t sw[3]; void nvn_syncwait_stats(uint64_t out[3]); nvn_syncwait_stats(sw);
+          if (sw[0] > psw[0]) LOG("[nvn] sync waits up to frame %llu: %.2f a frame, %.2f of them on the newest submission still on the GPU, %.2f ms a frame waiting (plan item 177)",
+                                  frame, (sw[0] - psw[0]) / nf, (sw[1] - psw[1]) / nf, (sw[2] - psw[2]) / 1e6 / nf); }
         { uint64_t pr[9]; mtl_pp_stats(pr);   // the pipeline prediction (nvn_mtl.m pso_predict_rest) over the window, when it scanned
           if (pr[4] > ppr[4]) LOG("[nvn] pipeline prediction up to frame %llu: %llu scans (ended by commands %llu / keys %llu / time %llu), %llu pipelines kicked, %llu taken by draws, "
                                   "%llu freed untaken, %llu refused with the table full, %llu in the table", frame, pr[4] - ppr[4], pr[5] - ppr[5], pr[6] - ppr[6], pr[7] - ppr[7],
@@ -1554,7 +1599,7 @@ static void power_line(uint64_t frame) {
     { uint64_t rep[32], rst[32]; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &pfold); prep = rep[NVN_COUNTER_TYPE_SAMPLES_PASSED]; prst = rst[NVN_COUNTER_TYPE_SAMPLES_PASSED]; }
     if (counts) { mtl_counts(pc); dm_gate_counts(pg); }
     mtl_pp_stats(ppr);
-    mtl_fbx_stats(pfx);
+    mtl_fbx_stats(pfx); mtl_fbx_split_stats(psp); { void nvn_syncwait_stats(uint64_t out[3]); nvn_syncwait_stats(psw); }
 }
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;
@@ -1701,6 +1746,17 @@ static void present_cfg(const win_t *o) {
       if (g_uncapped) fifo = 0;
       void mtl_link_set_fifo(int on); mtl_link_set_fifo(fifo);
       LOG("[nvn] the display link shows %s (%s)", fifo ? "every frame in order, each for its present period" : "the newest frame", c ? "DM_PRESENT_CONSUME" : "game.json present_consume"); }
+}
+// The rate the screen runs at now (the iOS front end's display link, every tick; plan item 172): a game stepping by the measured time follows it
+// between 60 and 120 on a ProMotion screen (nvn_promotion_hz). Any thread
+static _Atomic int g_pro_last;
+void nvn_display_rate_now(int now_hz) {
+    static int disp = -1; if (disp < 0) disp = mtl_display_hz();
+    if (g_hz < 0 || g_uncapped || fstep_on()) return;   // (before the first present the configuration is not made yet)
+    int hz = nvn_promotion_hz(dm_game_realtime_step(), getenv("DM_PRESENT_HZ"), getenv("DM_PROMOTION"), disp, now_hz);
+    if (!hz || hz == atomic_load(&g_pro_last)) return;
+    atomic_store(&g_pro_last, hz); g_hz = hz; void mtl_link_set_rate(int hz); mtl_link_set_rate(hz);
+    LOG("[nvn] ProMotion: the screen runs at %d Hz, presents at %d (DM_PROMOTION=0 keeps 60)", now_hz, hz);
 }
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);

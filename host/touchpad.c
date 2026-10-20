@@ -46,7 +46,7 @@ typedef struct { long id; int role, ctrl; uint32_t dir; float x, y; } finger;
 typedef struct { tp_item d; uint32_t mask; } control;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
-    float w, h, u, safe[4]; int laid_out, enabled, hidden;
+    float w, h, u, safe[5]; int laid_out, enabled, hidden;   // safe: l t r b, then the window controls' bottom (tp_layout)
     control c[20]; int nc, eye, dpad;
     float home_x, home_y, stick_r;
     finger f[16]; int nf;
@@ -90,7 +90,8 @@ static void apply_custom(void) {
         if (c) { it->x = df->x + c->dx * g.u; it->y = df->y + c->dy * g.u; it->r = df->r * c->s; it->hh = df->hh * c->s; }
 #endif
         float ex = it->r, ey = it->shape == TP_PILL ? it->hh : it->r;
-        it->x = clampf(it->x, L + ex, R - ex > L + ex ? R - ex : L + ex); it->y = clampf(it->y, T + ey, B - ey > T + ey ? B - ey : T + ey);
+        float Ti = g.safe[4] > T && it->x - ex < L + 0.25f * (R - L) ? g.safe[4] : T;   // the top-left corner: below the window controls
+        it->x = clampf(it->x, L + ex, R - ex > L + ex ? R - ex : L + ex); it->y = clampf(it->y, Ti + ey, B - ey > Ti + ey ? B - ey : Ti + ey);
     }
     g.home_x = g.def_hx; g.home_y = g.def_hy; g.stick_r = g.def_sr;
 #ifndef DM_TEST_TP_CUSTOM_IGNORED
@@ -99,10 +100,13 @@ static void apply_custom(void) {
 #endif
     g.home_x = clampf(g.home_x, L + g.stick_r, R - g.stick_r); g.home_y = clampf(g.home_y, T + g.stick_r, B - g.stick_r);
 }
-void tp_layout(float W, float H, float sl, float st, float sr, float sb) {
+void tp_layout(float W, float H, float sl, float st, float sr, float sb, float wt) {
     look_env();
     pthread_mutex_lock(&g_mu);
-    float safe[4] = {sl, st, sr, sb};
+#ifdef DM_TEST_TP_NO_WINDOW   // negative control of t_touchpad only: the window controls ignored
+    wt = 0;
+#endif
+    float safe[5] = {sl, st, sr, sb, wt};
     // only when the size or the safe area changed (UIKit lays views out again for other reasons too): a new layout releases every finger
     if (W > 0 && H > 0 && !(g.laid_out && W == g.w && H == g.h && !memcmp(safe, g.safe, sizeof safe))) {
         release_all(); memcpy(g.safe, safe, sizeof safe);
@@ -112,22 +116,22 @@ void tp_layout(float W, float H, float sl, float st, float sr, float sb) {
         float rb = 25 * u, d = 47 * u, cx = R - m - d - rb, cy = B - m - d - rb;   // face buttons, Nintendo positions: A right, B bottom, X top, Y left
         add(TP_CIRCLE, cx + d, cy, rb, 0, "A", DM_BTN_A); add(TP_CIRCLE, cx, cy + d, rb, 0, "B", DM_BTN_B);
         add(TP_CIRCLE, cx, cy - d, rb, 0, "X", DM_BTN_X); add(TP_CIRCLE, cx - d, cy, rb, 0, "Y", DM_BTN_Y);
-        float pw = 37 * u, ph = 16 * u, gap = 8 * u;   // shoulders: ZL / ZR in the top corners, L / R under them
-        add(TP_PILL, L + m + pw, T + m + ph, pw, ph, "ZL", DM_BTN_ZL); add(TP_PILL, L + m + pw, T + m + 3 * ph + gap, pw, ph, "L", DM_BTN_L);
+        float pw = 37 * u, ph = 16 * u, gap = 8 * u, TL = wt > T ? wt : T;   // shoulders: ZL / ZR in the top corners, L / R under them; the left column below the window controls
+        add(TP_PILL, L + m + pw, TL + m + ph, pw, ph, "ZL", DM_BTN_ZL); add(TP_PILL, L + m + pw, TL + m + 3 * ph + gap, pw, ph, "L", DM_BTN_L);
         add(TP_PILL, R - m - pw, T + m + ph, pw, ph, "ZR", DM_BTN_ZR); add(TP_PILL, R - m - pw, T + m + 3 * ph + gap, pw, ph, "R", DM_BTN_R);
         float sr2 = 16 * u, ty = T + m + sr2;   // top centre: - and +, the menu button between them, the eye
         add(TP_CIRCLE, W * 0.5f - 62 * u, ty, sr2, 0, "-", DM_BTN_MINUS); add(TP_CIRCLE, W * 0.5f + 62 * u, ty, sr2, 0, "+", DM_BTN_PLUS);
         g.menu = g.nc; add(TP_MENU, W * 0.5f, ty, 14 * u, 0, "menu", 0);   // the front end's panel (plan item 148), where BotWRecomp has its settings button
         g.eye = g.nc; add(TP_EYE, W * 0.5f + 124 * u, ty, 14 * u, 0, "eye", 0);
         float dr = 40 * u;   // D-pad on the left, under L, above the stick's area
-        g.dpad = g.nc; add(TP_DPAD, L + m + dr + 4 * u, T + m + 4 * ph + gap + 16 * u + dr, dr, 0, "dpad", 0);
+        g.dpad = g.nc; add(TP_DPAD, L + m + dr + 4 * u, TL + m + 4 * ph + gap + 16 * u + dr, dr, 0, "dpad", 0);
         float r3 = 18 * u;   // stick clicks
         add(TP_CIRCLE, W * 0.5f - 122 * u, B - m - r3, r3, 0, "L3", DM_BTN_LS); add(TP_CIRCLE, W * 0.5f + 122 * u, B - m - r3, r3, 0, "R3", DM_BTN_RS);
         g.stick_r = kStickRadius * u; g.home_x = L + m + 20 * u + g.stick_r; g.home_y = B - m - 14 * u - g.stick_r;   // the stick drawn at home while idle
         for (int i = 0; i < g.nc; i++) g.def[i] = g.c[i].d;
         g.def_hx = g.home_x; g.def_hy = g.home_y; g.def_sr = g.stick_r;
         g.laid_out = 1; apply_custom();
-        LOG("touch pad: layout %.0fx%.0f pt, %.2f pt per design point, safe area l %.0f t %.0f r %.0f b %.0f", W, H, u, sl, st, sr, sb);
+        LOG("touch pad: layout %.0fx%.0f pt, %.2f pt per design point, safe area l %.0f t %.0f r %.0f b %.0f, window controls down to %.0f", W, H, u, sl, st, sr, sb, wt);
     }
     pthread_mutex_unlock(&g_mu);
 }
@@ -226,6 +230,18 @@ void tp_enable(int on) {
     if (on != g.enabled) LOG("touch pad: on-screen controls %s", on ? "on" : "off");
     g.enabled = on; g.latch = 0;
     pthread_mutex_unlock(&g_mu);
+}
+static int g_ctl_hidden;
+int tp_controller(int ev) {
+    int h = g_ctl_hidden;
+    if (ev == TP_CTL_KEY) h = 1;
+    else if (ev == TP_CTL_TOUCH || ev == TP_CTL_GONE) h = 0;
+#ifdef DM_TEST_TP_CTL_ON_CONNECT   // negative control of t_touchpad only: hidden as soon as a controller connects, as before
+    else if (ev == TP_CTL_CONNECT) h = 1;
+#endif
+    if (h != g_ctl_hidden) { g_ctl_hidden = h; tp_enable(!h);
+        LOG("touch pad: %s (%s)", h ? "hidden" : "shown", ev == TP_CTL_KEY ? "a key on a game controller" : ev == TP_CTL_TOUCH ? "the screen touched" : ev == TP_CTL_GONE ? "no game controller left" : "a game controller connected"); }
+    return h;
 }
 void tp_set_hidden(int h) { pthread_mutex_lock(&g_mu); g.hidden = !!h; if (h) { g.stick = g.look = 0; g.vx = g.vy = 0; } pthread_mutex_unlock(&g_mu); }
 int tp_hidden(void) { pthread_mutex_lock(&g_mu); int h = g.hidden; pthread_mutex_unlock(&g_mu); return h; }
@@ -470,6 +486,6 @@ void dm_touchpad_selftest_start(void) {
     if (!g_nplan) return;
     qsort(g_plan, (size_t)g_nplan, sizeof g_plan[0], by_time);
     pthread_mutex_lock(&g_mu); int laid = g.laid_out; pthread_mutex_unlock(&g_mu);
-    if (!laid) tp_layout(844, 390, 47, 0, 47, 21);   // an iPhone in landscape (points)
+    if (!laid) tp_layout(844, 390, 47, 0, 47, 21, 0);   // an iPhone in landscape (points)
     pthread_t t; if (!pthread_create(&t, NULL, selftest, NULL)) pthread_detach(t);
 }

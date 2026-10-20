@@ -89,6 +89,17 @@ static inline int nvn_fps_policy(int user_fps, int low_power, int thermal) {
 // rate instead of the next step down (30). Off with DM_UNCAPPED=0, with DM_PRESENT_HZ (a fixed rate asked for) and on a display of 120 Hz or more
 // (nothing to gain there). The cap: DM_UNCAPPED_HZ=30..120 or "display" (the display's rate, 60 without one); 120 at most, as the frame step counts a
 // frame as at least 1/120 s. Returns the clock rate in Hz, 0 for the usual pacing.
+// ProMotion (plan item 172, after Touchable's SS_DISPLAY_HZ=120, MIT): on a screen of 120 Hz or more a game whose step follows the measured frame time
+// presents at 120 while the screen runs at 120 (the front end asks it for 80-120 Hz and reports the rate it runs at: iOS lowers it in Low Power Mode),
+// at 60 otherwise; a game that steps per frame (manosaba) stays at 60, as it would run twice as fast. DM_PROMOTION=0 or DM_PRESENT_HZ (a fixed rate)
+// leave the rate alone. Returns the present rate for the screen's current rate now_hz, 0 to leave it as it is
+static inline int nvn_promotion_hz(int realtime_step, const char *present_hz, const char *promotion, int display_hz, int now_hz) {
+    if (present_hz || (promotion && !strcmp(promotion, "0")) || display_hz < 120) return 0;
+#ifndef DM_TEST_PROMOTION_ANY_STEP   // negative control of t_pace only: a game stepping per frame at 120 too
+    if (!realtime_step) return 0;
+#endif
+    return now_hz >= 110 ? 120 : 60;
+}
 static inline int nvn_uncapped_hz(int realtime_step, const char *present_hz, const char *uncapped, const char *cap, int display_hz) {
 #ifdef DM_TEST_UNCAPPED_ANY_STEP   // negative control of t_pace only: a game stepping per frame paced uncapped too (it would run fast)
     (void)realtime_step;

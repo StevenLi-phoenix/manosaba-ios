@@ -29,6 +29,7 @@
 #include "dm.h"
 #include "front.h"
 #include "game.h"
+#include "lang.h"
 #include "romfs_validate.h"
 #include "nvn_pace.h"   // nvn_fps_policy (plan item 135)
 
@@ -162,10 +163,15 @@ static NSString *romfs_locate(char *why, size_t n) {
     NSArray<NSString *> *cand = @[[support_dir() stringByAppendingPathComponent:@"romfs"], [docs_dir() stringByAppendingPathComponent:@"RomFS"],
                                   [bundle_dir() stringByAppendingPathComponent:@"RomFS"]];
     snprintf(why, n, "no RomFS folder");
-    for (NSString *d in cand) {
+    [NSFileManager.defaultManager createDirectoryAtPath:support_dir() withIntermediateDirectories:YES attributes:nil error:nil];
+    for (NSUInteger i = 0; i < cand.count; i++) { NSString *d = cand[i];
         if (![NSFileManager.defaultManager fileExistsAtPath:d]) continue;
-        if (dm_romfs_validate(d.fileSystemRepresentation, why, n)) return d;
-        plog("boot: %s: %s", d.fileSystemRepresentation, why);
+        // the tree walked once, then a marker (plan item 175; Tears of the Kingdom's RomFS has tens of thousands of files); the key files every time
+        NSString *mk = [support_dir() stringByAppendingPathComponent:[NSString stringWithFormat:@"romfs-verified-%lu.txt", (unsigned long)i]]; int walked = 0;
+        uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+        int ok = dm_romfs_validate_marked(d.fileSystemRepresentation, mk.fileSystemRepresentation, why, n, &walked);
+        plog("boot: %s: %s (%s, %.0f ms)", d.fileSystemRepresentation, why, walked ? "walked" : "marker", (clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0) / 1e6);
+        if (ok) return d;
     }
     return nil;
 }
@@ -202,6 +208,14 @@ static void boot_prepare(NSString *romfs) {
     { NSString *mods = [doc stringByAppendingPathComponent:@"mods"]; BOOL dir = NO;
       if ([fm fileExistsAtPath:mods isDirectory:&dir] && dir) setenv("DM_MODS", mods.fileSystemRepresentation, 0); }
     setenv("DM_NVN_SHMAP", [res stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
+    // The game's language from the app's own language setting (plan item 170: Settings > Apps > <game> > Language, offered for the languages the app
+    // declares in CFBundleLocalizations, ios/tools/project_lang.py): the device's first language, when the game has it; else the profile's own
+    if (!getenv("DM_LANG")) {
+        NSArray *locs = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleLocalizations"]; NSString *tag = NSLocale.preferredLanguages.firstObject;
+        const char *code = [locs isKindOfClass:NSArray.class] && locs.count ? dm_lang_pick(tag.UTF8String, dm_game.languages) : NULL;
+        if (code) setenv("DM_LANG", code, 1);
+        plog("boot: language %s (the app's language %s; the game's: %s)", code ? code : dm_game.language, tag.UTF8String ?: "none", dm_game.languages);
+    }
     setenv("DM_MSL_DIR", [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     // Relative paths in DM_* switches (screenshots etc.) land in Documents
     if (chdir(doc.fileSystemRepresentation)) plog("[red] boot: chdir Documents failed: %s", strerror(errno));

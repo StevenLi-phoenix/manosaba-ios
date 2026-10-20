@@ -344,12 +344,28 @@ void mtl_init(void) { @autoreleasepool {
     stream_queue_once();
 #endif
     NSError *re = nil;
+    // Residency sets need a GPU of the Apple6 family (Apple's Metal feature set tables; GirlNet's d2r-mobile 3e051f1, MIT): a virtual GPU (GitHub's
+    // macOS runners) is of the Mac2 family only, and the call is not made there (plan item 176). The Metal 3 path then makes resources resident by
+    // the encoders' useResource declarations alone, as before iOS 18; Metal 4 has no such declarations and cannot run. DM_TEST_NO_RESIDENCY_SET=1
+    // takes that path on any GPU (gfx/tests run-m3)
+    int fam = [g_dev supportsFamily:MTLGPUFamilyApple6] && !(getenv("DM_TEST_NO_RESIDENCY_SET") && !strcmp(getenv("DM_TEST_NO_RESIDENCY_SET"), "1"));
+#ifdef DM_TEST_RES_IGNORE_FAMILY   // negative control of gfx/tests run-m3 only: the set made whatever the GPU, as before
+    fam = 1;
+#endif
     if (@available(iOS 18.0, macOS 15.0, *)) {   // (4ppp44's iOS 17 build compiles the set out; checked here, one Metal 3 binary keeps it from iOS 18 on)
+      if (fam) {
         MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
         rd.initialCapacity = 4096;
         g_res = [g_dev newResidencySetWithDescriptor:rd error:&re];
         if (!g_res) MDIE("failed to create MTLResidencySet");
         [g_q addResidencySet:g_res];
+      } else {
+#if DM_NVN_M3
+        MLOG("no residency set: %s is not of the Apple6 family (a virtual GPU) or DM_TEST_NO_RESIDENCY_SET=1: resources are made resident by the encoders' useResource declarations only", g_dev.name.UTF8String);
+#else
+        MDIE("Metal 4 needs residency sets, which %s does not have (a virtual GPU): run the Metal 3 build (dmhost_m3)", g_dev.name.UTF8String);
+#endif
+      }
     } else MLOG("no residency set before iOS 18: resources are made resident by the encoders' useResource declarations only");
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }
 #if !DM_NVN_M3
@@ -1519,7 +1535,11 @@ static void stor_sweep(void) {   // fin_drain: entries nobody has held for STOR_
 // dspan: the slot of the dirty-tracking range holding its storage (nvn_dirty_state_hint, -1 until found); spare: the texture before the last re-upload,
 // written by the next one once spare_fence (the last submission that could read it) has completed
 @implementation NvPkg
-- (void)dealloc { res_remove(tex); res_remove(spare); }
+- (void)dealloc {
+#ifndef DM_TEST_PKG_DEALLOC_KEEPS_RESIDENT   // negative control of t_upsoak only: released textures left in the residency set
+    res_remove(tex); res_remove(spare);
+#endif
+}
 @end
 static uint64_t g_pkg_uploads, g_pkg_reuploads, g_pkg_miss, g_pkg_spare_reuse, g_pkg_spare_drop;   // re-uploads written into the spare; spares dropped unused
 // DM_NVN_COUNTS (plan item 56, measuring what dropping cold CPU-filled textures could free): every 300 submissions, on the submit thread, the bytes of
@@ -2445,6 +2465,14 @@ void mtl_mem_census(char *out, size_t n) { @autoreleasepool {
     for (int i = 0; i < 5 && top[i].b && o < n; i++) o += (size_t)snprintf(out + o, n - o, " %ux%u fmt %u%s %llu MB", top[i].w, top[i].h, top[i].f, top[i].rt ? " RT" : "", top[i].b >> 20);
 } }
 unsigned long long mtl_gpu_allocated_mb(void) { id<MTLDevice> d = g_dev; return d ? (unsigned long long)(d.currentAllocatedSize >> 20) : 0; }   // GPU allocated (0 before the graphics layer starts); callable from any thread
+// The command allocators' memory (Metal 4; plan item 178, lordran-native 24740d4, MIT): the main submission's, the uploads', the presents'; zeros on Metal 3
+void mtl_cmd_alloc_bytes(uint64_t out[3]) {
+    out[0] = out[1] = out[2] = 0;
+#if !DM_NVN_M3
+    for (int i = 0; i < g_alloc_n; i++) out[0] += g_alloc4[i].allocatedSize;
+    for (int i = 0; i < 3; i++) { out[1] += g_up_alloc4[i].allocatedSize; out[2] += g_present_alloc4[i].allocatedSize; }
+#endif
+}
 void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_ok, unsigned long long heap_mb, unsigned long long heap_free_mb, unsigned long long heap_maxblk_kb) {
     if (g_res_census > 0) res_census(frame, rss_mb);
     static unsigned long long last_rss, last_gpu, last_frame, last_hfree, last_hmax; static int lines; unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
@@ -2461,7 +2489,11 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb, int heap_
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
     size_t am, ah; dm_alias_stat(&am, &ah);
-    char rtv[256]; rt_census_line(rtv, sizeof rtv);
+    char rtv[512]; rt_census_line(rtv, sizeof rtv);
+#if !DM_NVN_M3 && !defined(DM_TEST_MEMLINE_NO_ALLOC)   // (the macro: negative control of t_cmdalloc only)
+    { uint64_t ca[3]; mtl_cmd_alloc_bytes(ca); size_t l = strlen(rtv);
+      snprintf(rtv + l, sizeof rtv - l, "; command allocators %.1f MB (%d for the main submission), uploads %.1f MB, presents %.1f MB", ca[0] / 1048576.0, g_alloc_n, ca[1] / 1048576.0, ca[2] / 1048576.0); }
+#endif
     MLOG("memory up to frame %llu: RSS %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, memory pools %d (peak %d / tracking table capacity %d), texture re-uploads %llu in total; game heap %llu MB, free %llu MB, largest allocatable block %llu KB%s; alias region mapped %zu MB in %zu MB of host pages; headroom to the system memory limit %s%s", frame, rss_mb, gpu, nd, nr, live, peak, cap, (unsigned long long)g_pkg_reuploads,
         heap_mb, heap_free_mb, heap_maxblk_kb, heap_ok ? "" : " (not read)", am, ah, avail, rtv);
 }
@@ -2699,7 +2731,7 @@ void ts_after(void);
 // ---------- Store lookahead: at pass end, decide from the later commands of the same submission whether each attachment's write-back is redundant ----------
 // On TBDR every attachment is written back to memory in full when the pass ends; Switch (Maxwell immediate-mode rendering) has no such cost. If an attachment is cleared in full before being read, the write-back is redundant (DontCare).
 // For the decision see mtl_sub_index / sdx_decide; only what can be proven within the same submission is accepted, and anything still undecided at the end of the submission is always written back.
-typedef struct { uint64_t ser, bytes; uint32_t lv, sl; int idx; uint8_t depth, state, ridx, drawn, why, load, wrote, wwhy; const char *wkey; int wslot; } sd_att;   // depth: 0 color 1 depth 2 stencil (the two parts of a combined depth-stencil texture are decided separately)   // state 0 undecided 1 needed 2 redundant; idx: color attachment index, -1 for depth
+typedef struct { uint64_t ser, bytes; uint32_t lv, sl; int idx; uint8_t depth, state, ridx, drawn, why, load, wrote, wwhy, pw; const char *wkey; int wslot; } sd_att;   // pw: cleared, or written by a draw that samples none of the pass's attachments (fbx_prepare's split, plan item 165)   // depth: 0 color 1 depth 2 stencil (the two parts of a combined depth-stencil texture are decided separately)   // state 0 undecided 1 needed 2 redundant; idx: color attachment index, -1 for depth
 static sd_att g_sd[9]; static int g_nsd;
 static int g_udc_ab = -1, g_udc_ab_on;
 // Attachments this pass did not write (depth / stencil test only, color write mask 0, etc.) get their write-back changed to DontCare: the content is already in memory, saving one full write-back.
@@ -3061,7 +3093,7 @@ static void pg_commit(id fb) {   // the submission's rows go to its feedback (fb
 static int g_el_w, g_el_h, g_el_draws; static char g_el_key[12];
 static int g_nblk_wb; static void blk_writeback(void);
 static int enc_label_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_ENC_LABEL"); v = e && atoi(e); } return v; }
-static int g_fbx_nact; static inline void args_dirty_all(void);
+static int g_fbx_nact, g_fbx_self; static inline void args_dirty_all(void);   // g_fbx_self: this draw samples what its pass draws (fbx_prepare)
 static void rp_end(void) { if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }   // the attachment copies of a draw stand in only for it (fbx_prepare)
     if (g_enc) {
     if (g_cnt_on > 0 && g_stat_draw == g_cnt_pass_d0) g_cnt_nodraw++;
@@ -3348,6 +3380,7 @@ static RENC rp_begin_ex(int clear_only) {
         if (stt) { g_sd[g_nsd] = (sd_att){0}; g_sd[g_nsd].ser = R.rt.depth->serial; g_sd[g_nsd].bytes = sb; g_sd[g_nsd].lv = (uint32_t)pd.stencilAttachment.level; g_sd[g_nsd].sl = (uint32_t)pd.stencilAttachment.slice; g_sd[g_nsd].idx = -1; g_sd[g_nsd].depth = 2; g_sd[g_nsd].load = pd.stencilAttachment.loadAction == MTLLoadActionLoad; g_sd[g_nsd].wrote = R.clear_s != 0; g_nsd++;
                    pd.stencilAttachment.storeAction = MTLStoreActionUnknown; }
     }
+    for (int i = 0; i < g_nsd; i++) g_sd[i].pw = g_sd[i].wrote;   // a clear at load: newest in tile memory
     memset(R.clear_c, 0, sizeof R.clear_c); R.clear_d = R.clear_s = 0;
     {   // Pass info (same convention as the former per-draw fetch: colors take each attachment's base texture format; sample count takes the last color attachment, or depth if there is depth)
         uint64_t ser = g_pass.serial + 1; memset(&g_pass, 0, sizeof g_pass); g_pass.serial = ser;
@@ -3514,6 +3547,7 @@ static pthread_mutex_t g_rmu = PTHREAD_MUTEX_INITIALIZER;
 // ---------- Shader mapping table: Switch shader key (control section + code area, hle_nvn.c shader_key) → PC metallib ----------
 static NSMutableDictionary<NSString *, NSString *> *g_shmap;
 static NSString *g_shmap_path, *g_msl_dir;
+static NSMutableDictionary<NSString *, NSString *> *g_fmap;   // functional key → the first key of the map with it (the map's third column, plan item 169)
 // Shader stage map (gfx/tools/shmap_from_capture.py): Switch shader key → stage; the shaders themselves are translations of the game's own
 // Switch shaders built offline by gfx/tools/dmsh_build.py (<key>_b.metallib + reflection JSON)
 static void shmap_load(void) {
@@ -3528,6 +3562,7 @@ static void shmap_load(void) {
         if (!ln.length || [ln hasPrefix:@"#"]) continue;
         NSArray *c = [ln componentsSeparatedByString:@"\t"];
         if (c.count >= 2) g_shmap[c[0]] = c[1];
+        if (c.count >= 3 && [c[2] length] == 16) { if (!g_fmap) g_fmap = [NSMutableDictionary dictionary]; if (!g_fmap[c[2]]) g_fmap[c[2]] = c[0]; }
     }
     g_shmap_path = path;
     const char *m = getenv("DM_MSL_DIR");
@@ -3745,6 +3780,33 @@ static int rt_range_pr_ro(NvProg *p) {
     for (int k=0;k<6;k++) if (p->sh[k] && (k>1 || p->sh[k]->stage != k || !p->sh[k]->range_ro || p->sh[k]->rf.drv_read[0] || p->sh[k]->rf.drv_read[2])) return 0;
     return 1;
 }
+// Programs' functional keys by serial (plan item 169; a side table: prog_t cannot grow, nvn_obj.h): set at SetShaders, dropped with the program
+static nvn_hmap g_pfk = {.klen = 8}; static pthread_mutex_t g_pfk_mu = PTHREAD_MUTEX_INITIALIZER;
+void mtl_prog_fkeys(uint64_t serial, const uint8_t fk[6][8]) {
+    static const uint8_t zero[6][8]; if (!serial || !memcmp(fk, zero, sizeof zero)) return;
+    uint8_t *v = malloc(48); if (!v) return; memcpy(v, fk, 48);
+    pthread_mutex_lock(&g_pfk_mu); uint8_t *old = nvn_hm_get(&g_pfk, &serial); if (old) { nvn_hm_del(&g_pfk, &serial); free(old); } nvn_hm_put(&g_pfk, &serial, v); pthread_mutex_unlock(&g_pfk_mu);
+}
+static void prog_fkey(uint64_t serial, unsigned stage, uint8_t out[8]) {
+    memset(out, 0, 8); if (stage >= 6) return;
+    pthread_mutex_lock(&g_pfk_mu); const uint8_t *v = nvn_hm_get(&g_pfk, &serial); if (v) memcpy(out, v + 8 * stage, 8); pthread_mutex_unlock(&g_pfk_mu);
+}
+static void prog_fkey_drop(uint64_t serial) { pthread_mutex_lock(&g_pfk_mu); uint8_t *v = nvn_hm_get(&g_pfk, &serial); if (v) { nvn_hm_del(&g_pfk, &serial); free(v); } pthread_mutex_unlock(&g_pfk_mu); }
+// The map's key for a shader: its own, else (plan item 169) the first key of the map with its functional key, the shader the game also ships under another
+// key with other metadata in its control section (the same translation). log: the red line for a key that has neither, once per key, and a line for
+// each twin used
+static NSString *shmap_resolve(NSString *k, const uint8_t fk[8], int log) {
+    if (g_shmap[k]) return k;
+    static NSMutableSet<NSString *> *told; if (log && !told) told = [NSMutableSet set];
+    uint64_t z = 0; NSString *t = nil;
+#ifndef DM_TEST_SHMAP_NO_FKEY   // negative control of t_shmap only: no fallback
+    if (memcmp(fk, &z, 8)) t = g_fmap[[NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", fk[0], fk[1], fk[2], fk[3], fk[4], fk[5], fk[6], fk[7]]];
+#endif
+    if (log && ![told containsObject:k]) { [told addObject:k];
+        if (t) MLOG("shader %s is not in the shader map: its functional twin %s is used (the same code, constants and stage)", k.UTF8String, t.UTF8String);
+        else MLOG("[red] shader %s is not in the shader map", k.UTF8String); }
+    return t;
+}
 static NvShader *shader_get(NSString *pc, int stage) {
     if (!g_shcache) g_shcache = [NSMutableDictionary dictionary];
     NvShader *o = g_shcache[pc];
@@ -3768,9 +3830,10 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
     NvProg *o = [NvProg new];
     for (unsigned i = 0; i < p->nstage; i++) {
         const uint8_t *md = p->key[i];   // shader key computed at SetShaders (the game may already have reclaimed the control section memory by now)
-        NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
-        NSString *zh = g_shmap[k];
-        if (!zh) { MLOG("[red] shader %s is not in the shader map", k.UTF8String); continue; }
+        uint8_t fk[8]; prog_fkey(p->serial, i, fk);
+        NSString *k = shmap_resolve([NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]], fk, 1);
+        NSString *zh = k ? g_shmap[k] : nil;
+        if (!zh) continue;
         int st = stage_of(zh);
         NvShader *sh = st >= 0 ? shader_get([k stringByAppendingString:@"_b"], st) : nil;
         if (sh) o->sh[st] = sh; else MLOG("[red] shader %s (%s) failed to load: run gfx/tools/dmsh_build.py to package first", k.UTF8String, zh.UTF8String);
@@ -3787,12 +3850,13 @@ static __unsafe_unretained NvProg *prog_peek(const prog_t *p) {
     shmap_load();
     for (unsigned i = 0; i < p->nstage; i++) {
         const uint8_t *md = p->key[i];
-        NSString *k = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
-        if (!g_shmap[k] || !g_shcache[[k stringByAppendingString:@"_b"]]) return nil;
+        uint8_t fk[8]; prog_fkey(p->serial, i, fk);
+        NSString *k = shmap_resolve([NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]], fk, 0);
+        if (!k || !g_shcache[[k stringByAppendingString:@"_b"]]) return nil;
     }
     return prog_get(p);
 }
-void mtl_prog_release(prog_t *p) { @autoreleasepool { if (p->serial) serial_del(p->serial); } }
+void mtl_prog_release(prog_t *p) { @autoreleasepool { if (p->serial) { serial_del(p->serial); prog_fkey_drop(p->serial); } } }
 
 // ---------- Descriptor pool: texture ID / sampler ID → object ----------
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
@@ -4009,6 +4073,17 @@ static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void
 // mismatch with undefined reads (nxnative measured one fixed value: Super Mario 3D World's one-layer 2D array pre-lighting buffer sampled as 2D washed
 // the whole picture out). The supported pairs are in nvn_tex_fit.h; any other mismatch is reported once and bound as it is. The view is kept with
 // the texture ID until its view changes. Caller holds g_rmu
+// Which shaders meet another texture type than they declare (plan item 168: Tears of the Kingdom's block encoders declare texture3d and MacNativeGames'
+// shared list has them bound to 2D textures): each (shader, stage, slot, declared, bound) logged once, the first 32 of them
+static void ttm_note(const char *key, int stage, int reg, MTLTextureType want, id<MTLTexture> t, int tid) {
+    static struct { char key[17]; uint8_t stage, reg, want, have; } seen[32]; static int nseen; static uint64_t over;
+    for (int i = 0; i < nseen; i++) if (seen[i].stage == stage && seen[i].reg == reg && seen[i].want == want && seen[i].have == t.textureType && !strncmp(seen[i].key, key, 16)) return;
+    if (nseen == 32) { if (!over++) MLOG("texture type mismatches: more than 32 kinds, the rest not listed"); return; }
+    snprintf(seen[nseen].key, 17, "%.16s", key); seen[nseen].stage = (uint8_t)stage; seen[nseen].reg = (uint8_t)reg; seen[nseen].want = (uint8_t)want; seen[nseen].have = (uint8_t)t.textureType; nseen++;
+    MLOG("texture type mismatch %d: shader %.16s stage %d slot %d declares type %lu, bound type %lu (texture ID %d: %lux%lux%lu, %lu levels, Metal format %lu, NVN format %#x)", nseen, key, stage, reg,
+         (unsigned long)want, (unsigned long)t.textureType, tid, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth, (unsigned long)t.mipmapLevelCount, (unsigned long)t.pixelFormat,
+         tid > 0 && tid < g_ntreg ? g_treg[tid].t.d.format : 0);
+}
 static id<MTLTexture> tex_fit(int tid, id<MTLTexture> t, MTLTextureType want, uint64_t *rid) {
     MTLTextureType have = t.textureType; NSUInteger ns = nvn_tex_fit_slices(want, have, t.arrayLength);
     if (!ns || tid <= 0 || tid >= g_ntreg) { RED_ONCE(69, "texture type mismatch: the shader declares %lu, the texture is %lu (texture ID %d: %lux%lux%lu, %lu levels, Metal format %lu, NVN format %#x, serial %llu); bound as it is",
@@ -4163,13 +4238,19 @@ static void udc_note_draw(NvProg *pr) {
         if ((shader_color_mask >> i & 1) && ((S.chmask.mask >> (4 * i)) & 0xf) && (g_rt_dup_skip >> i & 1))
             RED_ONCE(80, "colour slot %d attaches the same texture as another slot (ser=%llu) and this draw writes it (mask %#x): those writes are lost", i, (unsigned long long)R.rt.color[i]->serial, (S.chmask.mask >> (4 * i)) & 0xf);
     for (int i = 0; i < g_nsd; i++) {
-        sd_att *t = &g_sd[i];
+        sd_att *t = &g_sd[i]; uint8_t w0 = t->wwhy; t->wwhy = 0;
         if (image_write) { t->wrote = 1; t->wwhy = 1; }
         else if (t->depth == 0 && t->idx >= 0 && (((S.chmask.mask >> (4 * t->idx)) & 0xf) || (shader_color_mask >> t->idx & 1))) { t->wrote = 1; t->wwhy = (S.chmask.mask >> (4 * t->idx)) & 0xf ? 2 : 3; }
         else if (t->depth == 1 && S.ds.dw) { t->wrote = 1; t->wwhy = 4; }
         else if (t->depth == 2 && S.ds.st && (S.st_wmask[0] || S.st_wmask[1])
                 && (S.ds.fail_f != NVN_STENCIL_OP_KEEP || S.ds.zfail_f != NVN_STENCIL_OP_KEEP || S.ds.zpass_f != NVN_STENCIL_OP_KEEP
                     || S.ds.fail_b != NVN_STENCIL_OP_KEEP || S.ds.zfail_b != NVN_STENCIL_OP_KEEP || S.ds.zpass_b != NVN_STENCIL_OP_KEEP)) { t->wrote = 1; t->wwhy = 5; }
+#ifndef DM_TEST_FBX_SPLIT_EACH   // negative control of t_fbx only: a sampling draw's writes count too (a split before every draw of a run)
+        if (t->wwhy && !g_fbx_self) t->pw = 1;
+#else
+        if (t->wwhy) t->pw = 1;
+#endif
+        if (!t->wwhy) t->wwhy = w0;
     }
 }
 static void state_reset(void) {
@@ -4961,7 +5042,11 @@ static void ul_apply(const upd_list *l, uint64_t lo, uint8_t *out, uint64_t n) {
     uint64_t hi = lo + n; int a = 0, b = l->n, k = 0; while (a < b) { int m = (a + b) / 2; if (l->e[m].lo < hi) a = m + 1; else b = m; }
     if (g_upd_icap < l->n) { g_upd_icap = l->n * 2; g_upd_idx = realloc(g_upd_idx, (size_t)g_upd_icap * sizeof *g_upd_idx); if (!g_upd_idx) MDIE("uniform update log index"); }
     for (int i = a - 1; i >= 0 && l->maxhi[i] > lo; i--) if (l->e[i].hi > lo) g_upd_idx[k++] = i;
+#ifndef DM_TEST_UB_NEWEST_FIRST   // negative control of t_nvn 5a2 only: the newest applied first, an older one over it
     for (int i = 1; i < k; i++) { int x = g_upd_idx[i], j = i - 1; while (j >= 0 && l->e[g_upd_idx[j]].seq > l->e[x].seq) { g_upd_idx[j + 1] = g_upd_idx[j]; j--; } g_upd_idx[j + 1] = x; }
+#else
+    for (int i = 1; i < k; i++) { int x = g_upd_idx[i], j = i - 1; while (j >= 0 && l->e[g_upd_idx[j]].seq < l->e[x].seq) { g_upd_idx[j + 1] = g_upd_idx[j]; j--; } g_upd_idx[j + 1] = x; }
+#endif
     for (int i = 0; i < k; i++) { const upd_ent *e = &l->e[g_upd_idx[i]]; uint64_t s0 = MAX(lo, e->lo), e0 = MIN(hi, e->hi); memcpy(out + (s0 - lo), e->data + (s0 - e->lo), e0 - s0); }
 }
 static void upd_log(uint64_t lo, uint64_t hi, const uint8_t *data) {
@@ -5048,10 +5133,11 @@ typedef struct { __strong id<MTLTexture> copy, src; uint64_t draw, sub; __strong
 static fbx_ent g_fbx[16]; static int g_nfbx;
 static int g_fbx_act[9];   // this draw's: indices into g_fbx (g_fbx_nact of them, declared at rp_end), set when its pass is open (fbx_activate)
 static int g_fbx_pend[9], g_fbx_npend;   // fbx_prepare's picks for the draw being prepared
-static int g_fbx_on = -1;   // 0 off, 1 after a texture barrier (default), 2 all
+static int g_fbx_on = -1;   // 0 off, 1 after a texture barrier (default), 2 all, 3 split (DM_NVN_FBX=split, plan item 165)
 static uint64_t g_fbx_bar_at;   // g_stat_draw at the last barrier that invalidates textures (NVN_BARRIER_INVALIDATE_TEXTURE_BIT)
-static uint64_t g_fbx_copies, g_fbx_draws, g_fbx_refused;
+static uint64_t g_fbx_copies, g_fbx_draws, g_fbx_refused, g_fbx_splits, g_fbx_split_clears;
 void mtl_fbx_stats(uint64_t out[3]) { out[0] = g_fbx_draws; out[1] = g_fbx_copies; out[2] = g_fbx_refused; }
+void mtl_fbx_split_stats(uint64_t out[2]) { out[0] = g_fbx_splits; out[1] = g_fbx_split_clears; }
 // The bound texture t, or the same view of it, on the copy of the attachment it is (nil: not this draw's attachment)
 static id<MTLTexture> fbx_sub(id<MTLTexture> t, uint64_t *rid) {
     for (int a = 0; a < g_fbx_nact; a++) { fbx_ent *e = &g_fbx[g_fbx_act[a]];
@@ -5145,7 +5231,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                     PD("B %llu st%d tex reg%d Metal level 0 %lux%lu non-zero words %.4f", g_stat_pass, nvn_stage, reg, (unsigned long)tw, (unsigned long)th, mn ? (double)mz / mn : 0.0);
                 }
             }
-            if (t && t.textureType != (MTLTextureType)b->decl_tt) { uint64_t r2 = 0; id<MTLTexture> fv = tex_fit(tid, t, (MTLTextureType)b->decl_tt, &r2); if (fv) { t = fv; trid = r2; } }
+            if (t && t.textureType != (MTLTextureType)b->decl_tt) { ttm_note(sh->key, nvn_stage, reg, (MTLTextureType)b->decl_tt, t, tid); uint64_t r2 = 0; id<MTLTexture> fv = tex_fit(tid, t, (MTLTextureType)b->decl_tt, &r2); if (fv) { t = fv; trid = r2; } }
             if (t && g_fbx_nact) { uint64_t r2 = 0; id<MTLTexture> c = fbx_sub(t, &r2); if (c) { t = c; trid = r2; } }   // the draw samples its own attachment: the copy
             if (!t) { t = dummy_tex(b->dtt, b->dpf); trid = g_dummy_tex_rid[b->dtt & 7][b->dpf & 3]; }
             slots[aid] = trid;
@@ -5688,11 +5774,16 @@ static void count_self_sample(NvProg *pr) {
                 MLOG("counts: fragment shader %.8s samples what its pass draws (pass %llu, %u x %u, %d colour targets, draw %llu of the pass, barrier since %d): %s", pr->sh[1]->key,
                      (unsigned long long)g_stat_pass, (unsigned)g_pass.tw, (unsigned)g_pass.th, R.rt.n, (unsigned long long)(g_stat_draw - g_cnt_pass_d0), g_cnt_bar_at > g_cnt_pass_d0, g_cnt_why); } } }
 }
-// Before a draw (see fbx_sub): the attachments it samples where it draws, copied unless a copy is still current; the copies stand in for them
+// Before a draw (see fbx_sub): the attachments it samples where it draws, copied unless a copy is still current; the copies stand in for them.
+// DM_NVN_FBX=split (plan item 165, MacNativeGames PR #67, open, MIT: ground decals sample the G-buffer pass they draw into; an Apple GPU keeps the
+// pass's pixels in tile memory, so they read the last frame's): no copies; the pass is stored and reopened before such a draw when an attachment it
+// samples holds pixels newer than memory, cleared at load or written by a draw that samples none of the pass's attachments (sd_att.pw), or written
+// by any draw before a texture-invalidating barrier (as the default copies, plan item 42). The draws of a run that sample (the decals) do not count
+// otherwise, so a run shares one split; a clear still pending before the pass opens is flushed the same way
 static void fbx_prepare(NvProg *pr) {
-    g_fbx_npend = 0;
+    g_fbx_npend = 0; g_fbx_self = 0;
     if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }
-    if (g_fbx_on < 0) { const char *e = getenv("DM_NVN_FBX"); g_fbx_on = !e ? 1 : !strcmp(e, "0") ? 0 : !strcmp(e, "all") ? 2 : 1; }
+    if (g_fbx_on < 0) { const char *e = getenv("DM_NVN_FBX"); g_fbx_on = !e ? 1 : !strcmp(e, "0") ? 0 : !strcmp(e, "all") ? 2 : !strcmp(e, "split") ? 3 : 1; }
     if (!g_fbx_on || !pr || (!R.rt.n && !R.rt.depth)) return;
     if (g_fbx_on == 1 && !(g_enc && g_stat_draw > g_cnt_pass_d0 && g_fbx_bar_at > g_cnt_pass_d0)) return;   // no barrier after draws of this pass: read as the console does
     uint64_t rs[9]; int nr = 0;
@@ -5714,8 +5805,21 @@ static void fbx_prepare(NvProg *pr) {
                 if (l0 < m1 && m0 < l1 && y0 < z1 && z0 < y1) need |= 1u << k;
             } } }
     if (!need) return;
+    g_fbx_self = 1;
     if (g_fz.active || g_lay.active || g_rt_range_active) { g_fbx_refused++; RED_ONCE(97, "a draw samples what its pass draws inside a merged, layered or range pass: not copied (first case pass %llu)", g_stat_pass); return; }
     g_fbx_draws++;
+    if (g_fbx_on == 3) {
+        if (g_enc) {
+            for (int i = 0; i < g_nsd; i++) { const sd_att *t = &g_sd[i];
+                int newer = t->pw || (t->wrote && g_fbx_bar_at > g_cnt_pass_d0);   // a texture barrier after any write of the pass makes it visible too (NVN)
+                for (int k = 0; k < 9; k++) if ((need >> k & 1) && newer && t->ser == rs[k] && (k < 8 ? t->depth == 0 && t->idx == k : t->depth != 0)) {
+                    PD("M %llu a draw samples an attachment its pass wrote, splitting here (plan item 165)", g_stat_pass); g_fbx_splits++; rp_end(); return; } }
+        } else {
+            int pend = 0; for (int k = 0; k < 9; k++) if (need >> k & 1) pend |= k < 8 ? R.clear_c[k] != 0 : R.clear_d || R.clear_s;
+            if (pend) { g_fbx_split_clears++; rp_begin(); rp_end(); }   // the pending clears into memory first
+        }
+        return;
+    }
     id<MTLTexture> src[9]; int ns = 0, stale = 0;
     for (int k = 0; k < 9; k++) if (need >> k & 1) { id<MTLTexture> t = tex_mtl(k < 8 ? R.rt.color[k] : R.rt.depth); if (!t) continue;
         int dup = 0; for (int j = 0; j < ns; j++) dup |= src[j] == t; if (dup) continue;
@@ -6764,7 +6868,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (g_fz.active && g_enc && g_fz.phase == 2 && !fz_p2_draw(pr, dw, di, g_fz.lmap2, &fz_fn)) {   // Cannot be proven: end the merged render pass (the earlier pass's result is stored as usual) and reopen with the later pass's original targets
         static int once3; if (!once3++) MLOG("readable tile pass merge: a draw in the later pass is not provable, falling back to separate passes (first case pass %llu)", g_stat_pass);
         g_fz_fallback++; rp_end(); }
-    if (!g_defer_replaying) fbx_prepare(pr); else if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }   // a replayed deferred draw: not copied for, and it keeps the draw that replays it's picks
+    if (!g_defer_replaying) fbx_prepare(pr); else { g_fbx_self = 0; if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); } }   // a replayed deferred draw: not copied for, and it keeps the draw that replays it's picks
     if (R.has_sc && !g_enc) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;

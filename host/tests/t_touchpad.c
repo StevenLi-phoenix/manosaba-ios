@@ -9,7 +9,10 @@
 // sizes A (pressed at its new place, not at the old), B pushed off the screen stays inside the safe area, the stick's home moves and shrinks, the
 // spec read back gives the same layout, one that does not parse changes nothing, reset; the editor drags and sizes X with nothing reaching the
 // game, and X then works there; the menu button asks for the panel once and presses nothing; opacity clamped. The customization ignored
-// (-DDM_TEST_TP_CUSTOM_IGNORED): 5 fail.
+// (-DDM_TEST_TP_CUSTOM_IGNORED): 5 fail. Device sizes and game controllers (plan item 171): ten devices from Touchable's table, each with every
+// control inside its safe area, none overlapping, the left column below the iPadOS window controls; a controller connected leaves the controls, a key
+// hides them, a touch or the last controller gone shows them. The window controls ignored (-DDM_TEST_TP_NO_WINDOW): 3 fail (the iPads that have
+// them); hidden on connect, as before (-DDM_TEST_TP_CTL_ON_CONNECT): 1 fails.
 #include "../touchpad.c"
 #include <stdio.h>
 uint64_t g_t0_ns;
@@ -37,7 +40,7 @@ static pad drag(long id, float speed, float ux, float uy) {   // a camera finger
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    tp_layout(844, 390, 47, 0, 47, 21);
+    tp_layout(844, 390, 47, 0, 47, 21, 0);
     float u, px, py, r; tp_find("stick", &px, &py, &r); u = g.u;
     CHECK(u > 0.97f && u < 0.98f && fabsf(r - 54 * u) < 0.01f, "layout: %.4f points per design point (390 / 400), stick ring %.1f", u, r);
 
@@ -122,11 +125,11 @@ int main(void) {
     CHECK(inside, "every button inside the safe area");
     // Laid out again: the same size and safe area keep a held finger (UIKit lays out for other reasons too); a new size releases it
     down(41, "A", 0, 0); T += 1 / 30.0; rd();   // (this read takes the press latch)
-    tp_layout(844, 390, 47, 0, 47, 21); T += 1 / 30.0; rd();
+    tp_layout(844, 390, 47, 0, 47, 21, 0); T += 1 / 30.0; rd();
     CHECK(S.b == DM_BTN_A, "laid out again unchanged: A still held");
-    tp_layout(844, 390, 0, 0, 0, 21); T += 1 / 30.0; rd();
+    tp_layout(844, 390, 0, 0, 0, 21, 0); T += 1 / 30.0; rd();
     CHECK(S.b == 0, "a new safe area: every finger released");
-    up(41); tp_layout(844, 390, 47, 0, 47, 21); tp_find("stick", &px, &py, &r);
+    up(41); tp_layout(844, 390, 47, 0, 47, 21, 0); tp_find("stick", &px, &py, &r);
     // Camera tuning
     { T = 12; rd();
       pad a = drag(50, 200, 1, 0); tp_look_tuning(2, 0, 0); pad b = drag(51, 200, 1, 0);
@@ -187,6 +190,45 @@ int main(void) {
       CHECK(m1 && !m2 && !mb, "the menu button: the panel asked for once, no button pressed");
       tp_opacity(0.4f); tp_draw(&d); float o1 = d.opacity; tp_opacity(0.01f); tp_draw(&d); float o2 = d.opacity; tp_opacity(1);
       CHECK(o1 == 0.4f && o2 == 0.15f, "opacity 0.4 drawn as such, 0.01 held at 0.15"); }
+    {   // Device sizes (plan item 171; Touchable's internal/tests/common/test_touch_layout.c table, MIT, as data: points in landscape, the safe area, and
+        // the top inset below the iPadOS window controls, which Touchable read on iPadOS 27's simulator for an iPad mini: safe top 10, window controls
+        // down to 53). Each: every control and the stick's home inside the safe area, none overlapping another, the left column (ZL, L, D-pad) below
+        // the window controls
+        typedef struct { const char *name; float w, h, l, r, t, b, win; } device;
+        static const device dv[] = {{"iPhone 16 Pro Max", 956, 440, 62, 62, 0, 21, 0}, {"iPhone 16 Pro", 874, 402, 62, 62, 0, 21, 0}, {"iPhone 13 mini", 812, 375, 50, 50, 0, 21, 0},
+            {"iPhone SE", 667, 375, 0, 0, 0, 0, 0}, {"iPad mini", 1133, 744, 0, 0, 10, 20, 53}, {"iPad mini, no window controls", 1133, 744, 0, 0, 0, 20, 0},
+            {"iPad mini, status bar", 1133, 744, 0, 0, 24, 20, 24}, {"iPad Air 11", 1180, 820, 0, 0, 10, 20, 53}, {"iPad Pro 13", 1376, 1032, 0, 0, 10, 20, 53},
+            {"iPad small window", 700, 520, 0, 0, 0, 0, 0}};
+        tp_custom_reset();
+        for (size_t k = 0; k < sizeof dv / sizeof *dv; k++) {
+            const device *v = &dv[k]; tp_layout(v->w, v->h, v->l, v->t, v->r, v->b, v->win);
+            float L = v->l, T = v->t, R = v->w - v->r, B = v->h - v->b; int inside = 1, below = 1, apart = 1; char why[160] = "";
+            enum { NS = 24 }; float sx[NS], sy[NS], ex[NS], ey[NS]; int round_[NS], ns = 0; const char *lab[NS];
+            for (int i = 0; i < g.nc && ns < NS - 1; i++) { const tp_item *d = &g.c[i].d;
+                sx[ns] = d->x; sy[ns] = d->y; ex[ns] = d->r; ey[ns] = d->shape == TP_PILL ? d->hh : d->r; round_[ns] = d->shape != TP_PILL; lab[ns] = d->label; ns++; }
+            sx[ns] = g.home_x; sy[ns] = g.home_y; ex[ns] = ey[ns] = g.stick_r; round_[ns] = 1; lab[ns] = "stick"; ns++;
+            for (int i = 0; i < ns; i++) {
+                if (sx[i] - ex[i] < L - 0.01f || sx[i] + ex[i] > R + 0.01f || sy[i] - ey[i] < T - 0.01f || sy[i] + ey[i] > B + 0.01f) { inside = 0; if (!*why) snprintf(why, sizeof why, "%s outside", lab[i]); }
+                if ((!strcmp(lab[i], "ZL") || !strcmp(lab[i], "L") || !strcmp(lab[i], "dpad")) && sy[i] - ey[i] < v->win - 0.01f) { below = 0; if (!*why) snprintf(why, sizeof why, "%s under the window controls", lab[i]); }
+                for (int j = i + 1; j < ns; j++) {   // circles by their centres; a pill against anything by the nearest point of its box
+                    float gap;
+                    if (round_[i] && round_[j]) gap = hypotf(sx[i] - sx[j], sy[i] - sy[j]) - ex[i] - ex[j];
+                    else { int a = round_[i] ? j : i, c = a == i ? j : i;   // a: a pill
+                        float qx = fmaxf(fabsf(sx[c] - sx[a]) - ex[a], 0), qy = fmaxf(fabsf(sy[c] - sy[a]) - ey[a], 0);
+                        gap = round_[c] ? hypotf(qx, qy) - ex[c] : fmaxf(fabsf(sx[c] - sx[a]) - ex[a] - ex[c], fabsf(sy[c] - sy[a]) - ey[a] - ey[c]); }
+                    if (gap < -0.01f) { apart = 0; if (!*why) snprintf(why, sizeof why, "%s and %s overlap by %.1f pt", lab[i], lab[j], -gap); }
+                }
+            }
+            CHECK(inside && below && apart, "%-30s %4.0fx%-4.0f inside the safe area, below the window controls, none overlapping%s%s", v->name, v->w, v->h, *why ? ": " : "", why);
+        }
+        tp_layout(844, 390, 47, 0, 47, 21, 0); }
+    {   // A game controller (plan item 171): connected, the controls stay; a key hides them (off: a finger reaches nothing); a touch shows them; a key
+        // again, then the last controller gone: shown
+        tp_set_hidden(0); int c0 = tp_controller(TP_CTL_CONNECT); int k1 = tp_controller(TP_CTL_KEY); T += 1 / 30.0; rd();
+        down(60, "A", 0, 0); T += 1 / 30.0; rd(); int none = !(S.b & DM_BTN_A); up(60);
+        int t1 = tp_controller(TP_CTL_TOUCH); int k2 = tp_controller(TP_CTL_KEY), g1 = tp_controller(TP_CTL_GONE);
+        down(61, "A", 0, 0); T += 1 / 30.0; rd(); int a = (S.b & DM_BTN_A) != 0; up(61); T += 1 / 30.0; rd();
+        CHECK(!c0 && k1 && none && !t1 && k2 && !g1 && a, "a controller connected: shown; a key: hidden (A not pressed by a finger); a touch: shown; a key, then none left: shown, A works"); }
     printf("t_touchpad: %d checks, %d failed\n", n, fail);
     return fail != 0;
 }

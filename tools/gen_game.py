@@ -24,11 +24,20 @@ def load(path):
     if g.get('window_unfocused', 'out_of_focus') not in ('out_of_focus', 'in_focus'): sys.exit(f'{path}: window_unfocused must be "out_of_focus" or "in_focus"')
     if not isinstance(g.get('virtual_cores', False), bool): sys.exit(f'{path}: virtual_cores must be true or false')
     if g.get('touch', 'screen') not in ('screen', 'pad'): sys.exit(f'{path}: touch must be "screen" or "pad"')
+    langs = g.get('languages', [g['language']])   # the game's own (plan item 170): nn::settings language codes; the device's language is taken among them
+    if not isinstance(langs, list) or not langs or any(l not in LANG_CODES for l in langs) or g['language'] not in langs:
+        sys.exit(f'{path}: languages must list nn::settings language codes ({" ".join(LANG_CODES)}), the profile\'s language among them')
     n = g.get('npdm', {})   # from the game's main.npdm (tools/new_game.py fills it): META SystemResourceSize, the ThreadInfo kernel capability's priorities
     if not isinstance(n, dict) or set(n) - {'system_resource_size', 'thread_priority'} or not re.fullmatch(r'0x[0-9a-fA-F]+', str(n.get('system_resource_size', '0x0'))) \
        or not (isinstance(n.get('thread_priority', [0, 0]), list) and len(n.get('thread_priority', [0, 0])) == 2 and all(isinstance(v, int) and 0 <= v < 64 for v in n.get('thread_priority', [0, 0]))):
         sys.exit(f'{path}: npdm must be {{"system_resource_size": "0x..", "thread_priority": [highest, lowest]}}')
     return g
+
+# nn::settings language codes (NintendoSDK nn::settings::Language)
+LANG_CODES = ('ja', 'en-US', 'fr', 'de', 'it', 'es', 'zh-CN', 'ko', 'nl', 'pt', 'ru', 'zh-TW', 'en-GB', 'fr-CA', 'es-419', 'zh-Hans', 'zh-Hant')
+# Apple's localization for each (CFBundleLocalizations, ios/tools/project_lang.py): the per-app language setting offers these
+APPLE_LOC = {'ja': 'ja', 'en-US': 'en', 'fr': 'fr', 'de': 'de', 'it': 'it', 'es': 'es', 'zh-CN': 'zh-Hans', 'ko': 'ko', 'nl': 'nl', 'pt': 'pt', 'ru': 'ru',
+             'zh-TW': 'zh-Hant', 'en-GB': 'en-GB', 'fr-CA': 'fr-CA', 'es-419': 'es-419', 'zh-Hans': 'zh-Hans', 'zh-Hant': 'zh-Hant'}
 
 def cstr(s): return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
@@ -46,6 +55,7 @@ def write_c(g, out):
           f'    .id = {cstr(g["id"])}, .title = {cstr(g["title"])}, .version = {cstr(g["version"])}, .engine = {cstr(g["engine"])},',
           f'    .program_id = 0x{int(g["program_id"], 16):016x}ull,',
           f'    .modules = {cstr(" ".join(g["modules"]))}, .main_build_id = {cstr(g["main_build_id"])}, .language = {cstr(g["language"])},',
+          f'    .languages = {cstr(" ".join(g.get("languages", [g["language"]])))},',
           f'    .screen_w = {g["screen"][0]}, .screen_h = {g["screen"][1]}, .guest_heap_mb = {g.get("guest_heap_mb", 256)},',
           '    .nvn_api_major = %s, .nvn_api_minor = %s,' % tuple(g.get('device_api', '55.15').split('.')),
           '    .nvn_c2 = {%s},' % ', '.join(f'{v[0]}, {v[1]}' for v in (g['nvn_c2']['tex'], g['nvn_c2']['samp'], g['nvn_c2']['img'])),
@@ -66,6 +76,8 @@ def write_c(g, out):
 
 if __name__ == '__main__':
     g = load(sys.argv[1])
+    if sys.argv[2] == '--get' and sys.argv[3] == 'apple_localizations':   # CFBundleLocalizations for the game's languages
+        print(' '.join(dict.fromkeys(APPLE_LOC[l] for l in g.get('languages', [g['language']])))); sys.exit(0)
     if sys.argv[2] == '--get':
         v = g
         for k in sys.argv[3].split('.'): v = v[k]

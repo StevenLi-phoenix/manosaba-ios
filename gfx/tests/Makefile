@@ -111,6 +111,8 @@ t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_upsoak: t_upsoak.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upsoak.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_ubren: t_ubren.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ubren.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_linkfifo: t_linkfifo.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -147,6 +149,10 @@ t_usnap: t_usnap.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_usnap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_fbx: t_fbx.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fbx.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_shmap: t_shmap.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_shmap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_cmdalloc: t_cmdalloc.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_cmdalloc.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_extent: t_extent.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_extent.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_passgpu: t_passgpu.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -204,6 +210,9 @@ run: \
 	t_feedback_pool \
 	t_fout \
 	t_fbx \
+	t_shmap \
+	t_cmdalloc \
+	t_upsoak \
 	t_fuse_check \
 	t_gputime \
 	t_hmap \
@@ -301,8 +310,13 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_usnap
 	./t_ussort
 	MTL_DEBUG_LAYER=1 ./t_visibility
+	DM_NVN_UB_RENAME=0 ./t_nvn > t_nvn_norename.log 2>&1 && tail -1 t_nvn_norename.log || { grep "✗" t_nvn_norename.log; tail -1 t_nvn_norename.log; exit 1; }   # uniform updates copied on the GPU timeline (plan item 179)
 	MTL_DEBUG_LAYER=1 ./t_fbx
 	DM_NVN_FBX=all MTL_DEBUG_LAYER=1 ./t_fbx
+	DM_NVN_FBX=split MTL_DEBUG_LAYER=1 ./t_fbx
+	@if echo "$(CFLAGS)" | grep -q DM_NVN_M3; then DM_TEST_NO_RESIDENCY_SET=1 MTL_DEBUG_LAYER=1 ./t_fbx > t_fbx_noset.log 2>&1; \
+	  if ! grep -q "no residency set: " t_fbx_noset.log || ! grep -q "10 checks, 0 failed" t_fbx_noset.log; then cat t_fbx_noset.log; echo "t_fbx without a residency set (plan item 176): failed"; exit 1; fi; \
+	  echo "t_fbx without a residency set (a virtual GPU's path, plan item 176): 10 checks, 0 failed"; fi
 	MTL_DEBUG_LAYER=1 ./t_extent
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_passgpu
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_pairs
@@ -310,6 +324,9 @@ run: \
 	./t_present_vp
 	./t_feedback_pool
 	MTL_DEBUG_LAYER=1 ./t_border
+	TMPDIR=. ./t_shmap
+	TMPDIR=. ./t_cmdalloc
+	./t_upsoak
 	MTL_DEBUG_LAYER=1 ./t_fout
 	MTL_DEBUG_LAYER=1 ./t_rtheap
 	./t_linkfifo

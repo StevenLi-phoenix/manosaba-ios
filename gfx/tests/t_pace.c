@@ -74,6 +74,20 @@ int main(void) {
         int got = nvn_uncapped_hz(u[i].rt, u[i].phz, u[i].unc, u[i].cap, u[i].disp), ok = got == u[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", u[i].why, u[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
+    // ProMotion (nvn_promotion_hz, plan item 172): 120 while a 120 Hz screen runs at 120, for a game stepping by the measured time only; a game
+    // stepping per frame (-DDM_TEST_PROMOTION_ANY_STEP) at 120 fails 1
+    struct { int rt; const char *phz, *pro; int disp, now, want; const char *why; } pm[] = {
+        {1, NULL, NULL, 120, 120, 120, "a real-time step on a 120 Hz screen running at 120: 120"},
+        {1, NULL, NULL, 120, 60, 60, "... the screen at 60 (Low Power Mode): 60"},
+        {0, NULL, NULL, 120, 120, 0, "a step per frame (manosaba): left at 60"},
+        {1, NULL, NULL, 60, 60, 0, "a 60 Hz screen: left alone"},
+        {1, "90", NULL, 120, 120, 0, "DM_PRESENT_HZ asked for: left alone"},
+        {1, NULL, "0", 120, 120, 0, "DM_PROMOTION=0: left alone"},
+    };
+    for (int i = 0; i < (int)(sizeof pm / sizeof *pm); i++) {
+        int got = nvn_promotion_hz(pm[i].rt, pm[i].phz, pm[i].pro, pm[i].disp, pm[i].now), ok = got == pm[i].want; n++;
+        printf("%-72s expected %3d → got %3d %s\n", pm[i].why, pm[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
     // Display-link ticks a frame takes (nvn_link_step, plan item 123); the old step (-DDM_TEST_LINK_STEP_FIXED, the interval whatever the link's
     // rate) fails the three power-saving cases at interval 2, 3 and 4
     struct { unsigned itv, hz, lhz, want; const char *why; } k[] = {

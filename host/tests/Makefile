@@ -68,6 +68,10 @@ run: \
 	$(B)/t_oe_unlocked \
 	$(B)/t_movie_fps \
 	$(B)/t_movie_fps_any \
+	$(B)/t_survey \
+	$(B)/t_lang \
+	$(B)/t_lang_region \
+	$(B)/t_survey_cols \
 	$(B)/t_options \
 	$(B)/t_options_nocheck \
 	$(B)/t_padmap \
@@ -76,9 +80,11 @@ run: \
 	$(B)/t_relr \
 	$(B)/t_relr_unchecked \
 	$(B)/t_romfs_validate \
+	$(B)/t_romfs_validate_nokeys \
 	$(B)/t_rundiag \
 	$(B)/t_rundiag_nokeep \
 	$(B)/t_rundiag_head \
+	$(B)/t_rundiag_noredact \
 	$(B)/t_sead \
 	$(B)/t_sead_broken \
 	$(B)/t_sleep \
@@ -100,6 +106,8 @@ run: \
 	$(B)/t_touchpad_rehit \
 	$(B)/t_touchpad_sensafter \
 	$(B)/t_touchpad_custom \
+	$(B)/t_touchpad_nowin \
+	$(B)/t_touchpad_ctlconnect \
 	$(B)/t_watchdog \
 	$(B)/t_watchdog_nobg
 	$(B)/t_altstack
@@ -249,6 +257,16 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "main+0x770f04 .*✗" $(B)/t_movie_fps_any.log; then \
 	   cat $(B)/t_movie_fps_any.log; echo "t_movie_fps_any: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_movie_fps_any: holding every cutscene holds the prologue's real-time one too, as expected"
+	TMPDIR="$(abspath $(B))" $(B)/t_survey
+	$(B)/t_lang
+	@status=0; $(B)/t_lang_region > $(B)/t_lang_region.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_lang_region.log)" -ne 5 ]; then \
+	   cat $(B)/t_lang_region.log; echo "t_lang_region: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_lang_region: the language alone loses Traditional Chinese, British English, Canadian French and Latin American Spanish, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_survey_cols > $(B)/t_survey_cols.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_survey_cols.log)" -ne 1 ] || ! grep -q "the rotation's rows.*✗" $(B)/t_survey_cols.log; then \
+	   cat $(B)/t_survey_cols.log; echo "t_survey_cols: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_survey_cols: a transposed rotation turns Link the wrong way, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_options 2>/dev/null
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_options_nocheck > $(B)/t_options_nocheck.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ c with a row" $(B)/t_options_nocheck.log; then \
@@ -266,6 +284,10 @@ run: \
 	   cat $(B)/t_relr_unchecked.log; echo "t_relr_unchecked: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_relr_unchecked: a RELR table applied unchecked writes wherever its words say, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate_nokeys > $(B)/t_romfs_validate_nokeys.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL marker: a key file cut short" $(B)/t_romfs_validate_nokeys.log; then \
+	   cat $(B)/t_romfs_validate_nokeys.log; echo "t_romfs_validate_nokeys: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_romfs_validate_nokeys: a marker trusted for the key files too lets a cut-short key file through, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_rundiag
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rundiag_nokeep > $(B)/t_rundiag_nokeep.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ its log kept as boot.interrupted.txt" $(B)/t_rundiag_nokeep.log; then \
@@ -275,6 +297,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ ... and gives its last 8 MiB exactly" $(B)/t_rundiag_head.log; then \
 	   cat $(B)/t_rundiag_head.log; echo "t_rundiag_head: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_rundiag_head: the start of a long log misses its last lines, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rundiag_noredact > $(B)/t_rundiag_noredact.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_rundiag_noredact.log)" -ne 3 ]; then \
+	   cat $(B)/t_rundiag_noredact.log; echo "t_rundiag_noredact: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_rundiag_noredact: an unredacted report gives away paths, addresses and the user, as expected"
 	$(B)/t_sead 2>/dev/null
 	@status=0; $(B)/t_sead_broken > $(B)/t_sead_broken.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ an address past A's end" $(B)/t_sead_broken.log; then \
@@ -321,9 +347,17 @@ run: \
 	   cat $(B)/t_touchpad_sensafter.log; echo "t_touchpad_sensafter: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_touchpad_sensafter: a sensitivity applied after saturation never lets 0.5× turn at full speed, as expected"
 	@status=0; $(B)/t_touchpad_custom > $(B)/t_touchpad_custom.log 2>/dev/null || status=$$?; \
-	 if [ "$$status" -ne 1 ] || ! grep -q "t_touchpad: 53 checks, 5 failed" $(B)/t_touchpad_custom.log; then \
+	 if [ "$$status" -ne 1 ] || ! grep -q "t_touchpad: 64 checks, 5 failed" $(B)/t_touchpad_custom.log; then \
 	   cat $(B)/t_touchpad_custom.log; echo "t_touchpad_custom: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_touchpad_custom: the default layout whatever the customization fails 5 layout checks, as expected"
+	@status=0; $(B)/t_touchpad_nowin > $(B)/t_touchpad_nowin.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "t_touchpad: 64 checks, 3 failed" $(B)/t_touchpad_nowin.log; then \
+	   cat $(B)/t_touchpad_nowin.log; echo "t_touchpad_nowin: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_touchpad_nowin: the window controls ignored put ZL under them on the three iPads that have them, as expected"
+	@status=0; $(B)/t_touchpad_ctlconnect > $(B)/t_touchpad_ctlconnect.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "t_touchpad: 64 checks, 1 failed" $(B)/t_touchpad_ctlconnect.log; then \
+	   cat $(B)/t_touchpad_ctlconnect.log; echo "t_touchpad_ctlconnect: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_touchpad_ctlconnect: hidden as soon as a controller connects, as before, fails the controller check, as expected"
 	$(B)/t_watchdog
 	@status=0; $(B)/t_watchdog_nobg > $(B)/t_watchdog_nobg.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ away" $(B)/t_watchdog_nobg.log; then \
@@ -536,6 +570,10 @@ $(B)/t_touchpad_sensafter: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../d
 	clang -O1 -Wall -Werror -DDM_TEST_TP_SENS_AFTER -I.. -o $@ t_touchpad.c
 $(B)/t_touchpad_custom: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_CUSTOM_IGNORED -I.. -o $@ t_touchpad.c
+$(B)/t_touchpad_nowin: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_TP_NO_WINDOW -I.. -o $@ t_touchpad.c
+$(B)/t_touchpad_ctlconnect: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_TP_CTL_ON_CONNECT -I.. -o $@ t_touchpad.c
 $(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
 $(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)
@@ -550,6 +588,14 @@ $(B)/t_oe_unlocked: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OE_EVENT_UNLOCKED -I.. -o $@ t_oe.c ../game.c $(GEN)
 $(B)/t_oe_noop: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game.c $(GEN)
+$(B)/t_lang: t_lang.c ../lang.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_lang.c
+$(B)/t_lang_region: t_lang.c ../lang.h | $(B)
+	clang -O1 -Wall -Werror -I.. -DDM_TEST_LANG_REGION_IGNORED -o $@ t_lang.c
+$(B)/t_survey: ../../games/totk/tests/t_survey.c ../../games/totk/survey.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -I.. -o $@ ../../games/totk/tests/t_survey.c
+$(B)/t_survey_cols: ../../games/totk/tests/t_survey.c ../../games/totk/survey.c ../dm.h ../game.h | $(B)
+	clang -O1 -Wall -I.. -DDM_TEST_SURVEY_COLUMNS -o $@ ../../games/totk/tests/t_survey.c
 $(B)/t_movie_fps: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ ../../games/totk/tests/t_movie_fps.c
 $(B)/t_movie_fps_any: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)
@@ -560,12 +606,16 @@ $(B)/t_quitwait_old: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_QUIT_NO_SECTION -I.. -o $@ t_quitwait.c
 $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
+$(B)/t_romfs_validate_nokeys: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_ROMFS_MARKER_NO_KEYS -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
 $(B)/t_rundiag: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_rundiag.c
 $(B)/t_rundiag_nokeep: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_NO_KEEP -I.. -o $@ t_rundiag.c
 $(B)/t_rundiag_head: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_HEAD -I.. -o $@ t_rundiag.c
+$(B)/t_rundiag_noredact: t_rundiag.c ../rundiag.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_RUNDIAG_NO_REDACT -I.. -o $@ t_rundiag.c
 $(B)/t_stickdir: t_stickdir.c ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_stickdir.c
 $(B)/t_stickdir_none: t_stickdir.c ../dm_input.h | $(B)

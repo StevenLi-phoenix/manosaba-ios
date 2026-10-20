@@ -7,6 +7,7 @@
   "modules": ["main", "sdk", "subsdk0"],
   "main_build_id": "277178b7dba1b6d4949a84778d4abc58",
   "language": "zh-Hant",
+  "languages": ["ja", "en-US", "en-GB", "fr", "fr-CA", "de", "it", "es", "es-419", "nl", "ru", "ko", "zh-Hans", "zh-Hant"],
   "screen": [1920, 1080],
   "guest_heap_mb": 256,
   "npdm": {"system_resource_size": "0x1800000", "thread_priority": [28, 59]},

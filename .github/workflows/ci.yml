@@ -4,7 +4,8 @@
 # (make -C host/tests run-ubsan) and the tool tests (tools/tests; t_rewriter_synth.py runs the rewriter, verify/structck.py and verify/equiv.py on a
 # synthetic module, so lz4 and unicorn are installed too); every tracked file passes the public-content audit (tools/audit_public.py: no
 # game data, keys or binaries; the repository is public). The graphics tests (gfx/tests, Metal 4 and Metal 3 on a real GPU) and the game runs stay
-# local (DEVELOPMENT.md). Nothing is uploaded or published.
+# local (DEVELOPMENT.md); the Metal 3 ones can also run by hand on the runner's virtual GPU (job gfx-m3, plan item 176: it has no residency sets,
+# so the graphics layer takes the Metal 3 path's declarations, as GirlNet's d2r-mobile CI run 39352965249 does). Nothing is uploaded or published.
 name: CI
 on:
   push:
@@ -43,3 +44,14 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install -q --disable-pip-version-check capstone==5.0.9 numpy==2.4.4 lz4==4.4.5 unicorn==2.1.4
           rc=0; for t in tools/tests/t_*.py; do echo "=== $t"; "$RUNNER_TEMP/venv/bin/python" -I "$t" || rc=1; done; exit $rc
+  gfx-m3:
+    # By hand only (Actions → CI → Run workflow) until the tests that pass on the virtual GPU are known; then it can join the push checks
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - name: Metal device
+        run: system_profiler SPDisplaysDataType | sed -n '1,20p'
+      - name: Metal 3 graphics tests on the virtual GPU
+        run: make -j"$(sysctl -n hw.ncpu)" -C gfx/tests run-m3

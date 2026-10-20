@@ -10,6 +10,7 @@ typedef struct {
     const char *modules;                      // default module list, space separated ("main sdk subsdk0")
     const char *main_build_id;                // NSO build id of the supported main (hex)
     const char *language;                     // nn::oe::GetDesiredLanguage default (DM_LANG overrides)
+    const char *languages;                    // the game's languages, space-separated nn::settings codes (game.json "languages"; host/lang.h)
     int screen_w, screen_h;                   // console output size the game renders at (touch space until the game sets a crop)
     unsigned guest_heap_mb;                   // heap region on iOS; the rest of the address space reservation goes to the alias region
     int nvn_api_major, nvn_api_minor;         // NVN API version nvnDeviceGetInteger reports (game.json device_api "major.minor")
@@ -53,6 +54,12 @@ int dm_game_realtime_step(void);            // 1: the game's step follows the me
 // nn::oe::SetUserInactivityDetectionTimeExtended(on) from the guest return address ra (host/hle_oe.c): the frame rate to hold until the next call,
 // 0 = none (weak default: 0). Tears of the Kingdom holds its pre-rendered movies at 30 (games/totk/movie_fps.c, plan item 130)
 int dm_game_inactivity_fps(int on, uint64_t ra);
+// A command channel line the host does not know (host/cmdchan.c): 0 not the game's, 1 the game's (run = 0: only checked when the line is read;
+// run = 1: run, the game logs the outcome). Tears of the Kingdom's survey (games/totk/survey.c, plan item 167)
+int dm_game_command(const char *line, int run);
+// On the game's thread right after it waited for its window image (nvnSyncWait on the sync of the last nvnWindowAcquireTexture, gfx/nvn/hle_nvn.c,
+// whose weak default this is): between two frames, where a game may act on its own objects
+void dm_game_frame_sync(void);
 
 // Services for game hooks (hle_fs.c)
 const char *dm_save_workdir(void);            // working directory of the transactional save (the copy the game reads and writes); NULL when none is mounted

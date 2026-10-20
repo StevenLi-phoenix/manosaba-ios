@@ -1,4 +1,5 @@
-// RomFS check (romfs_validate.c) against a profile of its own: two key files with exact sizes, and a tree "Data" of 3 files / 10 bytes.
+// RomFS check (romfs_validate.c) against a profile of its own: two key files with exact sizes, and a tree "Data" of 3 files / 10 bytes; the marker
+// (plan item 175) trusted after one walk, the key files checked every time. A marker trusted for the key files too (-DDM_TEST_ROMFS_MARKER_NO_KEYS): 1 fails.
 #include "../romfs_validate.h"
 #include "../game.h"
 #include <stdio.h>
@@ -36,6 +37,22 @@ int main(void) {
     CHECK(dm_romfs_report(R, rep, sizeof rep) == 0, "report of a complete RomFS: %s", rep);
     put("Data/.DS_Store", "finder");
     CHECK(dm_romfs_validate(R, why, sizeof why), "dot files are not counted: %s", why);
+    // The marker (plan item 175): walked once, then trusted; the key files checked every time; a change in the tree directory, another version's
+    // marker or DM_ROMFS_RECHECK=1 walk again; a failed check removes it
+    char mk[600]; snprintf(mk, sizeof mk, "%s.marker", R); int w;
+    CHECK(dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w && !access(mk, F_OK), "marker: the first check walks the tree and writes it: %s", why);
+    CHECK(dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && !w && strstr(why, "verified before"), "marker: the next one trusts it: %s", why);
+    put("Data/a.bin", "abc");
+    CHECK(!dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && strstr(why, "Data/a.bin is 3 bytes"), "marker: a key file cut short is still refused: %s", why);
+    put("Data/a.bin", "abcd"); dm_romfs_validate_marked(R, mk, why, sizeof why, &w);
+    put("Data/d.bin", "x"); usleep(10000);
+    CHECK(!dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w && strstr(why, "should be 3 files"), "marker: a file added to the tree directory walks it again (refused): %s", why);
+    char rm[1200]; snprintf(rm, sizeof rm, "%s/Data/d.bin", R); unlink(rm);
+    CHECK(access(mk, F_OK) && dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w, "marker: removed by the failed check, written again by the next good one: %s", why);
+    FILE *mf = fopen(mk, "w"); fputs("test 0.9 3 10 dev=0 ino=0 mtime=0.0\n", mf); fclose(mf);
+    CHECK(dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w, "marker: another version's marker walks again");
+    setenv("DM_ROMFS_RECHECK", "1", 1);
+    CHECK(dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w, "marker: DM_ROMFS_RECHECK=1 walks again"); unsetenv("DM_ROMFS_RECHECK"); unlink(mk);
     printf("t_romfs_validate: %d/%d passed\n", checks - fails, checks);
     char cmd[600]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", R); system(cmd);
     return fails != 0;

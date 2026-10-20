@@ -2,6 +2,7 @@
 // or on-screen controls for a game steered with a controller (game.json touch "pad", host/touchpad.c); game controllers; the software keyboard
 // dialog; scene lifecycle, audio session and thermal logging. main.m builds the window and forwards the scene events to front_ios_focus_event.
 #import <UIKit/UIKit.h>
+#import <UIKit/UIGestureRecognizerSubclass.h>   // DmAnyTouch sets its own state
 #import <AVFoundation/AVFoundation.h>
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
@@ -134,8 +135,11 @@ static UIViewController *top_controller(void);
     return self;
 }
 - (void)relayout {
-    UIEdgeInsets in = self.safeAreaInsets; CGSize b = self.bounds.size;
-    tp_layout((float)b.width, (float)b.height, (float)in.left, (float)in.top, (float)in.right, (float)in.bottom);
+    UIEdgeInsets in = self.safeAreaInsets; CGSize b = self.bounds.size; float wt = 0;
+    if (@available(iOS 26.0, *)) {   // the iPadOS window controls in the top-left corner (plan item 171, as Touchable reads them): the left column goes below
+        UIViewLayoutRegion *rg = [UIViewLayoutRegion safeAreaLayoutRegionWithCornerAdaptation:UIViewLayoutRegionAdaptivityAxisVertical];
+        wt = (float)[self edgeInsetsForLayoutRegion:rg].top; }
+    tp_layout((float)b.width, (float)b.height, (float)in.left, (float)in.top, (float)in.right, (float)in.bottom, wt);
     [self setNeedsDisplay];
 }
 - (void)layoutSubviews { [super layoutSubviews]; [self relayout]; }
@@ -330,10 +334,23 @@ static int pad_wanted(void) {
     if (e && !strcmp(e, "screen")) return 0;
     return dm_game.touch_pad;
 }
-static void pad_follow_controllers(void) {   // main thread: off while a controller with an extended profile is connected
+// A game controller (plan item 171, after Touchable): connecting one leaves the controls; a key on it hides them (dm_front_controller_key, host/
+// gamepad.m); a touch anywhere (DmAnyTouch on the screen's view) or the last controller gone shows them again (tp_controller)
+static void pad_ctl_apply(int hidden) { if (!g_pad) return; g_pad.hidden = hidden; [g_pad setNeedsDisplay]; }
+static void pad_follow_controllers(void) {   // main thread
     int ctl = 0; for (GCController *c in GCController.controllers) ctl |= c.extendedGamepad != nil;
-    tp_enable(!ctl); g_pad.hidden = ctl; [g_pad setNeedsDisplay];
+    pad_ctl_apply(tp_controller(ctl ? TP_CTL_CONNECT : TP_CTL_GONE));
 }
+void dm_front_controller_key(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (g_pad && !g_pad.hidden) pad_ctl_apply(tp_controller(TP_CTL_KEY)); }); }
+@interface DmAnyTouch : UIGestureRecognizer
+@end
+@implementation DmAnyTouch
+- (void)touchesBegan:(NSSet<UITouch *> *)t withEvent:(UIEvent *)e {
+    (void)t; (void)e;
+    if (g_pad && g_pad.hidden) pad_ctl_apply(tp_controller(TP_CTL_TOUCH));
+    self.state = UIGestureRecognizerStateFailed;   // only watches: the touch goes on to the views
+}
+@end
 
 // Frame rate hint for ProMotion screens: 60 Hz, or 30 Hz while the graphics layer is in its power-saving mode
 // System volume changes are logged with the time since the display link's last callback: after a volume button press the display link was seen to
@@ -350,10 +367,17 @@ double mtl_link_tick_age_ms(void);
 @interface DmRateHint : NSObject
 - (void)tick:(CADisplayLink *)l;
 @end
+// A game stepping by the measured time asks a ProMotion screen for 80-120 Hz and tells the graphics layer the rate it runs at (plan item 172,
+// nvn_display_rate_now); 60 or 30 otherwise
+void nvn_display_rate_now(int now_hz);
+int dm_game_realtime_step(void);
 @implementation DmRateHint
 - (void)tick:(CADisplayLink *)l {
     static int last = -1; int f = mtl_fps_target();
-    if (f != last) { last = f; l.preferredFrameRateRange = f == 30 ? CAFrameRateRangeMake(30, 30, 30) : CAFrameRateRangeMake(60, 60, 60); }
+    int pro = f != 30 && UIScreen.mainScreen.maximumFramesPerSecond >= 120 && dm_game_realtime_step() && !getenv("DM_PRESENT_HZ") && !(getenv("DM_PROMOTION") && !strcmp(getenv("DM_PROMOTION"), "0"));
+    int want = pro ? 120 : f;
+    if (want != last) { last = want; l.preferredFrameRateRange = want == 120 ? CAFrameRateRangeMake(80, 120, 120) : want == 30 ? CAFrameRateRangeMake(30, 30, 30) : CAFrameRateRangeMake(60, 60, 60); }
+    if (pro) { double d = l.targetTimestamp - l.timestamp; if (d > 0) nvn_display_rate_now((int)lround(1.0 / d)); }
 }
 @end
 static CADisplayLink *g_rate_link;
@@ -371,6 +395,8 @@ UIView *front_ios_view(CGRect frame, CGFloat scale) {
         for (NSNotificationName n in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
             [nc addObserverForName:n object:nil queue:mq usingBlock:^(NSNotification *x) { (void)x; pad_follow_controllers(); }];
         pad_follow_controllers();
+        DmAnyTouch *any = [[DmAnyTouch alloc] initWithTarget:nil action:nil]; any.cancelsTouchesInView = NO; any.delaysTouchesBegan = NO; any.delaysTouchesEnded = NO;
+        [box addGestureRecognizer:any];
         LOG("front: on-screen controls (touch \"pad\"%s)", getenv("DM_TOUCH") ? ", from DM_TOUCH" : "");
     }
     g_panel_tap = [DmPanelTap new];   // a three-finger tap opens the settings panel in any game (plan item 148); the touches still reach the game

@@ -1906,26 +1906,97 @@ Tier 3d, Tears of the Kingdom:
   (`DM_MODS`, `DM_FS=1`): a mod carrying the original archive → opened from the overlay; one with a texture byte changed and its merge →
   opened from `-merged`; the same without the merge → the mod's copy and the red line. On iOS the merge is made on a Mac and copied to
   `Documents/mods/-merged`
-- [ ] 165 decals that read their own G-buffer pass: one split per run (MacNativeGames PR #67), judged in motion against footage (with 42 / 113)
-- [ ] 166 a three-hour soak of the 60 fps product before 151 (MacNativeGames #57, #72, #74; upstream #90)
-- [ ] 167 a teleport command for fixed-point soaks and shader coverage (MacNativeGames d164868 `world_survey.c`; needs an overworld save)
-- [ ] 168 a second BC4 encoder in the agl library, as nxnative found in Breath of the Wild (b932024)
+- [x] batch 53 · 165 decals that read their own G-buffer pass, a switch (`DM_NVN_FBX=split`; MacNativeGames PR #67, open, MIT, written anew in
+  `fbx_prepare`): no copies; the pass is stored and reopened before a draw that samples an attachment holding pixels newer than memory: cleared at
+  load, written by a draw that samples none of the pass's attachments (`sd_att.pw`), or written by any draw before a texture-invalidating barrier
+  (as item 42's copies); a run of sampling draws (the decals) shares one split; a clear still pending before the pass opens is flushed first. The
+  cliff save: 84 draws a frame sample their pass, 3 splits a frame (the PR measured about 3), GPU p50 6.0 against 5.9 ms (noise about 3 %); the
+  prologue: no split at all (its self-sampling draws open their passes), s1300 and s1800 inside the console footage's ranges as the default's are.
+  Default off: the ghosting it fixes shows in motion at a place with ground decals, which needs footage and a save there. `t_fbx` split set (14,
+  Metal 4 and 3, API validation: one split before the reading draw, a run of two shares it, a plain draw between makes two, the first draw of a
+  pass none, a pending clear flushed, a barrier between two reading draws splits; a split before every reading draw fails 2). To check (the user):
+  a turning camera over paved ground or decals (Hyrule Castle courtyard in the PR) with and without the switch
+- [ ] 166 a three-hour soak of the 60 fps product before 151 (MacNativeGames #57, #72, #74; upstream #90). First run (batch 53's tools:
+  `tools/soak.py run --input` repeats a cycle of command channel lines around the screenshots, `--input-after` from a second on; `games/totk/
+  soak_walk.cmd` walks Link round a square with jumps; `t_soak` +3, key presses taking no time fails 2): the cliff save at 120 fps stopped after
+  47 min with `FATAL GPU allocated 6555 MB, above the budget of 6553 MB` (MacNativeGames #72's stop, there after 2 h 43 min); footprint +5.4 GB/h.
+  The memory line names it: render targets of virtual pools, 3,185 made and all alive with textures of their own (3.6 GB at 40 min): the game
+  keeps those texture objects (on the console they only alias its 111 MiB pool), each one a Metal texture here. Item 138's `DM_NVN_RT_HEAP=1`
+  bounds them to a heap of 1.25 × the pool; next: the same soak with it, then its default (on iOS the TBDR rewrites turn it off)
+- [x] batch 53 · 167 a teleport command (`games/totk/survey.c`, `DM_SURVEY=1`; MacNativeGames d164868 `world_survey.c`, MIT: its 1.4.3
+  addresses, actor layout and bounds as data, written anew): `survey pos <tag>` / `survey move <tag> X Y Z <frames>` on the command channel (a
+  new hook `dm_game_command` takes lines the host does not know, checked when read), run at the frame point (new hook `dm_game_frame_sync`: the
+  game's thread right after nvnSyncWait on the last acquire sync, main 0x2db958) through the game's forceSetMatrix (main 0x45ce70, its first
+  four words checked; the same in our NSO and product), the player found from the scene slot with guest reads through mach_vm_read_overwrite.
+  On the cliff save: Link at (373.4, 2332.8, 1564.8) moved to (393.4, 2362.8, 1564.8) in 3 frames, then falling (2358.4 a second later), the
+  shot shows him skydiving; a bad tag refused in red. `t_survey` (10 against a scene built in memory: forceSetMatrix's words, bad lines taken
+  but not queued, pos, the move's matrix rows, three calls then done, busy, no player, NaN rotation; the rotation transposed fails 1),
+  `t_cmdchan` (+1: a game's line checked when read and run as the game's). An overworld save is still needed for towns (the user)
+- [-] batch 53 · 168 measured: no second BC4 encoder in Tears of the Kingdom's runs. A census of texture type mismatches (`ttm_note`: each
+  shader, stage, slot, declared and bound type logged once) over the prologue and the cliff save: 2D against 2D array both ways (handled by
+  `tex_fit`), and one kind left: pixel shaders 5a5f059e21372e70, 8cac072f6f952665 and dd129a59ab3a409b declare slot 9 as texture3d and get the
+  4x4 RGBA8 texture 258, sampled for .x inside a branch (no visible effect found). The BC4 encoders (0544282c162305db and kin, texture3d) are bound
+  3D here; MacNativeGames' shared list shows them on 2D textures elsewhere in the game: a 2D-to-3D copy waits for a scene that shows it
 
 Tier 3d, iOS, Mac and tooling:
-- [ ] 169 shader functional keys: what the translator reads (stage, sizes, code, workgroup) as a fallback key (Touchable; manosaba's 2,740 shaders
-  are 1,299 functionally, measured on our capture)
-- [ ] 170 the game language from iOS Settings' per-app language, mapped to Nintendo's codes (Touchable)
-- [ ] 171 the touch controls below the iPadOS 26 window controls, hidden only after a controller key press, tested on a table of device sizes
-  (Touchable; with 148)
-- [ ] 172 ProMotion 120 Hz for a game that steps by real time (Touchable; manosaba to check first)
-- [ ] 173 install: profile expiry and device checks, the saves backed up first (Touchable's launcher)
-- [ ] 174 the iOS shader directory checked complete before packing (acnh-mobile 67afe52)
-- [ ] 175 the game data verified once, then a marker (super-mario-odyssey-ios ea19678; for 62e), keeping the key-file checks
-- [ ] 176 the Metal 3 gfx tests in CI on GitHub's paravirtual GPU, with residency-set creation falling back (GirlNet's CI run 39352965249)
-- [ ] 177 the GPU one frame behind the game, measured first (LASRecomp dc1d28f: 27.6 → 60 fps at 5K on an M3 Max; for 97 / 142 / 153)
-- [ ] 178 the diagnostics export redacted (lordran 40a9a72); memory sampled every 60 frames with the command allocators (lordran 24740d4; 62f)
+- [x] batch 53 · 169 shader functional keys as a fallback (Touchable's internal/tools/shader_keys.py, MIT, written anew): sha256 of {stage, the
+  constants' start − the code's start, the end − the constants' start, a compute workgroup} and the code from its start to its end (control +0x700
+  / 0x704 / 0x708 / 0x714 / 0x748), computed at SetShaders (`shader_fkey`) and kept by program serial in a side table (`mtl_prog_fkeys`: lordran
+  94a6307 found a game whose NVNprogram is smaller than the header's 0xC0, so prog_t does not grow); `shmap_from_capture.py` writes it as the shader
+  map's third column; a key not in the map takes the first key with its functional key (`shmap_resolve`, logged once). manosaba 2,740 shaders →
+  1,299 functional keys, Tears of the Kingdom 28,652 → 25,320 (its static shaders are all captured, so nothing is rescued there today). Maps
+  regenerated in the workspace (keys and stages unchanged). `t_nvn` 5c (+5: the host's value equals the map tool's for the same bytes, metadata
+  does not change it, a constant byte does, compute workgroup, a stage it does not take), `t_shmap` (5: itself, the twin, none, the table, the
+  side table; no fallback fails 1), `tools/tests/t_shmap_fkey.py` (6; the workgroup left out fails 1)
+- [x] batch 53 · 170 the game language from the app's own language setting (Touchable's switch_language / CFBundleLocalizations, MIT, written
+  anew): game.json `languages` (nn::settings codes, checked by `gen_game.py`; manosaba zh-Hans and zh-Hant, its StreamingAssets/config.json;
+  Tears of the Kingdom 14 from its Mals regions, Portuguese left out: USpt's code is not in this SDK's list) → `CFBundleLocalizations`
+  (`ios/tools/project_lang.py`, Apple's names), so Settings > Apps > <game> > Language offers them; at launch the first preferred language maps
+  through `host/lang.h` (script and region: zh-Hant / TW / HK / MO, en-GB for GB IE AU NZ ZA, fr-CA, es-419 for Latin America) to DM_LANG when the
+  game has it, else the profile's. `t_lang` (6; the language alone fails 5), `tools/tests/t_game_lang.py` (8; codes not checked fails 2). To check
+  (the user): the Language row in Settings and the game's text after a change
+- [x] batch 53 · 171 the touch controls below the iPadOS window controls and controllers (Touchable, MIT, written anew): `tp_layout` takes the
+  window controls' bottom (iOS 26 `UIViewLayoutRegion safeAreaLayoutRegionWithCornerAdaptation:`) and puts the left column (ZL, L, D-pad) below
+  it, custom layouts too; a controller connected leaves the controls, a key newly pressed on it (or a stick past half way; `host/gamepad.m`
+  `dm_front_controller_key`) hides them, a touch anywhere or the last controller gone shows them (`tp_controller`). `t_touchpad` (+11: Touchable's
+  table of ten devices, each with every control inside its safe area, none overlapping and the left column below the window controls; the
+  controller sequence; the window controls ignored fails 3, hidden on connect fails 1). To check (the user): an iPad window, a controller
+- [x] batch 53 · 172 ProMotion 120 Hz for a game that steps by real time (Touchable's SS_DISPLAY_HZ=120, MIT): `nvn_promotion_hz` (Tears of
+  the Kingdom with realtime: 120 while a 120 Hz screen runs at 120, back to 60 when iOS lowers it; DM_PROMOTION=0 or DM_PRESENT_HZ leave it); the
+  rate hint asks 80-120 Hz and reports the rate it runs at (`nvn_display_rate_now`). manosaba checked first: with keys at fixed frames, frames 600
+  and 1500 at 120 Hz match those at 60 (0.17 % and 0.00 %): it steps per frame and stays at 60. `t_pace` (+6; a game stepping per frame at 120
+  fails 1). To check (the user): a ProMotion iPhone's frame rate line in Tears of the Kingdom
+- [x] batch 53 · 173 install checks (Touchable's launcher install, MIT, written anew; `ios/tools/install_check.py`): `run.sh install` refuses an
+  expired signature or a profile without this device (UDID from `devicectl list devices`), warns within two days of expiry, and backs the app's
+  Documents up with a SHA-256 manifest first when the app is installed; a failed backup stops the install. `tools/tests/t_install_check.py` (7;
+  the expiry check skipped fails 1). To check (the user): one install to the phone
+- [x] batch 53 · 174 the iOS shader directory checked complete before packing (acnh-mobile 67afe52 check_invariance, MIT;
+  `ios/tools/shader_check.py`): every map key's `_b.metallib` and json of this chain and stage, every fout key's `_i_b`; run.sh stops otherwise.
+  Found: Tears of the Kingdom's profile names manosaba's iOS directory (2,740 libraries), so its app would have been packed with none of its
+  28,652 (+23 integer variants); the check refuses it now. `tools/tests/t_shader_check.py` (6; the library check left out fails 2)
+- [x] batch 53 · 175 the game data verified once, then a marker (super-mario-odyssey-ios ea19678, MIT; `dm_romfs_validate_marked`): the key
+  files every launch, the tree walked once and then trusted while the marker matches the game, version, expected totals and the tree directory
+  (device, inode, mtime); DM_ROMFS_RECHECK=1 walks again; a failed check removes it. iOS keeps it in Application Support and logs walked / marker
+  with the time. `t_romfs_validate` (+7; a marker trusted for the key files too fails 1). To check (the user): the boot line's time on the phone
+- [x] batch 53 · 176 residency sets only on an Apple6-family GPU (GirlNet d2r-mobile 3e051f1, MIT): a virtual GPU (GitHub's runners) is Mac2
+  only; the Metal 3 path then relies on its useResource declarations (the whole Metal 3 gfx suite passes that way with DM_TEST_NO_RESIDENCY_SET=1),
+  Metal 4 stops with a clear line. CI job `gfx-m3` (by hand: Actions → CI → Run workflow) runs the Metal 3 gfx tests on the runner's virtual GPU
+  until the passing set is known. `run-m3` runs t_fbx without a set (the set made regardless fails the check of its line). Not run on GitHub yet
+- [-] batch 53 · 177 measured first (LASRecomp dc1d28f: a game that waits for its newest submission right after presenting never overlaps a
+  frame's CPU work with the last one's GPU work; they wait for the fence before the newest instead): a census in nvnSyncWait (waits, those on
+  the newest submission still on the GPU, time; a line a frame window). Tears of the Kingdom at 120 fps: 2 waits a frame, 0.17-0.20 on the newest
+  still running, 0.32-0.36 ms a frame; at 30 fps on the cliff save: none on the newest. manosaba: 4 a frame, 1.00 on the newest, 1.6-1.8 ms a frame:
+  the pattern LASRecomp fixed, with room left on the M5 at 60 fps. Not changed: whether manosaba misses frames on a phone decides it (97 / 142).
+  `t_nvn` 6i (2: a wait on the newest submission held on the GPU counted as such, the same after it completed not; counted done too fails 1)
+- [x] batch 53 · 178 the diagnostics export redacted (lordran 40a9a72's rules, MIT, written anew in `host/rundiag.h`): line by line, header
+  included: app container and bundle paths, a home folder's user, UUIDs, MAC, IPv4 and e-mail addresses; frame numbers, offsets and versions stay.
+  Memory read every 60 frames (lordran 24740d4: short spikes), the line still printed on 64 MB changes; the memory line gives the Metal 4 command
+  allocators (main, uploads, presents). `t_rundiag` (+5; nothing redacted fails 3), `t_cmdalloc` (2, Metal 4 and 3; left out fails 1)
 - [ ] 179 tests to take: overlapping `UpdateUniformBuffer` writes (Touchable), a 512 re-upload soak (lordran), the pass-continuation cases
-  (GirlNet `t_p5r_rt_continue_gpu.m`)
+  (GirlNet `t_p5r_rt_continue_gpu.m`). Batch 53 took the first two: `t_nvn` 5a2 (144 bytes, 16 at 128 and 64 at 64 over them, 128 cases × 8
+  rounds, every byte the last write's, run with renamed updates and with DM_NVN_UB_RENAME=0; the newest applied first fails 1) and `t_upsoak`
+  (512 re-uploads of a 1920x1080 texture: one upload then 511 re-uploads, at most 3 alive, the allocation flat from the 128th, none resident after
+  release; released textures left resident fails 1). The pass continuation cases are next
 - [x] batch 34 · 180 screens judged by TypeSafe's Jev model drive the test runs (the d2r-mobile author's method; the user agreed to send
   screenshots, the key stays outside the repository in `~/.config/typesafe/api_key`): `tools/jevdrive.py` follows a running host's command
   channel (`DM_CMD`, `DM_NVN_SHOT_OUT=960x540`: `shot`, ask, `key`) until a goal's done condition holds on two frames in a row; goals in

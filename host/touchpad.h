@@ -16,7 +16,9 @@ typedef struct {
 } tp_draw_state;
 enum { TP_SEL_STICK = 100 };
 
-void tp_layout(float w, float h, float safe_l, float safe_t, float safe_r, float safe_b);   // the view's size and safe area; again on any change
+// The view's size and safe area, and win_t: the top inset below the iPadOS window controls in the top-left corner (plan item 171; 0 = none): the
+// controls of the left column (ZL, L, the D-pad) go below it. Again on any change
+void tp_layout(float w, float h, float safe_l, float safe_t, float safe_r, float safe_b, float win_t);
 void tp_touch(long id, int phase, float x, float y);
 void tp_enable(int on);            // every finger released; off (a game controller is connected): nothing drawn or read
 void tp_set_hidden(int hidden);    // the eye's choice (the front end keeps it across launches)
@@ -36,6 +38,10 @@ int tp_edit_scale(float size);         // the size of the control touched last i
 float tp_edit_scale_get(void);         // its size now, 0 when none
 void tp_opacity(float a);              // drawing opacity of the controls, 0.15-1
 int tp_menu_take(void);                // 1 once after the menu button (between - and +) was tapped
+// A game controller (plan item 171, after Touchable: a key on a real controller hides the controls, a touch on the screen shows them again; one only
+// connected leaves them): returns 1 while the controls are hidden by a controller (they are also off, as tp_enable(0))
+enum { TP_CTL_CONNECT, TP_CTL_KEY, TP_CTL_TOUCH, TP_CTL_GONE };
+int tp_controller(int event);
 
 int dm_touchpad_read(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);   // hle_hid.c, the game's thread
 void dm_touchpad_selftest_start(void);   // DM_TEST_TOUCHPAD (main.c)

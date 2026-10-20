@@ -3,7 +3,9 @@
 // untouched, an older kept log replaced), and the marker is gone afterwards; the marker follows the log's rename (boot.launch.txt → boot.txt); a
 // marker naming a path outside the directory is refused. The report: a 9 MiB log gives its last 8 MiB exactly, with a note; a short log whole;
 // a missing one says so; the header first. Expected bytes are made here. Without keeping the log (-DDM_TEST_RUNDIAG_NO_KEEP) 2 fail; the start of
-// a long log instead of its end (-DDM_TEST_RUNDIAG_HEAD) 2 fail.
+// a long log instead of its end (-DDM_TEST_RUNDIAG_HEAD) 2 fail. Redaction (plan item 178): app container and bundle paths, a home folder's user,
+// UUIDs, MAC, IP and e-mail addresses replaced, in the header too; frame numbers, offsets, versions and hex left; nothing redacted
+// (-DDM_TEST_RUNDIAG_NO_REDACT) 3 fail.
 #include "../rundiag.h"
 #include <stdlib.h>
 static int n, fail;
@@ -57,7 +59,18 @@ int main(void) {
     CHECK(rep && strstr(rep, "===== small.txt =====\na short log\n"), "a short log whole");
     CHECK(rep && strstr(rep, "===== missing.txt =====\n(none: No such file or directory)\n"), "a missing log says so");
     CHECK(!exists("report.txt.tmp"), "no temporary file left");
-    free(rep); free(b);
+    // Redaction (plan item 178): what names the player or the device goes, what describes the run stays
+    const char *pv = "boot: /private/var/mobile/Containers/Data/Application/0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0/Documents/save, bundle /var/containers/Bundle/Application/AABBCCDD-1122-3344-5566-77889900AABB/DmIOS.app\n"
+                     "host /Users/alice/dm-work/build ok, /Users/Shared stays; cloud id 123e4567-e89b-12d3-a456-426614174000; wifi aa:bb:cc:dd:ee:ff at 192.168.1.20 for bob.smith+x@example.co.uk\n"
+                     "frame 1200 main+0x2db94c x18 version 26.0.1 (23A341) chain ca5eb9623812 1.4.3 10.0.0 deadbeef-1234 time 12:34:56\n";
+    put("priv.txt", pv, strlen(pv)); const char *pl[] = {"priv.txt"};
+    CHECK(rundiag_report(rp, "switches: DM_SAVE=/var/mobile/Containers/Data/Application/0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0/Documents/save\n", g_dir, pl, 1, 8 << 20) == 0, "a report of a log with private details is written");
+    char *pr = get("report.txt", &len);
+    CHECK(pr && strstr(pr, "boot: <app data>/Documents/save, bundle <app bundle>/DmIOS.app") && strstr(pr, "DM_SAVE=<app data>/Documents/save"), "app container and bundle paths, in the header too");
+    CHECK(pr && strstr(pr, "host /Users/<user>/dm-work/build ok, /Users/Shared stays") && strstr(pr, "cloud id <uuid>;") && strstr(pr, "wifi <mac> at <ip> for <email>\n"), "a home folder's user, a UUID, MAC and IP addresses, an e-mail address");
+    CHECK(pr && strstr(pr, "frame 1200 main+0x2db94c x18 version 26.0.1 (23A341) chain ca5eb9623812 1.4.3 10.0.0 deadbeef-1234 time 12:34:56\n"), "frame numbers, offsets, versions, three-part numbers, hex and times stay");
+    CHECK(pr && !strstr(pr, "alice") && !strstr(pr, "0F1E2D3C") && !strstr(pr, "example.co.uk") && !strstr(pr, "192.168"), "none of the private details left");
+    free(pr); free(rep); free(b);
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir); if (system(cmd)) {}
     printf("t_rundiag: %d checks, %d failed\n", n, fail); return fail != 0;
 }

@@ -228,6 +228,38 @@ int main(void) {
     int ub_ok = 1;
     for (int k = 0; k < 20; k++) for (int i = 0; i < 16; i++) { uint32_t w; memcpy(&w, ub + k * 64 + i * 4, 4); ub_ok &= w == (uint32_t)(k * 100 + i); }
     EXPECT("uniform buffer 20×16 words all equal the recorded values", 1, ub_ok);
+    // 5a2. Overlapping inline uniform updates (plan item 179; Touchable's internal/patches/d2r-mobile.patch t_nvn case, MIT, written anew): per case
+    //      144 bytes, then 16 at 128 and 64 at 64 over them, the caller's data scribbled after each call; 128 cases in a submission, 8 rounds with
+    //      new values; after each fence every byte is the last write's. Run with renamed updates (default) and with DM_NVN_UB_RENAME=0 (Makefile).
+    //      The newest update applied first (-DDM_TEST_UB_NEWEST_FIRST): 1 fails
+    {
+        enum { CASES = 128, ROUNDS = 8, STRIDE = 256, BYTES = 144 };
+        static uint8_t ocm[64 * 1024] __attribute__((aligned(16384)));
+        static uint8_t want[CASES][BYTES]; uint8_t base[BYTES], tail[16], mid[64], *got = poolmem + 0x10000;
+        NVNmemoryPoolBuilder opb; NVNmemoryPool op; NVNcommandBuffer ocb; P(nvnMemoryPoolBuilderSetDefaults)(&opb);
+        P(nvnMemoryPoolBuilderSetStorage)(&opb, ocm, sizeof ocm); EXPECT("5a2. command memory for the overlapping updates", 1, P(nvnMemoryPoolInitialize)(&op, &opb));
+        P(nvnCommandBufferInitialize)(&ocb, &dev); unsigned bad = 0; int waits = 1;
+        for (int r = 0; r < ROUNDS; r++) {
+            P(nvnCommandBufferAddCommandMemory)(&ocb, &op, 0, sizeof ocm); P(nvnCommandBufferBeginRecording)(&ocb);
+            for (int k = 0; k < CASES; k++) {
+                for (int i = 0; i < BYTES; i++) base[i] = (uint8_t)(r * 37 + k * 11 + i * 3);
+                for (int i = 0; i < 16; i++) tail[i] = (uint8_t)(r * 19 + k * 7 + i * 5 + 0x51);
+                for (int i = 0; i < 64; i++) mid[i] = (uint8_t)(r * 23 + k * 13 + i * 7 + 0xA3);
+                memcpy(want[k], base, 64); memcpy(want[k] + 64, mid, 64); memcpy(want[k] + 128, tail, 16);
+                NVNbufferAddress a = (NVNbufferAddress)(uintptr_t)(got + k * STRIDE);
+                P(nvnCommandBufferUpdateUniformBuffer)(&ocb, a, STRIDE, 0, BYTES, base);
+                P(nvnCommandBufferUpdateUniformBuffer)(&ocb, a, STRIDE, 128, sizeof tail, tail);
+                P(nvnCommandBufferUpdateUniformBuffer)(&ocb, a, STRIDE, 64, sizeof mid, mid);
+                memset(base, 0xEE, sizeof base); memset(tail, 0xEE, sizeof tail); memset(mid, 0xEE, sizeof mid);   // the data is the caller's again
+            }
+            NVNcommandHandle oh = P(nvnCommandBufferEndRecording)(&ocb); P(nvnQueueSubmitCommands)(&q, 1, &oh);
+            P(nvnQueueFenceSync)(&q, &sf, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0); int w = P(nvnSyncWait)(&sf, 5000000000ull); waits &= w == 0 || w == 1;
+            for (int k = 0; k < CASES; k++) for (int i = 0; i < BYTES; i++) bad += got[k * STRIDE + i] != want[k][i];
+        }
+        EXPECT("5a2. 144 bytes, 16 at 128 and 64 at 64 over them, 128 cases × 8 rounds: every byte the last write's (wrong bytes)", 0, bad);
+        EXPECT("5a2. ... every round's fence waited", 1, waits);
+        P(nvnCommandBufferFinalize)(&ocb); P(nvnMemoryPoolFinalize)(&op);
+    }
     EXPECT("event value: h1(7,+5), h2 copies then runs h1(7,+5) again = 12", 12, P(nvnEventGetValue)(&ev));
     EXPECT("buffer copy 64 B all equal", 0, memcmp(src, dst, 64));
     uint64_t ts[2]; memcpy(ts, cnt, 16);
@@ -356,6 +388,24 @@ int main(void) {
         shdump_to(dir, &sd, 0); struct stat sc, sdt;
         EXPECT("then written whole: .ctl of 0x880 bytes and .data of 0x30 + 0x40 + 0x100", 1, !stat(pc, &sc) && sc.st_size == 0x880 && !stat(pd, &sdt) && sdt.st_size == 0x170);
         unlink(pc); unlink(pd); rmdir(dir); }
+    // 5c. The functional key (hle_nvn.c shader_fkey, plan item 169) against gfx/tools/shmap_from_capture.py's for the same bytes (tools/tests/
+    //     t_shmap_fkey.py: code byte i = i * 7, the pixel shader with the code area marker and its first SPH word written over it):
+    //     a pixel shader (stage 1, code from 0x30, constants from 0x80, end 0x100) and a compute one (stage 5 from 0, workgroup 8 x 4 x 1); other
+    //     metadata in the control section does not change it, a code byte does; bounds not sane give zeros
+    {   static uint8_t ctl[0x880], code[0x200]; for (int i = 0; i < (int)sizeof code; i++) code[i] = (uint8_t)(i * 7);
+        const uint32_t marker = 0x12345678u, sph = 2 | 5 << 10; memcpy(code, &marker, 4); memcpy(code + 0x30, &sph, 4);
+        uint32_t f[4] = {0x80, 0x100, 0x30, 0}; memcpy(ctl + 0x700, f, 12); uint32_t st = 1; memcpy(ctl + 0x714, &st, 4);
+        NVNshaderData sd = {.data = (NVNbufferAddress)(uintptr_t)code, .control = ctl}; uint8_t a[8], b[8]; char h[17];
+        shader_fkey(&sd, a); for (int i = 0; i < 8; i++) snprintf(h + 2 * i, 3, "%02x", a[i]);
+        EXPECT("5c. functional key of the pixel shader as the map tool's (7c7333bea0fcafb6)", 1, !strcmp(h, "7c7333bea0fcafb6"));
+        memcpy(ctl + 0x7d0, "NVN hash", 8); shader_fkey(&sd, b); EXPECT("5c. ... other control metadata: the same", 1, !memcmp(a, b, 8));
+        code[0x90] ^= 1; shader_fkey(&sd, b); code[0x90] ^= 1; EXPECT("5c. ... a constant byte changed: another", 1, memcmp(a, b, 8) != 0);
+        for (int i = 0; i < (int)sizeof code; i++) code[i] = (uint8_t)(i * 7);   // compute: bare code
+        uint32_t g[4] = {0x80, 0x100, 0, 0}, five = 5, wg[3] = {8, 4, 1}; memcpy(ctl + 0x700, g, 12); memcpy(ctl + 0x714, &five, 4); memcpy(ctl + 0x748, wg, 12);
+        shader_fkey(&sd, a); for (int i = 0; i < 8; i++) snprintf(h + 2 * i, 3, "%02x", a[i]);
+        EXPECT("5c. functional key of the compute shader, its workgroup in it (2617563634b77c30)", 1, !strcmp(h, "2617563634b77c30"));
+        uint32_t three = 3; memcpy(ctl + 0x714, &three, 4); shader_fkey(&sd, b); uint64_t z = 0;
+        EXPECT("5c. a stage the translator does not take: zeros", 1, !memcmp(b, &z, 8)); }
     // 6. Sync / window / present
     NVNsync s1, s2; P(nvnSyncInitialize)(&s1, &dev); P(nvnSyncInitialize)(&s2, &dev);
     EXPECT("wait on a sync never fenced = FAILED(3), as the SDK says", 3, P(nvnSyncWait)(&s1, 0));
@@ -781,6 +831,21 @@ int main(void) {
             printf("    acquire took %.1f ms, early %llu\n", ms, (unsigned long long)(g_acq_early - e0));
         }
         g_acq_gpu = 0; mtl_present_flush();
+    }
+
+    // 6i. The sync-wait census (plan item 177): a wait on the newest submission's fence while the GPU still runs it (completions held back) is
+    //     counted as such; the same wait once it has completed is counted only as a wait. Counted done too (-DDM_TEST_SYNCWAIT_DONE_TOO): 1 fails
+    {
+        void mtl_test_done_hold(int on); void nvn_syncwait_stats(uint64_t out[3]);
+        mtl_wait(mtl_last_fence(), 5000000000ull);
+        NVNsync s9; P(nvnSyncInitialize)(&s9, &dev); uint64_t w0[3], w1[3], w2[3]; nvn_syncwait_stats(w0);
+        mtl_test_done_hold(1);
+        P(nvnCommandBufferBeginRecording)(&cb); P(nvnCommandBufferBarrier)(&cb, 0); NVNcommandHandle h9 = P(nvnCommandBufferEndRecording)(&cb);
+        P(nvnQueueSubmitCommands)(&q, 1, &h9); P(nvnQueueFenceSync)(&q, &s9, NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0); P(nvnQueueFlush)(&q);
+        P(nvnSyncWait)(&s9, 0); nvn_syncwait_stats(w1);
+        mtl_test_done_hold(0); mtl_wait(mtl_last_fence(), 5000000000ull); P(nvnSyncWait)(&s9, 5000000000ull); P(nvnSyncWait)(&s9, 0); nvn_syncwait_stats(w2);
+        EXPECT("6i. a wait on the newest submission still on the GPU: counted as such", 1, w1[0] - w0[0] == 1 && w1[1] - w0[1] == 1);
+        EXPECT("6i. ... the same waits once it is done: waits only", 1, w2[0] - w1[0] == 2 && w2[1] == w1[1]);
     }
 
     // 6h. The frame log's size cap (plan item 145; DM_NVN_TSV_MAX_MB=1, set at the start): filled past 1 MB, the next frame's end writes the cap

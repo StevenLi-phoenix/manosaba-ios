@@ -4,7 +4,8 @@ then stays flat with noise reads as flat, the same with 120 MB an hour of climb 
 too. Timing lines (with and without GPU time) give early and late medians; a red line first seen after the warm-up is reported, one seen before
 it (with other numbers) is not. A frame window takes the timing lines ending in it; the spread of runs; the command channel's schedule.
 The host itself is run with --host: a 10-frame window of the real host is not part of this test (it needs the game's files).
-Negative control: T_SOAK_BROKEN=1 counts the warm-up in the slope (WARMUP_FRACTION 0, WARMUP_MIN_S 0): the flat run reads as growth."""
+Negative control: T_SOAK_BROKEN=1 counts the warm-up in the slope (WARMUP_FRACTION 0, WARMUP_MIN_S 0): the flat run reads as growth.
+--input's cycle (plan item 166) with key presses taking no time (DM_TEST_SOAK_KEY_NO_TIME=1, the channel waits for them): 2 fail."""
 import os, random, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import soak
@@ -61,4 +62,17 @@ with tempfile.TemporaryDirectory() as d:
     check(f'20 minutes, 4 shots: sleep 300,000 ms and a shot four times, three frames for the last shot, then quit ({len(sc)} lines)',
           sc == ['sleep 300000', 'shot /out/soak1.png'] + ['sleep 300000', 'shot /out/soak2.png', 'sleep 300000', 'shot /out/soak3.png', 'sleep 300000', 'shot /out/soak4.png', 'wait 3', 'quit'])
     check('no shots: one sleep, then quit', soak.schedule(1, 0, '/o') == ['sleep 60000', 'wait 3', 'quit'])
+    # --input (plan item 166): a 30 s cycle (the stick up 20 s, A for 0.5 s, 9.5 s of nothing) in a minute with two shots
+    cy = soak.input_cycle(['# walk', 'down LSU', 'sleep 20000', 'up LSU', 'key A 500  # jump', 'sleep 9500', ''])
+    check('the input cycle: comments and blank lines skipped, key A takes its 500 ms', cy == [(0, 'down LSU'), (20000, None), (0, 'up LSU'), (500, 'key A 500'), (9500, None)])
+    sc = soak.schedule(1, 2, '/o', cy)
+    check(f'... a minute of it with two shots: twice round, each shot when due, then quit ({len(sc)} lines)',
+          sc == ['down LSU', 'sleep 20000', 'up LSU', 'key A 500', 'sleep 9500', 'down LSU', 'shot /o/soak1.png', 'sleep 20000', 'up LSU', 'key A 500',
+                 'sleep 9500', 'shot /o/soak2.png', 'wait 3', 'quit'])
+    check('... from second 45 on: once round, cut at the end', soak.schedule(1, 0, '/o', cy, 45) == ['sleep 45000', 'down LSU', 'sleep 15000', 'wait 3', 'quit'])
+    bad = 0
+    for c in (['wait 60'], ['down LSU', 'up LSU'], ['shot /x.png']):
+        try: soak.input_cycle(c)
+        except ValueError: bad += 1
+    check('refused: wait (frames), a cycle that takes no time, other commands', bad == 3)
 print(f'== {total} checks, {fails} failed =='); sys.exit(fails != 0)

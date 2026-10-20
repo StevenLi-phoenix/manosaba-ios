@@ -4,7 +4,7 @@
 #   run.sh build              generate Gen/ and the Xcode project, build the app (log: $DM_ROOT/run/ios/build.log)
 #   run.sh ipa                the same build unsigned, packaged as $DM_ROOT/run/ios/<game>-ios26.ipa (-ios18 with DM_IOS_M3=1) to sign yourself;
 #                             DM_IPA_DATA=1 also puts the workspace's RomFS and shared fonts into the app (<game>-ios26-data.ipa)
-#   run.sh install            install the built app
+#   run.sh install            install the built app: its signature checked (expiry, this device), the app's Documents backed up first (ios/tools/install_check.py)
 #   run.sh launch [seconds]   launch it (ends a running instance), wait, then fetch Documents/boot.txt
 #   run.sh log                fetch Documents/boot.txt (or boot.launch.txt) now
 #   run.sh lifecycle [at] [len]  launch with a trip to the background simulated in the app at <at> s for <len> s (DM_TEST_BG, default 40 and 20),
@@ -42,6 +42,7 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
   # iOS shaders of the current translation chain version
   MSL=$(ws msl_ios); V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../gfx/nvn/dmsh_chain.h)
   [ -n "$V" ] && ls "$MSL/b-$V" 2>/dev/null | grep -q "_b.metallib$" || { t "[red] no iOS shaders in $MSL/b-$V (gfx/tools/dmsh_build.py with IOSOUT)"; exit 1; }
+  python3 tools/shader_check.py "$(ws shader_map)" "$MSL/b-$V" "../games/$GAME/fout.tsv" || { t "[red] build the game's iOS shaders first (gfx/tools/dmsh_build.py with IOSOUT)"; exit 1; }   # every shader of the map (plan item 174)
   cp -cR "$MSL/b-$V" Gen/msl/
   # App icon: the game's icon from the workspace (1024x1024 opaque PNG; game art is never committed); without one the app has no icon
   mkdir -p Gen/AppAssets.xcassets/AppIcon.appiconset; echo '{"info":{"version":1,"author":"xcode"}}' > Gen/AppAssets.xcassets/Contents.json
@@ -55,9 +56,10 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
   fi
   # Variants of the spec go next to project.yml (xcodegen resolves paths relative to the spec) and are removed afterwards
   SPEC=project.yml; FREE=
-  if [ "${DM_FREE_ACCOUNT:-0}" = 1 ]; then python3 tools/project_free.py $SPEC project_free.yml || exit 1; SPEC=project_free.yml; FREE=free; fi
-  if [ "${DM_IOS_M3:-0}" = 1 ]; then python3 tools/project_m3.py $SPEC project_m3.yml || { rm -f project_free.yml; exit 1; }; SPEC=project_m3.yml; fi
-  xcodegen generate -q --spec $SPEC >/dev/null; XG=$?; rm -f project_free.yml project_m3.yml
+  python3 tools/project_lang.py $SPEC project_lang.yml $(get apple_localizations) || exit 1; SPEC=project_lang.yml   # the per-app language setting (plan item 170)
+  if [ "${DM_FREE_ACCOUNT:-0}" = 1 ]; then python3 tools/project_free.py $SPEC project_free.yml || { rm -f project_lang.yml; exit 1; }; SPEC=project_free.yml; FREE=free; fi
+  if [ "${DM_IOS_M3:-0}" = 1 ]; then python3 tools/project_m3.py $SPEC project_m3.yml || { rm -f project_lang.yml project_free.yml; exit 1; }; SPEC=project_m3.yml; fi
+  xcodegen generate -q --spec $SPEC >/dev/null; XG=$?; rm -f project_lang.yml project_free.yml project_m3.yml
   [ $XG = 0 ] || { t "[red] xcodegen failed"; exit 1; }
   BN=$(git log -1 --format=%ct 2>/dev/null); [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] && BN=1; BN=${BN:-1}
   if [ "$CMD" = ipa ]; then
@@ -105,6 +107,17 @@ pull() {   # $1 = file under Documents, $2 = destination
 }
 case "$CMD" in
 install)
+  # Before installing (plan item 173, after Touchable's launcher): the signature valid and listing this device, and the app's Documents (the save)
+  # backed up with a SHA-256 manifest when the app is there already; a backup that fails stops the install
+  U=${DM_IOS_UDID:-}
+  if [ -z "$U" ]; then xcrun devicectl list devices --json-output "$R/devices.json" > /dev/null 2>&1; U=$(python3 tools/install_check.py udid "$R/devices.json" "$D"); fi
+  python3 tools/install_check.py profile "$APP" "$U" || exit 1
+  if xcrun devicectl device info apps --device "$D" --json-output "$R/apps.json" > /dev/null 2>&1 && python3 tools/install_check.py installed "$R/apps.json" "$B"; then
+    BK=$R/backup/$GAME-$(date +%Y%m%d-%H%M%S); mkdir -p "$BK"
+    xcrun devicectl device copy from --device "$D" --domain-type appDataContainer --domain-identifier "$B" --source Documents --destination "$BK" > "$R/backup.log" 2>&1 \
+      && python3 tools/install_check.py manifest "$BK" > /dev/null || { t "[red] backing up the app's Documents failed (see $R/backup.log): not installed"; exit 1; }
+    t "the app's Documents backed up to $BK ($(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$BK/manifest.json") files)"
+  fi
   xcrun devicectl device install app --device "$D" "$APP" > "$R/install.log" 2>&1 || { t "[red] install failed"; tail -5 "$R/install.log"; exit 1; }
   t "installed"; exit 0 ;;
 launch)
