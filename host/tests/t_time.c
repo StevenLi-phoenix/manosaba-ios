@@ -1,0 +1,34 @@
+// Time zone conversions (hle_time.c ToCalendarTime / ToPosixTime by the host's zone, plan item 128): acnh-mobile's dm/host/tests/t_timezone.c cases
+// (MIT, as data) with TZ set per case: the calendar, weekday, day of the year and offset of instants in Shanghai, UTC, Tokyo, Kathmandu (+5:45), New
+// York and Sydney in winter and summer, and back to the same instant; New York's 01:30 on 2026-11-01 occurring twice gives both instants in order,
+// with room for one only the earlier, with none none; 02:30 on 2026-03-08, skipped, gives none; February 30 gives none with success (the SDK's
+// documented result; acnh-mobile refuses it). Standard time only (-DDM_TEST_TOPOSIX_ONE: an hour repeated gives one, summer instants do not come back): 4 fail.
+#include "../hle_time.c"
+#include <stdio.h>
+struct dm_flags g_flag; uint64_t g_t0_ns;
+module_t g_mod[MAX_MOD]; int g_nmod;
+uint64_t guest_ns(void) { return 0; }
+static int n, fail;
+#define CHECK(c, ...) do { n++; if (c) printf("  ✓ "); else { fail++; printf("  ✗ "); } printf(__VA_ARGS__); printf("\n"); } while (0)
+static void zone(const char *z) { setenv("TZ", z, 1); tzset(); }
+int main(void) {
+    static const struct { const char *z; int64_t t; int y, mo, d, h, mi, off, wday, yday; } c[] = {
+        {"Asia/Shanghai", 1792367400, 2026, 10, 19, 7, 50, 28800, 1, 291}, {"UTC", 1792368600, 2026, 10, 19, 0, 10, 0, 1, 291},
+        {"Asia/Tokyo", 1767297600, 2026, 1, 2, 5, 0, 32400, 5, 1}, {"Asia/Kathmandu", 1780281000, 2026, 6, 1, 8, 15, 20700, 1, 151},
+        {"America/New_York", 1767268800, 2026, 1, 1, 7, 0, -18000, 4, 0}, {"America/New_York", 1782907200, 2026, 7, 1, 8, 0, -14400, 3, 181},
+        {"Australia/Sydney", 1767268800, 2026, 1, 1, 23, 0, 39600, 4, 0}, {"Australia/Sydney", 1782907200, 2026, 7, 1, 22, 0, 36000, 3, 181}};
+    for (unsigned i = 0; i < sizeof c / sizeof *c; i++) {
+        zone(c[i].z); CalendarTime ct; CalendarAdditionalInfo ai; int64_t out[2] = {0}; int32_t cnt = -1;
+        Result r1 = h_time_ToCalendarTime(&ct, &ai, &c[i].t), r2 = h_time_ToPosixTime(&cnt, out, 2, &ct);
+        CHECK(!r1 && ct.year == c[i].y && ct.month == c[i].mo && ct.day == c[i].d && ct.hour == c[i].h && ct.minute == c[i].mi && ai.offset == c[i].off && ai.wday == c[i].wday && ai.yday == c[i].yday
+              && !r2 && cnt == 1 && out[0] == c[i].t, "%-16s %lld: %04d-%02d-%02d %02d:%02d, offset %d, weekday %d, day %d, and back", c[i].z, (long long)c[i].t, ct.year, ct.month, ct.day, ct.hour, ct.minute, ai.offset, ai.wday, ai.yday);
+    }
+    zone("America/New_York"); int64_t out[2] = {0}; int32_t cnt = -1;
+    CalendarTime fall = {2026, 11, 1, 1, 30, 0, 0}, spring = {2026, 3, 8, 2, 30, 0, 0}, feb30 = {2026, 2, 30, 12, 0, 0, 0};
+    CHECK(!h_time_ToPosixTime(&cnt, out, 2, &fall) && cnt == 2 && out[0] == 1793511000LL && out[1] == 1793514600LL, "New York 2026-11-01 01:30, twice: both instants in order (%d)", cnt);
+    CHECK(!h_time_ToPosixTime(&cnt, out, 1, &fall) && cnt == 1 && out[0] == 1793511000LL, "... room for one: the earlier");
+    CHECK(!h_time_ToPosixTime(&cnt, NULL, 0, &fall) && cnt == 0, "... room for none: none");
+    CHECK(!h_time_ToPosixTime(&cnt, out, 2, &spring) && cnt == 0, "New York 2026-03-08 02:30, skipped: none");
+    CHECK(!h_time_ToPosixTime(&cnt, out, 2, &feb30) && cnt == 0, "February 30: none, with success (the SDK)");
+    printf("t_time: %d checks, %d failed\n", n, fail); return fail != 0;
+}

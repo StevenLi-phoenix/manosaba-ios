@@ -1568,7 +1568,17 @@ Tier 3c, from the deep review of 2026-10-20 (sources in that section; after 3b, 
   picture: moving the window by its title bar did nothing), one on the black bars is still no touch (`host/mouse_route.h`; `t_mouse_route`, 9; the
   old routing fails 3); App Nap held off while a window runs (`beginActivityWithOptions` user-initiated, latency-critical; blade2-mobile: a hidden
   window without sound turned a 10 ms sleep into 200 ms). The window checks are for the user
-- [ ] 128 tests from the deep review: WriteTexels, vertex fetch on the GPU, the svc vectors, time zones, RELR, pool lookup overflow, alpha NaN refs
+- [x] batch 30 · 128 the deep review's tests (their vectors as data, the code ours): `t_writetexels` (totk-mobile's regions: a row, a cube's six
+  faces, a region of face 3 with its neighbours kept, a BC4 region ending inside a block row, two 320x320 MINIMAL_LAYOUT textures back to back
+  that stay inside their 204,800 bytes each; rows at the region's pitch fail 2), `t_vfetch` (dr3-mobile's UNORM8 {0, 64, 128, 255} →
+  {0, 0x3e808081, 0x3f008081, 0x3f800000} and NaN payloads kept, on the GPU through our vertex formats; integer formats into float inputs keep
+  their bits; without `vfmt_for_float_input` Metal refuses the pipeline, 2 fail), the svc vectors in `t_guest_mem` section 11 and `t_coremask`
+  (with 143; the core table as Atmosphère, which we already followed: totk-mobile expects InvalidCoreId for ideal core 3 in mask 7 and a main
+  thread mask of 7, Atmosphère's KThread gives InvalidCombination and 1 << the core), `t_time` (acnh-mobile's zones: Shanghai, UTC, Tokyo,
+  Kathmandu, New York and Sydney both seasons, the repeated and the skipped hour; February 30 none with success, as the SDK documents; standard
+  time only fails 4), `t_relr` (144), the pool lookup (`nvn_pool_find.h`: a range wrapping past the end of the address space was found in a pool,
+  now in none; totk-mobile's nested and length-0 cases; the wrap fails 1), a NaN alpha reference in `t_alpha` (bayonetta3-mobile's: drawn by
+  NOTEQUAL and ALWAYS only; taken as 0 fails 1)
 - [ ] 129 rewriter: swapped-operand jump tables, disassembly past undecodable words, the CBZ success path in equiv, a narrower TSD filter, a
   synthetic NSO self-test in CI
 
@@ -1592,9 +1602,20 @@ Tier 3c, larger:
 
 Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):
 - [ ] 142 the swapchain acquire against the frame's GPU work: count acquires that return before that image's frame is done, then wait (blade2)
-- [ ] 143 svc details: SetHeapSize's 2 MiB granularity, a regrow reading zeros, 0xd401 over mapped sources; GetInfo's priority mask, fixed random
-  entropy, non-system totals and the NPDM's system resource size (totk-mobile's vectors)
-- [ ] 144 RELR entries validated (targets, alignment, stride)
+- [x] batch 30 · 143 svc details as Horizon (switchbrew's results; totk-mobile's vectors): SetHeapSize refuses sizes that are not 2 MiB multiples or
+  above 4 GiB (InvalidSize; it took any size: a 1-byte heap then left the next growth's pages unwritable) and sizes above the heap region with
+  OutOfMemory 0xD001 (was 0xD401), refuses a shrink over a MapMemory source (InvalidCurrentMemory), and gives back memory as fresh pages (a regrow
+  read the old contents); MapPhysicalMemory answers an unaligned address, a zero or unaligned size and a range that wraps or leaves the alias
+  region with InvalidAddress / InvalidSize / InvalidMemoryRegion (it ended the program, said 0xD401, and let a wrapping range through); GetInfo:
+  PriorityMask from the NPDM's ThreadInfo (28-59 in both games; it was 0), RandomEntropy four values fixed for the process with handle 0 and
+  subtypes 0-3 only, SystemResourceSize the NPDM's (`game.json` "npdm": TotK 24 MiB, manosaba 16 MiB; it was 32), Total = TotalNonSystem + it
+  and Used = UsedNonSystem + it (the pairs were equal). `tools/new_game.py` reads the NPDM fields for a new game. Tears of the Kingdom's heap is
+  still set at once to 2,630 MB; manosaba never calls SetHeapSize. `t_guest_mem` section 11 (the old SetHeapSize dies of SIGBUS on its 1-byte
+  heap; the old MapPhysicalMemory ends the program on an unaligned address)
+- [x] batch 30 · 144 the DT_RELR table checked whole before any slot is touched (`loader.c` `relr_each`): a bitmap before an address, a slot unaligned,
+  outside the module or past the end of the address space, or a table outside the module refuse the module with a red line (it wrote wherever
+  the words said). Both games' tables pass unchanged (TotK main 499,078 slots, manosaba main 613,227). `t_relr` (totk-mobile's table and bounds;
+  without the checks 5 fail, one of them a child dying on a write far away)
 - [ ] 145 small diagnostics: a size cap on the frame log, a same-frame present brightness check, the HID receipt deduplicated per controller style
 - [ ] 146 NCZ (solid zstd) input in the game extraction, restored to NCA with its hash checked
 - [ ] 147 tests that run the game's own SDK code against the host (time, vibration, fonts; needs the game, not CI)

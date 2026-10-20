@@ -22,6 +22,8 @@ typedef struct {
                                               //    keeps per-core data without locks (Tears of the Kingdom)
     int touch_pad;                            // 1: on iOS the touchscreen is on-screen controls (game.json touch "pad", host/touchpad.c) for a game steered with a
                                               //    controller; default "screen": touches go to the game's touchscreen
+    uint32_t npdm_sysres;                     // the NPDM's SystemResourceSize (game.json npdm.system_resource_size; GetInfo 16; 0 = the host's 32 MiB)
+    uint8_t npdm_prio_hi, npdm_prio_lo;       // its ThreadInfo capability's highest / lowest thread priority (game.json npdm.thread_priority; GetInfo 1)
     const dm_game_file *romfs_files; int romfs_nfiles;          // key RomFS files with their exact sizes (also tells the version)
     const char *romfs_tree; int romfs_tree_files; long long romfs_tree_bytes;   // RomFS directory whose file count and byte total must match
     const char *const *save_sync; int save_sync_n;              // save paths (glob, relative to the save root) kept in iCloud sync

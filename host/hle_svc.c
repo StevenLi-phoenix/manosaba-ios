@@ -130,6 +130,9 @@ enum { I_CoreMask=0, I_PriorityMask=1, I_AliasAddr=2, I_AliasSize=3, I_HeapAddr=
        I_FreeThreadCount=24, I_AliasExtraSize=28 };
 
 static uint8_t g_seen[256];
+static uint64_t sysres_total(void) { return dm_game.npdm_sysres ? dm_game.npdm_sysres : 0x2000000; }   // the NPDM's SystemResourceSize (game.json npdm)
+static uint64_t g_entropy[4];
+void entropy_init(void) { uint64_t dm_entropy64(void); for (int i = 0; i < 4; i++) g_entropy[i] = dm_entropy64(); }   // GetInfo RandomEntropy
 
 // Registry of mapped ranges (MapMemory stacks, MapPhysicalMemory alias pages), QueryMemory reports from it; the SDK relies on it to find free space.
 // Changes happen under g_mapmem_mu (MapMemory / UnmapMemory as a whole) and g_map_lock (the change itself); QueryMemory reads under g_map_lock: an unmap
@@ -446,12 +449,31 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     if (svc_thread(num, regs)) return regs[0];
     switch (num) {
     case 0x01: {  // SetHeapSize(out_addr*, size)  → x1 = heap base
+        // Horizon's rules (switchbrew SVC; plan item 143, totk-mobile's vectors in tests/t_guest_mem.c section 11): a multiple of 2 MiB and at most
+        // 4 GiB, else InvalidSize (0xCA01; it took any size); above the heap region OutOfMemory (0xD001; it said 0xD401); a shrink over memory that
+        // is mapped elsewhere (a MapMemory source: a thread's stack) InvalidCurrentMemory (0xD401); memory given back and taken again reads zeros
+        // (it kept its old contents behind PROT_NONE)
         size_t size = regs[1];
+#ifndef DM_TEST_HEAP_OLD   // negative control of t_guest_mem only: as before
+        if (size & 0x1fffff || size > 0x100000000ull) { regs[0] = 0xCA01; return 0; }
+        if (size > g_heap_cap) { LOG("SetHeapSize: %#zx is above the heap region (%#zx)", size, g_heap_cap); regs[0] = 0xD001; return 0; }
+#else
         if (size > g_heap_cap) { LOG("SetHeapSize OOM: req %#zx > cap %#zx", size, g_heap_cap); regs[0] = 0xD401; return 0; }
+#endif
         if (size + image_bytes() > app_pool()) { g_heap_rejects++; regs[0] = 0x10801; return 0; }   // exceeds the application memory pool: ResultLimitReached. At startup the game retries in 2 MB decrements until it fits (main+0x1b66184)
+#ifndef DM_TEST_HEAP_OLD
+        if (size < g_heap_cur) { int busy = 0; pthread_mutex_lock(&g_map_lock);
+            for (int i = 0; i < g_nmap && !busy; i++) busy = g_map[i].src && g_map[i].src < (uint64_t)(g_heap + g_heap_cur) && (uint64_t)(g_heap + size) < g_map[i].src + g_map[i].size;
+            pthread_mutex_unlock(&g_map_lock);
+            if (busy) { LOG("SetHeapSize: %#zx would free heap memory a MapMemory still holds (InvalidCurrentMemory)", size); regs[0] = 0xD401; return 0; } }
+#endif
         int rc = 0;
         if (size > g_heap_cur) rc = mprotect(g_heap + g_heap_cur, size - g_heap_cur, PROT_READ | PROT_WRITE);
+#ifndef DM_TEST_HEAP_OLD
+        else if (size < g_heap_cur) rc = mmap(g_heap + size, g_heap_cur - size, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == MAP_FAILED;   // given back: fresh pages
+#else
         else if (size < g_heap_cur) rc = mprotect(g_heap + size, g_heap_cur - size, PROT_NONE);
+#endif
         if (g_flag.svc) LOG("SetHeapSize %#zx -> base %p mprotect=%d errno=%d", size, g_heap, rc, errno);
         { static int said; if (!said && size) { said = 1; LOG("SetHeapSize: heap first set to %zu MB (application pool %llu MB − images %zu MB; %d refusals before)", size >> 20, (unsigned long long)(app_pool() >> 20), image_bytes() >> 20, g_heap_rejects); } }
         g_heap_cur = size;
@@ -529,8 +551,17 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     }
     case 0x2C: case 0x2D: {  // MapPhysicalMemory / UnmapPhysicalMemory(addr, size): only allowed inside the alias region (used by the SDK's VammManager)
         uint8_t *a = (uint8_t *)regs[0]; size_t size = regs[1];
+#ifndef DM_TEST_PHYS_OLD   // negative control of t_guest_mem only: as before
+        // Horizon's results (switchbrew; plan item 128, totk-mobile's vectors): address not 4 KiB aligned InvalidAddress, size 0 or not aligned
+        // InvalidSize, a range that wraps or leaves the alias region InvalidMemoryRegion (it said 0xD401, died on misalignment, and a wrapping range
+        // passed the range check)
+        if ((uintptr_t)a & 0xfff) { regs[0] = 0xCC01; return 0; }
+        if (!size || size & 0xfff) { regs[0] = 0xCA01; return 0; }
+        if (size > UINT64_MAX - (uint64_t)(uintptr_t)a || a < g_alias || a + size > g_alias + g_alias_cap) { LOG("SVC %#x outside the alias region %p+%#zx", num, a, size); regs[0] = 0xDC01; return 0; }
+#else
         if (a < g_alias || a + size > g_alias + g_alias_cap) { LOG("SVC %#x outside the alias region %p+%#zx", num, a, size); regs[0] = 0xD401; return 0; }
         if (((uintptr_t)a | size) & 0xfff) die("SVC %#x: address / size not 4 KB aligned %p+%#zx (the SDK never does this)", num, a, size);
+#endif
         // The physical memory the game may map: the application pool it is told about (GetInfo TotalMemory) less the images and the heap, as on the console
         size_t pool = (size_t)app_pool(), used = image_bytes() + g_heap_cur, limit = pool > used ? (pool - used) / 0x1000 : 0;
         if (alias_phys(a, size, num == 0x2C, limit)) {
@@ -562,17 +593,28 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         uint64_t id = regs[1], v = 0;
         switch (id) {
         case I_CoreMask: v = 7; break;
-        case I_PriorityMask: v = 0; break;
+        case I_PriorityMask: { int hi = dm_game.npdm_prio_hi, lo = dm_game.npdm_prio_lo; if (!hi && !lo) { hi = 28; lo = 59; }   // the NPDM's ThreadInfo range (both games: 28-59); it was 0
+            v = 0; for (int p = hi; p <= lo && p < 64; p++) v |= 1ull << p; break; }
         case I_AliasAddr: v = (uint64_t)g_alias; break;   case I_AliasSize: v = g_alias_cap; break;
         case I_HeapAddr:  v = (uint64_t)g_heap;  break;   case I_HeapSize:  v = g_heap_cap;  break;
         case I_AslrAddr:  v = (uint64_t)g_as;    break;   case I_AslrSize:  v = RESERVE;     break;
         case I_StackAddr: v = (uint64_t)g_stack; break;   case I_StackSize: v = g_stack_cap; break;
-        case I_TotalMem: case I_TotalNonSys: v = app_pool(); break;
-        case I_UsedMem:  case I_UsedNonSys:  v = g_heap_cur + image_bytes(); break;   // Used = heap + image, the same accounting as the check in SetHeapSize (it used to be hard-coded to 64 MB). The sdk's QueryMemoryInfo (sdk+0x34f4ec) only uses it to compute the "program usage" field;
+        // Total = TotalNonSystem + the system resource, Used = UsedNonSystem + the system resource (Horizon's accounting, totk-mobile's vectors;
+        // the two pairs were equal): the non-system totals are what the game's own memory is checked against (SetHeapSize above)
+        case I_TotalMem: v = app_pool() + sysres_total(); break;  case I_TotalNonSys: v = app_pool(); break;
+        case I_UsedMem:  v = g_heap_cur + image_bytes() + sysres_total(); break;  case I_UsedNonSys: v = g_heap_cur + image_bytes(); break;   // Used = heap + image, the same accounting as the check in SetHeapSize (it used to be hard-coded to 64 MB). The sdk's QueryMemoryInfo (sdk+0x34f4ec) only uses it to compute the "program usage" field;
                                                  // The "total available" field is simply the pool total, so at startup the game still has to step down from the whole pool by 2 MB at a time until pool - image (about 34 refusals) when setting its heap -- this is how the original behaves on the real device, not a mistake in our accounting
-        case I_SysResTotal: v = 0x2000000; break; case I_SysResUsed: v = 0x400000; break;
+        case I_SysResTotal: v = sysres_total(); break; case I_SysResUsed: v = 0x400000; break;
         case I_DebuggerAttached: v = 0; break;
-        case I_RandomEntropy: { uint64_t dm_entropy64(void); v = dm_entropy64(); break; }   // a deterministic stream when DM_DETCLOCK is on (hle_os.c)
+        // Four values fixed for the process, handle 0 and subtypes 0-3 only (switchbrew; it drew a new value every call, with any arguments)
+        case I_RandomEntropy: { static pthread_once_t once = PTHREAD_ONCE_INIT;
+#ifndef DM_TEST_HEAP_OLD
+            if (regs[2]) { regs[0] = 0xE401; return 0; }
+            if (regs[3] > 3) { regs[0] = 0xE801; return 0; }
+            pthread_once(&once, entropy_init); v = g_entropy[regs[3]]; break; }   // drawn from a deterministic stream when DM_DETCLOCK is on (hle_os.c)
+#else
+            uint64_t dm_entropy64(void); (void)once; v = dm_entropy64(); break; }
+#endif
         case I_ProgramId: v = dm_game.program_id; break;
         case I_IsApplication: v = 1; break;
         // User exception context area (switchbrew SVC GetInfo 20, a process value): SDK 20's SetDyingMessageRegion writes the region at +0x1c0 (TotK

@@ -857,7 +857,9 @@ int svc_thread(int num, uint64_t *regs) {
         thr_t *t = h_get((uint32_t)regs[0], O_THREAD); int c = (int)regs[1]; uint64_t m = regs[2]; uint32_t r = 0;
         if (!t) r = R_BAD_HANDLE;
         else if (c == -2) { c = PROC_IDEAL_CORE; m = 1ull << c; }
+#ifndef DM_TEST_CORE_NO_PROCMASK   // negative control of t_coremask only: cores outside the process's mask let through
         else if ((m | PROC_CORE_MASK) != PROC_CORE_MASK) r = R_BAD_CORE;
+#endif
         else if (!m) r = R_BAD_COMBO;
         else if (c >= 0 && c < 4) { if (!(m >> c & 1)) r = R_BAD_COMBO; }   // a valid virtual core (0..3 on the Switch's four) must be in the mask
         else if (c != -3 && c != -1) r = R_BAD_CORE;

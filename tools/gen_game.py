@@ -23,6 +23,10 @@ def load(path):
     if g.get('window_unfocused', 'out_of_focus') not in ('out_of_focus', 'in_focus'): sys.exit(f'{path}: window_unfocused must be "out_of_focus" or "in_focus"')
     if not isinstance(g.get('virtual_cores', False), bool): sys.exit(f'{path}: virtual_cores must be true or false')
     if g.get('touch', 'screen') not in ('screen', 'pad'): sys.exit(f'{path}: touch must be "screen" or "pad"')
+    n = g.get('npdm', {})   # from the game's main.npdm (tools/new_game.py fills it): META SystemResourceSize, the ThreadInfo kernel capability's priorities
+    if not isinstance(n, dict) or set(n) - {'system_resource_size', 'thread_priority'} or not re.fullmatch(r'0x[0-9a-fA-F]+', str(n.get('system_resource_size', '0x0'))) \
+       or not (isinstance(n.get('thread_priority', [0, 0]), list) and len(n.get('thread_priority', [0, 0])) == 2 and all(isinstance(v, int) and 0 <= v < 64 for v in n.get('thread_priority', [0, 0]))):
+        sys.exit(f'{path}: npdm must be {{"system_resource_size": "0x..", "thread_priority": [highest, lowest]}}')
     return g
 
 def cstr(s): return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
@@ -49,6 +53,7 @@ def write_c(g, out):
           '    .unfocused_in_focus = %d,' % (g.get('window_unfocused', 'out_of_focus') == 'in_focus'),
           '    .virtual_cores = %d,' % bool(g.get('virtual_cores', False)),
           '    .touch_pad = %d,' % (g.get('touch', 'screen') == 'pad'),
+          '    .npdm_sysres = %s, .npdm_prio_hi = %d, .npdm_prio_lo = %d,' % ((g.get('npdm', {}).get('system_resource_size', '0x0'),) + tuple(g.get('npdm', {}).get('thread_priority', [0, 0]))),
           f'    .romfs_files = romfs_files, .romfs_nfiles = {len(files)},',
           f'    .romfs_tree = {cstr(r["tree"]) if r.get("tree") else "0"}, .romfs_tree_files = {r.get("tree_files", 0)}, .romfs_tree_bytes = {r.get("tree_bytes", 0)}LL,',
           f'    .save_sync = save_sync, .save_sync_n = {len(sync)},',

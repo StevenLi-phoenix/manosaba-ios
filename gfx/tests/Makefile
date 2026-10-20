@@ -95,6 +95,10 @@ t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_writetexels: t_writetexels.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_writetexels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_vfetch: t_vfetch.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vfetch.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_depth_plain: t_depth_plain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_depth_plain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_libcopy: t_libcopy.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -223,11 +227,13 @@ run: \
 	t_uppool \
 	t_upwait \
 	t_usnap \
+	t_vfetch \
 	t_vfmt \
 	t_ussort \
 	t_visibility \
 	t_warm_list \
 	t_wb \
+	t_writetexels \
 	t_xv \
 	t_zskip
 	./t_nvn
@@ -308,6 +314,8 @@ run: \
 	./t_pso_canon
 	MTL_DEBUG_LAYER=1 ./t_samp
 	MTL_DEBUG_LAYER=1 ./t_fmt_swz
+	MTL_DEBUG_LAYER=1 ./t_vfetch
+	./t_writetexels 2>/dev/null
 	DM_NVN_DEPTH_PLAIN=1 ./t_depth_plain
 	DM_NVN_LIB_COPY=1 ./t_libcopy
 	./t_retry 2>/dev/null

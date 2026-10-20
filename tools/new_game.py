@@ -27,6 +27,13 @@ def program_id(npdm):
     if d[aci:aci + 4] != b'ACI0': die(f'{npdm}: no ACI0 section')
     return f'{struct.unpack_from("<Q", d, aci + 0x10)[0]:016X}'
 
+def npdm_fields(npdm):   # META 0x14 SystemResourceSize; ACI0 0x30 / 0x34 kernel capabilities, ThreadInfo = low bits 0111 (switchbrew NPDM)
+    d = open(npdm, 'rb').read(); aci = struct.unpack_from('<I', d, 0x70)[0]; ko, ks = struct.unpack_from('<II', d, aci + 0x30); prio = [28, 59]
+    for i in range(ks // 4):
+        w = struct.unpack_from('<I', d, aci + ko + 4 * i)[0]
+        if w & 0xf == 0x7: prio = [(w >> 10) & 63, (w >> 4) & 63]
+    return {'system_resource_size': f'{struct.unpack_from("<I", d, 0x14)[0]:#x}', 'thread_priority': prio}
+
 def main():
     a = sys.argv[1:]
     opt = {}
@@ -54,7 +61,7 @@ def main():
     g = {
         'id': gid, 'title': opt.get('title', gid), 'version': opt.get('version', gid), 'engine': 'unity' if unity else 'unknown',
         'program_id': program_id(os.path.join(exefs, 'main.npdm')), 'modules': mods, 'main_build_id': nso[0x40:0x50].hex(),
-        'language': opt.get('language', 'en-US'), 'screen': [1920, 1080], 'guest_heap_mb': 256,
+        'language': opt.get('language', 'en-US'), 'screen': [1920, 1080], 'guest_heap_mb': 256, 'npdm': npdm_fields(os.path.join(exefs, 'main.npdm')),
         'depth_mode': 'near_is_zero', 'nvn_c2': {'tex': ['0x20', 32], 'samp': ['0x568', 128], 'img': ['0x120', 8]},
         'romfs': {'files': {k: os.path.getsize(os.path.join(romfs, k)) for k in keys}, 'tree': tree, 'tree_files': n, 'tree_bytes': size},
         'save_sync': [],

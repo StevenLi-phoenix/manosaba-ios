@@ -25,6 +25,9 @@ static inline int pool_find_cmp_(void *ctx, const void *a, const void *b) {
 static inline void pool_find_reset(pool_find_t *f) { f->sorted = 0; f->last = -1; memset(f->hc, 0, sizeof f->hc); }
 static inline unsigned pool_find_hslot_(uint64_t addr) { return (unsigned)((addr >> 14) * 0x9E3779B1u) >> 22; }   // 10 bits: POOL_FIND_HC
 static inline int pool_find_contains_(const void *pools, size_t stride, int i, uint64_t addr, uint64_t len) {
+#ifndef DM_TEST_POOL_WRAP   // negative control of t_pool_find only: addr + len may wrap, as before
+    if (len > UINT64_MAX - addr) return 0;   // a range past the end of the address space is in no pool (plan item 128; totk-mobile's case: it wrapped to a small end)
+#endif
     return addr >= pool_find_lo_(pools, stride, i) && addr + len <= pool_find_hi_(pools, stride, i);
 }
 // The index of a pool holding [addr, addr + len), or -1

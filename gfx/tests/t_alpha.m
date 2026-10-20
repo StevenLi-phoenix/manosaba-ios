@@ -3,7 +3,8 @@
 // two RGBA8 targets after ColorStateSetAlphaTest (S.color.alpha_func) and SetAlphaRef (bind state 6). With colour 0's alpha exported, each of the
 // 8 NVN comparisons against reference 0.5 keeps or discards alpha 0, 0.5 and 1 as the comparison says (both targets written or both left at the
 // clear colour), also on the early return; the reference changing 0.75 → 0.25 → 0.75 is honoured each time (one specialization per reference);
-// ALWAYS uses the function shader_load specialized without a test. A shader that exports no alpha is discarded only by NEVER. Usage: t_alpha <MSL with alpha> <MSL without>
+// ALWAYS uses the function shader_load specialized without a test. A shader that exports no alpha is discarded only by NEVER. A NaN reference draws
+// only with NOTEQUAL and ALWAYS (bayonetta3-mobile's case, plan item 128); taken as 0 (-DDM_TEST_ALPHA_NAN_ZERO) 1 fails. Usage: t_alpha <MSL with alpha> <MSL without>
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -61,6 +62,10 @@ int main(int argc, char **argv) { @autoreleasepool {
     int r1 = draw1(vs, fs, NVN_ALPHA_FUNC_GREATER, 0.75f, 0.5f, 0, NULL), r2 = draw1(vs, fs, NVN_ALPHA_FUNC_GREATER, 0.25f, 0.5f, 0, NULL), r3 = draw1(vs, fs, NVN_ALPHA_FUNC_GREATER, 0.75f, 0.5f, 0, NULL);
     CHECK(r1 == 0 && r2 == 1 && r3 == 0, "GREATER, alpha 0.5, reference 0.75 → 0.25 → 0.75: drawn %d %d %d (want 0 1 0)", r1, r2, r3);
     CHECK(fs->afn.count == 9, "one specialization per comparison and reference: %lu (want 9: 7 comparisons at 0.5, GREATER at 0.75 and 0.25)", (unsigned long)fs->afn.count);
+    {   // A NaN reference (bayonetta3-mobile tests/test_alpha.m's case, plan item 128): every comparison with NaN is false but NOTEQUAL; ALWAYS draws
+        int ok = 1; char got[9] = {0};
+        for (unsigned op = 1; op <= 8; op++) { int d = draw1(vs, fs, op, NAN, 0.5f, 0, NULL); got[op - 1] = d == 1 ? '1' : d == 0 ? '0' : '?'; ok &= d == (op == NVN_ALPHA_FUNC_NOTEQUAL || op == NVN_ALPHA_FUNC_ALWAYS); }
+        CHECK(ok, "reference NaN, alpha 0.5: drawn by NOTEQUAL and ALWAYS only (NEVER .. ALWAYS: %s, want 00000101)", got); }
     int plain = 0, a = draw1(vs, fs, NVN_ALPHA_FUNC_ALWAYS, 0.5f, 0.0f, 0, &plain);
     CHECK(a == 1 && plain, "ALWAYS draws with the function specialized at load (no test)");
     int ok0 = 1; for (unsigned op = 1; op <= 8; op++) for (int i = 0; i < 3; i++) ok0 &= draw1(vs0, fs0, op, 0.5f, i * 0.5f, 0, NULL) == (op != NVN_ALPHA_FUNC_NEVER);

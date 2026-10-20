@@ -219,20 +219,44 @@ static void register_gates(module_t *m, const char *dir) {
 // DT_RELR (packed RELATIVE relocations, gABI; newer SDK toolchains emit them): an even word is the offset of one slot and
 // starts a run; an odd word is a bitmap whose bit i (i = 1..63) marks the slot (i − 1) words after the run position, which then moves on 63 words.
 // Each slot holds its link-time address (implicit addend): the loaded value is base + slot.
+// The whole table is checked before any slot is touched (plan item 144; totk-mobile's relr.h checks the same, its vectors in tests/t_relr.c): a
+// bitmap before any address, a slot not 8-byte aligned, outside the module or past the end of the address space, or a table outside the module
+// makes it refuse every slot and return the bad entry's index + 1 (it wrote wherever the words said). 0 = applied
 enum { DT_RELRSZ_ = 35, DT_RELR_ = 36 };
-static void relr_each(const module_t *m, void (*fn)(const module_t *, uint64_t off, void *), void *ctx) {
+static uint64_t relr_walk(const module_t *m, const uint64_t *e, uint64_t n, void (*fn)(const module_t *, uint64_t off, void *), void *ctx) {
+    uint64_t at = 0; int anchored = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        uint64_t w = e[i];
+        if (!(w & 1)) {
+#ifndef DM_TEST_RELR_UNCHECKED   // negative control of t_relr only: no checks, as before
+            if (w & 7 || w > m->size - 8) return i + 1;
+#endif
+            if (fn) fn(m, w, ctx);
+            at = w + 8; anchored = 1; continue;
+        }
+#ifndef DM_TEST_RELR_UNCHECKED
+        if (!anchored) return i + 1;
+        for (uint64_t v = w >> 1, b = 0; v; v >>= 1, b++) if (v & 1 && (at + 8 * b < at || at + 8 * b > m->size - 8)) return i + 1;
+#else
+        (void)anchored;
+#endif
+        if (fn) for (uint64_t v = w >> 1, b = 0; v; v >>= 1, b++) if (v & 1) fn(m, at + 8 * b, ctx);
+        if (at > UINT64_MAX - 63 * 8) return i + 1;
+        at += 63 * 8;
+    }
+    return 0;
+}
+static uint64_t relr_each(const module_t *m, void (*fn)(const module_t *, uint64_t off, void *), void *ctx) {
     uint64_t relr = 0, relrsz = 0;
     for (const Elf64_Dyn *d = m->dyn; d->d_tag; d++) {
         if (d->d_tag == DT_RELR_) relr = d->d_un.d_ptr;
         if (d->d_tag == DT_RELRSZ_) relrsz = d->d_un.d_val;
     }
-    const uint64_t *e = (const uint64_t *)(m->base + relr); uint64_t at = 0;
-    for (uint64_t i = 0; relr && i < relrsz / 8; i++) {
-        uint64_t w = e[i];
-        if (!(w & 1)) { fn(m, w, ctx); at = w + 8; continue; }
-        for (unsigned b = 0; (w >>= 1); b++) if (w & 1) fn(m, at + 8ull * b, ctx);
-        at += 63 * 8;
-    }
+    if (!relr) return 0;
+    if (m->size < 8 || relr > m->size || relrsz > m->size - relr || relr & 7) return 1;
+    const uint64_t *e = (const uint64_t *)(m->base + relr);
+    uint64_t bad = relr_walk(m, e, relrsz / 8, NULL, NULL);   // all checked first: a bad table touches nothing
+    return bad ? bad : relr_walk(m, e, relrsz / 8, fn, ctx);
 }
 static void relr_apply(const module_t *m, uint64_t off, void *ctx) { *(uint64_t *)(m->base + off) += (uint64_t)m->base; ++*(int *)ctx; }
 
@@ -259,7 +283,8 @@ static void relocate(module_t *m) {
             if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
             else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
         }
-    int nrelr = 0; relr_each(m, relr_apply, &nrelr);
+    int nrelr = 0; uint64_t bad = relr_each(m, relr_apply, &nrelr);
+    if (bad) die("[red] %s: DT_RELR entry %llu is not a valid relocation (a bitmap before any address, or a slot unaligned or outside the module): the module is not loaded", m->name, (unsigned long long)bad - 1);
     LOG("%s: reloc relative=%d relr=%d abs/glob=%d jump=%d", m->name, cnt[0], nrelr, cnt[1], cnt[2]);
 }
 
@@ -299,7 +324,8 @@ void loader_hash_log(void) {
                 nslot++;
             }
         struct relr_tok rt = {cp, NULL, 0, 0};
-        relr_each(m, relr_token, &rt); nslot += rt.n;            // RELR slots: token 0 like RELATIVE, tail = module-relative value
+        if (relr_each(m, relr_token, &rt)) die("[red] %s: invalid DT_RELR table (see the load)", m->name);
+        nslot += rt.n;            // RELR slots: token 0 like RELATIVE, tail = module-relative value
         CC_SHA256_CTX c; CC_SHA256_Init(&c); CC_SHA256_Update(&c, cp, (CC_LONG)m->size);
         CC_SHA256_Update(&c, rt.tail, (CC_LONG)(8 * rt.n)); free(rt.tail);
         for (int t = 0; t < 2; t++)                                // Token tails (addend / offset) are appended in slot order, and together with the slot head uniquely determine the slot value

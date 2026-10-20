@@ -61,6 +61,18 @@ int main(void) {
         if ((r < 0) != (s < 0) || (r >= 0 && !(a >= P[r].lo && a + 0x800 <= P[r].hi))) ok = 0;
     }
     t("overlapping pools: found exactly when the full scan finds one, and the pool holds the range", ok);
+    // totk-mobile's tests/test_nvn_pool_index.c cases (plan item 128; vectors as data): a range that wraps past the end of the address space is in no
+    // pool; an end exactly at a pool's end with length 0 is in it, one byte more is not; a pool nested in another, and the cache not keeping the
+    // enclosing pool across the nested one's start. The wrapping end (-DDM_TEST_POOL_WRAP, as before) fails 1
+    n = 0; P[n++] = (ent){0x100, 0x900}; P[n++] = (ent){0x200, 0x300}; pool_find_reset(&f);
+    t("a range past the end of the address space (UINT64_MAX - 7, 16 bytes): in no pool", pool_find(&f, P, sizeof P[0], n, UINT64_MAX - 7, 16) == -1);
+    t("length 0 at the pool's end: in it; 1 byte: not", pool_find(&f, P, sizeof P[0], n, 0x900, 0) == 0 && pool_find(&f, P, sizeof P[0], n, 0x900, 1) == -1);
+    int nest = 1;
+    for (int k = 0; k < 100; k++) {
+        int a1 = pool_find(&f, P, sizeof P[0], n, 0x180, 16), a2 = pool_find(&f, P, sizeof P[0], n, 0x210, 16), a3 = pool_find(&f, P, sizeof P[0], n, 0x210, 0x200), a4 = pool_find(&f, P, sizeof P[0], n, 0x500, 16);
+        nest &= a1 == 0 && (a2 == 0 || a2 == 1) && a3 == 0 && a4 == 0;
+    }
+    t("a pool nested in another: every answer holds the range (the nested one too short for 0x200 bytes)", nest);
     printf("== %d checks, %d failed ==\n", total, fail);
     free(f.idx); free(f.slo);
     return fail != 0;

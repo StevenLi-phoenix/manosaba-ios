@@ -4050,6 +4050,9 @@ static int vfmt_scaled(int f) { return (f >= 0x51 && f <= 0x54) || (f >= 0x57 &&
 // for a float input ("cannot be read using MTLAttributeFormatUInt"), so those are fetched as the float format of the same width: the shader sees the same
 // bits. 8 / 16-bit integer formats Metal converts to their float value, not the bits the shader expects: they stay as they are (logged once)
 static MTLVertexFormat vfmt_for_float_input(MTLVertexFormat f) {
+#ifdef DM_TEST_VFETCH_NO_FLOATIN   // negative control of t_vfetch only: the integer format kept (Metal then refuses the pipeline)
+    return f;
+#endif
     switch (f) {
         case MTLVertexFormatUInt: case MTLVertexFormatInt: return MTLVertexFormatFloat;
         case MTLVertexFormatUInt2: case MTLVertexFormatInt2: return MTLVertexFormatFloat2;
@@ -4216,7 +4219,11 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     k->vs = (__bridge void *)vs; k->fs = (__bridge void *)fs;
     memcpy(k->cfmt, cfmt, sizeof k->cfmt); k->dfmt = dfmt; k->sfmt = sfmt; k->samples = samples;
     k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c | (g_lay.active ? PSO_LAYERED : 0);
-    if (alpha_on()) { k->alpha_func = S.color.alpha_func; memcpy(&k->alpha_ref, &S.alpha_ref, sizeof k->alpha_ref); }
+    if (alpha_on()) { k->alpha_func = S.color.alpha_func; memcpy(&k->alpha_ref, &S.alpha_ref, sizeof k->alpha_ref);
+#ifdef DM_TEST_ALPHA_NAN_ZERO   // negative control of t_alpha only: a NaN reference taken as 0 (the comparisons it gets wrong are what t_alpha checks)
+        if ((k->alpha_ref & 0x7f800000) == 0x7f800000 && (k->alpha_ref & 0x7fffff)) k->alpha_ref = 0;
+#endif
+    }
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
     pso_key_blend_canon(k);   // zeros where blending is off (nvn_pso_skey.h)
     const nvn_refl *rf = &vs->rf;
@@ -6782,7 +6789,11 @@ void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVN
             unsigned layer = is3d ? 0 : layer0 + r->zoffset + z;
             if ((is3d && z == 0) || !is3d) if (nvn_deswizzle(&t->d, level, layer, t->mem, lin, lp)) { RED_ONCE(65, "WriteTexels deswizzle failed format %#x target %d", t->d.format, t->d.target); free(lin); return; }
             uint8_t *dst = lin + (is3d ? (size_t)(r->zoffset + z) * lp * lr : 0);
+#ifndef DM_TEST_WT_ROWS_AT_REGION   // negative control of t_writetexels only: rows placed at the region's pitch, not the level's
             for (size_t y = 0; y < hb; y++) memcpy(dst + (y0 + y) * lp + x0, src + z * img + y * row, wb);
+#else
+            for (size_t y = 0; y < hb; y++) memcpy(dst + (y0 + y) * wb + x0, src + z * img + y * row, wb);
+#endif
             if ((is3d && z == nz - 1) || !is3d) if (nvn_swizzle(&t->d, level, layer, lin, lp, t->mem)) { RED_ONCE(57, "WriteTexels swizzle failed format %#x target %d", t->d.format, t->d.target); free(lin); return; }
         }
         free(lin);

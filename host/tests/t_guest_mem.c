@@ -12,6 +12,10 @@
 // Physical memory limit (svc MapPhysicalMemory, as mesosphere KPageTableBase::MapPhysicalMemory): with an application pool of 285 MB
 //   (6) mapping up to the pool succeeds; one page more is LimitReached (0x10801) and maps nothing; pages already mapped do not count again;
 //       after an unmap the freed amount can be mapped again.
+// svc SetHeapSize and GetInfo (11): Horizon's size rules and results, memory given back reads zeros on regrowth, a shrink over a MapMemory source
+//   refused; PriorityMask, RandomEntropy and the memory totals as Horizon reports them; MapPhysicalMemory's argument results (totk-mobile's
+//   vectors; -DDM_TEST_PHYS_OLD, as before, ends the program on the unaligned address). As before (-DDM_TEST_HEAP_OLD): SetHeapSize(1) is taken, and growing from that
+//   unaligned size leaves the page unwritable: the test dies there (SIGBUS)
 // svc SetMemoryPermission (Horizon's checks, Atmosphère): (7) unaligned address / size, size 0 and other permissions than none / read / read-write
 //   are refused with Horizon's results; read-write and read are accepted.
 // rodata (rodata_seal.h, the loader after relocation): (8) only the 16 KB pages wholly inside [RO_OFF, DATA_OFF) become read-only, a page shared
@@ -102,6 +106,7 @@ static size_t ref_mapped(void) { size_t n = 0; for (int i = 0; i < NP; i++) n +=
 static size_t ref_hpages(size_t sub) { size_t n = 0; for (size_t h = 0; h < NP; h += sub) { int u = 0; for (size_t k = h; k < h + sub; k++) u |= ref[k]; n += u; } return n; }
 
 int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);   // what was checked before a crash stays in the log (the old SetHeapSize of section 11 faults)
     signal(SIGBUS, on_fault); signal(SIGSEGV, on_fault);
     mem_init();
     size_t sub = vm_page_size / 0x1000;
@@ -237,6 +242,40 @@ int main(void) {
       for (int i = 0; i < 2; i++) pthread_join(c[i], NULL);
       CHECK(ok && !g_q_bad, "%ld queries of a thread's own stack among 512 mappings, two threads unmapping and mapping them again: %d wrong", (long)g_q_n, (int)g_q_bad);
       for (int i = 0; i < 512; i++) svc(0x05, (uint64_t)(g_stack + 0x1000000 + 0x4000 * (size_t)i), (uint64_t)g_q_src, 0x4000); }
+
+    printf("11 SetHeapSize and GetInfo as Horizon (plan item 143; switchbrew, totk-mobile's tests/test_kernel.c vectors)\n");
+    {   uint64_t r[32];
+#define GI(id, h, sub) (memset(r, 0, sizeof r), r[1] = (id), r[2] = (h), r[3] = (sub), svc_dispatch(0x29, r, 0), r[0])
+#define HEAP(sz) (memset(r, 0, sizeof r), r[1] = (sz), svc_dispatch(0x01, r, 0), r[0])
+        CHECK(HEAP(1) == 0xCA01, "SetHeapSize(1): InvalidSize (not a multiple of 2 MiB)");
+        CHECK(HEAP(0x140000000ull) == 0xCA01, "SetHeapSize(5 GiB): InvalidSize (above 4 GiB)");
+        if (g_heap_cap + 0x200000 <= 0x100000000ull) CHECK(HEAP((g_heap_cap + 0x200000) & ~(size_t)0x1fffff) == 0xD001, "SetHeapSize above the heap region (%zu MiB): OutOfMemory 0xD001", g_heap_cap >> 20);
+        else printf("  - the heap region (%zu MiB) is above 4 GiB here: every aligned size above it is InvalidSize first (iOS has a smaller one)\n", g_heap_cap >> 20);
+        CHECK(HEAP(0x400000) == 0 && r[1] == (uint64_t)g_heap, "SetHeapSize(4 MiB): the heap's base");
+        *(uint64_t *)g_heap = 42; *(uint64_t *)(g_heap + 0x200000) = 99;
+        CHECK(HEAP(0x200000) == 0 && HEAP(0x400000) == 0 && *(uint64_t *)g_heap == 42 && *(uint64_t *)(g_heap + 0x200000) == 0, "shrunk to 2 MiB and grown again: the kept part keeps 42, the part given back reads 0");
+        uint8_t *dst = g_stack + 0x2000000; *(uint64_t *)(g_heap + 0x200000) = 7;
+        CHECK(svc(0x04, (uint64_t)dst, (uint64_t)(g_heap + 0x200000), 0x1000) == 0, "a thread stack mapped from the heap's second 2 MiB (MapMemory)");
+        CHECK(HEAP(0x200000) == 0xD401, "shrinking over that source: InvalidCurrentMemory 0xD401");
+        CHECK(svc(0x05, (uint64_t)dst, (uint64_t)(g_heap + 0x200000), 0x1000) == 0 && HEAP(0x200000) == 0 && HEAP(0) == 0, "unmapped, the shrink goes through, and to 0");
+        CHECK(GI(1, 0xffff8001u, 0) == 0 && r[1] == 0x0ffffffff0000000ull, "PriorityMask: priorities 28-59 (the NPDM's ThreadInfo), got %#llx", (unsigned long long)r[1]);
+        int same = 1; uint64_t e[4];
+        for (int i = 0; i < 4; i++) { same &= GI(11, 0, i) == 0; e[i] = r[1]; same &= GI(11, 0, i) == 0 && r[1] == e[i]; }
+        CHECK(same, "RandomEntropy 0-3: the same value on every call");
+        CHECK(GI(11, 0, 4) == 0xE801 && GI(11, 0xffff8001u, 0) == 0xE401, "RandomEntropy subtype 4: InvalidCombination; with a handle: InvalidHandle");
+        GI(6, 0xffff8001u, 0); uint64_t tot = r[1]; GI(21, 0xffff8001u, 0); uint64_t totn = r[1]; GI(16, 0xffff8001u, 0); uint64_t sres = r[1];
+        GI(7, 0xffff8001u, 0); uint64_t used = r[1]; GI(22, 0xffff8001u, 0); uint64_t usedn = r[1];
+        CHECK(sres == dm_game.npdm_sysres && sres && tot == totn + sres && used == usedn + sres, "SystemResourceSize the NPDM's (%#llx); Total = TotalNonSystem + it, Used = UsedNonSystem + it", (unsigned long long)sres);
+#define PHYS(n, a, sz) (memset(r, 0, sizeof r), r[0] = (a), r[1] = (sz), svc_dispatch((n), r, 0), r[0])
+        uint64_t al = (uint64_t)g_alias;
+        CHECK(PHYS(0x2C, al + 1, 0x1000) == 0xCC01, "MapPhysicalMemory at an unaligned address: InvalidAddress 0xCC01 (it ended the program)");
+        CHECK(PHYS(0x2C, al, 0) == 0xCA01 && PHYS(0x2C, al, 0x1001) == 0xCA01, "size 0 or unaligned: InvalidSize 0xCA01");
+        CHECK(PHYS(0x2C, al + g_alias_cap, 0x1000) == 0xDC01, "just past the alias region: InvalidMemoryRegion 0xDC01 (it said 0xD401)");
+        CHECK(PHYS(0x2C, UINT64_MAX - 0xfff, 0x1000) == 0xDC01 && PHYS(0x2C, al, UINT64_MAX - 0xfff) == 0xDC01, "a range that wraps around: InvalidMemoryRegion");
+#undef PHYS
+#undef GI
+#undef HEAP
+    }
 
     printf("t_guest_mem: %d checks, %d failed\n", checks, fails);
     return fails != 0;

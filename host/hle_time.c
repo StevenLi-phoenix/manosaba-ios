@@ -59,7 +59,11 @@ HLE_FORCE("_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditi
 HLE_FORCE_OPT("_ZN2nn4time11ToPosixTimeEPiPNS0_9PosixTimeEiRKNS0_12CalendarTimeE", "device time zone conversion → host mktime / localtime_r",
               Result, h_time_ToPosixTime, int32_t *count, int64_t *out, int32_t max, const CalendarTime *ct) {
     int n = 0; int64_t r[2];
+#ifndef DM_TEST_TOPOSIX_ONE   // negative control of t_time only: standard time only (an hour repeated at the fall change gives one result)
     for (int dst = 0; dst <= 1; dst++) {
+#else
+    for (int dst = 0; dst <= 0; dst++) {
+#endif
         struct tm tm = {.tm_year = ct->year - 1900, .tm_mon = ct->month - 1, .tm_mday = ct->day, .tm_hour = ct->hour, .tm_min = ct->minute,
                         .tm_sec = ct->second, .tm_isdst = dst};
         time_t t = mktime(&tm); struct tm back;

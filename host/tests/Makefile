@@ -21,6 +21,8 @@ run: \
 	$(B)/t_condvar \
 	$(B)/t_condvar_old \
 	$(B)/t_waitsync \
+	$(B)/t_coremask \
+	$(B)/t_coremask_noproc \
 	$(B)/t_crash_bt \
 	$(B)/t_crash_bt_unguarded \
 	$(B)/t_crash_stderr \
@@ -36,6 +38,8 @@ run: \
 	$(B)/t_gate_svc \
 	$(B)/t_gate_svc_rel \
 	$(B)/t_guest_mem \
+	$(B)/t_guest_mem_heapold \
+	$(B)/t_guest_mem_physold \
 	$(B)/t_hid_receipt \
 	$(B)/t_hid_script \
 	$(B)/t_hid_script_nocircle \
@@ -59,6 +63,8 @@ run: \
 	$(B)/t_padmap \
 	$(B)/t_quitwait \
 	$(B)/t_quitwait_old \
+	$(B)/t_relr \
+	$(B)/t_relr_unchecked \
 	$(B)/t_romfs_validate \
 	$(B)/t_rundiag \
 	$(B)/t_rundiag_nokeep \
@@ -76,6 +82,8 @@ run: \
 	$(B)/t_thread_exit \
 	$(B)/t_thread_exit_old \
 	$(B)/t_thread_leak \
+	$(B)/t_time \
+	$(B)/t_time_one \
 	$(B)/t_touch \
 	$(B)/t_touchpad \
 	$(B)/t_touchpad_rehit \
@@ -114,6 +122,11 @@ run: \
 	$(B)/t_condvar
 	$(B)/t_condvar_old
 	$(B)/t_waitsync
+	$(B)/t_coremask 2>/dev/null
+	@status=0; $(B)/t_coremask_noproc > $(B)/t_coremask_noproc.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ mask 8, outside the process's cores" $(B)/t_coremask_noproc.log; then \
+	   cat $(B)/t_coremask_noproc.log; echo "t_coremask_noproc: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_coremask_noproc: a core mask outside the process's cores let through moves the thread to core 3, as expected"
 	$(B)/t_crash_bt
 	@status=0; $(B)/t_crash_bt_unguarded > $(B)/t_crash_bt_unguarded.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ a corrupt frame pointer" $(B)/t_crash_bt_unguarded.log; then \
@@ -141,6 +154,14 @@ run: \
 	   cat $(B)/t_gate_svc_rel.log; echo "t_gate_svc_rel: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_gate_svc_rel: an svc gate passing the offset alone gives an address in no module, as expected"
 	$(B)/t_guest_mem 2>/dev/null
+	@status=0; $(B)/t_guest_mem_physold > $(B)/t_guest_mem_physold.log 2>&1 || status=$$?; \
+	 if [ "$$status" -eq 0 ] || ! grep -q "address / size not 4 KB aligned" $(B)/t_guest_mem_physold.log; then \
+	   tail -5 $(B)/t_guest_mem_physold.log; echo "t_guest_mem_physold: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_guest_mem_physold: the old MapPhysicalMemory ends the program on an unaligned address, as expected"
+	@status=0; $(B)/t_guest_mem_heapold > $(B)/t_guest_mem_heapold.log 2>&1 || status=$$?; \
+	 if [ "$$status" -eq 0 ] || ! grep -q "FAIL SetHeapSize(1): InvalidSize" $(B)/t_guest_mem_heapold.log; then \
+	   tail -5 $(B)/t_guest_mem_heapold.log; echo "t_guest_mem_heapold: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_guest_mem_heapold: the old SetHeapSize takes a 1-byte heap and the next growth faults, as expected"
 	$(B)/t_hid_receipt 2>/dev/null
 	$(B)/t_hid_script 2>/dev/null
 	@status=0; $(B)/t_hid_script_nocircle > $(B)/t_hid_script_nocircle.log 2>/dev/null || status=$$?; \
@@ -193,6 +214,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "waits until the game leaves it *✗" $(B)/t_quitwait_old.log; then \
 	   cat $(B)/t_quitwait_old.log; echo "t_quitwait_old: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_quitwait_old: a quit that waits for the save alone leaves inside the exit-request section, as expected"
+	$(B)/t_relr
+	@status=0; $(B)/t_relr_unchecked > $(B)/t_relr_unchecked.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ refused whole: a bitmap before any address" $(B)/t_relr_unchecked.log; then \
+	   cat $(B)/t_relr_unchecked.log; echo "t_relr_unchecked: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_relr_unchecked: a RELR table applied unchecked writes wherever its words say, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate
 	TMPDIR="$(abspath $(B))" $(B)/t_rundiag
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rundiag_nokeep > $(B)/t_rundiag_nokeep.log 2>/dev/null || status=$$?; \
@@ -229,6 +255,11 @@ run: \
 	   cat $(B)/t_thread_exit_old.log; echo "t_thread_exit_old: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_thread_exit_old: the pre-fix exit faults on the retired guest stack, as expected"
 	$(B)/t_thread_leak
+	$(B)/t_time 2>/dev/null
+	@status=0; $(B)/t_time_one > $(B)/t_time_one.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗ New York 2026-11-01 01:30, twice" $(B)/t_time_one.log; then \
+	   cat $(B)/t_time_one.log; echo "t_time_one: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_time_one: local time tried as standard time only misses the repeated hour, as expected"
 	$(B)/t_touch
 	$(B)/t_touchpad 2>/dev/null
 	@status=0; $(B)/t_touchpad_rehit > $(B)/t_touchpad_rehit.log 2>/dev/null || status=$$?; \
@@ -346,6 +377,14 @@ $(B)/t_mouse_route: t_mouse_route.c ../mouse_route.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mouse_route.c
 $(B)/t_mouse_route_swallow: t_mouse_route.c ../mouse_route.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MOUSE_SWALLOW_TITLE -I.. -o $@ t_mouse_route.c
+$(B)/t_relr: t_relr.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_relr.c
+$(B)/t_relr_unchecked: t_relr.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -DDM_TEST_RELR_UNCHECKED -I.. -Wl,-dead_strip -o $@ t_relr.c
+$(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_time.c -framework CoreFoundation
+$(B)/t_time_one: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_TOPOSIX_ONE -I.. -o $@ t_time.c -framework CoreFoundation
 $(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
 $(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
@@ -402,6 +441,14 @@ $(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../game.c $(GEN)
 $(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
+$(B)/t_guest_mem_heapold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HEAP_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
+$(B)/t_guest_mem_physold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_PHYS_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
+$(B)/t_coremask: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
 $(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)

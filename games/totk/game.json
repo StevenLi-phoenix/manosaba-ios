@@ -9,6 +9,7 @@
   "language": "zh-Hant",
   "screen": [1920, 1080],
   "guest_heap_mb": 256,
+  "npdm": {"system_resource_size": "0x1800000", "thread_priority": [28, 59]},
   "device_api": "55.15",
   "depth_mode": "near_is_minus_w",
   "present_interval": "game",
