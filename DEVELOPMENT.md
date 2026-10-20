@@ -1806,7 +1806,15 @@ Tier 3c, smaller items listed at the user's request (2026-10-20: every finding o
   content hash like LibHac. Not run on a real .nsz here (none in the workspace). `t_game_extract_ncz.py` (`game_extract.sh --selftest-ncz`: a
   synthetic NCA of three sections back byte for byte, one named after other bytes, a block-compressed one and one with a gap refused; skipped
   without the .NET SDK; the hash check skipped fails 1)
-- [ ] 147 tests that run the game's own SDK code against the host (time, vibration, fonts; needs the game, not CI)
+- [x] batch 47 · 147 tests that run the game's own SDK code against the host (`host/sdktest.c`, `DM_SDK_TEST=time,font` with any run; after
+  totk-mobile's `tests/test_time_sdk.c` and `test_font_sdk.c`, Apache-2.0, written anew; they need the game, not CI): at the 60th present a thread
+  started through the SDK's own `nn::os::CreateThread` calls by name what the game's calls reach (`loader.c` `dm_sym_bound`: the host's take-over
+  where there is one, else the SDK's code; `guest_sym` gives the SDK's definition even where the game's calls are taken over, and calling
+  `nn::time::Initialize` that way reached the time service over IPC and aborted), logs "[sdk-test]" lines and ends the run (exit 0 / 1; nothing
+  saved). time: Initialize, the user and network clocks within a second of the host's, ToCalendarTime of now equal to localtime_r with its UTC
+  offset, the SDK libc's own time(); font: shared font 0 loaded with a TrueType header, and the SDK's font engine (nn::fontll) loads it and draws
+  'A' at 30 px. Tears of the Kingdom and manosaba: 8 of 8 each. Vibration waits for 67 (the host has no vibration yet). The user clock an hour
+  ahead (`DM_TEST_SDK_TIME_SKEW=1`, `hle_time.c`): 2 fail (the user and network clocks)
 - [ ] 148 an in-game settings panel and a control layout editor for the touch controls (BotWRecomp menu, lordran)
 
 Tier 3d, from the evening sync of 2026-10-20 (sources in that section; after 3c, before Tier 4). Correctness, small:

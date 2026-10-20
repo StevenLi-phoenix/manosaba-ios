@@ -16,8 +16,10 @@ static int64_t fixed_time(void) {
 }
 HLE_FORCE("_ZN2nn4time10InitializeEv", "connects to the time service; clocks come from the host system time", Result, h_time_Initialize, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn4time13IsInitializedEv", "the time service is taken over: always initialized", int, h_time_IsInitialized, void) { return 1; }
+// DM_TEST_SDK_TIME_SKEW=1: the negative control of host/sdktest.c's time checks only: the user clock an hour ahead
+static int64_t skew(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_TEST_SDK_TIME_SKEW"); v = e && !strcmp(e, "1"); if (v) LOG("DM_TEST_SDK_TIME_SKEW=1: the user clock an hour ahead (a test)"); } return v ? 3600 : 0; }
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "user clock → host time()", Result, h_time_GetCurrentTime, int64_t *out) {
-    int64_t ft = fixed_time(); *out = ft >= 0 ? ft : time(NULL); return RES_OK;
+    int64_t ft = fixed_time(); *out = (ft >= 0 ? ft : time(NULL)) + skew(); return RES_OK;
 }
 // The real GetSystemClockContext asks the time service, which the host does not have, and fails. Unity's IL2CPP clock (manosaba main+0x394ba0 / +0x394c40,
 // behind DateTime.UtcNow / Now) only marks itself initialized once this succeeds and returns 0 ticks until then, so DateTime.Now was 0001-01-01 and every
@@ -126,7 +128,7 @@ typedef struct {
 } ClockSnapshot;
 _Static_assert(sizeof(CalendarTime) == 8 && sizeof(CalendarAdditionalInfo) == 0x18 && sizeof(ClockSnapshot) == 0xd0, "time layouts");
 static int64_t steady_s(void) { return (int64_t)(guest_ns() / 1000000000ull); }
-static int64_t user_now(void) { int64_t ft = fixed_time(); return ft >= 0 ? ft : time(NULL); }
+static int64_t user_now(void) { int64_t ft = fixed_time(); return (ft >= 0 ? ft : time(NULL)) + skew(); }
 static void location_name(char *out, size_t n) {
     memset(out, 0, n);
     if (fixed_time() >= 0) { strlcpy(out, "UTC", n); return; }   // main.c pins TZ to UTC then

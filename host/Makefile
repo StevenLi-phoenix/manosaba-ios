@@ -41,6 +41,7 @@ SRC = \
 	movie_webm.c \
 	options.c \
 	romfs_validate.c \
+	sdktest.c \
 	sead.c \
 	thread.c \
 	touchpad.c \
