@@ -2,6 +2,8 @@
 // second one's original not what the image holds), and an image with the originals. DM_OPTIONS=a,zzz applies a's two rows and nothing else, says
 // zzz is unknown; without DM_OPTIONS the directory's options.default (b) is used; DM_OPTIONS= and DM_OPTIONS=none ask for none; c is refused whole
 // (its first row not written either). Negative control: -DDM_TEST_OPTIONS_NO_CHECK (written without checking) writes c's first row.
+// Embedded (iOS, plan item 136): an image with a's new bytes, b's originals and c half written: a on, b and c off (c reported), b asked for and
+// missing reported; the embedded options not taken as on (-DDM_TEST_OPTIONS_EMBED_IGNORED) fails 1.
 #include "../options.c"
 #include <stdlib.h>
 #include <unistd.h>
@@ -33,6 +35,9 @@ int main(void) {
     CHECK(!w[0], "DM_OPTIONS=none: none");
     setenv("DM_OPTIONS", " c , ", 1); dm_options_wanted(dir, w, sizeof w); reset(); r = dm_options_apply(dir, "main", img, sizeof img, w);
     CHECK(r == -1 && img[0x40] == 0x55 && img[0x50] == 0x66 && !dm_option_on("c"), "c with a row whose original differs: refused whole, its first row not written either");
+    g_non = 0; reset(); img[0x10] = 0xaa; img[0x11] = 0xbb; img[0x20] = 0xcc; img[0x40] = 0xee;   // a built in, b original, c's first row only
+    int on = dm_options_embedded(dir, "main", img, sizeof img, "a,b");
+    CHECK(on == 1 && dm_option_on("a") && !dm_option_on("b") && !dm_option_on("c"), "embedded: a on (all its new bytes), b off (originals), c off (half written; %d on)", on);
     snprintf(p, sizeof p, "rm -rf '%s'", dir); if (system(p)) {}
     printf("== %d checks, %d failed ==\n", n, fail); return fail != 0;
 }

@@ -1702,8 +1702,15 @@ Tier 3c, iOS:
   thermal state changes, with the reason logged; `ENABLE_DEBUG_DYLIB: NO` in `ios/project.yml` (kept by project_m3.py). `t_pace` (7 policy cases;
   the setting alone fails 3), `t_ios_cpu.py` (2 more checks; the spec without the line fails 2). On a device (the user): Low Power Mode on and
   off while playing logs "frame rate 30 fps (Low Power Mode)" and back
-- [ ] 136 patches always applied, chosen by the page (no option pages on iOS); after 139: fps60's 13 sites write immediates (`mov w8, #1`, `cmp w10, #1`),
-  and a load from the page needs a second instruction there, so a code cave each (realtime and scene already read the page)
+- [x] batch 39 · 136 no option pages on iOS: the code options are built into the embedded image instead of written at load (iOS maps the signed
+  executable's code): `ios/tools/gen_embed.py` writes the options the app is built with (DM_OPTIONS at build time, else the product's
+  options.default) into a copy of each module's image, every original checked first and an option whole or the build stops (an option no module
+  lists stops it too), and the loader reads them back from the image (`options.c` `dm_options_embedded`: all new bytes on, all originals off,
+  anything else in red; asked for but not built in, in red), so `dm_option_on` answers as on the Mac. The choices that change at run time stay
+  data: the frame rate is the host's pacing (the setting, item 130's hold, 135's policy) over fps60's minimum interval 1, the step the host page
+  (realtime), the scene size the host page (scene). Making fps60's 13 sites read their minimum from the page (totk-mobile's design) would need a
+  code cave each with flag-free selects (0x2db22c's flags are live): not needed with the host deciding the rate. manosaba has no options: its app
+  is unchanged. `t_gen_embed.py` (7; options not written fails 3), `t_options` (1 more; embedded options ignored fails 1)
 
 Tier 3c, larger:
 - [ ] 137 one varying interface as a fallback library, pairs noted at bind time (a chain rebuild)

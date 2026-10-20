@@ -66,6 +66,35 @@ int dm_options_apply(const char *dir, const char *module, uint8_t *img, size_t s
     free(r);
     return refused ? -1 : words;
 }
+// iOS (plan item 136): the options built into the embedded image (ios/tools/gen_embed.py writes them before embedding, as the loader cannot change
+// signed code). An option whose rows all hold their new bytes is on, all their originals off, anything else is reported in red; an option asked
+// for that the app was built without is reported too (the app must be built with DM_OPTIONS). Returns the options on
+int dm_options_embedded(const char *dir, const char *module, const uint8_t *img, size_t sz, const char *wanted) {
+    char p[1100]; snprintf(p, sizeof p, "%s/%s.options.tsv", dir, module);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    char names[OPT_MAX][32]; int st[OPT_MAX], nn = 0; char line[1024];   // st: bit 0 a row holds its new bytes, bit 1 its original, bit 2 neither
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#') continue;
+        char name[32], off[32], ob[64], nb[64]; uint8_t o[16], b[16];
+        if (sscanf(line, "%31s %31s %63s %63s", name, off, ob, nb) != 4) continue;
+        if (!listed(g_seen, g_nseen, name) && g_nseen < OPT_MAX) strlcpy(g_seen[g_nseen++], name, sizeof g_seen[0]);
+        int k = 0; while (k < nn && strcmp(names[k], name)) k++;
+        if (k == nn) { if (nn == OPT_MAX) continue; strlcpy(names[nn], name, sizeof names[0]); st[nn++] = 0; }
+        uint64_t at = strtoull(off, NULL, 0); int l = hexbytes(ob, o, 16);
+        if (l <= 0 || hexbytes(nb, b, 16) != l || at + (uint64_t)l > sz) { st[k] |= 4; continue; }
+        st[k] |= !memcmp(img + at, b, (size_t)l) ? 1 : !memcmp(img + at, o, (size_t)l) ? 2 : 4;
+    }
+    fclose(f);
+    int on = 0;
+    for (int k = 0; k < nn; k++) {
+#ifndef DM_TEST_OPTIONS_EMBED_IGNORED   // negative control of t_options only: the embedded options not taken as on, as before
+        if (st[k] == 1) { if (!listed(g_on, g_non, names[k]) && g_non < OPT_MAX) strlcpy(g_on[g_non++], names[k], sizeof g_on[0]); on++; LOG("option %s: built into %s", names[k], module); }
+#endif
+        if (st[k] != 1 && st[k] != 2) LOG("[red] option %s: %s holds neither all its new bytes nor all its originals (state %d): taken as off", names[k], module, st[k]);
+        if (wanted_has(wanted, names[k]) && st[k] != 1) LOG("[red] option %s asked for, but this app was built without it (build it with DM_OPTIONS=%s)", names[k], wanted);
+    }
+    return on;
+}
 // After every module: an option asked for that no module lists (a typing error) in red; returns how many
 int dm_options_check(const char *wanted) {
     int bad = 0;

@@ -345,6 +345,7 @@ void loader_hash_log(void) {
 
 // Code options asked for (options.c): applied to each module's image before its code is sealed
 static char g_options_wanted[256];
+int dm_options_embedded(const char *dir, const char *module, const uint8_t *img, size_t sz, const char *wanted);   // options.c (iOS)
 void dm_options_wanted(const char *dir, char *out, size_t n); int dm_options_apply(const char *dir, const char *module, uint8_t *img, size_t sz, const char *wanted); int dm_options_check(const char *wanted);
 #if TARGET_OS_IPHONE
 // iOS does not allow code loaded at run time to execute, and Apple allows an executable only one segment with execute permission (ITMS-90999): the image is compiled into this executable by ios/tools/gen_embed.py --
@@ -360,7 +361,6 @@ static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned lo
 }
 #define IMAGE_MH (&_mh_execute_header)
 static void map_image(module_t *m, const char *dir) {
-    (void)dir;
     char sx0[17], sx1[17], dm[17]; snprintf(sx0, sizeof sx0, "__dm%sx0", m->name); snprintf(sx1, sizeof sx1, "__dm%sx1", m->name); snprintf(dm, sizeof dm, "__DM%sW", m->name);
     unsigned long z0, zw, z1;
     const uint8_t *x0 = getsectiondata(IMAGE_MH, "__TEXT", sx0, &z0), *w = getsectiondata(IMAGE_MH, dm, "__img", &zw), *x1 = getsectiondata(IMAGE_MH, "__TEXT", sx1, &z1);
@@ -374,7 +374,7 @@ static void map_image(module_t *m, const char *dir) {
     remap_at(m, base + z0, w, zw, TRUE, VM_PROT_READ | VM_PROT_WRITE);
     remap_at(m, base + m->patch_off, x1, z1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
-    if (*g_options_wanted) LOG("[red] %s: options %s are not applied on iOS (the code is the signed executable's; changed pages would have to be embedded, plan item 62)", m->name, g_options_wanted);
+    dm_options_embedded(dir, m->name, m->base, m->patch_off, g_options_wanted);   // the options are built into the image (ios/tools/gen_embed.py, plan item 136)
 }
 #else
 static uint8_t *slurp(const char *path, size_t *n) {
