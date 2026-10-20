@@ -43,6 +43,26 @@ What `build` puts into the app (`Gen/`, generated, not committed):
 | `shader_map.tsv`, `c1_full.tsv` | the profile's workspace |
 | `msl/b-<V>/` | iOS shader libraries of the current chain version |
 
+## iOS Simulator
+
+For the on-screen controls, safe areas and lifecycle without a phone (plan item 114):
+
+```sh
+python3 ios/tools/sim_metal.py $DM_ROOT/build/mano/shader_map.tsv $DM_ROOT/build/cache/metal_shader_cache/b-<V> $DM_ROOT/build/ios/sim/manosaba/b-<V>
+ios/run.sh sim-build              # Metal 3, arm64, unsigned (log: $DM_ROOT/run/ios/build-sim.log)
+DM_SIM_ENV="DM_TOUCH=pad" ios/run.sh sim-run 30    # iPhone 17 Pro (DM_SIM_DEVICE), a screenshot in $DM_ROOT/run/ios/sim.png
+DM_SIM_BG=20,10 ios/run.sh sim-run 30              # a real trip to the background (the Settings app) and back, judged: LIFECYCLE OK / RED
+ios/run.sh sim-stop
+```
+
+The Simulator is no device: the SDK (Xcode 27) has no Metal 4 and no MetalFX, so this is the Metal 3 build without MetalFX; its GPU is an
+Apple family 2 stand-in (Apple's "Developing Metal apps that run in Simulator": argument buffers tier 1, no unified memory, no programmable
+blending, at most 256 MB a buffer here), and the game's pictures come out wrong (manosaba's title screen, which the Mac shows at the same
+frame, nearly black). Device metallibs do not
+load there (`sim_metal.py` compiles the same MSL with the Simulator's SDK; the metallib header's platform byte says which: 7 the Simulator, 2 a
+device). The game data is cloned into the app's container (APFS, no bytes copied): a link to a folder under the Desktop made the app wait in
+`open()` for a permission answer. VP8 / VP9 movies do not play (no libvpx for the Simulator).
+
 ## Unsigned IPA
 
 `run.sh ipa` builds without signing (`CODE_SIGNING_ALLOWED=NO`, its own derived data `run/ios/dd-ipa`, so the signed build stays installable)

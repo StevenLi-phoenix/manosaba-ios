@@ -2,6 +2,7 @@
 # Build inputs of the iOS app, taken from the host's own compile command (make -n -B dmhost GAME=<game>), so the app follows host/Makefile:
 #   Gen/src/<flat name>   symlinks to the host sources (not main.c and not *_mac.* sources; main.c goes to Gen/main/main.c, built with -Dmain=dm_main)
 #   stdout               xcconfig lines: HEADER_SEARCH_PATHS (the -I directories and every source directory), OTHER_CFLAGS (-D), DM_FRAMEWORKS
+#                        (and for the Simulator SDK, which has no MetalFX, without it)
 # Usage: gen_build.py <host dir> <Gen dir> <game>
 import os, shlex, subprocess, sys
 host, gen, game = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2]), sys.argv[3]
@@ -33,3 +34,4 @@ for s in srcs:
 print('HEADER_SEARCH_PATHS = $(inherited) ' + ' '.join(f'"{d}"' for d in incs + dirs) + ' $(DM_VPX_INC)')   # DM_VPX_INC: ios/run.sh (the iOS libvpx, plan item 62b)
 print('OTHER_CFLAGS = $(inherited) ' + ' '.join(defs))
 print('DM_FRAMEWORKS = ' + ' '.join(f'-framework {f}' for f in fws if f != 'Cocoa'))
+print('DM_FRAMEWORKS[sdk=iphonesimulator*] = ' + ' '.join(f'-framework {f}' for f in fws if f not in ('Cocoa', 'MetalFX')))   # the Simulator SDK has no MetalFX (plan item 114)

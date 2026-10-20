@@ -38,7 +38,9 @@ static NSString *diag_head(void) {
 #endif
     [h appendFormat:@"%s, shader chain %s, this session up %.0f s\n", build, DMSH_CHAIN, (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - g_t0) / 1e9];
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice(); BOOL m4 = NO;
+#if !TARGET_OS_SIMULATOR   // the Simulator SDK has no Metal 4 (plan item 114)
     if (@available(iOS 26.0, *)) m4 = [dev supportsFamily:MTLGPUFamilyMetal4];
+#endif
     [h appendFormat:@"GPU %@: Metal 4 %s, Metal 3 %s, argument buffers tier %d, BC textures %s, working set %.0f MB recommended, %.0f MB allocated by the app\n",
         dev.name, m4 ? "yes" : "no", [dev supportsFamily:MTLGPUFamilyMetal3] ? "yes" : "no", (int)dev.argumentBuffersSupport + 1,
         dev.supportsBCTextureCompression ? "yes" : "no", dev.recommendedMaxWorkingSetSize / 1048576.0, dev.currentAllocatedSize / 1048576.0];

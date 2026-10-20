@@ -11,6 +11,14 @@
 #                             fetch boot.txt and judge it (tools/lifecycle_check.py: LIFECYCLE OK / RED). The real home button and app switcher
 #                             need UI automation on the phone and are not this
 #   run.sh push-data          copy the game's RomFS and shared fonts from the workspace into the app (Library/Application Support)
+#   run.sh sim-build          the same build for the iOS Simulator (plan item 114: the on-screen controls, safe areas and lifecycle without a phone):
+#                             Metal 3 (the Simulator SDK has no Metal 4 and no MetalFX), arm64, unsigned, the Simulator's shaders
+#                             ($DM_ROOT/build/ios/sim/<game>/b-<chain>, ios/tools/sim_metal.py), no libvpx
+#   run.sh sim-run [seconds]  on a Simulator (DM_SIM_DEVICE, default "iPhone 17 Pro"; booted without a window): install, clone the workspace's RomFS
+#                             and fonts into the app (once; DM_SIM_DATA=fresh again), launch with DM_SIM_ENV="A=1 B=2" (DM_NVN_TBDR=0 unless given), wait, then a screenshot
+#                             ($DM_ROOT/run/ios/sim.png) and Documents/boot.txt (sim_boot.txt). DM_SIM_BG=<at>,<len>: at <at> s the Settings app
+#                             is opened (this one goes to the background) and after <len> s this one again, then tools/lifecycle_check.py judges it
+#   run.sh sim-stop           shut the Simulators down (a booted one keeps its memory; sim-run boots it again)
 # Build switches: DM_FREE_ACCOUNT=1 (free developer account: no iCloud / memory / sustained-execution entitlements), DM_IOS_M3=1 (older-API build,
 # iOS 18), DM_DEVICE_FAMILY=1 (iPhone only), DM_ENV_FILE=<file> (DM_* switches read at launch, as Documents/env.txt is).
 set -u
@@ -27,8 +35,8 @@ DD=${DM_IOS_DD:-$R/dd}
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app
 CMD=${1:-}
 
-if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
-  if [ "$CMD" = ipa ]; then local_env_need DM_BUNDLE_ID || exit 1; else local_env_need DM_TEAM_ID DM_BUNDLE_ID || exit 1; fi
+if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
+  if [ "$CMD" != build ]; then local_env_need DM_BUNDLE_ID || exit 1; else local_env_need DM_TEAM_ID DM_BUNDLE_ID || exit 1; fi
   OUT=$(ws product); MODS=$(get modules); TITLE=$(get title)
   rm -rf Gen; mkdir -p Gen/dm Gen/msl
   # Host sources, header paths and frameworks from host/Makefile; the game's modules as embedded code
@@ -36,15 +44,17 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
   F=$(python3 tools/gen_embed.py "$OUT" Gen/embed.S $MODS) || { t "[red] gen_embed failed ($OUT)"; exit 1; }
   # VP8 / VP9 movies (plan item 62b): the iOS libvpx when it has been built (tools/build_libvpx.sh), checked first; host/hle_movie.c finds its headers
   VPX=$ROOT/build/ios/libvpx; VPXL=; VPXI=
-  if [ -f "$VPX/lib/libvpx.a" ]; then python3 tools/vpx_check.py "$VPX/lib/libvpx.a" 18.0 || exit 1; VPXL="\"$VPX/lib/libvpx.a\""; VPXI="\"$VPX/include\""
+  if [ "$CMD" = sim-build ]; then t "Simulator: no libvpx (the iOS one is built for the device): VP8 / VP9 movies will not play"
+  elif [ -f "$VPX/lib/libvpx.a" ]; then python3 tools/vpx_check.py "$VPX/lib/libvpx.a" 18.0 || exit 1; VPXL="\"$VPX/lib/libvpx.a\""; VPXI="\"$VPX/include\""
   else t "no iOS libvpx in $VPX: VP8 / VP9 movies will not play (ios/tools/build_libvpx.sh builds it)"; fi
   { echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F $VPXL"; echo "DM_VPX_INC = $VPXI"; echo "DM_GAME_TITLE = $TITLE"; } >> Gen/dm.xcconfig
   for m in $MODS; do cp "$OUT/$m.fixups.tsv" "$OUT/$m.gates.tsv" Gen/dm/ || exit 1; done
   cp "$(ws shader_map)" Gen/dm/shader_map.tsv || { t "[red] no shader stage map"; exit 1; }
   if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || exit 1; t "env switches baked in from $DM_ENV_FILE"; fi   # read at launch (host/envfile.h)
   C1=$(ws c1) && [ -f "$C1" ] && cp "$C1" Gen/dm/c1_full.tsv
-  # iOS shaders of the current translation chain version
+  # iOS shaders of the current translation chain version (the Simulator's own: ios/tools/sim_metal.py)
   MSL=$(ws msl_ios); V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' ../gfx/nvn/dmsh_chain.h)
+  [ "$CMD" = sim-build ] && MSL=$ROOT/build/ios/sim/$GAME
   [ -n "$V" ] && ls "$MSL/b-$V" 2>/dev/null | grep -q "_b.metallib$" || { t "[red] no iOS shaders in $MSL/b-$V (gfx/tools/dmsh_build.py with IOSOUT)"; exit 1; }
   python3 tools/shader_check.py "$(ws shader_map)" "$MSL/b-$V" "../games/$GAME/fout.tsv" || { t "[red] build the game's iOS shaders first (gfx/tools/dmsh_build.py with IOSOUT)"; exit 1; }   # every shader of the map (plan item 174)
   cp -cR "$MSL/b-$V" Gen/msl/
@@ -62,10 +72,17 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
   SPEC=project.yml; FREE=
   python3 tools/project_lang.py $SPEC project_lang.yml $(get apple_localizations) || exit 1; SPEC=project_lang.yml   # the per-app language setting (plan item 170)
   if [ "${DM_FREE_ACCOUNT:-0}" = 1 ]; then python3 tools/project_free.py $SPEC project_free.yml || { rm -f project_lang.yml; exit 1; }; SPEC=project_free.yml; FREE=free; fi
-  if [ "${DM_IOS_M3:-0}" = 1 ]; then python3 tools/project_m3.py $SPEC project_m3.yml || { rm -f project_lang.yml project_free.yml; exit 1; }; SPEC=project_m3.yml; fi
+  if [ "${DM_IOS_M3:-0}" = 1 ] || [ "$CMD" = sim-build ]; then python3 tools/project_m3.py $SPEC project_m3.yml || { rm -f project_lang.yml project_free.yml; exit 1; }; SPEC=project_m3.yml; fi
   xcodegen generate -q --spec $SPEC >/dev/null; XG=$?; rm -f project_lang.yml project_free.yml project_m3.yml
   [ $XG = 0 ] || { t "[red] xcodegen failed"; exit 1; }
   BN=$(git log -1 --format=%ct 2>/dev/null); [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] && BN=1; BN=${BN:-1}
+  if [ "$CMD" = sim-build ]; then
+    t "building $TITLE ($GAME) for the Simulator (Metal 3, arm64, unsigned), build number $BN"
+    xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+      -derivedDataPath "$R/dd-sim" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO DM_BUILD_NUMBER=$BN build > "$R/build-sim.log" 2>&1 || {
+        t "[red] build failed (see $R/build-sim.log)"; grep -E 'error:|BUILD FAILED' "$R/build-sim.log" | head -20; exit 1; }
+    t "built $R/dd-sim/Build/Products/Release-iphonesimulator/DmIOS.app"; exit 0
+  fi
   if [ "$CMD" = ipa ]; then
     # No signature and no entitlements: whoever installs it signs it with their own certificate and profile, which decide what the app may use
     # (iCloud save sync, increased memory limit, ...). Its own derived data, so the signed build of run.sh build stays installable
@@ -102,6 +119,41 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ]; then
     DM_BUILD_NUMBER=$BN ${DM_DEVICE_FAMILY:+DM_DEVICE_FAMILY=$DM_DEVICE_FAMILY} build > "$R/build.log" 2>&1 || {
       t "[red] build failed (see $R/build.log)"; grep -E 'error:|BUILD FAILED' "$R/build.log" | head -20; exit 1; }
   t "built $APP"; exit 0
+fi
+
+if [ "$CMD" = sim-stop ]; then xcrun simctl shutdown all; t "Simulators shut down"; exit 0; fi
+if [ "$CMD" = sim-run ]; then
+  local_env_need DM_BUNDLE_ID || exit 1; B=$DM_BUNDLE_ID; WAIT=${2:-60}
+  APPS=$R/dd-sim/Build/Products/Release-iphonesimulator/DmIOS.app; [ -d "$APPS" ] || { t "[red] no Simulator build: run.sh sim-build"; exit 1; }
+  NAME=${DM_SIM_DEVICE:-iPhone 17 Pro}
+  SIM=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; n=sys.argv[1]; print(next((d["udid"] for r in json.load(sys.stdin)["devices"].values() for d in r if n in (d["name"], d["udid"])), ""))' "$NAME")
+  [ -n "$SIM" ] || { t "[red] no available Simulator device \"$NAME\" (xcrun simctl list devices available)"; exit 1; }
+  xcrun simctl boot "$SIM" 2>/dev/null; xcrun simctl bootstatus "$SIM" -b > /dev/null || { t "[red] the Simulator $NAME did not boot"; exit 1; }
+  xcrun simctl install "$SIM" "$APPS" || { t "[red] install failed"; exit 1; }
+  DATA=$(xcrun simctl get_app_container "$SIM" "$B" data) || { t "[red] no data container"; exit 1; }
+  mkdir -p "$DATA/Library/Application Support" "$DATA/Documents"
+  for x in romfs:romfs sysfont:sysfont; do   # the workspace's data cloned in (APFS: no bytes copied); a link would make the Simulator ask for the folder's
+    dst="$DATA/Library/Application Support/${x##*:}"   # files (the Desktop's, say: the app then waits in open() for that answer). Once; DM_SIM_DATA=fresh again
+    { [ "${DM_SIM_DATA:-}" = fresh ] || [ -L "$dst" ]; } && rm -rf "$dst"; [ -d "$dst" ] && continue
+    src=$(ws "${x%%:*}") && [ -d "$src" ] || { t "skipped ${x%%:*}: no ${src:-(workspace.${x%%:*} not set)}"; continue; }
+    t "cloning $(cd "$src" && pwd -P) → Library/Application Support/${x##*:}"
+    cp -cR "$(cd "$src" && pwd -P)" "$dst.part" && mv "$dst.part" "$dst" || { t "[red] cloning ${x%%:*} failed (another volume?)"; rm -rf "$dst.part"; exit 1; }
+  done
+  rm -f "$DATA/Documents/boot.txt"
+  export SIMCTL_CHILD_DM_NVN_TBDR=0   # the TBDR rewrites' pass merges load readable-tile libraries the Simulator's shader directory leaves out
+  for kv in ${DM_SIM_ENV:-}; do export "SIMCTL_CHILD_$kv"; done
+  xcrun simctl launch --terminate-running-process "$SIM" "$B" > "$R/sim-launch.log" 2>&1 || { t "[red] launch failed"; cat "$R/sim-launch.log"; exit 1; }
+  if [ -n "${DM_SIM_BG:-}" ]; then
+    AT=${DM_SIM_BG%%,*}; LEN=${DM_SIM_BG##*,}
+    t "launched on $NAME; to the background at ${AT}s for ${LEN}s (the Settings app opened), waiting $((AT + LEN + WAIT))s in all"
+    sleep "$AT"; xcrun simctl launch "$SIM" com.apple.Preferences > /dev/null; sleep "$LEN"; xcrun simctl launch "$SIM" "$B" > /dev/null
+  else t "launched on $NAME, waiting ${WAIT}s"; fi
+  sleep "$WAIT"
+  xcrun simctl io "$SIM" screenshot "$R/sim.png" > /dev/null 2>&1 && t "screenshot: $R/sim.png"
+  cp "$DATA/Documents/boot.txt" "$R/sim_boot.txt" 2>/dev/null || cp "$DATA/Documents/boot.launch.txt" "$R/sim_boot.txt" 2>/dev/null || { t "[red] no log"; exit 1; }
+  t "log: $R/sim_boot.txt"; tail -20 "$R/sim_boot.txt"
+  if [ -n "${DM_SIM_BG:-}" ]; then python3 -I ../tools/lifecycle_check.py "$R/sim_boot.txt"; exit $?; fi
+  exit 0
 fi
 
 local_env_need DM_DEVICE DM_BUNDLE_ID || exit 1

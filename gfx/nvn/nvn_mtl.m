@@ -2,7 +2,15 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CAMetalDisplayLink.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_SIMULATOR   // the iOS Simulator SDK has no MetalFX (Xcode 27; plan item 114): no scaler is ever made, the callers keep their own paths
+#define DM_METALFX 0
+#define FX_SCALER id
+#else
+#define DM_METALFX 1
+#define FX_SCALER id<MTLFXSpatialScalerBase>
 #import <MetalFX/MetalFX.h>
+#endif
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
@@ -340,7 +348,11 @@ void mtl_init(void) { @autoreleasepool {
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("no Metal device");
+#if TARGET_OS_SIMULATOR   // the Simulator's stand-in reports none; its buffers are the Mac's (plan item 114: tried as they are)
+    if (!g_dev.hasUnifiedMemory) MLOG("the iOS Simulator's GPU reports no unified memory: zero-copy memory pools tried anyway");
+#else
     if (!g_dev.hasUnifiedMemory) MDIE("a unified-memory device is required (zero-copy memory pools)");
+#endif
     g_q = [g_dev newCommandQueue];
 #if DM_NVN_M3
     stream_queue_once();
@@ -7241,7 +7253,7 @@ void mtl_set_upscale_pass(const char *fs, int color, const char *compose_fs, int
     g_up_color[0] = color; g_up_color[1] = compose_color;
 }
 typedef struct {
-    id<MTLFXSpatialScalerBase> sc; id<MTLTexture> out; NSUInteger iw, ih, ow, oh; MTLPixelFormat fi, fo; int mode;   // the scaler in use, what it was made for, its own output (compose)
+    FX_SCALER sc; id<MTLTexture> out; NSUInteger iw, ih, ow, oh; MTLPixelFormat fi, fo; int mode;   // the scaler in use, what it was made for, its own output (compose)
     NSUInteger bad_iw, bad_ih, bad_ow, bad_oh; MTLPixelFormat bad_fi, bad_fo;                                         // the last configuration that could not be made (not tried again)
     uint64_t done, kept[7];   // kept: draws left to the game, by reason (fxp_why)
 } fxp_ctx;
@@ -7257,6 +7269,11 @@ static const char *const fxp_why[7] = {"the scaler not made", "the targets", "bl
 // The scaler for src → ow x oh: into dst (its format), or into a texture of its own (dst nil: the scene's format)
 static int fxp_ready(fxp_ctx *c, int which, id<MTLTexture> src, id<MTLTexture> dst, NSUInteger ow, NSUInteger oh, int mode) {
     MTLPixelFormat fo = dst ? dst.pixelFormat : src.pixelFormat;
+#if !DM_METALFX
+    (void)c; (void)which; (void)ow; (void)oh; (void)mode; (void)fo;
+    if (!g_fxp.unavailable) { g_fxp.unavailable = 1; MLOG("MetalFX for the game's upscale: the iOS Simulator has no MetalFX; the game's own"); }
+    return 0;
+#else
     if (c->sc && c->iw == src.width && c->ih == src.height && c->ow == ow && c->oh == oh && c->fi == src.pixelFormat && c->fo == fo && c->mode == mode) return 1;
     if (g_fxp.unavailable || (c->bad_iw == src.width && c->bad_ih == src.height && c->bad_ow == ow && c->bad_oh == oh && c->bad_fi == src.pixelFormat && c->bad_fo == fo)) return 0;
     const char *why = NULL;
@@ -7273,9 +7290,9 @@ static int fxp_ready(fxp_ctx *c, int which, id<MTLTexture> src, id<MTLTexture> d
     d.colorProcessingMode = (MTLFXSpatialScalerColorProcessingMode)mode;
     uint64_t t0 = now_ns();
 #if DM_NVN_M3
-    id<MTLFXSpatialScalerBase> sc = [d newSpatialScalerWithDevice:g_dev];
+    FX_SCALER sc = [d newSpatialScalerWithDevice:g_dev];
 #else
-    id<MTLFXSpatialScalerBase> sc = [d newSpatialScalerWithDevice:g_dev compiler:g_fxp.comp];
+    FX_SCALER sc = [d newSpatialScalerWithDevice:g_dev compiler:g_fxp.comp];
 #endif
     id<MTLTexture> out = nil;
     if (!sc) why = "no scaler for them";
@@ -7298,10 +7315,14 @@ static int fxp_ready(fxp_ctx *c, int which, id<MTLTexture> src, id<MTLTexture> d
     MLOG("MetalFX %s: a scaler for %lux%lu (format %lu) → %lux%lu (format %lu)%s, colour processing %d, made in %.1f ms", fxp_name[which], (unsigned long)src.width, (unsigned long)src.height,
          (unsigned long)src.pixelFormat, (unsigned long)ow, (unsigned long)oh, (unsigned long)fo, out ? " of its own" : "", mode, (now_ns() - t0) / 1e6);
     return 1;
+#endif
 }
 static void fxp_encode(fxp_ctx *c, id<MTLTexture> src, NSUInteger cw, NSUInteger ch, id<MTLTexture> out) {
     rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
-    id<MTLFXSpatialScalerBase> sc = c->sc;
+#if !DM_METALFX
+    (void)c; (void)src; (void)cw; (void)ch; (void)out;   // (never reached: fxp_ready makes no scaler)
+#else
+    FX_SCALER sc = c->sc;
     sc.colorTexture = src; sc.outputTexture = out; sc.inputContentWidth = cw; sc.inputContentHeight = ch;
 #if DM_NVN_M3
     [(id<MTLFXSpatialScaler>)sc encodeToCommandBuffer:(CBUF)g_cb];
@@ -7309,6 +7330,7 @@ static void fxp_encode(fxp_ctx *c, id<MTLTexture> src, NSUInteger cw, NSUInteger
     CENC e = enc_c_begin(NULL); [e updateFence:g_fxp.fence afterEncoderStages:MTLStageDispatch]; enc_c_end(e);   // (enc_c_begin: after everything before, on this command buffer)
     sc.fence = g_fxp.fence;
     [(id<MTL4FXSpatialScaler>)sc encodeToCommandBuffer:(CBUF)g_cb];
+#endif
 #endif
 }
 static void fxp_log(int which, NvShader *fs, NSUInteger cw, NSUInteger ch, id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
@@ -8655,7 +8677,7 @@ static int upscale_on(void) {
     return m;
 }
 static struct {   // present thread only
-    id<MTLFXSpatialScalerBase> scaler; id<MTLTexture> out;
+    FX_SCALER scaler; id<MTLTexture> out;
     NSUInteger iw, ih, ow, oh; MTLPixelFormat fmt;   // iw x ih: the whole input texture (MetalFX asserts it matches the descriptor); the crop is its content size
     id<MTLFence> fence;
 #if !DM_NVN_M3
@@ -8677,6 +8699,9 @@ static void fx_retire(id o) {
 static void fx_broken(const char *why) { g_fx.broken = 1; MLOG("[red] MetalFX upscaling unavailable (%s): bilinear scaling", why); }
 static int fx_ready(id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
     if (g_fx.broken) return 0;
+#if !DM_METALFX
+    (void)src; (void)ow; (void)oh; fx_broken("the iOS Simulator has no MetalFX"); return 0;
+#else
     NSUInteger cw = src.width, ch = src.height;
     if (g_fx.scaler && g_fx.iw == cw && g_fx.ih == ch && g_fx.ow == ow && g_fx.oh == oh && g_fx.fmt == src.pixelFormat) return 1;
     if (![MTLFXSpatialScalerDescriptor supportsDevice:g_dev]) { fx_broken("the device does not support the spatial scaler"); return 0; }
@@ -8693,9 +8718,9 @@ static int fx_ready(id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
     d.inputWidth = cw; d.inputHeight = ch; d.outputWidth = ow; d.outputHeight = oh;
     d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;   // the picture's bytes are gamma encoded (the present samples the swapchain through a non-sRGB view)
 #if DM_NVN_M3
-    id<MTLFXSpatialScalerBase> sc = [d newSpatialScalerWithDevice:g_dev];
+    FX_SCALER sc = [d newSpatialScalerWithDevice:g_dev];
 #else
-    id<MTLFXSpatialScalerBase> sc = [d newSpatialScalerWithDevice:g_dev compiler:g_fx.compiler];
+    FX_SCALER sc = [d newSpatialScalerWithDevice:g_dev compiler:g_fx.compiler];
 #endif
     if (!sc) { MLOG("[red] MetalFX: no spatial scaler for %lux%lu → %lux%lu format %lu", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh, (unsigned long)src.pixelFormat); fx_broken("scaler creation failed"); return 0; }
     if ((src.usage & sc.colorTextureUsage) != sc.colorTextureUsage) { MLOG("[red] MetalFX: the game picture's usage %#lx lacks %#lx", (unsigned long)src.usage, (unsigned long)sc.colorTextureUsage); fx_broken("input texture usage"); return 0; }
@@ -8710,6 +8735,7 @@ static int fx_ready(id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
 #endif
     MLOG("MetalFX spatial scaler for a %lux%lu texture → %lux%lu (format %lu)", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh, (unsigned long)src.pixelFormat);
     return 1;
+#endif
 }
 static void fx_state(int st) {
     if (st == g_fx.state) return;
@@ -8738,7 +8764,8 @@ static id<MTLTexture> fx_apply(CBUF cb, id<MTLTexture> src0, const int crop[4], 
         g_fx.log_cw = cw; g_fx.log_ch = ch; g_fx.log_ow = ow; g_fx.log_oh = oh;
         MLOG("MetalFX upscales the game's %lux%lu picture to %lux%lu on screen", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh);
     }
-    id<MTLFXSpatialScalerBase> sc = g_fx.scaler;
+#if DM_METALFX
+    FX_SCALER sc = g_fx.scaler;
     sc.colorTexture = src; sc.inputContentWidth = cw; sc.inputContentHeight = ch; sc.outputTexture = g_fx.out;
 #if DM_NVN_M3
     [(id<MTLFXSpatialScaler>)sc encodeToCommandBuffer:cb];
@@ -8747,6 +8774,7 @@ static id<MTLTexture> fx_apply(CBUF cb, id<MTLTexture> src0, const int crop[4], 
     [cb useResidencySet:g_fx.rs];
     [(id<MTL4FXSpatialScaler>)sc encodeToCommandBuffer:cb];
     *wait = g_fx.fence;
+#endif
 #endif
     out_crop[0] = out_crop[1] = 0; out_crop[2] = (int)ow; out_crop[3] = (int)oh;
     return g_fx.out;

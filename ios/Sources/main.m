@@ -332,7 +332,10 @@ static void host_start(NSString *romfs) {
 static int gpu_supported(char *why, size_t n) {
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice(); int ok = 0;
     if (getenv("DM_TEST_NO_METAL4")) ok = 0;
-#if DM_NVN_M3
+#if TARGET_OS_SIMULATOR   // the Simulator's GPU is an Apple family 2 stand-in, no Metal 3 (plan item 114): run anyway, for the controls, safe areas and lifecycle
+    else { ok = dev != nil; if (ok) plog("boot: the iOS Simulator's GPU (%s, argument buffers tier %d): run for the controls, safe areas and lifecycle, the pictures are not a device's",
+                                        dev.name.UTF8String, (int)dev.argumentBuffersSupport + 1); else snprintf(why, n, "No Metal device in the Simulator."); }
+#elif DM_NVN_M3
     else ok = dev && [dev supportsFamily:MTLGPUFamilyMetal3];
     if (!ok) snprintf(why, n, "This device's GPU (%s) does not support Metal 3, which this build needs.", dev ? dev.name.UTF8String : "none");
 #else

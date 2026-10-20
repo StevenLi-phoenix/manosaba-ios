@@ -2358,7 +2358,23 @@ Tier 4, large:
   screen-space coordinate it divides out of its varyings, not at the fragment's own position, and framebuffer fetch reads only the fragment's
   own pixel; standing in would need a proof the coordinate is that pixel. The copies cost was within run-to-run timing on the Mac (42); what
   they cost on an iPhone (three 1600x896 copies twice a frame docked) is a device check
-- [ ] 114 an iOS Simulator build for the touch controls, safe areas and lifecycle
+- [x] batch 57 · 114 an iOS Simulator build for the touch controls, safe areas and lifecycle: `ios/run.sh sim-build` / `sim-run [s]` /
+  `sim-stop` (ios/README.md). What the Simulator is here (Xcode 27, iOS 26.5 runtime): its SDK's Metal 4 headers are empty and it has no MetalFX,
+  so the build is the Metal 3 one (`project_m3.py`) with MetalFX compiled out (`DM_METALFX` in `gfx/nvn/nvn_mtl.m`: no scaler is ever made, the
+  callers keep their own paths; `gen_build.py` leaves the framework out for that SDK), arm64, unsigned, without libvpx. Its GPU is an Apple
+  family 2 stand-in (Apple's "Developing Metal apps that run in Simulator"; here argument buffers tier 1, no unified memory, no Metal 3 family,
+  256 MB a buffer at most): the app's GPU check and the replay's unified-memory requirement let it run there with a line saying so, and the
+  pictures are not a device's (manosaba's title screen, which the Mac shows at frame 2700, nearly black). Device metallibs do not load there:
+  `ios/tools/sim_metal.py` compiles the map's MSL with the Simulator's SDK (iOS's flags from `gfx/tools/ios_metal.py`, which dmsh_build.py
+  fingerprints and so stays as it is; manosaba's 2,740 in 24 s; the readable-tile variants left out, `sim-run` sets `DM_NVN_TBDR=0`). The game
+  data is cloned into the app's container (APFS, no bytes copied): a link to the workspace's RomFS under the Desktop left the app waiting in
+  `open()` for the folder's permission. Measured with manosaba on an iPhone 17 Pro Simulator: the game runs (frame time p50 20 ms); with
+  `DM_TOUCH=pad` the on-screen controls lay out in the safe area the Simulator reports (left 62, right 62, bottom 20 points: clear of the
+  Dynamic Island); `DM_SIM_BG=20,10` (the Settings app opened for 10 s, then this one again: a real background trip, not `DM_TEST_BG`) gives
+  LIFECYCLE OK on all six checks (`tools/lifecycle_check.py`). `tools/tests/t_sim_metal.py` (5: the flags, three libraries of the Simulator
+  by the metallib header's platform byte, 7 against a device's 2 and macOS's 1, kept on a second run, a key without MSL refused; the device SDK
+  left in place: 2 fail). Touches themselves cannot be sent from the command line (`simctl` has no touch input); the controls' own check runs
+  there: `DM_SIM_ENV="DM_TOUCH=pad DM_TEST_TOUCHPAD=check:10"` gave 17 passed, 0 failed on the Simulator's layout (the controller the game read)
 
 Tier 5, needs the user's devices, controller or account:
 - [ ] 65 increased-memory-limit with a free account (one signing attempt)
