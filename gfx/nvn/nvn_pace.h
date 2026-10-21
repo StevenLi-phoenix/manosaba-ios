@@ -144,3 +144,37 @@ static inline int nvn_frame_latency(int setting, int link_hz) {
     (void)link_hz; return 2;
 #endif
 }
+// The time-constraint declaration of a per-frame thread (the acquiring thread and the translation thread; plan item 61d). Its period is the frame
+// rate cap's (the display rate times the app's own hold, nvn_hold_interval(1, hz, hold)), not one the game raised for lateness: with the game's
+// interval 2 declared, Tears of the Kingdom on an iPhone went from 3.4 to 1.5 GHz and from 65 % to 5 % of its CPU time on performance cores at
+// thermal state 0 and stayed at 23-30 fps (seedds/nxnative 5efe1d8, MIT; ours on the iPhone 17 Pro: 0-15 % on performance cores, 0.9-1.3 GHz). A new
+// period keeps the computation declared so far, which went back to 2 ms before (nxnative 04ea8f8, MacNativeGames c5d8671, MIT); the computation
+// follows 1.25 x the p90 of the thread's own CPU time a frame over 120 frames, between 1 ms and 0.9 of the period (nvn_rt_sample). Using more than
+// the computation does not demote the thread (XNU sched_prim.c / priority.c: it ends the thread's deadline for that period; the fail-safe demotion
+// needs about 100 quanta without blocking). DM_RT_DECL=old declares as before (the held period, 2 ms again on each change, half the period for the
+// translation thread)
+static inline uint64_t nvn_rt_period_ns(int hz, int hold_interval) {
+    return hz > 0 ? (uint64_t)(hold_interval > 0 ? hold_interval : 1) * 1000000000ull / (uint64_t)hz : 0;
+}
+static inline uint64_t nvn_rt_comp_clamp(uint64_t comp_ns, uint64_t period_ns) {
+    if (comp_ns > period_ns * 9 / 10) comp_ns = period_ns * 9 / 10;
+    return comp_ns < 1000000ull ? 1000000ull : comp_ns;
+}
+// The computation to declare with a new period: the fixed one (DM_RT_COMP), else the one declared so far (0: none yet, 2 ms to start)
+static inline uint64_t nvn_rt_comp_on_period(uint64_t fixed_ns, uint64_t declared_ns, uint64_t period_ns) {
+#ifdef DM_TEST_RT_COMP_RESET   // negative control of t_pace only: every new period starts again from 2 ms (before 2026-10-22)
+    declared_ns = 0;
+#endif
+    return nvn_rt_comp_clamp(fixed_ns ? fixed_ns : declared_ns ? declared_ns : 2000000ull, period_ns);
+}
+typedef struct { double win[120]; int n; } nvn_rt_win;
+static inline int nvn_rt_dcmp(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
+// One frame's CPU time of the thread (ms); every 120 frames the computation to declare (ns) when 1.25 x their p90, clamped, differs from the
+// declared one by more than 15 %, else 0
+static inline uint64_t nvn_rt_sample(nvn_rt_win *w, double cpu_ms, double declared_ms, uint64_t period_ns) {
+    w->win[w->n++] = cpu_ms;
+    if (w->n < 120) return 0;
+    double v[120]; memcpy(v, w->win, sizeof v); qsort(v, 120, sizeof *v, nvn_rt_dcmp); w->n = 0;
+    uint64_t c = nvn_rt_comp_clamp((uint64_t)(v[107] * 1.25 * 1e6), period_ns); double cm = c / 1e6;
+    return cm > declared_ms * 1.15 || cm < declared_ms * 0.85 ? c : 0;
+}

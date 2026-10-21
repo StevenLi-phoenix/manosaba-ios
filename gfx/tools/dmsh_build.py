@@ -568,6 +568,7 @@ def finish(key, w, j, c1):
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
             'raster': raster_facts(j['stage'], src), 'vs_pad': pad, 'alpha_test': j['stage'] == 'ps' and ALPHA}
     if vi_locs: refl['vi_entry'] = 'main0_vi'; refl['vi_int'] = vi_locs
+    if j['stage'] == 'vs': refl['screen_locn'] = dmsh_fetch.screen_locn(src)   # outputs holding the projected screen position (the vertex side of a projected fetch proof)
     write_refl(key, refl)
     fetch_finish(key, src, refl)
     return 'ok', '', refl

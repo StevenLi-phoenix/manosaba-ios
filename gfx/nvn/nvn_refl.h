@@ -37,6 +37,9 @@ typedef struct {
     uint8_t nfc, fc_reg[32], fc_locn[32], nfo, fo_color[4]; uint64_t fc_mixed[2]; int8_t uv_attr[32];
     // Vertex - .x / .y of interpolated output locn = fma(.x / .y of attribute uv_aff_attr[locn], scale, offset), where scale / offset reference a uniform: (slot << 8) | (vector << 2) | component
     int8_t uv_aff_attr[32]; uint16_t uv_aff[32][4];   // [sx, ox, sy, oy]
+    // Fragment - bit i: fetch call i samples at in.m.xy * (1 / in.m.w) of its input ("proj"); vertex - bit L: output locn L is ((w + x) / 2, (w - y) / 2, -, w) of
+    // the final position (dmsh_fetch.py screen_locn). Together with a viewport over the whole target: the call reads this pixel's texel
+    uint32_t fc_proj, scr_locn;
     uint8_t c1[4096];        // c1 constant segment as-is (B)
 } nvn_refl;
 

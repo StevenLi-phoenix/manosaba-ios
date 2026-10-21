@@ -193,6 +193,22 @@ int main(void) {
         };
         printf("  dropped at 30 fps %d, at 60 fps with 5 doubled %d\n", d30, d60);
         for (int i = 0; i < 3; i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
+    // Time-constraint declarations (nvn_rt_*, plan item 61d): the cap's period; a new period keeps the computation declared (-DDM_TEST_RT_COMP_RESET,
+    // 2 ms again on every change, fails 2); 1.25 x the p90 of 120 frames
+    {   nvn_rt_win w = {0}, w2 = {0}; uint64_t got = 0, got2 = 0;
+        for (int i = 0; i < 120; i++) got = nvn_rt_sample(&w, i < 108 ? 8.0 : 30.0, 2.0, 16666666);
+        for (int i = 0; i < 120; i++) got2 = nvn_rt_sample(&w2, 8.0, 10.0, 16666666);
+        struct { int ok; const char *why; } f[] = {
+            {nvn_rt_period_ns(60, 1) == 16666666, "the cap at 60 Hz: 16.67 ms (the game's own interval is not an input)"},
+            {nvn_rt_period_ns(120, 4) == 33333333, "the app's hold of 4 at 120 Hz: 33.3 ms"},
+            {nvn_rt_comp_on_period(0, 0, 16666666) == 2000000, "the first declaration: 2 ms"},
+            {nvn_rt_comp_on_period(0, 10000000, 33333333) == 10000000, "a new period keeps the 10 ms declared"},
+            {nvn_rt_comp_on_period(0, 20000000, 16666666) == 14999999, "... clamped to 0.9 of a shorter period"},
+            {nvn_rt_comp_on_period(5000000, 10000000, 33333333) == 5000000, "DM_RT_COMP fixed: 5 ms"},
+            {got == 10000000, "p90 of 120 frames (108 at 8 ms, 12 at 30 ms) x 1.25: 10 ms"},
+            {got2 == 0, "within 15 % of the declared 10 ms: no new declaration"},
+        };
+        for (int i = 0; i < 8; i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

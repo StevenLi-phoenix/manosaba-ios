@@ -249,6 +249,15 @@ Independent projects:
   CODPHISH/ns2app (Silksong on iOS), WangTingYeYe/rtg-mobile, rootrd/dontstarve-harmony (NVN → Vulkan), two A12Z iPad Pro D2R ports with per-slot
   bindings (aerolithink, bluewater0121). hitsmaxft/nsp-dawrin (GPL-3.0): a synthetic NSP that CI could use.
 
+Read through on 2026-10-22 (sixth review): upstream main 53e7c5b (unchanged; a new `android` branch at 29533be, Vulkan); seedds/nxnative 64cdee9
+(its history was rewritten: b932024's tree is 5dae4db); MacNativeGames d92f463, tvc97's fork 50 ahead (PR #159), DavidZande/MacNativeGames
+(MIT, branch `performance`, new: M1 Pro measurements, tag `notes-2026-10-21`); T5eng 057575d, atone 185cfda, armyja df997fa, dr3 a31c36c,
+tomodachi 5587d1b, bayonetta3 e5ce116, 4ppp44 2a7b1c6 and Kamisorara unchanged; lordran 1e6b2cf; GirlNet `codex/p5r-runtime` b3e60ce; blade2
+25a443e; acnh-mobile cc0ae3c; totk-mobile 6d4c1d3; Touchable 476fb39; super-mario-odyssey-ios 3ef14d3 (`codex/nxnative-verify-once` 103329c);
+dodola a7ab0c4; LASRecomp main da35b83, `beta_5` 5c7e498 (PR #238 iOS); SkyRecomp c8de7ab; d2r-port-radar 7b8d4ca (297 entries); yokeyhh
+8e1d2af; aerolithink 43cde9a; bluewater0121 30ca74e; DanielZhangyc 56737aa; realskyrin e508a1f (no licence). New: alanyangcn/smbwonder-ios (no
+licence: facts only; iPhone measurements of per-draw work and tile plans), armyja/nxnative-cuphead (MIT).
+
 Not worth porting: nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK runtimes (dodola, imink/hades-ios), upstream's D2R-only parts.
 
 ### Reviews and the plan items they produced
@@ -262,6 +271,8 @@ Not worth porting: nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK 
 - 2026-10-20, deep review (each project's own work against its base, and which of its tests could check ours): 115-141; every remaining finding
   of the three reviews, at the user's request: 142-148 and, seen but not planned before, 149-154.
 - 2026-10-20 evening sync (only what was new since the morning): 155-180, and changes written into 62b, 67, 94a, 100, 131, 133, 134, 139 and 151.
+- 2026-10-22, sixth review, read for performance on the iPhone (the user's 10 fps shrine; four reviewers of the references, one of Touchable's touch
+  controls, one of Apple's documentation): Tier 7, 181-193, and 113 reopened as 181.
 
 Evidence the open items rely on:
 - 94a: totk-mobile (`nvn_texture_rendered.inc`, `nvn_texture_writeback.inc`) writes back a GPU write after 30 frames without another, at the end of
@@ -382,8 +393,9 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
 - Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 61d, 62c2, 62g, 62h, 62j, 63b
-  (`DM_APP_POOL_ADD_MB`), 113, 170 (the game's text), 172, 67e (the phone's pulses after a trip to the background), how 62l's 60 fps build plays.
+  (`DM_APP_POOL_ADD_MB`), 170 (the game's text), 172, 181 (the shrine that fell to 10 fps), 182 (with 61d), how 62l's 60 fps build plays.
 - The next game: 64's open sub-items.
+- The user's choices: 192 (the touch controls after Touchable).
 - Decisions: `DM_FRAME_STEP=vsync` as iOS's default (133: 35 % less CPU on the Mac); `DM_PRESENT_LATENCY=auto` as the default (after 153's
   check).
 
@@ -1004,7 +1016,8 @@ Tier 4, large:
 - [-] batch 56 · 113 framebuffer fetch for in-pass reads of the current pixel (after 42): not done. In the prologue 16 fragment shaders sample what
   their own pass draws, all but one before any texture barrier, where the replay must read memory as the console does (42); the one after a barrier
   (fcd1a8d9) samples at a coordinate from its varyings, not its own pixel. What its attachment copies (three 1600x896 twice a frame docked) cost on
-  an iPhone is a device check
+  an iPhone is a device check. That reason was wrong (2026-10-22): its vertex shader 6286c2c1 writes that varying as ((w + x) / 2, (w - y) / 2, -, w)
+  of its position, so xy / w is its own pixel; done as 181
 - [x] batch 57 · 114 an iOS Simulator build for the touch controls, safe areas and lifecycle: `ios/run.sh sim-build` / `sim-run [s]` / `sim-stop`
   (ios/README.md). The Metal 3 build with MetalFX compiled out (`DM_METALFX` in `gfx/nvn/nvn_mtl.m`; the Simulator's SDK has no Metal 4 headers or
   MetalFX), unsigned, without libvpx; `ios/tools/sim_metal.py` compiles the map's MSL for the Simulator (`sim-run` sets `DM_NVN_TBDR=0`); the game
@@ -1040,6 +1053,7 @@ Tier 5, needs the user's devices, controller or account:
   - [x] batch 62 · 67e the phone's haptics after a trip to the background: iOS stops the engine there and refused the new one made at once
     (AVAudioSession 'what', a red line on the iPhone 17 Pro), after which the phone stayed still for the session. Now made at the first pulse due
     in focus, tried again 2 s after a failed start, doubling up to 30 s (`haptics_map.h` `dm_phone_engine_due`, `gamepad.m`; `t_haptics`)
+    Checked on the iPhone 17 Pro on 2026-10-22 (Tears of the Kingdom): after switching to another app and back, the vibration test pulses again
 - [x] batch 62 · 68 MixWithOthers on an iPhone: another app's music plays on under the game (iPhone 17 Pro, 2026-10-21; "mixes with other apps: yes")
 - [ ] 69 the game over flow with the overlay, in play
 - [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
@@ -1081,6 +1095,57 @@ Tier 6, optional (seen, not planned before; listed at the user's request 2026-10
   `DM_ASPECT=<w>:<h>`, `<w>x<h>`, a ratio from 1 to 4, or `window`; View → Wide Picture (⌘4) switches 21:9; the present pass stretches the picture
   (`mtl_present_stretch`). The HUD stretches with it, as in MacNativeGames; iOS refuses `DM_ASPECT` in red. `games/totk/check_aspect.py`,
   `t_aspect`, `t_present_vp`. product60 rebuilt (previous: `product60.prev154`), `options.default` = `fps60,realtime,scene,output,aspect`
+
+Tier 7, performance on the iPhone, from the sixth review of 2026-10-22 (its notes, with each source's commits and numbers, in the review's merge;
+the device the user's iPhone 17 Pro):
+- [x] batch 68 · 181 the iPhone's 10 fps shrine (2026-10-22: 60 fps facing one way, 10 the other; the user's save `work/run/totk/save_iphone_1022`
+  slot_02, on the Mac with `DM_RENDER_HEIGHT=720`): 480 G-buffer decal draws a frame (7d1b1cac with c1 / c3 / c7, 5733c5bf with c1 / c3) each read
+  their own pixel of the pass they draw into right after a texture barrier, and each got whole-attachment copies and a split: 1,347 copies, 6.5 GB
+  loaded a frame, GPU p50 30.3 ms, translation 10.6 ms (`DM_NVN_FBX=0`: 4.8 / 4.5 ms; on the iPhone GPU 86 ms, translation 80 ms). Keeping a copy
+  until its attachment is written never helped (every decal writes what the next one reads; DavidZande/MacNativeGames found the same). Now they
+  read the tile (`fbx_fetch`, after OJZen/totk-mobile's framebuffer fetch and DavidZande/MacNativeGames 4b18416): `dmsh_fetch.py` rewrites a sample
+  at `in.m.xy * (1.0 / in.m.w)` ("proj") and proves the vertex side (`screen_locn`: ((w + x) / 2, (w - y) / 2, -, w) of the final position; 2,388
+  vertex shaders, 3,232 fragment shaders with such samples, 468 of them with no readable-tile version before), the host checks the viewport, the
+  view (the attachment itself; a single-channel format's own swizzle expansion is accepted) and binds the readable-tile version. Shrine: 598 draws
+  a frame read the tile, 0 copies, 315 MB loaded, GPU p50 5.5 ms, translation 5.9 ms; pictures within run-to-run variation (30 fps, two copy runs and
+  one tile-read run, looked at and measured). 118 of the 598 follow another decal with no barrier between (undefined in NVN; they read the tile,
+  where the copies read the previous split's store). `DM_NVN_FBX_FETCH=0` copies as before. Chain `ba19de4f1d15`. `tools/tests/t_dmsh_fetch.py`
+  (`DM_TEST_FETCH_NO_PROJ=1` fails 2), `t_refl` (`-DDM_TEST_REFL_NO_SCREEN` fails 2), `t_fbx` fa-fd, fr, fs (`-DDM_TEST_FBX_NO_FETCH` fails 4,
+  `-DDM_TEST_FBX_SWIZZLE_ANY` 2). Device check: the shrine on the iPhone
+- [x] batch 68 · 182 the time-constraint declarations (61d's code part; nvn_pace.h `nvn_rt_*`): both threads declare the cap's period (the display rate
+  and the app's own hold, not the interval the game raised when late), a new period keeps the computation declared (it went back to 2 ms), and the
+  translation thread declares 1.25 x the p90 of its own CPU a frame (it declared half the period). nxnative 5efe1d8 / 04ea8f8 and MacNativeGames
+  c5d8671 (MIT): with the late interval declared, TotK on an iPhone fell to 1.5 GHz and 5 % on performance cores at thermal state 0; ours showed
+  0-15 % at 0.9-1.3 GHz. The comment that a thread using more than its computation is demoted was wrong (XNU: it ends its deadline for the period).
+  `DM_RT_DECL=old` declares as before. `t_pace` (`-DDM_TEST_RT_COMP_RESET` fails 2). Device check: 61d's A/B on the iPhone (performance-core share,
+  clocks, frame time, with and without `DM_RT_DECL=old`, after a cooldown)
+- [ ] 183 guest yields: `host/hle_thread.c` turns them into `sched_yield`, and the iPhone's log shows the game's main thread yielding 14,000-20,000
+  times (15-25 ms) a frame; Apple's Tech Talk 110147 says a yield drops the thread's priority for up to 10 ms and spinning keeps a thread from moving
+  to a performance core. Measure, then try a short spin and a block (nxnative PR #37: 30 µs before sleeping, M4 Pro frame p50 8.8 → 8.34 ms)
+- [ ] 184 pipelines compiled at first sight (up to 360 ms a frame on the iPhone): MacNativeGames' one binary archive per pipeline (iPhone 14: warm-up
+  95-122 s → 5.9 s, pipeline time in long frames 1,452 → 102 ms; its pitfalls: many pipelines in one file, 142 files searched, `gpuarchiver-*`
+  folders), Apple's offline `metal-tt` route from our metallibs or Metal 4's `MTL4Archive`; a seed `pso_manifest.tsv` from Mac runs (the slot of
+  78 no tool fills); MacNativeGames PR #166's prediction rescans
+- [ ] 185 the replay's CPU per draw (22,000-34,000 instructions): `prog_get` returns an `__unsafe_unretained` pointer ARC ignores (a retain and
+  autorelease per draw; DavidZande/MacNativeGames b484570), a vertex-binding cache (nxnative 697df75), a view cache by serial (nxnative 9b7cb76),
+  `g_rmu` as an `os_unfair_lock` (MacNativeGames 5f5de5e), MacNativeGames' replay caches (dfa7ec4, shrine submit 7.1 → 6.0 ms on a Mac), `-O2`
+  against the iOS default `-Os`; first a per-stage CPU split of the draw path (GirlNet's `DM_NVN_SUBPROF`)
+- [ ] 186 62j's leads: shared storage tracked by serial (`stor_key_of`, the store lookahead and hoist), clear quads that leave `g_sd[].wrote` unset
+  while `udc_dead` stores DontCare, `attr_read` without `pend_hits` (`fz_load_covers`) (DavidZande/MacNativeGames 907138d, 14142f8); the load probe's
+  readback not ordered after the probed pass on Metal 4 (`lp_finish`); `DM_NVN_XV=0` in the one-at-a-time list; sentinel clears; the iPhone run with
+  `DM_NVN_TBDR=1` under Metal API validation
+- [ ] 187 passes: lazy clears without the TBDR set (nxnative f5646ef), narrower encoder-start barriers with a vertex-stage check (tvc97 12ca537)
+- [ ] 188 attachment copies: copy textures without `PixelFormatView` (lossless compression), only the drawn level and layer
+- [ ] 189 back up to 60 fps after a step down (nxnative 9409472 / b53bb89, tvc97 `nvn_cap_auto.h`: under 30 % on performance cores in two windows)
+- [ ] 190 a scene size driven by dropped frames (upstream `hle_oe.c`: an iPhone 17 Pro Max's dropped frames 23 % → 10 %), when TotK's scene size
+  can change while it runs
+- [ ] 191 correctness from the review: `QueryHostSupportsTextureGatherOffsets() => false` (totk-mobile eaec4e4; our `agl_technique_pfx` failure),
+  `host/lang.h` checking the script before the region and `AppleLanguages` first (Touchable 69ddbd5 / PR #3), an `EFAULT` retry after unprotecting
+  guest pages (yokeyhh v18), 64-bit driver handles and the BC kernel cast (aerolithink), region-only Read / WriteTexels (MacNativeGames PR #143),
+  batched write-back on an invalidate (DavidZande 8c46687), SDK 27's Metal4FX barrier properties (bayonetta3)
+- [ ] 192 touch controls after Touchable (476fb39): its fixed 8-way D-pad, Liquid Glass, face-button slides and layout; Touchable has no analog stick
+  or camera drag, so the left side, the stick's origin, how presses look, the extra controls and opacity wait for the user's choices
+- [ ] 193 the iOS logs' `thermal -1`: `dm_thermal_now` has no iOS definition (`gfx/nvn/hle_nvn.c` says `front_ios.m` has one)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

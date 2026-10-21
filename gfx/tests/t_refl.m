@@ -1,5 +1,6 @@
 // Reflection json → nvn_refl (nvn_refl.m): the binding kinds dmsh_build.py writes. sbuf_ubo = a storage buffer whose address the shader reads from a
 // uniform buffer (uniform slot reg, byte off): kind, slot, offset and the no-reuse flag; a missing, odd or out-of-range offset and a missing slot are refused.
+// The projected fetch proof's two halves: a fetch call's "proj" and a vertex shader's "screen_locn" (-DDM_TEST_REFL_NO_SCREEN, leaving both unread, fails 2).
 #import <Foundation/Foundation.h>
 #include <stdio.h>
 #include "../nvn/nvn_refl.h"
@@ -30,6 +31,20 @@ int main(void) { @autoreleasepool {
     EXPECT("sbuf_ubo with an unaligned offset is refused", 1, parse(@[@{@"kind": @"sbuf_ubo", @"reg": @1, @"off": @0x42, @"arg_id": @0, @"msl_name": @"vp_s0"}], &o, err));
     EXPECT("sbuf_ubo with an offset past 64 KiB is refused", 1, parse(@[@{@"kind": @"sbuf_ubo", @"reg": @1, @"off": @0x10000, @"arg_id": @0, @"msl_name": @"vp_s0"}], &o, err));
     EXPECT("sbuf_ubo without a slot is refused", 1, parse(@[@{@"kind": @"sbuf_ubo", @"reg": [NSNull null], @"off": @0x40, @"arg_id": @0, @"msl_name": @"vp_s0"}], &o, err));
+    {   // projected fetch proof (dmsh_fetch.py): call 1 projected, call 0 not; the vertex shader's screen outputs 1 and 6, an out-of-range one ignored
+        NSDictionary *fj = @{@"route": @"B", @"stage": @"ps", @"depth_mode": @"near_is_minus_w", @"c2": @{@"tex": @[@0x20, @32], @"samp": @[@0x568, @128]}, @"bindings": @[],
+                             @"fetch": @{@"calls": @[@{@"fc": @0, @"tex_reg": @16, @"varying_locn": @0}, @{@"fc": @1, @"tex_reg": @1, @"varying_locn": @6, @"proj": @1}],
+                                         @"mixed_regs": @[], @"outputs": @[@{@"color": @1, @"type": @"float4"}]}};
+        r = nvn_refl_from_json(fj, &o, err, 256);
+        EXPECT("fetch calls with a projected one parse", 0, r);
+        EXPECT("fc_proj: only call 1", 2, o.fc_proj);
+        NSDictionary *vj = @{@"route": @"B", @"stage": @"vs", @"depth_mode": @"near_is_minus_w", @"c2": @{@"tex": @[@0x20, @32], @"samp": @[@0x568, @128]}, @"bindings": @[],
+                             @"screen_locn": @[@1, @6, @40]};
+        r = nvn_refl_from_json(vj, &o, err, 256);
+        EXPECT("screen_locn parses", 0, r);
+        EXPECT("scr_locn: outputs 1 and 6", (1 << 1) | (1 << 6), o.scr_locn);
+        EXPECT("no screen_locn: nothing proven", 0, (parse(@[], &o, err), o.scr_locn));
+    }
     printf("== %d checks, %d failed ==\n", g_n, g_fail);
     return g_fail != 0;
 } }

@@ -102,10 +102,19 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             if (ok) o->uv_aff_attr[l] = (int8_t)a; }
         NSDictionary *uv = [ra isKindOfClass:[NSDictionary class]] ? ra[@"uv_from_attr"] : nil;
         if ([uv isKindOfClass:[NSDictionary class]]) for (NSString *k in uv) { int l = k.intValue, a = [uv[k] intValue]; if (l >= 0 && l < 32 && a >= 0 && a < 16) o->uv_attr[l] = (int8_t)a; }
+        NSArray *sl = j[@"screen_locn"];
+#ifndef DM_TEST_REFL_NO_SCREEN
+        if ([sl isKindOfClass:[NSArray class]]) for (NSNumber *l in sl) if (l.intValue >= 0 && l.intValue < 32) o->scr_locn |= 1u << l.intValue;
+#else
+        (void)sl;
+#endif
         NSDictionary *fe = j[@"fetch"];
         if ([fe isKindOfClass:[NSDictionary class]]) {
             for (NSDictionary *c in fe[@"calls"]) { int i = [c[@"fc"] intValue], r = [c[@"tex_reg"] intValue], l = [c[@"varying_locn"] intValue];
                 if (i != o->nfc || i >= 32 || r < 0 || r >= 128 || l < 0 || l >= 32) FAIL("fetch call table not contiguous or out of range (entry %d)", i);
+#ifndef DM_TEST_REFL_NO_SCREEN   // negative control of t_refl only
+                if ([c[@"proj"] intValue] == 1) o->fc_proj |= 1u << o->nfc;
+#endif
                 o->fc_reg[o->nfc] = (uint8_t)r; o->fc_locn[o->nfc] = (uint8_t)l; o->nfc++; }
             for (NSNumber *r in fe[@"mixed_regs"]) if (r.intValue >= 0 && r.intValue < 128) o->fc_mixed[r.intValue >> 6] |= 1ull << (r.intValue & 63);
             for (NSDictionary *u in fe[@"outputs"]) { if (o->nfo >= 4) FAIL("more than 4 fetch outputs"); o->fo_color[o->nfo++] = (uint8_t)[u[@"color"] intValue]; }

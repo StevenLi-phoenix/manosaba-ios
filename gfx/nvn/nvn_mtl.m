@@ -6199,8 +6199,11 @@ static void count_self_sample(NvProg *pr) {
 // samples holds pixels newer than memory, cleared at load or written by a draw that samples none of the pass's attachments (sd_att.pw), or written
 // by any draw before a texture-invalidating barrier (as the default copies, plan item 42). The draws of a run that sample (the decals) do not count
 // otherwise, so a run shares one split; a clear still pending before the pass opens is flushed the same way
-static void fbx_prepare(NvProg *pr) {
-    g_fbx_npend = 0; g_fbx_self = 0;
+static __strong id<MTLFunction> g_fbx_fn; static uint8_t g_fbx_lmap[8]; static pso_fz_desc g_fbx_desc; static uint64_t g_fbx_fetches;   // fbx_fetch's pick for this draw
+void mtl_fbx_fetch_stats(uint64_t out[1]) { out[0] = g_fbx_fetches; }
+static int fbx_fetch(NvProg *pr, unsigned need, const p_draw *dw, const p_draw_idx *di);
+static void fbx_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
+    g_fbx_npend = 0; g_fbx_self = 0; g_fbx_fn = nil;
     if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }
     if (g_fbx_on < 0) { const char *e = getenv("DM_NVN_FBX"); g_fbx_on = !e ? 1 : !strcmp(e, "0") ? 0 : !strcmp(e, "all") ? 2 : !strcmp(e, "split") ? 3 : 1; }
     if (!g_fbx_on || !pr || (!R.rt.n && !R.rt.depth)) return;
@@ -6233,6 +6236,7 @@ static void fbx_prepare(NvProg *pr) {
             MLOG("attachment copies: fragment shader %.8s samples what its pass drew%s (pass %llu, %u x %u, draw %llu of the pass, attachments %#x)", f->key,
                  g_fbx_bar_at > g_cnt_pass_d0 ? " before a texture barrier" : "", (unsigned long long)g_stat_pass, (unsigned)g_pass.tw, (unsigned)g_pass.th,
                  (unsigned long long)(g_stat_draw - g_cnt_pass_d0), need); } } }
+    if (fbx_fetch(pr, need, dw, di)) { g_fbx_fetches++; return; }   // read from the tile: no copy and no split
     if (g_fbx_on == 3) {
         if (g_enc) {
             for (int i = 0; i < g_nsd; i++) { const sd_att *t = &g_sd[i];
@@ -7112,6 +7116,76 @@ static int fz_p2_draw(NvProg *pr, const p_draw *dw, const p_draw_idx *di, uint8_
     if (fz_check_on()) fz_snap_take(dw, di);
     g_fz_draws++; return 1;
 }
+// A draw that samples colour attachments of its pass only at its own pixel reads them from the tile instead ([[color(k)]] of its readable-tile
+// version, dmsh_fetch.py; programmable blending sees the earlier draws of the pass in their order), so no copy and no split is made for it
+// (fbx_prepare). Every sample of such an attachment must be a rewritten call proven to read this pixel's texel: the projected screen position the
+// vertex shader writes (fc_proj with its scr_locn) or the uv proof of a full-screen draw, with the viewport over the whole target and the bound view
+// the attachment itself (level 0 layer 0 of a single-sample texture of the target's size, its format, no swizzle); the depth target never.
+// Tears of the Kingdom's G-buffer decals (7d1b1cac, 5733c5bf: 480 a frame in the iPhone's shrine save of 2026-10-22, each after a texture barrier,
+// 1,347 copies and splits a frame, GPU 30 ms against 4.8 without them on an M-series Mac; with the tile reads 598 a frame read from the tile, no
+// copy, GPU 5.5 ms). Without the splits more draws follow a barrier in their pass: 118 of the 598 come after another decal with no barrier between,
+// which NVN leaves undefined; they read the tile too, where the copies read the store of the previous split, and the pictures matched (two runs of
+// copies and one of tile reads at 30 fps differ by the camera's timing alone). After OJZen/totk-mobile's framebuffer fetch
+// (host/nvn_framebuffer_fetch.inc, Apache-2.0) and DavidZande/MacNativeGames 4b18416 (MIT), written anew. DM_NVN_FBX_FETCH=0 copies as before
+// A view swizzle that changes nothing a sample of the format returns: none, or the format's own expansion (absent channels 0, alpha 1: an R32Float
+// target sampled through (red, zero, zero, one), Tears of the Kingdom's decal 7d1b1cac) - what a tile read of the attachment gives too (t_fbx fr)
+static int fbx_swizzle_plain(MTLTextureSwizzleChannels sw, MTLPixelFormat f) {
+    if (sw.red == MTLTextureSwizzleRed && sw.green == MTLTextureSwizzleGreen && sw.blue == MTLTextureSwizzleBlue && sw.alpha == MTLTextureSwizzleAlpha) return 1;
+    int n = 4;
+    switch (f) {
+        case MTLPixelFormatR8Unorm: case MTLPixelFormatR8Unorm_sRGB: case MTLPixelFormatR8Snorm: case MTLPixelFormatR16Unorm: case MTLPixelFormatR16Snorm:
+        case MTLPixelFormatR16Float: case MTLPixelFormatR32Float: n = 1; break;
+        case MTLPixelFormatRG8Unorm: case MTLPixelFormatRG8Unorm_sRGB: case MTLPixelFormatRG8Snorm: case MTLPixelFormatRG16Unorm: case MTLPixelFormatRG16Snorm:
+        case MTLPixelFormatRG16Float: case MTLPixelFormatRG32Float: n = 2; break;
+        case MTLPixelFormatRG11B10Float: case MTLPixelFormatRGB9E5Float: n = 3; break;
+        default: return 0;
+    }
+#ifdef DM_TEST_FBX_SWIZZLE_ANY   // negative control of t_fbx only: any swizzle taken as plain
+    (void)n; return 1;
+#endif
+    return sw.red == MTLTextureSwizzleRed && sw.green == (n >= 2 ? MTLTextureSwizzleGreen : MTLTextureSwizzleZero) &&
+           sw.blue == (n >= 3 ? MTLTextureSwizzleBlue : MTLTextureSwizzleZero) && sw.alpha == MTLTextureSwizzleOne;
+}
+static int fbx_fetch(NvProg *pr, unsigned need, const p_draw *dw, const p_draw_idx *di) {
+#ifdef DM_TEST_FBX_NO_FETCH   // negative control of t_fbx only
+    (void)pr; (void)need; (void)dw; (void)di; return 0;
+#else
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_FBX_FETCH"); on = !e || strcmp(e, "0"); }
+    NvShader *vs = pr->sh[0], *fs = pr->sh[1];
+    if (!on || !vs || !fs || !fs->rf.nfc || !fs->rf.nfo || (need & 0x100) || alpha_on()) return 0;
+    NSUInteger W = 0, H = 0; rt_dims(&W, &H);
+    if (S.has_vp && !(S.vp[0][0] == 0 && S.vp[0][1] == 0 && S.vp[0][2] == (float)W && S.vp[0][3] == (float)H)) return 0;
+    int fx[32]; for (int i = 0; i < 32; i++) fx[i] = -1; uint8_t fbmask = 0;
+    for (int st = 0; st < 5; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh || sh->stage >= 6) continue;
+        for (int i = 0; i < sh->rf.nb; i++) { const nvn_rbind *b = &sh->rf.b[i]; uint64_t h;
+            if (b->kind == NVN_RB_IMG) h = b->reg < 32 ? S.img[sh->stage][b->reg] : 0; else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TBUF) h = b->reg < 128 ? S.tex[sh->stage][b->reg] : 0; else continue;
+            uint64_t ser = h ? h_ser(h) : 0; if (!ser) continue;
+            int j = -1; for (int m = 0; m < R.rt.n && m < 8; m++) if (R.rt.color[m] && R.rt.color[m]->serial == ser) { j = m; break; }
+            if (j < 0) { if (R.rt.depth && R.rt.depth->serial == ser) return 0; continue; }
+            if (sh != fs || b->kind != NVN_RB_TEX || (fs->rf.fc_mixed[b->reg >> 6] >> (b->reg & 63) & 1)) return 0;
+            const tex_t *a = R.rt.color[j]; uint64_t s_; int lv, sl; rt_sub(&R.rt, j, &s_, &lv, &sl);
+            if (lv || sl || a->d.samples > 1 || MAX(a->d.width, 1u) != W || MAX(a->d.height, 1u) != H) return 0;
+            int tid = h_tid(h); void *tv_ = NULL; if (tid) tex_fast_rid(tid, &tv_); __unsafe_unretained id<MTLTexture> tv = (__bridge id<MTLTexture>)tv_;
+            if (!tv) return 0;
+            uint32_t apf = tv.parentTexture ? (uint32_t)tv.parentTexture.pixelFormat : (uint32_t)tv.pixelFormat; uint8_t swz[4];
+            if (R.rt.has_cview[j] && R.rt.cview[j].set_format && !(nvn_fmt_to_mtl(R.rt.cview[j].format, &apf, swz) && apf)) return 0;
+            MTLTextureSwizzleChannels sw = tv.swizzle;
+            if ((tv.parentTexture && (tv.parentRelativeLevel || tv.parentRelativeSlice)) || tv.pixelFormat != (MTLPixelFormat)apf || tv.sampleCount > 1 ||
+                !fbx_swizzle_plain(sw, tv.pixelFormat)) return 0;
+            int any = 0;
+            for (int c = 0; c < fs->rf.nfc; c++) if (fs->rf.fc_reg[c] == b->reg) { int l = fs->rf.fc_locn[c];
+                if (fs->rf.fc_proj >> c & 1 ? !(l < 32 && (vs->rf.scr_locn >> l & 1)) : !uv_proof(vs, l, dw, di)) return 0;
+                fx[c] = j; fbmask |= (uint8_t)(1u << j); any = 1; }
+            if (!any) return 0;
+        } }
+    if (!fbmask) return 0;
+    memset(g_fbx_lmap, 0xff, sizeof g_fbx_lmap);
+    for (int o = 0; o < fs->rf.nfo; o++) { int c = fs->rf.fo_color[o]; if (c < 8 && c < R.rt.n && R.rt.color[c]) g_fbx_lmap[c] = (uint8_t)c; }
+    id<MTLFunction> fn = bf_fn(fs, fx, fbmask, g_fbx_lmap); if (!fn) return 0;
+    memset(&g_fbx_desc, 0, sizeof g_fbx_desc); g_fbx_desc.kind = 1; g_fbx_desc.fbmask = fbmask; for (int i = 0; i < 32; i++) g_fbx_desc.fx[i] = (int8_t)fx[i];
+    g_fbx_fn = fn; return 1;
+#endif
+}
 // ---------- 8-bit indices the GPU wrote earlier in this submission (MacNativeGames' widen_u8_gpu, as seedds/nxnative 7dde056 adapted it; both MIT;
 // written anew here) ----------
 // Metal has no 8-bit index type, so draw widens them to 16 bits on the CPU at replay. When a buffer write encoded earlier in this submission (copy,
@@ -7508,7 +7582,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (g_fz.active && g_enc && g_fz.phase == 2 && !fz_p2_draw(pr, dw, di, g_fz.lmap2, &fz_fn)) {   // Cannot be proven: end the merged render pass (the earlier pass's result is stored as usual) and reopen with the later pass's original targets
         static int once3; if (!once3++) MLOG("readable tile pass merge: a draw in the later pass is not provable, falling back to separate passes (first case pass %llu)", g_stat_pass);
         g_fz_fallback++; rp_end(); }
-    if (!g_defer_replaying) fbx_prepare(pr); else { g_fbx_self = 0; if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); } }   // a replayed deferred draw: not copied for, and it keeps the draw that replays it's picks
+    if (!g_defer_replaying) fbx_prepare(pr, dw, di); else { g_fbx_self = 0; if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); } }   // a replayed deferred draw: not copied for, and it keeps the draw that replays it's picks
     if (R.has_sc && !g_enc) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
@@ -7531,7 +7605,8 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (skip_d) { g_stat_ds_omit++; if (mode == 3) g_stat_s_only++; else if (mode == 4) g_stat_d_only++; }
     // The pipeline depends only on (program, render pass targets, blend / color / write mask / multisample state, vertex layout): if these did not change, reuse the previous one
     static id<MTLRenderPipelineState> cur_ps; static NvProg *cur_pr; static uint64_t cur_ps_pass;
-    if (g_fz.active && !g_defer_replaying) { g_pso_lmap = g_fz.phase == 1 ? g_fz.lmap1 : g_fz.lmap2; g_pso_fsfn = g_fz.phase == 1 ? nil : fz_fn; g_pso_fz = g_fz.phase == 1 ? (pso_fz_desc){0} : g_fz_desc; g_pso_dirty = 1; }   // Readable tile merge: fetch the pipeline by the physical -> logical mapping and the specialization
+    if (g_fz.active && !g_defer_replaying) { g_pso_lmap = g_fz.phase == 1 ? g_fz.lmap1 : g_fz.lmap2; g_pso_fsfn = g_fz.phase == 1 ? nil : fz_fn; g_pso_fz = g_fz.phase == 1 ? (pso_fz_desc){0} : g_fz_desc; g_pso_dirty = 1; }
+    else if (g_fbx_fn && !g_defer_replaying) { g_pso_lmap = g_fbx_lmap; g_pso_fsfn = g_fbx_fn; g_pso_fz = g_fbx_desc; g_pso_dirty = 1; }   // the readable-tile version fbx_fetch picked (identity mapping)   // Readable tile merge: fetch the pipeline by the physical -> logical mapping and the specialization
     if (g_pso_dirty || pr != cur_pr || cur_ps_pass != g_pass.serial) { cur_ps = pso_get(pr, nil); cur_pr = pr; cur_ps_pass = g_pass.serial; g_pso_dirty = !cur_ps; }
     if (g_pso_lmap) { g_pso_lmap = NULL; g_pso_fsfn = nil; memset(&g_pso_fz, 0, sizeof g_pso_fz); g_pso_dirty = 1; }   // The next draw fetches again according to its own situation
     __unsafe_unretained id<MTLRenderPipelineState> ps = cur_ps;

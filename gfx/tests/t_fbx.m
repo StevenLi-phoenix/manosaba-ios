@@ -15,6 +15,12 @@
 // C + 0.5, one split), e. A split before every reading draw (-DDM_TEST_FBX_SPLIT_EACH) fails sc.
 // After tomodachi-native's attachment copies (4dbd30f / da08d11, MIT), written for this replay. Negative control: DM_NVN_FBX=0 fails a, c2
 // (and in the all set a, c, f).
+// Reading from the tile (fbx_fetch): a decal program whose vertex shader writes ((w + x) / 2, (w - y) / 2, 0, w) of its position (w = 2) to locn1 and
+// whose fragment shader samples the target at that varying's xy / w, with its readable-tile version (as dmsh_fetch.py writes one): fa (B, barrier,
+// decal: B + 0.25, no copy, read from the tile), fb (B, barrier, decal, barrier, decal: B + 0.5, the second sees the first, no copy), fc (the same
+// with the vertex side not proven: one copy), fd (a viewport over part of the target: one copy). -DDM_TEST_FBX_NO_FETCH fails fa, fb and fr (4).
+// fr: an R32Float target sampled through the swizzle (red, zero, zero, one), its format's own expansion, read from the tile: (0.5, 0, 0, 1), no copy;
+// fs: the swizzle (red, red, red, one) changes what a sample returns: a copy, (0.5, 0.5, 0.5). -DDM_TEST_FBX_SWIZZLE_ANY fails fs (2).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -38,7 +44,7 @@ static void bind_tex(chain *c, int id) { p_bind_handles b = {.stage = 1, .first 
 static void draw_cmd(chain *c) { p_draw d = {NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3}; emit(c, OP_DRAW, &d, sizeof d); }
 static void ds_off(chain *c) { ds_st d = {0, 0, NVN_DEPTH_FUNC_ALWAYS, 0, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP};
     p_bind_state x = {.kind = 5}; memcpy(x.bytes, &d, sizeof d); emit(c, OP_BIND_STATE, &x, sizeof x); }
-static prog_t g_pB, g_pC, g_pAdd; static NvProg *g_tfbx_keep[3];
+static prog_t g_pB, g_pC, g_pAdd, g_pDecal, g_pDecalU, g_pDecalR; static NvProg *g_tfbx_keep[6];
 static void setup(void) {
     NSError *e = nil;
     id<MTLLibrary> l = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -53,7 +59,38 @@ static void setup(void) {
         NvProg *p = [NvProg new]; p->sh[0] = [NvShader new]; p->sh[0]->fn = [l newFunctionWithName:@"v"];
         p->sh[1] = [NvShader new]; p->sh[1]->stage = 1; p->sh[1]->fn = [l newFunctionWithName:fn[i]];
         if (i == 2) { p->sh[1]->rf.nb = 1; p->sh[1]->rf.b[0] = (nvn_rbind){.kind = NVN_RB_TEX, .reg = 0, .dtt = 2}; p->sh[1]->ae = [p->sh[1]->fn newArgumentEncoderWithBufferIndex:0]; }
+        p->sh[1]->rf.color_mask = 1; p->sh[1]->rf.color_known = 1;   // (colour 0 only: a second target keeps its pixels)
         pg[i]->serial = 9700 + i; serial_put(pg[i]->serial, p); g_tfbx_keep[i] = p;
+    }
+    // The decal: the original version and its readable-tile one (function constants FX_0 = 0, FB_k = 32 + k, OM_0_k = 64 + k as dmsh_fetch.py numbers them)
+    NSMutableString *fc = [NSMutableString stringWithString:@"#include <metal_stdlib>\nusing namespace metal;\nconstant int FX_0 [[function_constant(0)]];\n"];
+    for (int k = 0; k < 8; k++) [fc appendFormat:@"constant bool FB_%d [[function_constant(%d)]];\nconstant bool OM_0_%d [[function_constant(%d)]];\n", k, 32 + k, k, 64 + k];
+    NSMutableString *outs = [NSMutableString string], *ins = [NSMutableString string], *sel = [NSMutableString string], *put = [NSMutableString string];
+    for (int k = 0; k < 8; k++) { [outs appendFormat:@"    float4 o_at%d [[color(%d), function_constant(OM_0_%d)]];\n", k, k, k]; [ins appendFormat:@", float4 fb%d [[color(%d), function_constant(FB_%d)]]", k, k, k];
+        [sel appendFormat:@"FX_0 == %d ? fb%d : ", k, k]; [put appendFormat:@"    if (OM_0_%d) o.o_at%d = r;\n", k, k]; }
+    NSString *common = @"struct A { texture2d<float> t [[id(0)]]; };\nstruct DI { float4 m [[user(locn1)]]; };\nstruct VO { float4 p [[position]]; float4 m [[user(locn1)]]; };\n"
+        "vertex VO vproj(uint n [[vertex_id]]) { float2 q[3] = {float2(-1,-1), float2(3,-1), float2(-1,3)}; float w = 2.0; float4 p = float4(q[n] * w, 0, w);\n"
+        "    VO o; o.p = p; o.m = float4((p.w + p.x) * 0.5, (p.w - p.y) * 0.5, 0, p.w); return o; }\n";
+    NSString *orig = [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n%@fragment float4 decal(DI in [[stage_in]], constant A &a [[buffer(0)]]) {\n"
+        "    constexpr sampler s(filter::nearest); float2 uv = in.m.xy * (1.0 / in.m.w); return float4(a.t.sample(s, uv).rgb + 0.25, 1); }\n"
+        "fragment float4 decalr(DI in [[stage_in]], constant A &a [[buffer(0)]]) {\n"
+        "    constexpr sampler s(filter::nearest); float2 uv = in.m.xy * (1.0 / in.m.w); return a.t.sample(s, uv); }\n", common];
+    NSString *bf = [NSString stringWithFormat:@"%@%@struct DO {\n%@};\nfragment DO main0(DI in [[stage_in]], constant A &a [[buffer(0)]]%@) {\n"
+        "    constexpr sampler s(filter::nearest); float2 uv = in.m.xy * (1.0 / in.m.w); float4 v = (%@a.t.sample(s, uv)); float4 r = float4(v.rgb + 0.25, 1);\n"
+        "    DO o;\n%@    return o; }\n", fc, common, outs, ins, sel, put];
+    id<MTLLibrary> lo = [g_dev newLibraryWithSource:orig options:nil error:&e]; if (!lo) { printf("%s\n", e.localizedDescription.UTF8String); abort(); }
+    id<MTLLibrary> lb = [g_dev newLibraryWithSource:bf options:nil error:&e]; if (!lb) { printf("%s\n", e.localizedDescription.UTF8String); abort(); }
+    NSString *bfr = [bf stringByReplacingOccurrencesOfString:@"float4 r = float4(v.rgb + 0.25, 1);" withString:@"float4 r = v;"];
+    id<MTLLibrary> lbr = [g_dev newLibraryWithSource:bfr options:nil error:&e]; if (!lbr) { printf("%s\n", e.localizedDescription.UTF8String); abort(); }
+    if (!g_bf_fn_cache) { g_bf_fn_cache = [NSMutableDictionary dictionary]; g_bf_lib_cache = [NSMutableDictionary dictionary]; }
+    prog_t *dp[3] = {&g_pDecal, &g_pDecalU, &g_pDecalR};
+    for (int i = 0; i < 3; i++) {
+        NvProg *p = [NvProg new]; p->sh[0] = [NvShader new]; p->sh[0]->fn = [lo newFunctionWithName:@"vproj"]; p->sh[0]->rf.scr_locn = i == 1 ? 0 : 1u << 1;
+        NvShader *f = p->sh[1] = [NvShader new]; f->stage = 1; f->fn = [lo newFunctionWithName:i == 2 ? @"decalr" : @"decal"]; snprintf(f->key, sizeof f->key, "tdecal%d_b", i);
+        f->rf.nb = 1; f->rf.b[0] = (nvn_rbind){.kind = NVN_RB_TEX, .reg = 0, .dtt = 2}; f->ae = [f->fn newArgumentEncoderWithBufferIndex:0];
+        f->rf.nfc = 1; f->rf.fc_reg[0] = 0; f->rf.fc_locn[0] = 1; f->rf.fc_proj = 1; f->rf.nfo = 1; f->rf.fo_color[0] = 0; f->rf.color_mask = 1; f->rf.color_known = 1;
+        g_bf_lib_cache[[NSString stringWithFormat:@"tdecal%d", i]] = i == 2 ? lbr : lb;
+        dp[i]->serial = 9703 + i; serial_put(dp[i]->serial, p); g_tfbx_keep[3 + i] = p;
     }
 }
 // Runs the chain, returns pixel (3,3) of the level as 0xRRGGBB
@@ -72,6 +109,7 @@ static int near(uint32_t got, float r, float g, float b) {   // within 2 of each
 }
 static uint64_t copies(void) { uint64_t s[3]; mtl_fbx_stats(s); return s[1]; }
 static uint64_t splits(void) { uint64_t s[2]; mtl_fbx_split_stats(s); return s[0] + s[1]; }
+static uint64_t fetches(void) { uint64_t s[1]; mtl_fbx_fetch_stats(s); return s[0]; }
 
 static void barrier(chain *c) { int32_t b = NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_INVALIDATE_TEXTURE_BIT; emit(c, OP_BARRIER, &b, 8); }
 static void begin_b(chain *c, tex_t *T) { set_rt(c, T, 0); clear_color(c, 0.1f); ds_off(c); bind_prog(c, &g_pB); draw_cmd(c); }
@@ -135,6 +173,39 @@ int main(void) { @autoreleasepool {
           uint32_t px = run(&c, &T, 0); printf("     c2: %06x\n", px);
           EXPECT("c2  a barrier between two reading draws: B + 0.5", 1, near(px, 1.0f, 0.75f, 0.625f));
           EXPECT("c2  ... two copies", 2, copies() - c0); }
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t c0 = copies(), f0 = fetches(); begin_b(&c, &T); barrier(&c); bind_prog(&c, &g_pDecal); bind_tex(&c, v0); draw_cmd(&c);
+          uint32_t px = run(&c, &T, 0); printf("     fa: %06x\n", px);
+          EXPECT("fa  a decal after a barrier reads B from the tile (B + 0.25)", 1, near(px, 0.75f, 0.5f, 0.375f));
+          EXPECT("fa  ... no copy", 0, copies() - c0);
+          EXPECT("fa  ... read from the tile once", 1, fetches() - f0); }
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t c0 = copies(), f0 = fetches(); begin_b(&c, &T); barrier(&c); bind_prog(&c, &g_pDecal); bind_tex(&c, v0); draw_cmd(&c);
+          barrier(&c); draw_cmd(&c);
+          uint32_t px = run(&c, &T, 0); printf("     fb: %06x\n", px);
+          EXPECT("fb  two decals with barriers: the second sees the first (B + 0.5)", 1, near(px, 1.0f, 0.75f, 0.625f));
+          EXPECT("fb  ... no copy, two tile reads", 1, copies() - c0 == 0 && fetches() - f0 == 2); }
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t c0 = copies(), f0 = fetches(); begin_b(&c, &T); barrier(&c); bind_prog(&c, &g_pDecalU); bind_tex(&c, v0); draw_cmd(&c);
+          uint32_t px = run(&c, &T, 0); printf("     fc: %06x\n", px);
+          EXPECT("fc  the vertex side not proven: a copy (B + 0.25)", 1, near(px, 0.75f, 0.5f, 0.375f));
+          EXPECT("fc  ... one copy, no tile read", 1, copies() - c0 == 1 && fetches() == f0); }
+        { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t c0 = copies(), f0 = fetches(); begin_b(&c, &T); barrier(&c);
+          p_viewports v = {.n = 1}; v.v[0][2] = v.v[0][3] = 4; emit(&c, OP_VIEWPORTS, &v, sizeof v); bind_prog(&c, &g_pDecal); bind_tex(&c, v0); draw_cmd(&c);
+          run(&c, &T, 0);
+          EXPECT("fd  a viewport over part of the target: a copy, no tile read", 1, copies() - c0 == 1 && fetches() == f0); }
+        for (int k = 0; k < 2; k++) {   // fr / fs: B in colour 0 and 0.5 in an R32Float colour 1; the decal samples colour 1 through a swizzled view into colour 0
+            tex_t T = tex(), U = tex(); U.d.format = NVN_FORMAT_R32F; U.d.levels = 1;
+            view_t uv = {.set_levels = 1, .base_level = 0, .nlevels = 1, .set_swz = 1, .swz_r = NVN_TEXTURE_SWIZZLE_R, .swz_g = k ? NVN_TEXTURE_SWIZZLE_R : NVN_TEXTURE_SWIZZLE_ZERO,
+                         .swz_b = k ? NVN_TEXTURE_SWIZZLE_R : NVN_TEXTURE_SWIZZLE_ZERO, .swz_a = NVN_TEXTURE_SWIZZLE_ONE};
+            static int vid = 1700; int vu = vid++; mtl_reg_tex(vu, &U, &uv);
+            chain c = chain_new(); uint64_t c0 = copies(), f0 = fetches();
+            p_set_rt r = {.n = 2}; r.color[0] = &T; r.color[1] = &U; for (int q = 0; q < 2; q++) { r.has_cview[q] = 1; r.cview[q].set_levels = 1; r.cview[q].nlevels = 1; }
+            emit(&c, OP_SET_RT, &r, sizeof r); p_viewports v = {.n = 1}; v.v[0][2] = v.v[0][3] = 8; emit(&c, OP_VIEWPORTS, &v, sizeof v); p_scissor sc = {0, 0, 8, 8}; emit(&c, OP_SCISSOR, &sc, sizeof sc);
+            clear_color(&c, 0.1f); p_clear_color k1 = {.index = 1, .mask = 15, .rgba = {0.5f, 0.5f, 0.5f, 0.5f}}; emit(&c, OP_CLEAR_COLOR, &k1, sizeof k1);
+            ds_off(&c); bind_prog(&c, &g_pB); draw_cmd(&c); barrier(&c); bind_prog(&c, &g_pDecalR); bind_tex(&c, vu); draw_cmd(&c);
+            uint32_t px = run(&c, &T, 0); printf("     %s: %06x\n", k ? "fs" : "fr", px);
+            if (!k) { EXPECT("fr  R32Float through (red, zero, zero, one) read from the tile: (0.5, 0, 0)", 1, near(px, 0.5f, 0, 0));
+                      EXPECT("fr  ... no copy, one tile read", 1, copies() - c0 == 0 && fetches() - f0 == 1); }
+            else { EXPECT("fs  through (red, red, red, one): a copy samples (0.5, 0.5, 0.5)", 1, near(px, 0.5f, 0.5f, 0.5f));
+                   EXPECT("fs  ... one copy, no tile read", 1, copies() - c0 == 1 && fetches() == f0); } }
     } else {
         { tex_t T = tex(); int v0 = view(&T, 0); chain c = chain_new(); uint64_t c0 = copies(); begin_b(&c, &T); reading(&c, v0);
           uint32_t px = run(&c, &T, 0); printf("     a: %06x\n", px);

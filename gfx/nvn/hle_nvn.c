@@ -1488,14 +1488,21 @@ static int xlat_on(void) {
     if (g_xlat < 0) { const char *e = getenv("DM_NVN_XLAT"); g_xlat = e && atoi(e) > 0; if (g_xlat) LOG("[nvn] DM_NVN_XLAT=1: submissions and presents replayed in order on a translation thread"); }
     return g_xlat;
 }
-static void xlat_rt(uint64_t period_ns) {   // the translation thread's time constraint (61d's switch)
+static int rt_old(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_RT_DECL"); v = e && !strcmp(e, "old"); if (v) LOG("[nvn] DM_RT_DECL=old: time constraints declared as before 2026-10-22"); } return v; }   // (nvn_pace.h nvn_rt_*)
+static void xlat_rt(uint64_t period_ns) {   // the translation thread's time constraint (61d's switch), once a frame: the cap's period, 1.25 x the p90 of its CPU a frame (nvn_pace.h)
     static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_XLAT_RT"); on = !(e && !strcmp(e, "0")); }
-    static uint64_t set; if (!on || !period_ns || dm_detclock_enabled() || set == period_ns) return;
+    if (!on || !period_ns || dm_detclock_enabled()) return;
+    static uint64_t set, comp, last; static nvn_rt_win w;
+    uint64_t c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), want = comp;
+    if (rt_old()) want = period_ns / 2;
+    else { uint64_t v = last ? nvn_rt_sample(&w, (double)(c - last) / 1e6, comp / 1e6, period_ns) : 0; if (v) want = v; else if (set != period_ns) want = nvn_rt_comp_on_period(0, comp, period_ns); }
+    last = c;
+    if (set == period_ns && want == comp) return;
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
-    thread_time_constraint_policy_data_t p = {.period = (uint32_t)(period_ns * tb.denom / tb.numer), .computation = (uint32_t)(period_ns / 2 * tb.denom / tb.numer),
+    thread_time_constraint_policy_data_t p = {.period = (uint32_t)(period_ns * tb.denom / tb.numer), .computation = (uint32_t)(want * tb.denom / tb.numer),
                                               .constraint = (uint32_t)(period_ns * tb.denom / tb.numer), .preemptible = 1};
     kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-    set = period_ns; LOG("[nvn] translation thread time constraint (period %.3f ms, computation %.3f ms) %s", period_ns / 1e6, period_ns / 2e6, kr == KERN_SUCCESS ? "set" : "not set");
+    set = period_ns; comp = want; LOG("[nvn] translation thread time constraint (period %.3f ms, computation %.3f ms) %s", period_ns / 1e6, want / 1e6, kr == KERN_SUCCESS ? "set" : "not set");
 }
 static void x_run(xjob *j, uint64_t job) {
     if (j->kind == XJ_SUBMIT) {
@@ -1697,7 +1704,7 @@ static void rt_comp_tick(uint64_t period_ns);
 static double g_rt_comp_ms;   // Currently declared real-time computation amount (ms; 0 = not declared)
 static double g_rt_period_ms;
 static void sleep_until_ns(uint64_t dl);
-static uint64_t present_period(const win_t *o);
+static uint64_t present_period(const win_t *o), rt_cap_period(const win_t *o);
 __attribute__((weak)) void dm_main_yield_stats(uint64_t *n, uint64_t *ns) { *n = 0; *ns = 0; }   // The host's hle_thread.c provides the ground truth; 0 in graphics unit tests
 __attribute__((weak)) uint32_t dm_guest_work_qos(unsigned *count) { if (count) *count = 0; return QOS_CLASS_UNSPECIFIED; }
 extern uint32_t mtl_present_qos(void);
@@ -1745,9 +1752,9 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // Vsync blocks here (real-device NVN: when all textures in the swapchain are waiting for display, wait for the next one to be released), not in present -- the game often calls present while holding a lock
     uint64_t at = *idx < 4 ? o->avail[*idx] : 0, now = dm_detclock_enabled() ? guest_ns() : now_ns(), wait = at > now ? at - now : 0;
     if (!dm_detclock_enabled()) {   // Register the acquire thread as a time-constraint thread (no longer registered only when it "arrived early": it must also declare itself when it is constantly behind in the hot state)
-        static uint64_t rt_period; uint64_t period = present_period(o);
-        if (period && rt_period != period) { rt_period = period; set_time_constraint(period); }
-        rt_comp_tick(period);
+        static uint64_t rt_period; uint64_t period = present_period(o), rtp = rt_old() ? period : rt_cap_period(o);
+        if (rtp && rt_period != rtp) { rt_period = rtp; set_time_constraint(rtp); }
+        rt_comp_tick(rtp);
         if (mtl_link_active() && !g_uncapped) { void mtl_link_set_interval(int n); mtl_link_set_interval(win_interval(o));   // game interval mode: as many ticks as the interval (it waited one: 60 fps at interval 2, the game ran twice as fast)
             if (!mtl_link_wait_tick(period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the next display-link tick when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
@@ -1870,11 +1877,11 @@ void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]);
 void mtl_vis_state(int *open, uint64_t *folded);
 void mtl_counts(uint64_t out[13]);
 void mtl_pkg_age(uint64_t out[5]);
-void mtl_fbx_stats(uint64_t out[3]); void mtl_fbx_split_stats(uint64_t out[2]);
+void mtl_fbx_stats(uint64_t out[3]); void mtl_fbx_split_stats(uint64_t out[2]); void mtl_fbx_fetch_stats(uint64_t out[1]);
 void mtl_pp_stats(uint64_t out[9]);
 __attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle.c; the graphics unit tests link without it
 static void power_line(uint64_t frame) {
-    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3], psp[2], psw[3], ppr[9]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3], pff[1], psp[2], psw[3], ppr[9]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     static int counts = -1; if (counts < 0) counts = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0");
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
@@ -1893,9 +1900,9 @@ static void power_line(uint64_t frame) {
         if (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prep || rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prst)
             LOG("[nvn] occlusion up to frame %llu: %.1f reports / %.1f resets a frame, %d slots in the open count, %.1f folded a frame", frame,
                 (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prep) / nf, (rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] - prst) / nf, open, (fold - pfold) / nf);
-        { uint64_t fx[3]; mtl_fbx_stats(fx);
-          if (fx[0] > pfx[0] || fx[2] > pfx[2]) LOG("[nvn] attachment copies up to frame %llu: %.1f draws a frame sample what their pass draws, %.1f copies, %.1f not copied (merged, layered or range pass)",
-                                                   frame, (fx[0] - pfx[0]) / nf, (fx[1] - pfx[1]) / nf, (fx[2] - pfx[2]) / nf);
+        { uint64_t fx[3], ff[1]; mtl_fbx_stats(fx); mtl_fbx_fetch_stats(ff);
+          if (fx[0] > pfx[0] || fx[2] > pfx[2]) LOG("[nvn] attachment copies up to frame %llu: %.1f draws a frame sample what their pass draws, %.1f copies, %.1f read from the tile at their pixel, %.1f not copied (merged, layered or range pass)",
+                                                   frame, (fx[0] - pfx[0]) / nf, (fx[1] - pfx[1]) / nf, (ff[0] - pff[0]) / nf, (fx[2] - pfx[2]) / nf);
           uint64_t sp[2]; mtl_fbx_split_stats(sp);
           if (sp[0] > psp[0] || sp[1] > psp[1]) LOG("[nvn] pass splits up to frame %llu: %.1f a frame before draws that sample what their pass wrote, %.1f pending clears flushed (DM_NVN_FBX=split)",
                                                    frame, (sp[0] - psp[0]) / nf, (sp[1] - psp[1]) / nf); }
@@ -1922,7 +1929,7 @@ static void power_line(uint64_t frame) {
     { uint64_t rep[32], rst[32]; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &pfold); prep = rep[NVN_COUNTER_TYPE_SAMPLES_PASSED]; prst = rst[NVN_COUNTER_TYPE_SAMPLES_PASSED]; }
     if (counts) { mtl_counts(pc); dm_gate_counts(pg); }
     mtl_pp_stats(ppr);
-    mtl_fbx_stats(pfx); mtl_fbx_split_stats(psp); { void nvn_syncwait_stats(uint64_t out[3]); nvn_syncwait_stats(psw); }
+    mtl_fbx_stats(pfx); mtl_fbx_fetch_stats(pff); mtl_fbx_split_stats(psp); { void nvn_syncwait_stats(uint64_t out[3]); nvn_syncwait_stats(psw); }
 }
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;
@@ -2003,10 +2010,11 @@ static void slow_emit(uint64_t f) {
     }
     if (f % 300 == 0) fprintf(stderr, "[slowframe]\t#\tup to frame %llu\tjudged=%llu\tslow=%llu\tcriterion=%s\n", f, judged, slow, has ? "on-screen present interval" : "present call interval (no window)");
 }
-// Declaration for the time-constraint (real-time) thread: period = present period, constraint = period, computation = the CPU time this thread actually needs per frame.
-// The computation used to be hard-coded at 2 ms, while the game main thread (game logic + recording + submit replay) takes about 10 ms per frame when hot - a 5× gap between declared and actual:
-// a real-time thread that exceeds its declared computation gets demoted by the system, and the performance controller also sets frequency from the declaration (this declaration is how the system learns the frame deadline and the workload).
-// DM_RT_COMP=<ms> fixes the declaration; default auto = every 120 frames take the p90 of this thread's per-frame CPU time and re-declare if it differs from the declared value by > 15% (capped at 0.9 × period).
+// Declaration for the time-constraint (real-time) thread: period = the frame rate cap's period (rt_cap_period; nvn_pace.h nvn_rt_*), constraint = period,
+// computation = the CPU time this thread actually needs per frame (the game main thread: game logic + recording + submit, about 10 ms a frame when hot).
+// Exceeding the computation does not demote the thread (XNU: it ends its deadline for that period); whether the performance controller sets clocks from
+// the declaration is not documented. DM_RT_COMP=<ms> fixes the declaration; default auto = every 120 frames 1.25 x the p90 of this thread's per-frame CPU
+// time, re-declared when it differs from the declared value by > 15% (capped at 0.9 × period), kept across period changes.
 static void set_time_constraint_comp(uint64_t period_ns, uint64_t comp_ns) {
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     if (comp_ns < 1000000ull) comp_ns = 1000000ull; if (comp_ns > period_ns * 9 / 10) comp_ns = period_ns * 9 / 10;
@@ -2018,17 +2026,15 @@ static void set_time_constraint_comp(uint64_t period_ns, uint64_t comp_ns) {
     LOG("[nvn] present thread time-constraint policy (period %.3f ms, computation %.3f ms) %s", period_ns / 1e6, comp_ns / 1e6, kr == KERN_SUCCESS ? "set" : "failed to set");
 }
 static int rt_comp_fixed_ms(void) { static int v = -2; if (v == -2) { const char *e = getenv("DM_RT_COMP"); v = e && *e && strcmp(e, "auto") ? atoi(e) : -1; } return v; }   // −1 = auto
-static void set_time_constraint(uint64_t period_ns) { int f = rt_comp_fixed_ms(); set_time_constraint_comp(period_ns, f > 0 ? (uint64_t)f * 1000000ull : 2000000ull); }   // first time: the fixed value, or auto's starting value of 2 ms
+static void set_time_constraint(uint64_t period_ns) { int f = rt_comp_fixed_ms(); uint64_t fx = f > 0 ? (uint64_t)f * 1000000ull : 0;
+    set_time_constraint_comp(period_ns, rt_old() ? (fx ? fx : 2000000ull) : nvn_rt_comp_on_period(fx, (uint64_t)(g_rt_comp_ms * 1e6), period_ns)); }   // first time: the fixed value, or auto's starting value of 2 ms
 // Called every frame at acquire: records this thread's CPU time since the last call; in auto mode re-declares based on p90
 static void rt_comp_tick(uint64_t period_ns) {
     if (rt_comp_fixed_ms() > 0 || !period_ns || !g_rt_comp_ms) return;
-    static uint64_t last; static double win[120]; static int n;
+    static uint64_t last; static nvn_rt_win w;
     uint64_t c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID); if (!last) { last = c; return; }
-    win[n++] = (double)(c - last) / 1e6; last = c;
-    if (n < 120) return;
-    double v[120]; memcpy(v, win, sizeof v); qsort(v, 120, sizeof *v, dcmp); n = 0;
-    double p90 = v[107], comp = p90 * 1.25, cap = period_ns * 0.9 / 1e6; if (comp > cap) comp = cap; if (comp < 1) comp = 1;
-    if (comp > g_rt_comp_ms * 1.15 || comp < g_rt_comp_ms * 0.85) set_time_constraint_comp(period_ns, (uint64_t)(comp * 1e6));
+    uint64_t v = nvn_rt_sample(&w, (double)(c - last) / 1e6, g_rt_comp_ms, period_ns); last = c;
+    if (v) set_time_constraint_comp(period_ns, v);
 }
 static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic clock
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
@@ -2085,6 +2091,10 @@ static uint64_t present_period(const win_t *o) {
     present_cfg(o);
     int itv = win_interval(o), hz = g_hz;
     return hz > 0 ? (uint64_t)itv * 1000000000ull / (uint64_t)hz : 0;
+}
+static uint64_t rt_cap_period(const win_t *o) {   // the period the time-constraint threads declare: the cap's, without the game's own (late) interval (nvn_pace.h nvn_rt_period_ns)
+    present_cfg(o);
+    return nvn_rt_period_ns(g_hz, nvn_hold_interval(1, g_hz, nvn_pace_hold(atomic_load(&g_fps_hold), mtl_fps_target())));
 }
 int (*g_nvn_loadscreen_up)(void);   // optional game hook: is a loading screen up right now (waits for the pipeline warm-up there; marks long frames hidden behind it)
 __attribute__((weak)) void dm_movie_tick(void) {}   // host hle_movie.c: hands paced movie frames over, one per game frame; none in the graphics unit tests
@@ -2213,7 +2223,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     prev_in = t0; prev_pass = ps; prev_draw = dr;
     dump_frame();
     if (g_frame % TWIN == 0) tsummary(g_frame);
-    if (xlat_on()) { xjob j = {.kind = XJ_FRAME, .frame = g_frame, .period = present_period(o) / 1e9}; pthread_mutex_lock(&g_xord_mu); x_push(&j); pthread_mutex_unlock(&g_xord_mu); }   // in order with the replays (plan item 61)
+    if (xlat_on()) { xjob j = {.kind = XJ_FRAME, .frame = g_frame, .period = (rt_old() ? present_period(o) : rt_cap_period(o)) / 1e9}; pthread_mutex_lock(&g_xord_mu); x_push(&j); pthread_mutex_unlock(&g_xord_mu); }   // in order with the replays (plan item 61)
     else mtl_set_frame(g_frame);
     // Real-device semantics: present only enqueues and returns immediately; this frame's display time is scheduled by the pacer, and the texture can be acquired again only at "display time + one period" (blocking in AcquireTexture)
     uint64_t period = present_period(o), now = dm_detclock_enabled() ? guest_ns() : now_ns();
