@@ -125,6 +125,7 @@ run: \
 	$(B)/t_relr_unchecked \
 	$(B)/t_romfs_validate \
 	$(B)/t_romfs_validate_nokeys \
+	$(B)/t_romfs_validate_anyorig \
 	$(B)/t_rundiag \
 	$(B)/t_rundiag_nokeep \
 	$(B)/t_rundiag_head \
@@ -444,6 +445,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL marker: a key file cut short" $(B)/t_romfs_validate_nokeys.log; then \
 	   cat $(B)/t_romfs_validate_nokeys.log; echo "t_romfs_validate_nokeys: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_romfs_validate_nokeys: a marker trusted for the key files too lets a cut-short key file through, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_romfs_validate_anyorig > $(B)/t_romfs_validate_anyorig.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL overlay: another version's original refused" $(B)/t_romfs_validate_anyorig.log; then \
+	   cat $(B)/t_romfs_validate_anyorig.log; echo "t_romfs_validate_anyorig: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_romfs_validate_anyorig: an overlay served without comparing the RomFS's original takes another version's, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_rundiag
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_rundiag_nokeep > $(B)/t_rundiag_nokeep.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ its log kept as boot.interrupted.txt" $(B)/t_rundiag_nokeep.log; then \
@@ -863,6 +868,8 @@ $(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
 $(B)/t_romfs_validate_nokeys: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_ROMFS_MARKER_NO_KEYS -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
+$(B)/t_romfs_validate_anyorig: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_OVERLAY_ANY_ORIGINAL -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
 $(B)/t_rundiag: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_rundiag.c
 $(B)/t_rundiag_nokeep: t_rundiag.c ../rundiag.h | $(B)

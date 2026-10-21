@@ -10,6 +10,7 @@
 //   sleep <ms>           run the next line after ms (1-600000)
 //   shot <path>          the next presented frame as a PNG (as DM_NVN_SHOT)
 //   passdump <frames>    the render pass records of the next frames (as DM_NVN_PASSDUMP, 1-600)
+//   texdump <path>       the colour targets of the next frame as PNGs (as DM_NVN_TEXDUMP; %d in the path is the target's index)
 //   threads              every guest thread's state now (as on a crash)
 //   memsnap <path>       a memory snapshot now (as DM_MEMSNAP, memsnap.c)
 //   hlecount             the host call counts now (DM_HLECOUNT's file)
@@ -30,6 +31,7 @@ uint32_t hid_key_mask(const char *name);                // hle_hid.c
 void hid_cmd_keys(uint64_t down, uint64_t up);
 void dm_gfx_shot_at(long k, const char *path);          // gfx/nvn/nvn_mtl.m
 void mtl_passdump_next(long n);
+void mtl_texdump_next(const char *path);
 void svc_thread_dump(void);                             // hle_thread.c
 long dm_memsnap_write(const char *path, long frame);    // memsnap.c
 void hlecount_flush(void);                              // hle_count.c
@@ -37,7 +39,7 @@ void dm_host_shutdown(const char *why);                 // hle_lifecycle.c
 void sead_heaps_print(void);                            // sead.c
 void sead_heap_of(uint64_t addr);
 
-enum { CMD_NONE, CMD_KEY, CMD_DOWN, CMD_UP, CMD_WAIT, CMD_SLEEP, CMD_SHOT, CMD_PASSDUMP, CMD_THREADS, CMD_MEMSNAP, CMD_HLECOUNT, CMD_QUIT, CMD_HEAPS, CMD_HEAP, CMD_GAME };
+enum { CMD_NONE, CMD_KEY, CMD_DOWN, CMD_UP, CMD_WAIT, CMD_SLEEP, CMD_SHOT, CMD_PASSDUMP, CMD_TEXDUMP, CMD_THREADS, CMD_MEMSNAP, CMD_HLECOUNT, CMD_QUIT, CMD_HEAPS, CMD_HEAP, CMD_GAME };
 int dm_game_command(const char *line, int run);   // host/game.h: the game's own commands (Tears of the Kingdom: survey, plan item 167)
 #define CMD_LINE 1024
 typedef struct { int kind; uint32_t mask; long n; char path[CMD_LINE]; } dm_cmd;
@@ -55,7 +57,7 @@ static int cmd_parse(const char *line, dm_cmd *c, const char **why) {
     char arg[CMD_LINE]; size_t an = (size_t)(line + len - a); if (an >= sizeof arg) { *why = "line too long"; return -1; }
     memcpy(arg, a, an); arg[an] = 0;
     static const struct { const char *name; int kind; } names[] = {{"key", CMD_KEY}, {"down", CMD_DOWN}, {"up", CMD_UP}, {"wait", CMD_WAIT},
-        {"sleep", CMD_SLEEP}, {"shot", CMD_SHOT}, {"passdump", CMD_PASSDUMP}, {"threads", CMD_THREADS}, {"memsnap", CMD_MEMSNAP},
+        {"sleep", CMD_SLEEP}, {"shot", CMD_SHOT}, {"passdump", CMD_PASSDUMP}, {"texdump", CMD_TEXDUMP}, {"threads", CMD_THREADS}, {"memsnap", CMD_MEMSNAP},
         {"hlecount", CMD_HLECOUNT}, {"quit", CMD_QUIT}, {"heaps", CMD_HEAPS}, {"heap", CMD_HEAP}};
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) if (!strcmp(w, names[i].name)) c->kind = names[i].kind;
     if (!c->kind) {   // the game's own (it checks the line now and logs what running it does)
@@ -77,7 +79,7 @@ static int cmd_parse(const char *line, dm_cmd *c, const char **why) {
         char *end; errno = 0; c->n = (long)strtoull(arg, &end, 0);
         if (end == arg || *end || errno || !c->n) { *why = "heap takes an address"; return -1; }
         return 0; }
-    case CMD_SHOT: case CMD_MEMSNAP:
+    case CMD_SHOT: case CMD_MEMSNAP: case CMD_TEXDUMP:
         if (!*arg) { *why = "expected a path"; return -1; }
         strlcpy(c->path, arg, sizeof c->path); return 0;
     default:
@@ -95,6 +97,7 @@ static void cmd_run(const dm_cmd *c) {
     case CMD_SLEEP: usleep((useconds_t)c->n * 1000); break;
     case CMD_SHOT: dm_gfx_shot_at(1, c->path); break;
     case CMD_PASSDUMP: mtl_passdump_next(c->n); break;
+    case CMD_TEXDUMP: mtl_texdump_next(c->path); break;
     case CMD_THREADS: svc_thread_dump(); break;
     case CMD_MEMSNAP: { long f = (long)dm_nvn_frame_count(); long n = dm_memsnap_write(c->path, f);
         if (n < 0) LOG("[red] command channel: memsnap %s failed", c->path); else LOG("[cmd] memsnap: frame %ld, %ld bytes to %s", f, n, c->path); break; }

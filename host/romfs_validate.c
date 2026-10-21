@@ -3,6 +3,7 @@
 // (.DS_Store etc.) are not counted.
 #include "romfs_validate.h"
 #include "game.h"
+#include <CommonCrypto/CommonDigest.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
@@ -86,4 +87,38 @@ int dm_romfs_validate(const char *dir, char *why, size_t why_n) {
                  dm_game.romfs_tree_files, dm_game.romfs_tree_bytes); return 0; }
     snprintf(why, why_n, "%d key files of the right size; %s complete (%d files, %lld bytes)", dm_game.romfs_nfiles, dm_game.romfs_tree ? dm_game.romfs_tree : "-", n, bytes);
     return 1;
+}
+// ---------- RomFS overlay (romfs_validate.h) ----------
+// On the Mac games/<id>/defaults.c finds the workspace's overlay; on iOS the app looks for one next to the RomFS (ios/Sources/main.m) and serves it
+// only when this check passes: a half-copied overlay or one made from another game version would replace the game's file with a wrong one
+static int sha256_hex(const char *p, char hex[65]) {
+    FILE *f = fopen(p, "rb"); if (!f) return 0;
+    CC_SHA256_CTX c; CC_SHA256_Init(&c); unsigned char b[1 << 16], d[CC_SHA256_DIGEST_LENGTH]; size_t k;
+    while ((k = fread(b, 1, sizeof b, f))) CC_SHA256_Update(&c, b, (CC_LONG)k);
+    fclose(f); CC_SHA256_Final(d, &c);
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    return 1;
+}
+int dm_romfs_overlay_check(const char *overlay, const char *romfs, char *why, size_t why_n) {
+    char mp[4200], line[2048]; snprintf(mp, sizeof mp, "%s/manifest.tsv", overlay);
+    FILE *f = fopen(mp, "r"); if (!f) { snprintf(why, why_n, "no manifest.tsv"); return 0; }
+    int n = 0, ln = 0, ok = 1;
+    while (ok && fgets(line, sizeof line, f)) {
+        ln++; if (line[0] == '#' || line[0] == '\n') continue;
+        char path[1024], size[32], sha[80], orig[80], p[4200], got[65]; struct stat st;
+        if (sscanf(line, "%1023[^\t]\t%31[^\t]\t%79[^\t]\t%79s", path, size, sha, orig) != 4) { snprintf(why, why_n, "manifest.tsv line %d unreadable", ln); ok = 0; break; }
+        snprintf(p, sizeof p, "%s/%s", overlay, path);
+        if (stat(p, &st) || st.st_size != atoll(size) || !sha256_hex(p, got) || strcmp(got, sha)) {
+            snprintf(why, why_n, "%s is not the file its manifest lists (not fully copied?)", path); ok = 0; break; }
+        snprintf(p, sizeof p, "%s/%s", romfs, path);
+#ifndef DM_TEST_OVERLAY_ANY_ORIGINAL   // negative control of t_romfs_validate only: the RomFS's original not compared
+        if (!sha256_hex(p, got) || strcmp(got, orig)) {
+            snprintf(why, why_n, "the RomFS's %s is not the file the overlay was made from (another game version?)", path); ok = 0; break; }
+#endif
+        n++;
+    }
+    fclose(f);
+    if (ok && !n) { snprintf(why, why_n, "manifest.tsv lists no files"); ok = 0; }
+    if (ok) snprintf(why, why_n, "%d file(s), made from this RomFS's", n);
+    return ok;
 }

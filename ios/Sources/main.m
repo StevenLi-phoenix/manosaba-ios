@@ -3,8 +3,9 @@
 //   boot.txt is kept as boot.previous.txt (a launch by the system in the background must not replace the last session's log).
 //   DM_LOG_PORT=<port>: also serve the log on 127.0.0.1:<port> (tools/logport.py through iproxy); "dump" dumps state, "quit" exits.
 //   Game data (the player's own dump): RomFS in Library/Application Support/romfs (ios/run.sh push-data), Documents/RomFS (Files app) or the
-//   app bundle's RomFS (ios/run.sh ipa with DM_IPA_DATA=1); the console's shared fonts in sysfont next to it. Checked against the game profile
-//   (romfs_validate.c); when missing, a page says what is missing and where it goes.
+//   app bundle's RomFS (ios/run.sh ipa with DM_IPA_DATA=1); the console's shared fonts in sysfont next to it, and the game's RomFS overlay in
+//   romfs_overlay (served when made from this RomFS). Checked against the game profile (romfs_validate.c); when missing, a page says what is
+//   missing and where it goes.
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
 //   Mods (host/mods.c): Documents/mods when it exists (Files app; one folder per mod, or an SD card's atmosphere folder).
 //   Run diagnostics (plan item 106): log lines carry UTC milliseconds (host/logstamp.h; DM_LOG_TIME=0 in env.txt turns it off); Documents/boot.running
@@ -203,6 +204,23 @@ static void exclude_from_backup(NSString *d) {
     [u getResourceValue:&v forKey:NSURLIsExcludedFromBackupKey error:nil];
     plog("boot: %s excluded from backups: %s%s%s", d.fileSystemRepresentation, set && v.boolValue ? "yes" : "no", e ? " — " : "", e ? e.localizedDescription.UTF8String : "");
 }
+// The game's RomFS overlay (Tears of the Kingdom: games/totk/romfs_overlay.py's quick-menu backgrounds and game over flow at 60 fps and up; on the
+// Mac games/totk/defaults.c serves the workspace's): the first romfs_overlay folder, in the RomFS's places, made from this RomFS
+// (dm_romfs_overlay_check), unless DM_ROMFS_OVERLAY is set (env.txt; empty turns it off). ios/run.sh push-data copies the workspace's in, as
+// MacNativeGames ships its overlays with the data. Without it the 60 fps product drew the ability wheel (hold L) over black on the iPhone 17 Pro
+// (2026-10-22): the overlay's quick-menu fix was never served on iOS
+static void overlay_locate(NSString *romfs) {
+    if (getenv("DM_ROMFS_OVERLAY")) { plog("boot: RomFS overlay \"%s\" (DM_ROMFS_OVERLAY)", getenv("DM_ROMFS_OVERLAY")); return; }
+    for (NSString *d in @[[support_dir() stringByAppendingPathComponent:@"romfs_overlay"], [docs_dir() stringByAppendingPathComponent:@"romfs_overlay"],
+                          [bundle_dir() stringByAppendingPathComponent:@"romfs_overlay"]]) {
+        BOOL dir = NO; if (![NSFileManager.defaultManager fileExistsAtPath:d isDirectory:&dir] || !dir) continue;
+        char why[512]; uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+        int ok = dm_romfs_overlay_check(d.fileSystemRepresentation, romfs.fileSystemRepresentation, why, sizeof why);
+        plog("%sboot: RomFS overlay %s: %s (%.0f ms)", ok ? "" : "[red] ", d.fileSystemRepresentation, why, (clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0) / 1e6);
+        if (ok) { setenv("DM_ROMFS_OVERLAY", d.fileSystemRepresentation, 1); exclude_from_backup(d); return; }
+    }
+    plog("boot: no RomFS overlay (ios/run.sh push-data copies the workspace's build/<game>/romfs_overlay)");
+}
 
 // ---------- Host ----------
 static char *g_argv[16]; static int g_argc;
@@ -215,6 +233,7 @@ static void boot_prepare(NSString *romfs) {
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
     NSString *font = sysfont_locate(); if (font) setenv("DM_SYSFONT", font.fileSystemRepresentation, 0);
     exclude_from_backup(romfs); exclude_from_backup(font);
+    overlay_locate(romfs);   // before the host starts: host/mods.c puts the mods' layers in front of it
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     // The game's cache storage (Tears of the Kingdom; hle_fs.c): in Library/Caches, which the system may empty while the app is not running, as a

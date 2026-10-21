@@ -3,14 +3,15 @@
 # relative to DM_ROOT. Device and signing settings come from local.env (see local.env.example).
 #   run.sh build              generate Gen/ and the Xcode project, build the app (log: $DM_ROOT/run/ios/build.log)
 #   run.sh ipa                the same build unsigned, packaged as $DM_ROOT/run/ios/<game>-ios26.ipa (-ios18 with DM_IOS_M3=1) to sign yourself;
-#                             DM_IPA_DATA=1 also puts the workspace's RomFS and shared fonts into the app (<game>-ios26-data.ipa)
+#                             DM_IPA_DATA=1 also puts the workspace's RomFS, shared fonts and RomFS overlay into the app (<game>-ios26-data.ipa)
 #   run.sh install            install the built app: its signature checked (expiry, this device), the app's Documents backed up first (ios/tools/install_check.py)
 #   run.sh launch [seconds]   launch it (ends a running instance), wait, then fetch Documents/boot.txt
 #   run.sh log                fetch Documents/boot.txt (or boot.launch.txt) now
 #   run.sh lifecycle [at] [len]  launch with a trip to the background simulated in the app at <at> s for <len> s (DM_TEST_BG, default 40 and 20),
 #                             fetch boot.txt and judge it (tools/lifecycle_check.py: LIFECYCLE OK / RED). The real home button and app switcher
 #                             need UI automation on the phone and are not this
-#   run.sh push-data          copy the game's RomFS and shared fonts from the workspace into the app (Library/Application Support)
+#   run.sh push-data [what]   copy the game's RomFS, shared fonts and RomFS overlay (build/<game>/romfs_overlay, when the workspace has one)
+#                             from the workspace into the app (Library/Application Support); what: some of romfs sysfont overlay (default all)
 #   run.sh sim-build          the same build for the iOS Simulator (plan item 114: the on-screen controls, safe areas and lifecycle without a phone):
 #                             Metal 3 (the Simulator SDK has no Metal 4 and no MetalFX), arm64, unsigned, the Simulator's shaders
 #                             ($DM_ROOT/build/ios/sim/<game>/b-<chain>, ios/tools/sim_metal.py), no libvpx
@@ -108,6 +109,10 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
         src=$(cd "$src" && pwd -P)
         t "adding $src as ${x##*:}"; ditto "$src" "$W/Payload/DmIOS.app/${x##*:}" || { t "[red] copying ${x%%:*} failed"; exit 1; }
       done
+      # The game's RomFS overlay when the workspace has one (Tears of the Kingdom's quick menus and game over at 60 fps; main.m serves it when it
+      # was made from the RomFS beside it)
+      ov=$ROOT/build/$GAME/romfs_overlay
+      if [ -d "$ov" ]; then t "adding $ov as romfs_overlay"; ditto "$ov" "$W/Payload/DmIOS.app/romfs_overlay" || { t "[red] copying the overlay failed"; exit 1; }; fi
     fi
     xattr -cr "$W/Payload"
     # Files already compressed are stored, not deflated again (nxnative's zip_store, MIT): 130 MB of Tears of the Kingdom's .zs took 1.66 s to
@@ -201,8 +206,13 @@ lifecycle)
   pull boot.txt "$R/lifecycle_boot.txt" || { t "[red] no log"; exit 1; }
   t "log: $R/lifecycle_boot.txt"; python3 -I ../tools/lifecycle_check.py "$R/lifecycle_boot.txt"; exit $? ;;
 push-data)
-  for x in romfs:romfs sysfont:sysfont; do
-    src=$(ws "${x%%:*}") || continue; [ -d "$src" ] || { t "skipped ${x%%:*}: no $src"; continue; }
+  # The RomFS overlay (games/<game>/romfs_overlay.py) goes with the data, as MacNativeGames ships its overlays: without it Tears of the Kingdom's
+  # 60 fps product drew the ability wheel over black on the iPhone (2026-10-22). "push-data overlay" copies it alone
+  WANT=" ${*:2} "; [ "$WANT" = "  " ] && WANT=" romfs sysfont overlay "
+  for x in romfs:romfs sysfont:sysfont overlay:romfs_overlay; do
+    case "$WANT" in *" ${x%%:*} "*) ;; *) continue ;; esac
+    if [ "${x%%:*}" = overlay ]; then src=$ROOT/build/$GAME/romfs_overlay; else src=$(ws "${x%%:*}") || continue; fi
+    [ -d "$src" ] || { t "skipped ${x%%:*}: no $src"; continue; }
     src=$(cd "$src" && pwd -P)   # the workspace often links to the data elsewhere; devicectl does not follow a symlinked source directory ("Is a directory")
     t "copying $src → Library/Application Support/${x##*:}"
     xcrun devicectl device copy to --device "$D" --domain-type appDataContainer --domain-identifier "$B" --source "$src" \

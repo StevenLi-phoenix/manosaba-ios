@@ -1,5 +1,6 @@
 // RomFS check (romfs_validate.c) against a profile of its own: two key files with exact sizes, and a tree "Data" of 3 files / 10 bytes; the marker
-// (plan item 175) trusted after one walk, the key files checked every time. A marker trusted for the key files too (-DDM_TEST_ROMFS_MARKER_NO_KEYS): 1 fails.
+// (plan item 175) trusted after one walk, the key files checked every time; the RomFS overlay check. A marker trusted for the key files too
+// (-DDM_TEST_ROMFS_MARKER_NO_KEYS): 1 fails; the overlay served over another version's original (-DDM_TEST_OVERLAY_ANY_ORIGINAL): 1 fails.
 #include "../romfs_validate.h"
 #include "../game.h"
 #include <stdio.h>
@@ -53,6 +54,22 @@ int main(void) {
     CHECK(dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w, "marker: another version's marker walks again");
     setenv("DM_ROMFS_RECHECK", "1", 1);
     CHECK(dm_romfs_validate_marked(R, mk, why, sizeof why, &w) && w, "marker: DM_ROMFS_RECHECK=1 walks again"); unsetenv("DM_ROMFS_RECHECK"); unlink(mk);
+    // The RomFS overlay (2026-10-22: never served on iOS, the ability wheel showed black at 60 fps): its manifest.tsv names the overlay's file
+    // ("abc!") and the original it was made from (Data/a.bin, "abcd"); served only when both are as listed
+    char ov[600], rom[600]; snprintf(ov, sizeof ov, "%s/ov", R); snprintf(rom, sizeof rom, "%s", R);
+    CHECK(!dm_romfs_overlay_check(ov, rom, why, sizeof why) && !strcmp(why, "no manifest.tsv"), "overlay: none refused: %s", why);
+    put("ov/manifest.tsv", "# path\tsize\tsha256\toriginal_sha256 (test)\n");
+    CHECK(!dm_romfs_overlay_check(ov, rom, why, sizeof why) && strstr(why, "lists no files"), "overlay: an empty manifest refused: %s", why);
+    put("ov/manifest.tsv", "# path\tsize\tsha256\toriginal_sha256 (test)\nData/a.bin\t4\t53e0eff3204626f3e256ca636572d7ccdf8eb5a190c9defa3fa567bc63866b76\t"
+                           "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589\n");
+    put("ov/Data/a.bin", "abc");
+    CHECK(!dm_romfs_overlay_check(ov, rom, why, sizeof why) && strstr(why, "not fully copied"), "overlay: its file cut short refused: %s", why);
+    put("ov/Data/a.bin", "abc!");
+    CHECK(dm_romfs_overlay_check(ov, rom, why, sizeof why) && strstr(why, "1 file(s)"), "overlay: made from this RomFS accepted: %s", why);
+    put("Data/a.bin", "abce");
+    CHECK(!dm_romfs_overlay_check(ov, rom, why, sizeof why) && strstr(why, "another game version"), "overlay: another version's original refused: %s", why);
+    put("ov/manifest.tsv", "# test\nData/a.bin 4\n");
+    CHECK(!dm_romfs_overlay_check(ov, rom, why, sizeof why) && strstr(why, "line 2 unreadable"), "overlay: an unreadable line refused: %s", why);
     printf("t_romfs_validate: %d/%d passed\n", checks - fails, checks);
     char cmd[600]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", R); system(cmd);
     return fails != 0;

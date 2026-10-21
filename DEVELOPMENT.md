@@ -82,7 +82,8 @@ map and library from the profile; rebuild them with `shmap_from_capture.py` and 
   them, `DM_OPTIONS=none` none).
 - RomFS overlay for 60 fps and up: `work/build/cache/dm/venv/bin/python -I games/totk/romfs_overlay.py work/data/switch/totk-1.4.3/RomFS
   work/build/totk/romfs_overlay` (quick menus' background, the game over menu's one-frame wait); served first when it exists
-  (`games/totk/defaults.c` sets `DM_ROMFS_OVERLAY`; empty turns it off). Test: `games/totk/tests/t_romfs_overlay.py <RomFS>`.
+  (`games/totk/defaults.c` sets `DM_ROMFS_OVERLAY`; empty turns it off). Test: `games/totk/tests/t_romfs_overlay.py <RomFS>`. On iOS
+  `ios/run.sh push-data overlay` copies it in and the app serves it when it was made from the phone's RomFS (194).
 - TBDR rewrites off on the Mac (`games/totk/defaults.c`; `DM_NVN_TBDR=1` on): GPU p50 8-10 % lower without them on the M5; mid-submission
   commits and layered passes need them off.
 - Window: game.json `present_interval` "game" (the display-link wait takes the game's interval: it steps per frame), `window_unfocused`
@@ -392,8 +393,8 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
 - An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
-- Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 61d, 62c2, 62g, 62h, 62j, 63b
-  (`DM_APP_POOL_ADD_MB`), 170 (the game's text), 172, 181 (the shrine that fell to 10 fps), 182 (with 61d), how 62l's 60 fps build plays.
+- Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 62c2, 62g, 62h, 62j, 63b
+  (`DM_APP_POOL_ADD_MB`), 170 (the game's text), 172, 181 (the shrine that fell to 10 fps), how 62l's 60 fps build plays.
 - The next game: 64's open sub-items.
 - The user's choices: 192 (the touch controls after Touchable).
 - Decisions: `DM_FRAME_STEP=vsync` as iOS's default (133: 35 % less CPU on the Mac); `DM_PRESENT_LATENCY=auto` as the default (after 153's
@@ -848,8 +849,13 @@ Tier 4, large:
     `DM_NVN_TRACE=<first>+<frames>:<path>` writes a TSV, `tools/trace_report.py` splits each frame into translation / sync waits / acquire / present
     / game with the GPU's busy, latency and starved time. Prologue: at 30 fps 297 of 299 frames wait for the display (61 does not raise 30 fps); the
     60 fps product at 120 Hz 16 % wait for translation (more on an iPhone's CPU: 61d). `gfx/tests/t_trace.c`, `tools/tests/t_trace_report.py`
-  - [ ] 61d the translation thread's time-constraint policy (re-declared at most every 200 ms) against none, on the iPhone (with 61e's
-    DM_NVN_PASSGPU count there: the single-draw passes' cost on a tile GPU)
+  - [x] batch 69 · 61d the translation thread's time-constraint policy (re-declared at most every 200 ms) against none, on the iPhone (with 61e's
+    DM_NVN_PASSGPU count there: the single-draw passes' cost on a tile GPU). iPhone 17 Pro, 2026-10-22, the shrine save standing 90 s, runs
+    alternating, the phone warm: with the policy against `DM_NVN_XLAT_RT=0`, performance cores 66.0 / 65.9 % against 64.1 / 64.5 %, frame time
+    p50 19.1 / 19.4 against 19.4 / 22.1 ms, p95 about 33 ms and CPU 1.7-2.0 W either way: no consistent difference beyond the warm-up
+    drift (consecutive default runs went 3.09 → 2.61 GHz); kept. DM_NVN_PASSGPU there: 159 passes, 12.4 ms of GPU a frame; the 100
+    single-draw render passes 3.6 ms of it (29 %; the M5's prologue: 84, 2.76 ms), mostly 1280x720 passes loading their attachments (a lead
+    for 62j and 187)
   - [-] 61e full-screen single-draw passes as compute: not done on the Mac. DM_NVN_PASSGPU (item 49) on the prologue (M5): 84 single-draw passes a
     frame, 2.76 ms together, nearly all small downsample targets; idle gaps between encoders 0.19 ms a frame plus 0.84 ms waiting for the CPU to
     commit (61's matter). Compute versions need the translator to make kernels, to save at most the passes' own cost (under 0.9 ms a frame) on a GPU
@@ -1118,7 +1124,9 @@ the device the user's iPhone 17 Pro):
   c5d8671 (MIT): with the late interval declared, TotK on an iPhone fell to 1.5 GHz and 5 % on performance cores at thermal state 0; ours showed
   0-15 % at 0.9-1.3 GHz. The comment that a thread using more than its computation is demoted was wrong (XNU: it ends its deadline for the period).
   `DM_RT_DECL=old` declares as before. `t_pace` (`-DDM_TEST_RT_COMP_RESET` fails 2). Device check: 61d's A/B on the iPhone (performance-core share,
-  clocks, frame time, with and without `DM_RT_DECL=old`, after a cooldown)
+  clocks, frame time, with and without `DM_RT_DECL=old`, after a cooldown). Done 2026-10-22 (iPhone 17 Pro, shrine save, alternating, warm, no
+  cooldown between runs): `DM_RT_DECL=old` 1.75 W, 2.62 GHz, performance cores 66.1 %, frame p50 19.9 ms against 1.73-1.74 W, 2.63-2.64 GHz,
+  65.8-65.9 %, 19.2-19.5 ms: no difference once warm (the first, cooler run of either is higher)
 - [ ] 183 guest yields: `host/hle_thread.c` turns them into `sched_yield`, and the iPhone's log shows the game's main thread yielding 14,000-20,000
   times (15-25 ms) a frame; Apple's Tech Talk 110147 says a yield drops the thread's priority for up to 10 ms and spinning keeps a thread from moving
   to a performance core. Measure, then try a short spin and a block (nxnative PR #37: 30 µs before sleeping, M4 Pro frame p50 8.8 → 8.34 ms)
@@ -1146,6 +1154,15 @@ the device the user's iPhone 17 Pro):
 - [ ] 192 touch controls after Touchable (476fb39): its fixed 8-way D-pad, Liquid Glass, face-button slides and layout; Touchable has no analog stick
   or camera drag, so the left side, the stick's origin, how presses look, the extra controls and opacity wait for the user's choices
 - [ ] 193 the iOS logs' `thermal -1`: `dm_thermal_now` has no iOS definition (`gfx/nvn/hle_nvn.c` says `front_ios.m` has one)
+- [x] batch 69 · 194 the ability wheel (hold L) over black on the iPhone (2026-10-22, the user's screenshot after 62l's 60 fps build): the RomFS
+  overlay's quick-menu fix (MacNativeGames' menu capture; the RomFS overlay note above) was never served on iOS: `games/totk/defaults.c`
+  looks under the workspace, which the app does not have. The app now serves `romfs_overlay` from the RomFS's places (`main.m`
+  `overlay_locate`) when `dm_romfs_overlay_check` passes (each manifest file whole, each original the RomFS's own: a half-copied overlay or
+  another game version is refused with a red line); `ios/run.sh push-data [overlay]` and the data IPA carry it, as MacNativeGames ships its
+  overlays with the data. On the iPhone 17 Pro, shots 60 / 180 / 300 / 420 frames into a hold: black in all 5 runs without it, the world
+  behind the wheel in both runs with it (named by env.txt, then found by the app itself); the earlier runs that had looked fine ran at 30 fps. `t_romfs_validate` (+6; `DM_TEST_OVERLAY_ANY_ORIGINAL` fails 1). Also: the command channel's
+  `texdump <path>` (the next frame's colour targets, as `DM_NVN_TEXDUMP`; `t_cmdchan`), and `t_ktrace` signals until the waiter woke (the
+  2026-10-22 CI hang)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

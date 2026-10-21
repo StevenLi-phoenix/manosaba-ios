@@ -17,6 +17,7 @@ uint64_t dm_nvn_frame_count(void) { return g_frame; }
 static _Atomic int g_shots, g_threads, g_quit, g_hlecount, g_pd; static char g_shot_path[CMD_LINE];
 void dm_gfx_shot_at(long k, const char *path) { (void)k; strlcpy(g_shot_path, path, sizeof g_shot_path); g_shots++; }
 void mtl_passdump_next(long k) { g_pd = (int)k; }
+static char g_td[64]; void mtl_texdump_next(const char *path) { snprintf(g_td, sizeof g_td, "%s", path); }
 void svc_thread_dump(void) { g_threads++; }
 long dm_memsnap_write(const char *path, long frame) { (void)path; (void)frame; return 0; }
 void hlecount_flush(void) { g_hlecount++; }
@@ -48,6 +49,9 @@ int main(void) {
     CHECK(parse_ok("down ZR", CMD_DOWN, 1u << 9, 0, NULL) && parse_ok("up ZR", CMD_UP, 1u << 9, 0, NULL), "down ZR / up ZR");
     CHECK(parse_ok("wait 30", CMD_WAIT, 0, 30, NULL) && parse_ok("sleep 10", CMD_SLEEP, 0, 10, NULL) && parse_ok("passdump 3", CMD_PASSDUMP, 0, 3, NULL), "wait / sleep / passdump");
     CHECK(parse_ok("shot /tmp/a b.png", CMD_SHOT, 0, 0, "/tmp/a b.png") && parse_ok("memsnap /tmp/s", CMD_MEMSNAP, 0, 0, "/tmp/s"), "shot and memsnap keep a path with a space");
+    { dm_cmd c; const char *why; int ok = parse_ok("texdump td_%d.png", CMD_TEXDUMP, 0, 0, "td_%d.png") && parse_bad("texdump", "path");
+      if (ok && !cmd_parse("texdump t%d.png", &c, &why)) cmd_run(&c);
+      CHECK(ok && !strcmp(g_td, "t%d.png"), "texdump <path> parses, runs and needs a path"); }
     CHECK(parse_ok("heaps", CMD_HEAPS, 0, 0, NULL) && parse_ok("heap 0x1234", CMD_HEAP, 0, 0x1234, NULL) && parse_bad("heap", "address") && parse_bad("heap 0x12z", "address"), "heaps / heap <addr>");
     CHECK(parse_ok("threads", CMD_THREADS, 0, 0, NULL) && parse_ok("hlecount", CMD_HLECOUNT, 0, 0, NULL) && parse_ok("quit", CMD_QUIT, 0, 0, NULL), "threads / hlecount / quit");
     CHECK(parse_ok("", CMD_NONE, 0, 0, NULL) && parse_ok("   ", CMD_NONE, 0, 0, NULL) && parse_ok("# key A", CMD_NONE, 0, 0, NULL), "blank lines and comments do nothing");

@@ -8507,6 +8507,13 @@ static void shot(id<MTLTexture> src, const char *path, int screen, const int cro
 // Diagnostic: before the first render pass of the next frame is opened, wait for the GPU to finish, then draw each one (the mip level used by that frame) by full-screen sampling into RGBA8 and save as PNG (float formats are clamped to [0,1])
 static long g_td_frame = -2; static const char *g_td_path; static NSMutableArray *g_td_list; static int g_td_done;
 static void td_dump(void);
+void mtl_texdump_next(const char *path) {   // the command channel's "texdump <path>" (host/cmdchan.c): the next frame's colour targets, as DM_NVN_TEXDUMP
+    static char p[4][1024]; static int k; snprintf(p[k], sizeof p[k], "%s", path);
+    if (!g_td_list) g_td_list = [NSMutableArray array];
+    g_td_path = p[k]; k = (k + 1) & 3; g_td_done = 0;
+    long f = (long)atomic_load(&g_cur_frame) + 1; __atomic_store_n(&g_td_frame, f, __ATOMIC_RELEASE);
+    MLOG("texdump of frame %ld to %s (command channel)", f, path);
+}
 void td_note(RPD *pd, NSUInteger nc) {
     if (g_td_frame == -2) { const char *e = getenv("DM_NVN_TEXDUMP"), *c = e ? strchr(e, ':') : NULL; g_td_frame = c ? atol(e) : -1; g_td_path = c ? c + 1 : NULL; g_td_list = [NSMutableArray array]; }
     if (g_td_frame < 0 || g_td_done) return;

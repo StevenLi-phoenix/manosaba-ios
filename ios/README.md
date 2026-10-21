@@ -23,9 +23,10 @@ reinstall), and before the first launch you trust the developer in Settings → 
 export DM_ROOT=~/dm-work
 ios/run.sh build            # generate Gen/ and the Xcode project, build (log: $DM_ROOT/run/ios/build.log)
 ios/run.sh ipa              # the same build unsigned: $DM_ROOT/run/ios/<game>-ios26.ipa (-ios18 with DM_IOS_M3=1), see below
-                            # DM_IPA_DATA=1: with the RomFS and system fonts inside (<game>-ios26-data.ipa)
+                            # DM_IPA_DATA=1: with the RomFS, system fonts and RomFS overlay inside (<game>-ios26-data.ipa)
 ios/run.sh install          # install on DM_DEVICE
-ios/run.sh push-data        # copy the profile's RomFS and system fonts into the app's Library/Application Support
+ios/run.sh push-data [what] # copy the profile's RomFS, system fonts and RomFS overlay into Library/Application Support
+                            # (what: some of romfs sysfont overlay; e.g. push-data overlay after games/totk/romfs_overlay.py)
 ios/run.sh launch [s]       # launch, wait s seconds (default 30), fetch Documents/boot.txt
 ios/run.sh log              # fetch the log now
 ```
@@ -86,6 +87,10 @@ it signed with every entitlement of its profile (increased memory limit included
 - **Game data**: RomFS in `Library/Application Support/romfs` (`push-data`), `Documents/RomFS` (Files app; file sharing is on) or the app's
   own `RomFS` (`run.sh ipa` with `DM_IPA_DATA=1`), the first complete one in that order; system fonts in `sysfont` in the same three places. The
   RomFS is checked against the profile before the game starts; if something is missing the app shows what and where.
+- **RomFS overlay** (Tears of the Kingdom's quick-menu backgrounds and game over flow at 60 fps and up, `games/totk/romfs_overlay.py`):
+  `romfs_overlay` in the same three places (`push-data overlay` copies the workspace's `build/<game>/romfs_overlay`), served when its
+  `manifest.tsv` says it was made from the RomFS beside it (`host/romfs_validate.c`); `DM_ROMFS_OVERLAY` in env.txt names another, empty turns
+  it off. Without it the 60 fps build draws the ability wheel (hold L) over black.
 - **Mods**: `Documents/mods` (Files app), one folder per mod (`<mod>/romfs`, or as shipped for Atmosphère), or an SD card's `atmosphere`
   folder copied as is; earlier names win, a name starting with `-` turns a mod off; code mods are not applied (`host/mods.c`).
 - **On-screen controls** (games with game.json `touch` "pad": Tears of the Kingdom; `DM_TOUCH=pad` / `screen` overrides the profile, e.g.
