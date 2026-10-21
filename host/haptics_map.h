@@ -6,7 +6,9 @@
 //   1252.572 Hz, dekuNukem's rumble_data_table, on a log scale). Both to calibrate on a controller (device check).
 //   The phone's own haptics (iOS, no controller): single pulses, rate-limited as acnh-mobile does (MIT; written anew): a value under 0.03 is
 //   none; pulses at least 120 ms apart and at most 8 in a burst (a burst ends 1.5 s after it began or 200 ms after the last value), the
-//   strongest value since the last pulse.
+//   strongest value since the last pulse. Its engine is made at the first pulse due while the app is in focus (iOS stops it in the background
+//   and refuses a start there with AVAudioSession's 'what': once that was tried at once and the phone stayed still for the rest of the session);
+//   after a failed start it is tried again 2 s later, doubling up to 30 s.
 #pragma once
 #include <math.h>
 #include <stdint.h>
@@ -39,3 +41,16 @@ static inline float dm_pulse_take(dm_pulse_lim *s, uint64_t now) {
 #endif
     float p = s->peak; s->peak = 0; s->last_pulse = now; s->pulses++; return p;
 }
+typedef struct { uint64_t retry_at; unsigned fails; } dm_phone_eng;
+// Whether to make and start the phone's engine now, for a pulse of strength `pulse`; focus: dm_focus_now() (1 in focus, 2 out of focus, 3 background)
+static inline int dm_phone_engine_due(const dm_phone_eng *e, float pulse, int focus, uint64_t now) {
+#ifndef DM_TEST_PHONE_ENG_ANY_FOCUS   // negative control of t_haptics only: made whatever the focus
+    if (focus != 1) return 0;
+#endif
+    return pulse > 0 && now >= e->retry_at;
+}
+static inline void dm_phone_engine_failed(dm_phone_eng *e, uint64_t now) {
+    uint64_t wait = 2000000000ull << (e->fails < 4 ? e->fails : 4); if (wait > 30000000000ull) wait = 30000000000ull;
+    e->retry_at = now + wait; e->fails++;
+}
+static inline void dm_phone_engine_started(dm_phone_eng *e) { e->retry_at = 0; e->fails = 0; }

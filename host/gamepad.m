@@ -69,7 +69,8 @@ void (*dm_pad_hd_sink)(const float v[2][4]);   // a Switch Pro Controller's HD r
 static hap_t g_hap[NHAP];
 static dispatch_queue_t g_hq; static dispatch_source_t g_htimer;
 #if TARGET_OS_IPHONE
-static __strong CHHapticEngine *g_phone; static dm_pulse_lim g_plim; static int g_phone_tried;
+static __strong CHHapticEngine *g_phone; static dm_pulse_lim g_plim; static int g_phone_off = -1; static dm_phone_eng g_peng;
+int dm_focus_now(void);   // hle_oe.c: 1 in focus
 #endif
 static int g_hlog = -1;
 static int hap_start(hap_t *h, int k) {   // the engine running (once; again after a stop or a reset)
@@ -99,18 +100,30 @@ static void hap_set(hap_t *h, int k, const float v[4]) {
 }
 static void hap_phone(float peak, uint64_t now) {
 #if TARGET_OS_IPHONE
-    if (!g_phone && !g_phone_tried) {
-        g_phone_tried = 1; const char *e = getenv("DM_PHONE_HAPTICS");
+    if (g_phone_off < 0) {
+        const char *e = getenv("DM_PHONE_HAPTICS"); g_phone_off = 1;
         if (e && !strcmp(e, "0")) LOG("haptics: the phone's off (DM_PHONE_HAPTICS=0)");
         else if (!CHHapticEngine.capabilitiesForHardware.supportsHaptics) LOG("haptics: this device has no haptics");
-        else { NSError *err = nil; g_phone = [[CHHapticEngine alloc] initAndReturnError:&err];
-               if (!g_phone || ![g_phone startAndReturnError:&err]) { g_phone = nil; LOG("[red] haptics: the phone's engine did not start (%s)", err.localizedDescription.UTF8String ?: "?"); }
-               else { g_phone.stoppedHandler = ^(CHHapticEngineStoppedReason r) { (void)r; dispatch_async(g_hq, ^{ g_phone_tried = 0; g_phone = nil; }); };
-                      LOG("haptics: the phone's own, as pulses (no controller with haptics)"); } }
+        else { g_phone_off = 0; LOG("haptics: the phone's own, as pulses (no controller with haptics); its engine starts at the first pulse in focus"); }
     }
     dm_pulse_note(&g_plim, peak, now);
     float p = dm_pulse_take(&g_plim, now);
-    if (!(p > 0) || !g_phone || NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious) return;
+    if (!(p > 0) || g_phone_off || NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious) return;
+    if (!g_phone) {   // made here, in focus (haptics_map.h dm_phone_engine_due): iOS stops it in the background and refuses a start there
+        if (!dm_phone_engine_due(&g_peng, p, dm_focus_now(), now)) return;
+        NSError *err = nil; CHHapticEngine *eng = [[CHHapticEngine alloc] initAndReturnError:&err];
+        if (!eng || ![eng startAndReturnError:&err]) {
+            dm_phone_engine_failed(&g_peng, now);
+            if (g_peng.fails <= 3) LOG("[red] haptics: the phone's engine did not start in focus (%s): tried again in %.0f s", err.localizedDescription.UTF8String ?: "?", (g_peng.retry_at - now) / 1e9);
+            return;
+        }
+        __weak CHHapticEngine *we = eng;
+        void (^lost)(const char *) = ^(const char *why) { dispatch_async(g_hq, ^{ if (g_phone != we) return; g_phone = nil; if (g_hlog > 0) LOG("haptics: the phone's engine %s", why); }); };
+        eng.stoppedHandler = ^(CHHapticEngineStoppedReason r) { (void)r; lost("stopped: made again at the next pulse in focus"); };
+        eng.resetHandler = ^{ lost("reset: made again at the next pulse in focus"); };
+        g_phone = eng; dm_phone_engine_started(&g_peng);
+        if (g_hlog > 0) LOG("haptics: the phone's engine started");
+    }
     CHHapticEvent *ev = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticTransient parameters:@[
         [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:dm_haptic_gain(p)],
         [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.4f]] relativeTime:0];

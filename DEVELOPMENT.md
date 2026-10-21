@@ -378,9 +378,11 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
 - Play or saves: 72 (a blood moon), 69 (game over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the
   checks of 161 (grass), 163 (hair and cloth), 165 (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
 - The console: 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
-- An iPhone or iPad: 65, 68, 70, 71b's Metal 4 screen; the checks of 106, 112, 113, 134, 135, 140, 142, 148, 153, 170, 171, 173, 175.
+- An iPhone or iPad: 65, 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 68, 106, 134,
+  135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
-- Tears of the Kingdom running on iOS first (62): 61d, 62c2, 62g, 62h, the checks of 62a, 62b, 62e, 63b (`DM_APP_POOL_ADD_MB`), 172.
+- Tears of the Kingdom running on iOS first (62): 61d, 62c2, 62g, 62h, the checks of 62a, 62b, 62e, 63b (`DM_APP_POOL_ADD_MB`), 112, 113, 142,
+  170 (the game's text), 172, 67e (the phone's pulses after a trip to the background).
 - The next game: 64's open sub-items.
 - Decisions: `DM_FRAME_STEP=vsync` as iOS's default (133: 35 % less CPU on the Mac); `DM_PRESENT_LATENCY=auto` as the default (after 153's
   check).
@@ -588,7 +590,7 @@ Tier 3b, iOS and tooling:
 - [x] batch 27 · 106 run diagnostics (lordran-native f5834c5 / 9567c94, MIT; the code is ours): UTC millisecond log stamps (`host/logstamp.h`,
   `DM_LOG_TIME=1` on the Mac), `Documents/boot.running` → red line and `boot.interrupted.txt` (`host/rundiag.h`), Export Diagnostics
   (`ios/Sources/diag_export.m`), the fps / GPU line (`gfx/nvn/nvn_perfline.h`; Settings: Show frame rate, `DM_PERF_LINE=1`).
-  The device check is the user's
+  Checked on the iPhone 17 Pro (2026-10-21): a foreground kill's red line and `boot.interrupted.txt`, Export Diagnostics, Show frame rate
 - [x] batch 27 · 107 the frames-stopped dump (justr4mzi's mush8 fork 979317e, GPL: the idea only): `DM_FREEZE_DUMP` seconds (6) without a present give
   one thread dump per freeze; thread dumps print after resuming (`hle_thread.c` `thr_bt`)
 - [x] batch 27 · 108 the Metal 4 iOS build compiles for `apple-a14` (was a18; lordran 78dd33d): one IPA for every Metal 4 device (`t_ios_cpu.py`)
@@ -665,11 +667,11 @@ Tier 3c, Tears of the Kingdom:
 Tier 3c, iOS:
 - [x] batch 36 · 134 iOS audio: the session asks for 48 kHz and a 5 ms I/O buffer and logs what it got (nxnative 18c6143); underruns and the zeros
   filled counted, logged by a watchdog (after nxnative b301431, MIT) that moves a unit silent for 200 ms, or one whose Start the device refuses, to
-  the silent sink and retries it (1, 2, 4, then every 8 s); the media services reset makes every unit again (`dm_audio_reset`). On a device (the
-  user): the session's logged rate and buffer
+  the silent sink and retries it (1, 2, 4, then every 8 s); the media services reset makes every unit again (`dm_audio_reset`). On the iPhone 17
+  Pro (2026-10-21): 48000 Hz and 5.00 ms as asked, output latency 12.4 ms
 - [x] batch 37 · 135 iOS: the frame rate setting held at 30 in Low Power Mode or from thermal state Serious up (`nvn_fps_policy` in
-  `gfx/nvn/nvn_pace.h`, after super-mario-odyssey-ios's frame pacer, MIT), the reason logged; `ENABLE_DEBUG_DYLIB: NO` in `ios/project.yml`. On a
-  device (the user): Low Power Mode on and off while playing logs "frame rate 30 fps (Low Power Mode)" and back
+  `gfx/nvn/nvn_pace.h`, after super-mario-odyssey-ios's frame pacer, MIT), the reason logged; `ENABLE_DEBUG_DYLIB: NO` in `ios/project.yml`. On the
+  iPhone 17 Pro (2026-10-21): Low Power Mode on and off logged "frame rate 30 fps (Low Power Mode)", then "frame rate 60 fps (the setting)"
 - [x] batch 39 · 136 no option pages on iOS (iOS maps the signed executable's code): `ios/tools/gen_embed.py` builds the code options (DM_OPTIONS at
   build time, else the product's options.default) into the embedded image, each checked whole, and `options.c` `dm_options_embedded` reads them back,
   so `dm_option_on` answers as on the Mac; run-time choices stay data (the frame rate by the host's pacing, realtime and scene through the host page).
@@ -690,8 +692,8 @@ Tier 3c, larger:
 - [x] batch 42 · 140 FIFO frame consumption for a game that steps once per frame (game.json `present_consume` `"fifo"`: manosaba;
   `DM_PRESENT_CONSUME=newest|fifo` overrides; after acnh-mobile c2af194, MIT, written anew): the display link shows the oldest queued frame
   (`nvn_mtl.m` `link_take`), each at least its present period from the tick that showed it (`nvn_pace.h` `nvn_fifo_due`); uncapped pacing keeps the
-  newest. On a device (the user): manosaba's log says "the display link shows every frame in order" and its "display link up to" lines count 0 "stale
-  frames dropped by coalescing"
+  newest. On the iPhone 17 Pro (2026-10-21): the line is logged and steady play drops 0 stale frames; each return from the background drops 1-3
+  (5 in 4 returns)
 - [x] batch 43 · 141 IL2CPP class names in crash reports and memory snapshots (`host/il2cpp_obj.h`; armyja's nxnative-aa-port reads the same fields,
   MIT, written anew): a Unity game's crash report (`game.c` `dm_engine_il2cpp`) names the object each of x0-x28 points to; `tools/memsnap.py` `class`,
   `refs` and `diff` (manosaba from frame 600 to 2400 grew 29,776 System.String, 12,625 Naninovel.PlaybackSpot, 8,930 Naninovel.RawValuePart, 7,924
@@ -700,7 +702,7 @@ Tier 3c, larger:
 Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):
 - [x] batch 44 · 142 the swapchain acquire against the GPU work of the frame last drawn into its image (after blade2-mobile 43e760e, MIT): the present
   records the newest submission's fence (`win_t` `rfence`) and the timing summary counts acquires before that work finished; `DM_NVN_ACQ_GPU=wait`
-  waits. 0 on the Mac in both games, so the wait stays off. On a device (the user): the count in TotK and manosaba logs
+  waits. 0 on the Mac in both games, so the wait stays off. On the iPhone 17 Pro: 0 in manosaba (2026-10-21); Tears of the Kingdom's waits for 62
 - [x] batch 30 · 143 svc details as Horizon (switchbrew's results; totk-mobile's vectors): SetHeapSize (2 MiB multiples up to 4 GiB, OutOfMemory
   0xD001, no shrink over a MapMemory source, fresh pages), MapPhysicalMemory's InvalidAddress / InvalidSize / InvalidMemoryRegion, GetInfo
   PriorityMask, RandomEntropy, SystemResourceSize (`game.json` "npdm") and Total / Used; `tools/new_game.py` reads the NPDM fields
@@ -775,8 +777,8 @@ Tier 3d, iOS, Mac and tooling:
   shader map's third column; a key not in the map takes the first with its functional key (`shmap_resolve`)
 - [x] batch 53 · 170 the game language from the app's own language setting (Touchable's switch_language / CFBundleLocalizations, MIT, written anew):
   game.json `languages` → `CFBundleLocalizations` (`ios/tools/project_lang.py`); at launch the first preferred language maps through `host/lang.h` to
-  DM_LANG when the game has it (Tears of the Kingdom without Portuguese: USpt's code is not in this SDK's list). To check (the user): the Language row
-  in Settings and the game's text after a change
+  DM_LANG when the game has it (Tears of the Kingdom without Portuguese: USpt's code is not in this SDK's list). On the iPhone 17 Pro (2026-10-21) the
+  app's language follows the Language row; manosaba keeps the language chosen in the game, so the game's text is to check with Tears of the Kingdom (62)
 - [x] batch 53 · 171 the touch controls below the iPadOS window controls and controllers (Touchable, MIT, written anew): `tp_layout` puts the left
   column below the window controls (iOS 26 `UIViewLayoutRegion safeAreaLayoutRegionWithCornerAdaptation:`); a key pressed on a controller hides them
   (`host/gamepad.m` `dm_front_controller_key`), a touch or the last controller gone shows them (`tp_controller`). To check (the user): an iPad window,
@@ -786,11 +788,12 @@ Tier 3d, iOS, Mac and tooling:
   To check (the user): a ProMotion iPhone's frame rate line in Tears of the Kingdom
 - [x] batch 53 · 173 install checks (Touchable's launcher install, MIT, written anew; `ios/tools/install_check.py`): `run.sh install` refuses an
   expired signature or a profile without this device, warns within two days of expiry and backs the app's Documents up with a SHA-256 manifest first.
-  To check (the user): one install to the phone
+  Checked: installs to the iPhone 17 Pro (2026-10-21) with the expiry warning and the backup
 - [x] batch 53 · 174 the iOS shader directory checked complete before packing (acnh-mobile 67afe52 check_invariance, MIT;
   `ios/tools/shader_check.py`): it found Tears of the Kingdom's profile naming manosaba's iOS directory; run.sh stops on it
 - [x] batch 53 · 175 the game data verified once, then a marker (super-mario-odyssey-ios ea19678, MIT; `dm_romfs_validate_marked`): the key files
-  every launch, the tree walked once while the marker matches; DM_ROMFS_RECHECK=1 walks again. To check (the user): the boot line's time on the phone
+  every launch, the tree walked once while the marker matches; DM_ROMFS_RECHECK=1 walks again. On the iPhone 17 Pro (2026-10-21): 667 files walked in
+  49 ms after an install, the marker in 1 ms after
 - [x] batch 53 · 176 residency sets only on an Apple6-family GPU (GirlNet d2r-mobile 3e051f1, MIT): on a virtual GPU (GitHub's runners) Metal 3 relies
   on its useResource declarations and Metal 4 stops with a clear line; CI job `gfx-m3` (by hand: Actions → CI → Run workflow) runs the Metal 3 gfx
   tests there. Not run on GitHub yet
@@ -986,9 +989,14 @@ Tier 5, needs the user's devices, controller or account:
     (BotWRecomp's idea; GyroscopeZeroDriftMode sets the threshold); `GetSixAxisSensorState` writes a not-connected state without a source.
     GameController's axes are to be measured first: `DM_PAD_MOTION_LOG=1` (device check: flat, tilted forward, turned left); then `gamepad.m` feeds
     `dm_motion_set`
-- [ ] 68 MixWithOthers on an iPhone
+  - [x] batch 62 · 67e the phone's haptics after a trip to the background: iOS stops the engine there and refused the new one made at once
+    (AVAudioSession 'what', a red line on the iPhone 17 Pro), after which the phone stayed still for the session. Now made at the first pulse due
+    in focus, tried again 2 s after a failed start, doubling up to 30 s (`haptics_map.h` `dm_phone_engine_due`, `gamepad.m`; `t_haptics`)
+- [x] batch 62 · 68 MixWithOthers on an iPhone: another app's music plays on under the game (iPhone 17 Pro, 2026-10-21; "mixes with other apps: yes")
 - [ ] 69 the game over flow with the overlay, in play
 - [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
+  2026-10-21 on the iPhone 17 Pro (chain ca5eb9623812): `ios/run.sh lifecycle` LIFECYCLE OK, the home button and the app switcher fine by
+  hand, "CoreAudio output opened in 4.1 ms"; left: the on-screen controls of 58 with `DM_TOUCH=pad`
 - [-] 71 not done: iOS 17 is not supported (59)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups; uncapped pacing of 53 in a window (product60, `DM_WINDOW=1`)

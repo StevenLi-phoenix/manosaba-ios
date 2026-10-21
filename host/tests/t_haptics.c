@@ -2,6 +2,8 @@
 // 0.1 → 0.208; a side's intensity from its larger band, its sharpness between the HD rumble bands' ends (the lowest 0, the highest 1, the defaults
 // 160 / 320 Hz in between, weighted by amplitude); the phone's pulses: none under 0.03, at least 120 ms apart, at most 8 in a burst, none from a
 // value older than 200 ms. Pulses as often as asked (-DDM_TEST_PULSE_NO_GAP): 1 fails.
+// The phone's engine: made only for a pulse due in focus, not out of focus or in the background; after failed starts not before 2, 4, 8, 16, then
+// 30 s; a start clears that. Made whatever the focus (-DDM_TEST_PHONE_ENG_ANY_FOCUS): 1 fails.
 #include "../haptics_map.h"
 #include <stdio.h>
 static int n, fail;
@@ -26,6 +28,14 @@ int main(void) {
     check("a 1.4 s burst of values every 100 ms: at most 8 pulses", got <= 8 && got >= 6);
     dm_pulse_lim O = {0}; dm_pulse_note(&O, 0.4f, t); int stale = dm_pulse_take(&O, t + 250 * ms) == 0;
     check("a value 250 ms old: no pulse", stale);
+    dm_phone_eng E = {0};
+    check("the phone's engine: not made out of focus (2) or in the background (3), even for a pulse", !dm_phone_engine_due(&E, 0.5f, 2, t) && !dm_phone_engine_due(&E, 0.5f, 3, t));
+    check("... not made in focus without a pulse; made in focus for one", !dm_phone_engine_due(&E, 0, 1, t) && dm_phone_engine_due(&E, 0.5f, 1, t));
+    int waits_ok = 1; uint64_t at = t; const uint64_t want[] = {2, 4, 8, 16, 30, 30};
+    for (int k = 0; k < 6; k++) { dm_phone_engine_failed(&E, at); uint64_t w = want[k] * 1000 * ms;
+        waits_ok &= !dm_phone_engine_due(&E, 0.5f, 1, at + w - 1) && dm_phone_engine_due(&E, 0.5f, 1, at + w); at += w; }
+    dm_phone_engine_started(&E);
+    check("... after failed starts not before 2, 4, 8, 16, 30, 30 s; a start clears the wait", waits_ok && dm_phone_engine_due(&E, 0.5f, 1, 0));
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

@@ -66,6 +66,7 @@ run: \
 	$(B)/t_memsnap \
 	$(B)/t_haptics \
 	$(B)/t_haptics_nogap \
+	$(B)/t_haptics_anyfocus \
 	$(B)/t_motion \
 	$(B)/t_procon \
 	$(B)/t_procon_raw \
@@ -266,6 +267,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_haptics_nogap.log)" -ne 1 ]; then \
 	   cat $(B)/t_haptics_nogap.log; echo "t_haptics_nogap: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_haptics_nogap: pulses as often as asked fail the gap check, as expected"
+	@status=0; $(B)/t_haptics_anyfocus > $(B)/t_haptics_anyfocus.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_haptics_anyfocus.log)" -ne 1 ]; then \
+	   cat $(B)/t_haptics_anyfocus.log; echo "t_haptics_anyfocus: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_haptics_anyfocus: the phone's engine made in the background fails, as expected"
 	$(B)/t_motion 2>/dev/null
 	$(B)/t_procon
 	@status=0; $(B)/t_procon_raw > $(B)/t_procon_raw.log 2>&1 || status=$$?; \
@@ -737,6 +742,8 @@ $(B)/t_haptics: t_haptics.c ../haptics_map.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_haptics.c
 $(B)/t_haptics_nogap: t_haptics.c ../haptics_map.h | $(B)
 	clang -O1 -Wall -I.. -DDM_TEST_PULSE_NO_GAP -o $@ t_haptics.c
+$(B)/t_haptics_anyfocus: t_haptics.c ../haptics_map.h | $(B)
+	clang -O1 -Wall -I.. -DDM_TEST_PHONE_ENG_ANY_FOCUS -o $@ t_haptics.c
 $(B)/t_procon: t_procon.c ../procon.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_procon.c
 $(B)/t_procon_raw: t_procon.c ../procon.h | $(B)
