@@ -136,6 +136,7 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_PASSGPU=<file>` | GPU time of each render pass and dispatch as TSV (timestamps: an `MTL4CounterHeap` on Metal 4, stage-boundary samples on Metal 3); every 300 frames a line with the GPU time a frame and the kinds of pass that took the most |
 | `DM_NVN_TEXCENSUS=1` | One line per new texture shape of the kinds whose layout or sampling rules came from outside checks: cube arrays, LINEAR_RENDER_TARGET without LINEAR, MINIMAL_LAYOUT, packaged 3D, linear block-compressed, formats with their own swizzle (sampled or as render targets) |
 | `DM_NVN_WB_IDLE=1` | An experiment (plan item 94): a texture the GPU wrote in a CPU-visible pool and left alone for 30 submissions is written back to its storage, and one whose storage the CPU writes afterwards is uploaded from it again. Off: it changes more than the terrain it is for (94a) |
+| `DM_NVN_WB_IDLE_SUBS=<n>` | With `DM_NVN_WB_IDLE=1`: write back after n idle submissions instead of 30 (1: after every GPU write; a diagnostic) |
 | `DM_NVN_ANISO=<2..16>` | Anisotropic filtering raised to that on mipmapped linear samplers without a depth compare or a reduction (most of Tears of the Kingdom's ask for 1); off by default, which keeps the shots comparable with the console's |
 | `DM_NVN_DEPTH_PLAIN=1` | Depth / stencil textures without the GPU's lossless compression (an A/B; the same picture in Tears of the Kingdom's prologue) |
 | `DM_NVN_COUNTS=1` | Counters in the power summary: draws sampling their own attachment, timestamp reports, ClearTexture, passes without a draw, passes drawing only a top-left part, counter reads and svcs a second |
@@ -144,6 +145,7 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |
 | `DM_NVN_TBDR=0` | Turn off all pass optimizations (attach, load and store everything), for equivalence comparisons |
 | `DM_NVN_NOCULL=1` | Draw with face culling off (does a missing draw come back?) |
+| `DM_NVN_OCC_FORCE=<n>` | Every samples-passed (occlusion) result reported as n (does a missing object come back with n large?; a diagnostic) |
 | `DM_NVN_RTCLEAR=<serial>` | Passes on that colour texture start cleared to magenta (does the attachment reach the texture?) |
 | `DM_NVN_UNWRITTEN_DC=0` | Store attachments even when the pass did not write them |
 | `DM_NVN_FUSE_CHECK=1` | Same-frame check of pass merging |

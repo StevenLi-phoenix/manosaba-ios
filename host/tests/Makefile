@@ -54,9 +54,11 @@ run: \
 	$(B)/t_hid_applet \
 	$(B)/t_totk_defaults \
 	$(B)/t_totk_defaults_noxlat \
+	$(B)/t_totk_defaults_tbdr \
 	$(B)/t_hid_applet_silent \
 	$(B)/t_hid_script \
 	$(B)/t_hid_script_nocircle \
+	$(B)/t_hid_script_norstick \
 	$(B)/t_hstack \
 	$(B)/t_hstack_old \
 	$(B)/t_ktrace \
@@ -291,11 +293,19 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_totk_defaults_noxlat.log)" -ne 1 ]; then \
 	   cat $(B)/t_totk_defaults_noxlat.log; echo "t_totk_defaults_noxlat: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_totk_defaults_noxlat: the translation thread off by default, as expected"
+	@status=0; env -u DM_NVN_XLAT -u DM_NVN_TBDR $(B)/t_totk_defaults_tbdr > $(B)/t_totk_defaults_tbdr.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_totk_defaults_tbdr.log)" -ne 1 ]; then \
+	   cat $(B)/t_totk_defaults_tbdr.log; echo "t_totk_defaults_tbdr: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_totk_defaults_tbdr: the TBDR rewrites left on, as expected"
 	$(B)/t_hid_script 2>/dev/null
 	@status=0; $(B)/t_hid_script_nocircle > $(B)/t_hid_script_nocircle.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL LSL and LSU overlap" $(B)/t_hid_script_nocircle.log; then \
 	   cat $(B)/t_hid_script_nocircle.log; echo "t_hid_script_nocircle: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_hid_script_nocircle: sticks clamped per axis leave the circle on diagonals, as expected"
+	@status=0; $(B)/t_hid_script_norstick > $(B)/t_hid_script_norstick.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "FAIL RSR pushes the right stick right" $(B)/t_hid_script_norstick.log; then \
+	   cat $(B)/t_hid_script_norstick.log; echo "t_hid_script_norstick: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_hid_script_norstick: right stick keys not applied fail, as expected"
 	$(B)/t_hstack 2>/dev/null
 	DM_HSTACK=0 $(B)/t_hstack 2>/dev/null
 	@status=0; DM_HSTACK=0 $(B)/t_hstack deep > $(B)/t_hstack_deep.log 2>&1 || status=$$?; \
@@ -738,6 +748,8 @@ $(B)/t_totk_defaults: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | 
 	clang -O1 -Wall -I.. -o $@ t_totk_defaults.c
 $(B)/t_totk_defaults_noxlat: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
 	clang -O1 -Wall -DDM_TEST_TOTK_NO_XLAT -I.. -o $@ t_totk_defaults.c
+$(B)/t_totk_defaults_tbdr: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
+	clang -O1 -Wall -DDM_TEST_TOTK_TBDR_ON -I.. -o $@ t_totk_defaults.c
 $(B)/t_haptics: t_haptics.c ../haptics_map.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_haptics.c
 $(B)/t_haptics_nogap: t_haptics.c ../haptics_map.h | $(B)
@@ -775,6 +787,8 @@ $(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hl
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c ../touchpad.c
 $(B)/t_hid_script_nocircle: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_CIRCLE -I.. -o $@ t_hid_script.c ../touchpad.c
+$(B)/t_hid_script_norstick: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_RSTICK -I.. -o $@ t_hid_script.c ../touchpad.c
 # VP9 movies need libvpx (brew install libvpx), as the host build does (host/Makefile VPX)
 VPX ?= /opt/homebrew/opt/libvpx
 $(B)/t_movie: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)

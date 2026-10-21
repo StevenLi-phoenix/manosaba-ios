@@ -161,7 +161,11 @@ static NSString *support_dir(void) { return NSSearchPathForDirectoriesInDomains(
 static NSString *docs_dir(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]; }
 static NSString *bundle_dir(void) { return NSBundle.mainBundle.resourcePath; }   // read-only; holds the data only when packaged with it
 // The first RomFS that passes the profile's check; why = the reason of the last one tried
-static void parts_line(const char *s) { plog("boot: %s", s); }
+static __weak UILabel *g_prep_label; static NSString *g_prep_head;   // the screen shown while the data is located (SceneDelegate showGameOrMissing)
+static void parts_line(const char *s) {
+    plog("boot: %s", s);
+    NSString *t = @(s); dispatch_async(dispatch_get_main_queue(), ^{ g_prep_label.text = [NSString stringWithFormat:@"%@\n\n%@", g_prep_head ?: @"", t]; });
+}
 static NSString *romfs_locate(char *why, size_t n) {
     // RomFS parts copied into Documents (plan item 62e, tools/romfs_parts.py: a few 1 GiB files instead of tens of thousands): unpacked into
     // Application Support/romfs first, each part checked, then deleted (host/romfs_parts.c)
@@ -213,6 +217,11 @@ static void boot_prepare(NSString *romfs) {
     exclude_from_backup(romfs); exclude_from_backup(font);
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
+    // The game's cache storage (Tears of the Kingdom; hle_fs.c): in Library/Caches, which the system may empty while the app is not running, as a
+    // console's cache storage may be deleted. Unset, the Mac default under $HOME/dm-work does not exist in the container: the game asked again and
+    // again (933,995 red lines in 10 s on the first iPhone run)
+    { NSString *cs = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"cache_storage"];
+      [fm createDirectoryAtPath:cs withIntermediateDirectories:YES attributes:nil error:nil]; setenv("DM_CACHE", cs.fileSystemRepresentation, 0); }
     { NSString *mods = [doc stringByAppendingPathComponent:@"mods"]; BOOL dir = NO;
       if ([fm fileExistsAtPath:mods isDirectory:&dir] && dir) setenv("DM_MODS", mods.fileSystemRepresentation, 0); }
     setenv("DM_NVN_SHMAP", [res stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
@@ -304,6 +313,7 @@ static void host_start(NSString *romfs) {
 @interface DmMissingVC : UIViewController
 @property (copy) void (^retry)(void);
 @property (strong) UILabel *label;
+@property BOOL preparing;   // the game data being located: no Retry
 @end
 @implementation DmMissingVC
 - (BOOL)prefersStatusBarHidden { return YES; }
@@ -315,6 +325,7 @@ static void host_start(NSString *romfs) {
     [b addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:b];
     UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem]; [x setTitle:@"Export Diagnostics" forState:UIControlStateNormal]; x.tag = 2;
     [x addTarget:self action:@selector(exportDiag) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:x];
+    b.hidden = self.preparing;
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews]; CGRect r = CGRectInset(self.view.bounds, 40, 30);
@@ -350,17 +361,34 @@ static int gpu_supported(char *why, size_t n) {
 @property (strong, nonatomic) UIWindow *window;
 @property (strong) NSString *romfs;
 @property BOOL exportFirst;   // launched by the Export Diagnostics quick action: export before the host starts
+@property BOOL locating;      // romfs_locate running off the main thread
+@property BOOL exporting;     // the launch's export still on screen: the host waits for it
 @end
 @implementation SceneDelegate
-- (void)showGameOrMissing:(BOOL)retry {
-    UIWindowScene *ws = self.window.windowScene; char why[1024];
+// The game data is located off the main thread: Tears of the Kingdom's 16 RomFS parts take minutes to check and unpack and its 304,243 files a
+// while to walk the first time, and on the main thread the system's launch watchdog ends the app first (plan item 62i). A screen says what is
+// happening meanwhile; the host starts once the data is there, at once if the scene is already in the foreground
+- (void)showGameOrMissing {
+    char why[1024];
     if (!gpu_supported(why, sizeof why)) {
         plog("boot: GPU not supported: %s", why);
         DmMissingVC *m = [DmMissingVC new]; self.window.rootViewController = m;
         m.label.text = [NSString stringWithFormat:@"%@ %@\n\n%@", @(dm_game.title), @(dm_game.version), @(why)];
         return;
     }
-    NSString *rf = romfs_locate(why, sizeof why);
+    if (self.locating) return;
+    self.locating = YES; UIApplication.sharedApplication.idleTimerDisabled = YES;   // no auto-lock while unpacking (the host keeps it off later)
+    DmMissingVC *p = [DmMissingVC new]; p.preparing = YES; self.window.rootViewController = p; [p loadViewIfNeeded];
+    g_prep_head = [NSString stringWithFormat:@"%@ %@\n\nPreparing the game data…", @(dm_game.title), @(dm_game.version)];
+    p.label.text = g_prep_head; g_prep_label = p.label;
+    __weak SceneDelegate *me = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        char w[1024]; NSString *rf = romfs_locate(w, sizeof w); NSString *ws = @(w);
+        dispatch_async(dispatch_get_main_queue(), ^{ SceneDelegate *s = me; if (!s) return; s.locating = NO; [s showLocated:rf why:ws]; });
+    });
+}
+- (void)showLocated:(NSString *)rf why:(NSString *)whyText {
+    UIWindowScene *ws = self.window.windowScene; const char *why = whyText.UTF8String;
     if (rf) {
         self.romfs = rf;
         // UIWindowSceneGeometry.coordinateSpace exists from iOS 26 only (the DM_IOS_M3 build runs on iOS 18: unrecognized selector at launch);
@@ -376,23 +404,27 @@ static int gpu_supported(char *why, size_t n) {
         DmGameVC *vc = [DmGameVC new]; vc.view = front_ios_view(bounds, ws.screen.nativeScale);
         self.window.rootViewController = vc;
         dm_log_overlay_attach(vc.view);
-        if (retry) { host_start(rf); front_ios_focus_event(2); front_ios_focus_event(3); }   // at launch sceneWillEnterForeground starts it
+        // In the foreground already (the usual case: locating outlasts the launch): start now; otherwise sceneWillEnterForeground starts it. Not
+        // before the Export Diagnostics quick action has exported (its completion starts the host)
+        UISceneActivationState st = ws.activationState;
+        if (!g_host_up && !self.exportFirst && !self.exporting && (st == UISceneActivationStateForegroundActive || st == UISceneActivationStateForegroundInactive)) {
+            host_start(rf); front_ios_focus_event(2); if (st == UISceneActivationStateForegroundActive) front_ios_focus_event(3); }
         return;
     }
     plog("boot: game data missing: %s", why);
     DmMissingVC *m = [DmMissingVC new];
-    __weak SceneDelegate *ws_ = self; m.retry = ^{ [ws_ showGameOrMissing:YES]; };
+    __weak SceneDelegate *ws_ = self; m.retry = ^{ [ws_ showGameOrMissing]; };
     self.window.rootViewController = m;
     m.label.text = [NSString stringWithFormat:@"%@ %@\n\nThe game data is missing or incomplete:\n%@\n\nCopy the RomFS of your own copy of the game into the folder "
                     "\"RomFS\" of this app (Files app → On My iPhone), and the console's shared fonts into \"sysfont\". Then tap Retry.",
-                    @(dm_game.title), @(dm_game.version), @(why)];
+                    @(dm_game.title), @(dm_game.version), whyText];
 }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
     (void)s;
     self.exportFirst = [o.shortcutItem.type isEqualToString:@"export-diagnostics"];
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.backgroundColor = UIColor.blackColor;
-    [self showGameOrMissing:NO];
+    [self showGameOrMissing];
     [self.window makeKeyAndVisible];
 }
 - (void)sceneWillResignActive:(UIScene *)s { (void)s; if (g_host_up) front_ios_focus_event(0); }
@@ -406,8 +438,9 @@ static int gpu_supported(char *why, size_t n) {
 - (void)sceneDidBecomeActive:(UIScene *)s {
     (void)s; dm_log_overlay_refresh(); gfx_settings_refresh(); if (g_host_up) front_ios_focus_event(3);
     if (self.exportFirst) {
-        self.exportFirst = NO; __weak SceneDelegate *me = self;
+        self.exportFirst = NO; self.exporting = YES; __weak SceneDelegate *me = self;
         dm_diag_export(self.window.rootViewController, ^{
+            me.exporting = NO;
             if (!me.romfs || g_host_up) return;
             host_start(me.romfs); front_ios_focus_event(2); front_ios_focus_event(3);
         });

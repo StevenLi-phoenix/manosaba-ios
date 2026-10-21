@@ -1556,7 +1556,11 @@ uint64_t mtl_sub_commit(void) {
             else if (ops[i].kind == 3) {   // Samples passed: the sum of all slots since the reset
                 vis_list *l = ops[i].vis; uint64_t sum = l->base;
                 for (int k = 0; k < l->n; k++) { sum += ((const uint64_t *)((__bridge id<MTLBuffer>)l->s[k].buf).contents)[l->s[k].slot]; CFRelease(l->s[k].buf); }
-                free(l); uint64_t rec[2] = {sum, REPORT_TICKS(ops[i])}; memcpy((void *)ops[i].addr, rec, sizeof rec);
+                free(l);
+                { static long long force = -2; if (force == -2) { const char *e = getenv("DM_NVN_OCC_FORCE"); force = e ? atoll(e) : -1;   // diagnostic: every samples-passed result this value
+                      if (force >= 0) MLOG("[red] DM_NVN_OCC_FORCE=%lld: every samples-passed result reported as that (a diagnostic)", force); }
+                  if (force >= 0) sum = (uint64_t)force; }
+                uint64_t rec[2] = {sum, REPORT_TICKS(ops[i])}; memcpy((void *)ops[i].addr, rec, sizeof rec);
             }
             else { uint64_t t = REPORT_TICKS(ops[i]); memcpy((uint8_t *)(uintptr_t)ops[i].addr + 8, &t, 8); }   // the timestamp half only: the counter half was written in command order at replay (see OP_REPORT_COUNTER)
         }
@@ -2442,12 +2446,13 @@ static void wb_census_first(const tex_t *t) {   // a CPU-filled texture's first 
 static int wb_level(const tex_t *t, id<MTLTexture> mt, unsigned level, unsigned layer);
 static uint64_t g_wb_idle_n;
 static void wb_idle_pass(void) {   // submit thread, before the submission's command buffer exists
-    static int on = -1; if (on < 0) on = getenv("DM_NVN_WB_IDLE") && atoi(getenv("DM_NVN_WB_IDLE"));
-    if (!on || g_sub_serial % 8) return;
+    static int on = -1, subs = 30; if (on < 0) { on = getenv("DM_NVN_WB_IDLE") && atoi(getenv("DM_NVN_WB_IDLE"));
+        const char *s = getenv("DM_NVN_WB_IDLE_SUBS"); if (s && atoi(s) > 0) subs = atoi(s); }   // diagnostic: the idle submissions before a write-back
+    if (!on || (subs >= 8 && g_sub_serial % 8)) return;
     wb_ent *list[16]; int nl = 0;
     pthread_mutex_lock(&g_wb_mu);
     for (uint32_t i = 0; i < g_wb.cap && nl < 16; i++) { wb_ent *e = g_wb.vals ? g_wb.vals[i] : NULL;
-        if (e && !e->idle_stamp && g_sub_serial - e->sub >= 30 && !nvn_dirty_since(e->t.mem, e->t.size, e->stamp)) { e->idle_stamp = 1; list[nl++] = e; } }
+        if (e && !e->idle_stamp && g_sub_serial - e->sub >= (uint64_t)subs && !nvn_dirty_since(e->t.mem, e->t.size, e->stamp)) { e->idle_stamp = 1; list[nl++] = e; } }
     pthread_mutex_unlock(&g_wb_mu);
     for (int i = 0; i < nl; i++) {
         wb_ent *e = list[i]; const tex_t *t = &e->t; id o = (__bridge id)e->obj; id<MTLTexture> mt = [o isKindOfClass:[NvPkg class]] ? ((NvPkg *)o)->tex : o; uint32_t upf; int ubpp;

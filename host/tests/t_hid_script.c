@@ -1,6 +1,6 @@
 // hle_hid.c: DM_KEYS timed script, merging with the front end, the on-screen controls and the game controller, press latches, touch items. A fake clock; the real parser
 // and the real GetNpadState path. Expectations are written by hand from the rules in hle_hid.c. Sticks per axis, not onto the circle
-// (-DDM_TEST_HID_NO_CIRCLE), fail 3.
+// (-DDM_TEST_HID_NO_CIRCLE), fail 4. The right stick pseudo-keys (RSL / RSR / RSU / RSD) parsed but not applied (-DDM_TEST_HID_NO_RSTICK): 2 fail.
 #ifndef HLE_HID_SOURCE
 #define HLE_HID_SOURCE "../hle_hid.c"
 #endif
@@ -29,7 +29,7 @@ static void setup(const char *script) { setenv("DM_KEYS", script, 1); keys_parse
 static NpadState rd(void) { NpadState s; uint32_t id = 0; h_hid_GetFullKey(&s, &id); return s; }
 
 int main(void) {
-    setup("A@1+0.5,B@2,LSL@3,LSU@3.1+0.1,T0.25:0.5@4+0.1");
+    setup("A@1+0.5,B@2,LSL@3,LSU@3.1+0.1,T0.25:0.5@4+0.1,RSR@5,RSU@5.1+0.1");
     at(0.99); CHECK(rd().buttons == 0, "nothing before 1 s");
     at(1.0); CHECK(rd().buttons == DM_BTN_A, "A from 1 s");
     at(1.49); CHECK(rd().buttons == DM_BTN_A, "A held until 1.5 s");
@@ -41,6 +41,8 @@ int main(void) {
     at(4.05); rd(); CHECK(g_tn == 1 && g_t[0].id == 0 && g_t[0].x == 0.25f && g_t[0].y == 0.5f, "touch item: one finger at (0.25, 0.5)");
     int calls = g_tcalls; at(4.06); rd(); CHECK(g_tcalls == calls, "unchanged touch set: not pushed again");
     at(4.2); rd(); CHECK(g_tn == 0, "touch item over: all lifted");
+    at(5.05); { NpadState s = rd(); CHECK(s.rx == 32767 && s.ry == 0 && s.lx == 0 && s.buttons == DM_BTN_STICK_R_RIGHT, "RSR pushes the right stick right; the only button is its direction"); }
+    at(5.15); { NpadState s = rd(); CHECK(s.rx == 23169 && s.ry == 23169, "RSR and RSU overlap: the diagonal on the right stick's circle"); }
 
     setup("A@f100+10,B@f200,X@2");   // frame items next to a time item
     at(0); frame_now = 99; CHECK(rd().buttons == 0, "frame items: nothing before frame 100");
@@ -60,8 +62,8 @@ int main(void) {
     dm_pad_set(DM_BTN_Y, 5000, 6000, 0, 0); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_Y && s.lx == 5000 && s.ly == 6000, "game controller buttons and stick"); }
     dm_input_set(DM_BTN_A, -7, 8, 0, 0); { NpadState s = rd(); CHECK(s.buttons == (DM_BTN_A | DM_BTN_Y) && s.lx == -7 && s.ly == 8, "buttons ORed, the front end's stick wins when not at rest"); }
     dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0); rd();
-    CHECK(hid_key_mask("A") == DM_BTN_A && hid_key_mask("MINUS") == DM_BTN_MINUS && hid_key_mask("LSL") == PK_LSL && !hid_key_mask("Q") && !hid_key_mask("T0.5:0.5"),
-          "command channel key names: buttons and left stick keys, not touch items or unknown names");
+    CHECK(hid_key_mask("A") == DM_BTN_A && hid_key_mask("MINUS") == DM_BTN_MINUS && hid_key_mask("LSL") == PK_LSL && hid_key_mask("RSD") == PK_RSD && !hid_key_mask("Q") && !hid_key_mask("T0.5:0.5"),
+          "command channel key names: buttons and stick keys, not touch items or unknown names");
     hid_cmd_keys(DM_BTN_ZR | PK_LSR, 0); { NpadState s = rd(); CHECK(s.buttons == (DM_BTN_ZR | DM_BTN_STICK_L_RIGHT) && s.lx == 32767, "command channel keys held (cmdchan.c down)"); }
     hid_cmd_keys(0, DM_BTN_ZR); { NpadState s = rd(); CHECK(s.buttons == DM_BTN_STICK_L_RIGHT && s.lx == 32767, "... ZR released, the stick still held"); }
     hid_cmd_keys(0, PK_LSR); { NpadState s = rd(); CHECK(s.buttons == 0 && s.lx == 0, "... all released"); }

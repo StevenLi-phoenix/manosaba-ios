@@ -377,12 +377,12 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
   checks of 123 (the 30 fps setting) and 127.
 - Play or saves: 72 (a blood moon), 69 (game over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the
   checks of 161 (grass), 163 (hair and cloth), 165 (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
-- The console: 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
+- The console: 62k (the cave wall from the same angles), 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
 - An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
-- Tears of the Kingdom running on iOS first (62): 61d, 62c2, 62g, 62h, the checks of 62a, 62b, 62e, 63b (`DM_APP_POOL_ADD_MB`), 112, 113, 142,
-  170 (the game's text), 172, 67e (the phone's pulses after a trip to the background).
+- Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 61d, 62c2, 62g, 62h, 62j, the checks of 62b (a movie), 63b
+  (`DM_APP_POOL_ADD_MB`), 113, 170 (the game's text), 172, 67e (the phone's pulses after a trip to the background).
 - The next game: 64's open sub-items.
 - Decisions: `DM_FRAME_STEP=vsync` as iOS's default (133: 35 % less CPU on the Mac); `DM_PRESENT_LATENCY=auto` as the default (after 153's
   check).
@@ -702,7 +702,7 @@ Tier 3c, larger:
 Tier 3c, smaller items listed at the user's request (2026-10-20: every finding of the three reviews as a to-do):
 - [x] batch 44 · 142 the swapchain acquire against the GPU work of the frame last drawn into its image (after blade2-mobile 43e760e, MIT): the present
   records the newest submission's fence (`win_t` `rfence`) and the timing summary counts acquires before that work finished; `DM_NVN_ACQ_GPU=wait`
-  waits. 0 on the Mac in both games, so the wait stays off. On the iPhone 17 Pro: 0 in manosaba (2026-10-21); Tears of the Kingdom's waits for 62
+  waits. 0 on the Mac in both games, so the wait stays off. On the iPhone 17 Pro (2026-10-21): 0 in manosaba and in Tears of the Kingdom
 - [x] batch 30 · 143 svc details as Horizon (switchbrew's results; totk-mobile's vectors): SetHeapSize (2 MiB multiples up to 4 GiB, OutOfMemory
   0xD001, no shrink over a MapMemory source, fresh pages), MapPhysicalMemory's InvalidAddress / InvalidSize / InvalidMemoryRegion, GetInfo
   PriorityMask, RandomEntropy, SystemResourceSize (`game.json` "npdm") and Total / Used; `tools/new_game.py` reads the NPDM fields
@@ -836,11 +836,13 @@ Tier 4, large:
     busy 6.7 of 33 ms. On an iPhone's tile GPU a dependent pass costs more (totk-mobile: 38-57 µs on an M4), so the DM_NVN_PASSGPU count joins 61d's
     device run
 - [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
+  2026-10-21, the first device run (iPhone 17 Pro, iOS 26.4, free account, the 30 fps product, handheld): into the prologue's cave and play; 30 fps,
+  GPU p50 8-20 ms, RSS 2.3 GB with 3.8 GB to the limit, the Mac prologue's three red lines and no other. Left: a movie (62b), 62j, 62k, the census
   - [x] batch 54 · 62a guest memory reserved at the top of `main()`, before UIKit and Metal (`svc_reserve_early`; `host/guest_as.h`: the lowest free
     gap from 4 GiB, 2 MiB aligned, ending at or below 2^39, from 6 GiB down by 256 MiB to what the game needs; `vm_map` fixed, mmap's choice if that
     fails, the free gaps logged when short). Every platform: a block past 2^39 is moved below it (macOS 27 reserves about 24 GiB in
     0x70_0000_0000..2^39, MacNativeGames). Tears of the Kingdom: `guest_heap_mb` 2176, `ios_pool_add_mb` 0 (the console's pool; manosaba keeps 512).
-    `host/tests/t_guest_as.c`. The size an iPhone gets is a device check
+    `host/tests/t_guest_as.c`. The iPhone 17 Pro gave the whole 6144 MB without extended virtual addressing (2026-10-21)
   - [x] batch 54 · 62b VP9 on iOS with libvpx (GirlNet dropped VideoToolbox's VP9 probe, which faulted at a movie's start):
     `ios/tools/build_libvpx.sh` builds 1.17.0 (SHA-256 pinned, the value totk-mobile pins) static for arm64 iOS 18.0+ into
     `$DM_ROOT/build/ios/libvpx`; `ios/run.sh` links it after `ios/tools/vpx_check.py`, hle_movie.c finds the headers through `DM_VPX_INC`; without
@@ -863,8 +865,8 @@ Tier 4, large:
   - [x] batch 54 · 62e RomFS as 1 GiB parts with an index; a ready marker instead of the tree walk at every launch (the marker: item 175):
     `tools/romfs_parts.py pack <tree> <out>` writes the parts and `romfs.dmri` (sizes, files, SHA-256), `check` holds parts to it; copied into
     Documents, the next launch (`host/romfs_parts.c`, `romfs_locate`) checks them and unpacks part by part into Application Support/romfs.partial (a
-    launch cut short carries on; absolute, "." and ".." paths refused). `host/tests/t_romfs_parts.c`. Copying Tears of the Kingdom's parts to a
-    phone is a device check
+    launch cut short carries on; absolute, "." and ".." paths refused). `host/tests/t_romfs_parts.c`. Tears of the Kingdom's 16
+    parts went to the iPhone 17 Pro in 513 s and were unpacked at the first launch in 4.5 minutes (62i)
   - [x] batch 54 · 62f `maxBufferLength` and the recommended working set on the "Metal device" line (mush8 PR #3); `DM_COOL_START=nominal` (or
     `fair`) waits before the game starts until the thermal state is at most that (looking every 5 s, at most 10 minutes; T5eng: the same scene at 60
     fps on a cool phone, 30 on a hot one): `host/coolstart.h`, `host/tests/t_coolstart.c`
@@ -872,7 +874,22 @@ Tier 4, large:
     shows a "not written by vertex shader" failure (item 137: none on the Mac since chain bab8d4746968; the red line names both keys)
   - [ ] 62h render targets of virtual pools in a heap on for iOS (`DM_NVN_RT_HEAP=1`, item 138: 140-190 MB less GPU memory on the cliff save)
     after screenshot comparisons over more scenes; with the TBDR rewrites on it needs them alias-aware (pass merges and content facts by heap
-    range) or stays off
+    range) or stays off. Since batch 64 Tears of the Kingdom runs without the TBDR rewrites on iOS, so the heap is on there by default (the iPhone's
+    log of 2026-10-21 says so); the comparisons over more scenes are still to do
+  - [x] batch 64 · 62i what the first device run needed: the game data located off the main thread with a screen saying so (the 16 RomFS parts took
+    4.5 minutes to unpack and the 304,243 files 14 s to walk; on the main thread the launch watchdog ends the app); `DM_CACHE` in Library/Caches on
+    iOS (unset, the Mac's default path does not exist there and CreateCacheStorage failed 933,995 times in 10 s into the log, now at most 3 lines);
+    `games/totk/survey.c` through vm_read_overwrite (the iOS SDK's mach_vm.h is an #error). Install before copying the parts: `run.sh install` backs
+    the app's Documents up, parts included (16 GB back to the Mac)
+  - [ ] 62j the TBDR rewrite that breaks on the phone: with them on the iPhone drew a trail behind Zelda's torch and a glow over half the picture
+    (the prologue's frame 1300 from an empty save); off, the picture is the Mac's, so Tears of the Kingdom runs without them on iOS too since batch
+    64 (`games/totk/defaults.c`). Each rewrite off in turn (store lookahead, load elision, same-target continuation, clear-only hoist, on-demand
+    depth-stencil) against that shot names it
+  - [ ] 62k a cave wall missing from some camera angles (the player on the iPhone; on the Mac too, every run alike: the iPhone's cave save, Link
+    walked left onto the rock and the camera turned with the new right stick keys `RSR` etc., frames 1450-1650 show him climbing in front of
+    nothing). Not the TBDR rewrites, the translation thread, the operation mode, the occlusion results (`DM_NVN_OCC_FORCE=100000`), face culling
+    (`DM_NVN_NOCULL`) or texture write-back (`DM_NVN_WB_IDLE_SUBS=1`). The camera is close to the rock while Link climbs: the game's own camera
+    inside the rock would look the same, so the console decides first
 - [x] batch 56 · 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
   - [-] 63a MetalFX's docked guard against the scene's content size (MacNativeGames ff092e3): their fix is in their replacement of the game's
     upscale pass; our present-time MetalFX (`fx_apply`) already compares the content size with the size on screen (63c: the valid region from the
@@ -954,8 +971,8 @@ Tier 4, large:
     game that has local play
 - [-] batch 55 · 112 conditional rendering on the GPU: not worth it on the Mac. The prologue makes 11,000-19,000 conditionals per 300 frames, 0-2 %
   on a samples-passed result still pending (at most about 1.3 draws a frame the console might have skipped); the GPU way needs GPU-written results,
-  indirect draws and predicated clears (totk-mobile's nvn_query_gpu / nvn_conditional_draw). The same line (every 300 frames) on an iPhone decides
-  again (device check)
+  indirect draws and predicated clears (totk-mobile's nvn_query_gpu / nvn_conditional_draw). On the iPhone 17 Pro (2026-10-21): 0 of 11,298
+  conditionals pending, so it stays as it is
 - [-] batch 56 · 113 framebuffer fetch for in-pass reads of the current pixel (after 42): not done. In the prologue 16 fragment shaders sample what
   their own pass draws, all but one before any texture barrier, where the replay must read memory as the console does (42); the one after a barrier
   (fcd1a8d9) samples at a coordinate from its varyings, not its own pixel. What its attachment copies (three 1600x896 twice a frame docked) cost on

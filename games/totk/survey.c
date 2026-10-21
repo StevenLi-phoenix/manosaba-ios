@@ -8,7 +8,7 @@
 // The work runs at the frame point (dm_game_frame_sync, gfx/nvn/hle_nvn.c: the game's thread has just waited for the window's image, main 0x2db958,
 // between two frames), never on the command thread. The player is found from main's scene slot (bss 0x3add238): *slot +0x1e8 the scene, its +0x50
 // component count and +0x58 components, component 13 the resident actors (+0x20 count, +0x28 links of 0x70 bytes, +8 data, data +0x40 the actor),
-// the one named "Player" (actor +0x218), position actor +0x2b4, rotation (3x3) +0x2c0. Guest memory is read with mach_vm_read_overwrite, so a
+// the one named "Player" (actor +0x218), position actor +0x2b4, rotation (3x3) +0x2c0. Guest memory is read with vm_read_overwrite, so a
 // stale pointer reads as no player instead of a fault. forceSetMatrix (main 0x45ce70: actor, a 3x4 row matrix, 0) routes the move through the
 // physics component as the game's own warps do; its first four words are checked before it is ever called.
 // Off unless DM_SURVEY=1: a save written after a move keeps the new place. Checked by games/totk/tests/t_survey.c.
@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include "dm.h"
 #include "game.h"
 
@@ -37,8 +36,8 @@ static unsigned g_hold_left; static float g_hold_xyz[3]; static char g_hold_tag[
 
 static int rd(uintptr_t a, void *out, size_t n) {
     if (!a || a > UINTPTR_MAX - n) return 0;
-    mach_vm_size_t got = 0;
-    return mach_vm_read_overwrite(mach_task_self(), a, n, (mach_vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS && got == n;
+    vm_size_t got = 0;   // vm_read_overwrite, as host/crash.c: the iOS SDK's mach_vm.h is an #error
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS && got == n;
 }
 static uintptr_t rdp(uintptr_t a) { uintptr_t p = 0; return rd(a, &p, sizeof p) ? p : 0; }
 static int xyz_ok(const float v[3]) {

@@ -725,7 +725,8 @@ HLE_FORCE_OPT("_ZN2nn2fs17MountCacheStorageEPKci", "cache storage <index> → ho
 }
 HLE_FORCE_OPT("_ZN2nn2fs18CreateCacheStorageEill", "create cache storage <index>: a host directory (sizes not reserved)", Result, h_fs_CreateCache, int index, int64_t size, int64_t journal) {
     char b[1024], d[1100]; mkdir(envdir("DM_CACHE", "run/platform/cache", b, sizeof b), 0755);
-    if (mkdir(cache_dir(index, d, sizeof d), 0755) && errno != EEXIST) { LOG("[red] CreateCacheStorage %d: %s errno=%d", index, d, errno); return RES_FAIL; }
+    if (mkdir(cache_dir(index, d, sizeof d), 0755) && errno != EEXIST) {   // at most 3 lines: a game may ask again and again
+        static _Atomic int nf; if (atomic_fetch_add(&nf, 1) < 3) LOG("[red] CreateCacheStorage %d: %s errno=%d", index, d, errno); return RES_FAIL; }
     LOG("fs cache storage %d created → %s (data %lld, journal %lld bytes)", index, d, (long long)size, (long long)journal);
     return RES_OK;
 }

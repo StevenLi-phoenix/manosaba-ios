@@ -57,8 +57,13 @@ static uint32_t style_of(uint32_t id) {
 static const struct { uint32_t mask; const char *name; } k_names[] = {
     K(A), K(B), K(X), K(Y), K(LS), K(RS), K(L), K(R), K(ZL), K(ZR), K(PLUS), K(MINUS), K(LEFT), K(UP), K(RIGHT), K(DOWN)};
 #undef K
-enum { PK_LSL = 1u << 24, PK_LSR = 1u << 25, PK_LSU = 1u << 26, PK_LSD = 1u << 27, PK_MASK = 0xFu << 24, PK_TOUCH = 1u << 28 };   // outside the button bits
-static const struct { uint32_t mask; const char *name; } k_stick[] = {{PK_LSL, "LSL"}, {PK_LSR, "LSR"}, {PK_LSU, "LSU"}, {PK_LSD, "LSD"}};
+// Stick pseudo-keys outside the button bits (16-23 are the sticks' direction buttons only in what GetNpadState returns): the left stick 24-27, the
+// right stick 16-19 (a camera turned by a script: the wall that vanished at some angles in Tears of the Kingdom's first cave, 2026-10-21)
+enum { PK_LSL = 1u << 24, PK_LSR = 1u << 25, PK_LSU = 1u << 26, PK_LSD = 1u << 27, PK_RSL = 1u << 16, PK_RSR = 1u << 17, PK_RSU = 1u << 18,
+       PK_RSD = 1u << 19, PK_MASK = 0xFu << 24 | 0xFu << 16, PK_TOUCH = 1u << 28 };
+static const struct { uint32_t mask; const char *name; } k_stick[] = {{PK_LSL, "LSL"}, {PK_LSR, "LSR"}, {PK_LSU, "LSU"}, {PK_LSD, "LSD"},
+                                                                    {PK_RSL, "RSL"}, {PK_RSR, "RSR"}, {PK_RSU, "RSU"}, {PK_RSD, "RSD"}};
+enum { NSTICK = sizeof k_stick / sizeof *k_stick };
 #define KMAX 256
 static struct { uint32_t mask; uint64_t t0, t1; float tx, ty; int frame; } g_keys[KMAX];   // frame: t0 / t1 are frame numbers
 static int g_nkeys;
@@ -67,7 +72,7 @@ static _Atomic uint64_t g_cmd_mask;   // keys held through the command channel (
 // The key of a DM_KEYS name (a button or a left stick pseudo-key; 0 for touch items and unknown names), for the command channel
 uint32_t hid_key_mask(const char *name) {
     for (int i = 0; i < (int)(sizeof k_names / sizeof *k_names); i++) if (!strcmp(name, k_names[i].name)) return k_names[i].mask;
-    for (int i = 0; i < 4; i++) if (!strcmp(name, k_stick[i].name)) return k_stick[i].mask;
+    for (int i = 0; i < NSTICK; i++) if (!strcmp(name, k_stick[i].name)) return k_stick[i].mask;
     return 0;
 }
 void hid_cmd_keys(uint64_t down, uint64_t up) { atomic_fetch_or(&g_cmd_mask, down); atomic_fetch_and(&g_cmd_mask, ~up); }
@@ -84,7 +89,7 @@ static void keys_parse(void) {
             tx = (float)atof(tok + 1); ty = (float)atof(c + 1); mask = PK_TOUCH;
         }
         for (int i = 0; i < (int)(sizeof k_names / sizeof *k_names); i++) if (!strcmp(tok, k_names[i].name)) mask = k_names[i].mask;
-        for (int i = 0; i < 4; i++) if (!strcmp(tok, k_stick[i].name)) mask = k_stick[i].mask;
+        for (int i = 0; i < NSTICK; i++) if (!strcmp(tok, k_stick[i].name)) mask = k_stick[i].mask;
         if (!mask) die("DM_KEYS: unknown key \"%s\"", tok);
         const char *v = at + 1; int frame = *v == 'f'; v += frame;
         if (!((*v >= '0' && *v <= '9') || *v == '.')) die("DM_KEYS item \"%s@%s\": expected seconds or f<frame> after @", tok, at + 1);
@@ -197,6 +202,10 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
       if (!(s->lx || s->ly) && (plx || ply)) { s->lx = plx; s->ly = ply; } if (!(s->rx || s->ry) && (prx || pry)) { s->rx = prx; s->ry = pry; } }
     if (km & PK_LSL) s->lx = -32767; if (km & PK_LSR) s->lx = 32767;   // script stick pseudo-keys (up is positive)
     if (km & PK_LSU) s->ly = 32767;  if (km & PK_LSD) s->ly = -32767;
+#ifndef DM_TEST_HID_NO_RSTICK   // negative control of t_hid_script only: the right stick pseudo-keys parsed but not applied
+    if (km & PK_RSL) s->rx = -32767; if (km & PK_RSR) s->rx = 32767;
+    if (km & PK_RSU) s->ry = 32767;  if (km & PK_RSD) s->ry = -32767;
+#endif
     stick_circle(&s->lx, &s->ly); stick_circle(&s->rx, &s->ry);
     s->buttons |= dm_stick_dirs(s->lx, s->ly, s->rx, s->ry);   // the sticks as direction buttons, bits 16-23 (dm_input.h)
     s->attributes = ATTR_CONNECTED;
