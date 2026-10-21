@@ -4,6 +4,8 @@
 //   button), Xbox letters match their positions, PlayStation by position (bottom = buttonA);
 //   what the game must get: the printed letter (the Switch button of that name, right A confirms); no letter: the Xbox letter at that position.
 // The old mapping (Nintendo controllers swapped by position once more) fails every Nintendo row.
+// DM_FACE_BUTTONS=position (plan item 149): Xbox and PlayStation by position (right A, bottom B, top X, left Y), Nintendo controllers by their letters
+// still; Nintendo controllers by position too (-DDM_TEST_FACE_POS_ALL): 2 fail.
 #include <stdio.h>
 #include "../gamepad_map.h"
 static int n, fail;
@@ -25,6 +27,21 @@ int main(void) {
               r[i].ctl, r[i].pos, r[i].cap, nm[r[i].sys], nm[__builtin_ctzll(r[i].want)]);
     CHECK(dm_gamepad_face(1, 1, 0, 0) == (DM_BTN_A | DM_BTN_B), "two buttons at once: each counts on its own");
     CHECK(dm_gamepad_face(0, 0, 0, 0) == 0, "none pressed: 0");
+    // DM_FACE_BUTTONS=position
+    static const struct { const char *ctl, *vendor, *pos; int sys; uint64_t want; } p[] = {
+        { "Xbox One", "Xbox Wireless Controller", "bottom", GA, DM_BTN_B }, { "Xbox One", "Xbox Wireless Controller", "right", GB, DM_BTN_A },
+        { "Xbox One", "Xbox Wireless Controller", "left", GX, DM_BTN_Y }, { "Xbox One", "Xbox Wireless Controller", "top", GY, DM_BTN_X },
+        { "DualSense", "DualSense Wireless Controller", "bottom", GA, DM_BTN_B }, { "DualSense", "DualSense Wireless Controller", "right", GB, DM_BTN_A },
+        { "DualSense", "DualSense Wireless Controller", "left", GX, DM_BTN_Y }, { "DualSense", "DualSense Wireless Controller", "top", GY, DM_BTN_X } };
+    for (unsigned i = 0; i < sizeof p / sizeof *p; i++) {
+        int bp = dm_face_by_position("position", p[i].ctl, p[i].vendor);
+        CHECK(dm_gamepad_face_by(p[i].sys == GA, p[i].sys == GB, p[i].sys == GX, p[i].sys == GY, bp) == p[i].want, "position: %s, the %s button (the system's button%s) → the game's %s",
+              p[i].vendor, p[i].pos, nm[p[i].sys], nm[__builtin_ctzll(p[i].want)]);
+    }
+    int pro = dm_face_by_position("position", "Switch Pro Controller", "Pro Controller"), jc = dm_face_by_position("position", "HID", "Joy-Con (L/R)");
+    CHECK(!pro && dm_gamepad_face_by(1, 0, 0, 0, pro) == DM_BTN_A, "position: a Switch Pro Controller keeps its letters (the right buttonA → A)");
+    CHECK(!jc, "position: a Joy-Con pair keeps its letters");
+    CHECK(!dm_face_by_position(NULL, "Xbox One", "Xbox Wireless Controller") && !dm_face_by_position("label", "DualSense", "DualSense"), "unset or label: by the system's letters");
     printf("t_padmap: %d checks, %d failed\n", n, fail);
     return fail != 0;
 }

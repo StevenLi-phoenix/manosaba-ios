@@ -126,6 +126,11 @@ static uint64_t app_pool(void) {
 static size_t image_bytes(void) { size_t n = 0; for (int i = 0; i < g_nmod; i++) n += g_mod[i].size; return (n + 0x1fffff) & ~(size_t)0x1fffff; }
 
 static module_t *mod_named(const char *n) { for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, n)) return &g_mod[i]; return NULL; }
+// The cheat VM's memory regions (cheats.c, plan item 150b): {main's image, the heap, the alias region, the whole reserved block (ASLR)}; 0 = none yet
+void dm_guest_bases(uint64_t out[4]) {
+    module_t *m = mod_named("main");
+    out[0] = m ? (uint64_t)(uintptr_t)m->base : 0; out[1] = (uint64_t)(uintptr_t)g_heap; out[2] = (uint64_t)(uintptr_t)g_alias; out[3] = (uint64_t)(uintptr_t)g_as;
+}
 // The SDK's own allocator, called as is: a null return is logged (first 8), since callers in games often do not check it
 HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEmm", "the SDK allocator, logging null returns", void *, hle_stdalloc_allocate, void *self, size_t size, size_t align) {
     static void *(*orig)(void *, size_t, size_t);

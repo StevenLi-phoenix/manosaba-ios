@@ -422,6 +422,8 @@ static void map_image(module_t *m, const char *dir) {
     remap_at(m, base + m->patch_off, x1, z1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
     dm_options_embedded(dir, m->name, m->base, m->patch_off, g_options_wanted);   // the options are built into the image (ios/tools/gen_embed.py, plan item 136)
+    { static int once; if (getenv("DM_PCHTXT") && !once++) LOG("[red] DM_PCHTXT: not on iOS (the app's code is signed; pchtxt.c is the Mac's): the game as built"); }
+    { void dm_cheats_code(const char *, module_t *); dm_cheats_code(dir, m); }   // (iOS: a red line when DM_CHEATS is set)
 }
 #else
 static uint8_t *slurp(const char *path, size_t *n) {
@@ -443,6 +445,9 @@ static void map_image(module_t *m, const char *dir) {
     if (m->base == MAP_FAILED) die("%s mmap", m->name);
     memcpy(m->base, raw, sz); free(raw); install_key_page(m);
     if (*g_options_wanted) dm_options_apply(dir, m->name, m->base, sz, g_options_wanted);   // before the code is sealed (options.c)
+    { const char *pf = getenv("DM_PCHTXT"); int dm_pchtxt_apply(const char *, const char *, uint8_t *, size_t, const char *);
+      if (pf && *pf) dm_pchtxt_apply(dir, m->name, m->base, m->patch_off, pf); }   // community ExeFS patches, after the options (pchtxt.c, plan item 150a)
+    { void dm_cheats_code(const char *, module_t *); dm_cheats_code(dir, m); }   // cheats into main's code, before it is sealed (cheats.c, plan item 150b)
     uint64_t rx = (m->text_end + 0x3FFF) & ~0x3FFFull;
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) die("%s mprotect text", m->name);
     uint64_t po = m->patch_off & ~0x3FFFull;
@@ -472,9 +477,11 @@ void load_modules(const char *dir, const char **names, int n) {
         g_nmod++;
     }
     if (*g_options_wanted) { dm_options_check(g_options_wanted); LOG("options asked for: %s", g_options_wanted); }
+    { void dm_pchtxt_report(const char *); const char *pf = getenv("DM_PCHTXT"); if (pf && *pf) dm_pchtxt_report(pf); }
     force_init();
     t = now_ns(); for (int i = 0; i < g_nmod; i++) relocate(&g_mod[i]); tr = now_ns() - t;
     force_check();
+    { void dm_cheats_start(void); dm_cheats_start(); }   // the cheats that run on a host thread (cheats.c, plan item 150b)
     // rodata read-only now that relocation is done (rodata_seal.h); DM_RODATA_RW=1 leaves it writable
     if (!getenv("DM_RODATA_RW")) for (int i = 0; i < g_nmod; i++) { module_t *m = &g_mod[i]; uint64_t lo, hi;
         if (dm_rodata_seal(m->base, m->text_end, m->ro_off, m->data_off, m->key_page_off, &lo, &hi)) die("%s: rodata mprotect failed", m->name);

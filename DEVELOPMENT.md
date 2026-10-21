@@ -2442,9 +2442,36 @@ Tier 5, needs the user's devices, controller or account:
   as the guide)
 
 Tier 6, optional (seen, not planned before; listed at the user's request 2026-10-20):
-- [ ] 149 face buttons by position for PlayStation and Xbox controllers, as a switch (MacNativeGames 31052d6)
-- [ ] 150 pchtxt patches at load and a cheat VM, refusing rewritten sites (MacNativeGames 1b33531, PR #22)
-- [ ] 151 the save-loading crash workaround at 1.4.3 main+0x1bd01c4 (MacNativeGames dd0e893), if it is ever seen
+- [x] batch 60 · 149 face buttons by position for PlayStation and Xbox controllers, as a switch (MacNativeGames 31052d6, MIT, written anew):
+  `DM_FACE_BUTTONS=position` maps a controller that is not Nintendo's by position, so each button sits where the game's Switch prompt shows it
+  (right, the system's buttonB, A; bottom, buttonA, B; top, buttonY, X; left, buttonX, Y); a Nintendo controller (its category or vendor naming
+  Nintendo, Switch or Joy-Con) keeps its printed letters, which the system reports. Unset, every controller maps by the system's letters as
+  before (MacNativeGames made position its default; here it stays a switch: the user plays with an Xbox controller by its letters). The
+  connected line says which. `t_padmap` +13 (Nintendo controllers by position too: 2 fail)
+- [x] batch 60 · 150 pchtxt patches at load and a cheat VM, refusing rewritten sites (MacNativeGames 1b33531, PR #22)
+  - [x] batch 60 · 150a pchtxt at load (MacNativeGames 1b33531's TOTK_PCHTXT, MIT, written anew): `DM_PCHTXT=<file>[:<file>...]`
+    (`host/pchtxt.c`, Mac). A file's `@nsobid` names its module (its build ID, compared over the file's digits, at least 32, with
+    `<module>.cuts.tsv`'s `# BUILD_ID`); the `<offset> <hex bytes>` lines of its `@enabled` sections, up to `@disabled` or `@stop`, are written
+    into that module's image after the options and before the code is sealed (offsets the image's; `offset_shift` is the IPS form's). A patch
+    touching a word the rewriter changed (sites.tsv's instructions, windows and region pieces; cuts; caves; any option row) or reaching past the
+    image refuses the whole file in red; a file no module takes is named in red. iOS: a red line (signed code). On Tears of the Kingdom's
+    product60: a patch writing a text word's own bytes back applied, one over the rewritten word at 0x6e28 refused, another build's named.
+    `host/tests/t_pchtxt.c` (9; written over the rewritten code: 5 fail)
+  - [x] batch 60 · 150b a cheat VM (Atmosphère's cheat file format; MacNativeGames PR #22's split, MIT, open, written anew):
+    `host/cheat_vm.c` (game-independent) parses "[name]" / "{master}" sections of 8-digit words and runs them, from Atmosphère's documented
+    encodings (docs/features/cheats.md; facts only, its code is GPL): stores, memory and register conditionals with else, loops, register loads,
+    pointer chains, stores through registers, the legacy and the full arithmetic (float add / sub / mul / div for 4 and 8 bytes), key
+    conditionals (8 and C4 with its latch), save / restore, the static registers (the host's 00-7F read, the program's 80-FF written and kept);
+    pause / resume and debug log are noted only; a failed access or an unknown instruction stops the program. `host/cheats.c` (Mac):
+    `DM_CHEATS=<file>` (named after a build ID: must be main's), `DM_CHEATS_ON=all` or names; a cheat of stores only into main's code is written
+    at load before the code is sealed, refused when a store touches a word the rewriter changed (pchtxt.c's tables) or is not 4 / 8 aligned;
+    the rest run about 30 times a second on a host thread with mach_vm_read_overwrite / mach_vm_write (a stale pointer fails, a store into any
+    module's code or patch area is refused); held buttons as the game last read them. No cheat codes in the repository. iOS: a red line. On
+    Tears of the Kingdom's product60 with a test file: a text word written with its own bytes at load, one over the rewritten word refused, a
+    null-pointer read reported once and run again, a file named for another build refused. `t_cheat_vm` (15, hand-encoded programs; the
+    nesting ignored: 1 fails), `t_cheats` (7, which cheats go into the code at load; the rewriter's words unchecked: 1 fails)
+- [-] batch 60 · 151 the save-loading crash workaround at 1.4.3 main+0x1bd01c4 (MacNativeGames dd0e893), if it is ever seen: not seen. No
+  log here (work/run, the session's runs) has that address; to take if it ever shows up
 - [ ] 152 frame interpolation by replaying the frame (LASRecomp `frame-interp-rt`)
 - [ ] 153 frame latency 2 at 30 Hz, measured
 - [ ] 154 the ultrawide aspect patch on the Mac (MacNativeGames `aspect_patch.h`)

@@ -94,8 +94,11 @@ directory) is always required; `DM_TEMP` defaults to `$DM_ROOT/run/platform/temp
 | `DM_CMD=<file>` | Live command channel: lines appended to the file run while the game runs (`key A 200`, `down ZR` / `up ZR`, `wait <frames>`, `sleep <ms>`, `shot <png>`, `passdump <frames>`, `threads`, `memsnap <path>`, `hlecount`, `heaps`, `heap <addr>`, `quit`; `#` comments); a line runs once its newline is written. See `cmdchan.c` |
 | `DM_OPTIONS=<a,b>` or `none` | The product's code options to apply (default: its `options.default`); e.g. Tears of the Kingdom's `fps60,realtime,scene,output` (60 fps) or none (as shipped) |
 | `DM_OUTPUT_RES=<w>x<h>` | Tears of the Kingdom with the option `output`: its swapchain and canvas size (UI and composition at that size), 640x360 up to 1920x1080, or up to the size of a heap overlay made by `games/totk/heapdef.py --output` (`games/totk/frame_step.c`) |
+| `DM_CHEATS=<file>`, `DM_CHEATS_ON=all` or names | Mac: an Atmosphère cheat file for main; stores only into main's code written at load (refused over rewritten code), the rest run about 30 times a second (`cheats.c`, plan item 150b) |
+| `DM_FACE_BUTTONS=position` | Controllers other than Nintendo's: face buttons by position (right A, bottom B, top X, left Y) instead of by the system's letters (`gamepad_map.h`, plan item 149) |
 | `DM_PAD_LOG=1` | Log each haptics engine's starts and stops (`gamepad.m`, plan item 67c) |
 | `DM_PAD_MOTION_LOG=1` | Log a controller's motion as GameController reports it, twice a second (gravity, user acceleration, rotation): for measuring its axes before they feed the six-axis sensor (plan item 67d) |
+| `DM_PCHTXT=<file>[:<file>...]` | Mac: community ExeFS patches in pchtxt form, applied at load to the module their `@nsobid` names; one touching rewritten code is refused whole (`pchtxt.c`, plan item 150a) |
 | `DM_PHONE_HAPTICS=0` | iOS: no pulses on the phone's own haptics when no controller has haptics (plan item 67c) |
 | `DM_PROCON=0` | Mac: leave a Switch Pro Controller to GameController (no IMU or HD rumble over its HID device, `procon_mac.m`, plan item 67b) |
 | `DM_SURVEY=1` | Tears of the Kingdom: `survey pos <tag>` / `survey move <tag> X Y Z <frames>` on the command channel read Link's place and move him through the game's own forceSetMatrix, between two frames (`games/totk/survey.c`) |

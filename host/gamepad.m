@@ -176,8 +176,8 @@ static void hap_init(void) {
 }
 
 __attribute__((weak)) void dm_front_controller_key(void) {}
-static void publish(GCController *c, GCExtendedGamepad *g) {
-    uint64_t b = dm_gamepad_face(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed);
+static void publish(GCController *c, GCExtendedGamepad *g, int by_position) {
+    uint64_t b = dm_gamepad_face_by(g.buttonA.pressed, g.buttonB.pressed, g.buttonX.pressed, g.buttonY.pressed, by_position);
     if (g.leftShoulder.pressed) b |= DM_BTN_L; if (g.rightShoulder.pressed) b |= DM_BTN_R;
     if (g.leftTrigger.pressed) b |= DM_BTN_ZL; if (g.rightTrigger.pressed) b |= DM_BTN_ZR;
     if (g.leftThumbstickButton.pressed) b |= DM_BTN_LS; if (g.rightThumbstickButton.pressed) b |= DM_BTN_RS;
@@ -194,9 +194,11 @@ static void publish(GCController *c, GCExtendedGamepad *g) {
 static void attach(GCController *c) {
     GCExtendedGamepad *g = c.extendedGamepad;
     if (!g) { LOG("gamepad: %s has no extended gamepad profile, ignored", c.vendorName.UTF8String ?: "?"); return; }
-    LOG("gamepad: connected %s (category %s), face buttons by the system's buttonA / B / X / Y", c.vendorName.UTF8String ?: "?", c.productCategory.UTF8String ?: "?");
+    int bp = dm_face_by_position(getenv("DM_FACE_BUTTONS"), c.productCategory.UTF8String, c.vendorName.UTF8String);
+    LOG("gamepad: connected %s (category %s), face buttons %s", c.vendorName.UTF8String ?: "?", c.productCategory.UTF8String ?: "?",
+        bp ? "by position (right A, bottom B, top X, left Y: DM_FACE_BUTTONS=position)" : "by the system's buttonA / B / X / Y");
     __weak GCController *wc = c;
-    g.valueChangedHandler = ^(GCExtendedGamepad *gp, GCControllerElement *el) { (void)el; GCController *sc = wc; if (sc) publish(sc, gp); };
+    g.valueChangedHandler = ^(GCExtendedGamepad *gp, GCControllerElement *el) { (void)el; GCController *sc = wc; if (sc) publish(sc, gp, bp); };
     dispatch_async(g_hq, ^{ GCController *sc = wc; if (sc) hap_add(sc); });
     // DM_PAD_MOTION_LOG=1: the controller's motion as GameController reports it, twice a second (plan item 67: GameController documents its axes
     // for an iPhone only, so which way a controller's axes point in nn::hid's frame is measured first: flat, tilted forward, turned left)

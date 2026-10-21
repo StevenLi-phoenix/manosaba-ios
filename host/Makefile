@@ -20,6 +20,8 @@ SRC = \
 	app_mac.m \
 	cloud.m \
 	cloudsync.c \
+	cheat_vm.c \
+	cheats.c \
 	cmdchan.c \
 	crash.c \
 	diag.c \
@@ -40,6 +42,7 @@ SRC = \
 	movie_av.m \
 	movie_webm.c \
 	options.c \
+	pchtxt.c \
 	procon_mac.m \
 	romfs_parts.c \
 	romfs_validate.c \

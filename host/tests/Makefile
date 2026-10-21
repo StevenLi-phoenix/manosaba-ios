@@ -106,7 +106,14 @@ run: \
 	$(B)/t_survey_cols \
 	$(B)/t_options \
 	$(B)/t_options_nocheck \
+	$(B)/t_cheat_vm \
+	$(B)/t_cheat_vm_flat \
+	$(B)/t_cheats \
+	$(B)/t_cheats_norw \
 	$(B)/t_padmap \
+	$(B)/t_pchtxt \
+	$(B)/t_pchtxt_nocheck \
+	$(B)/t_padmap_posall \
 	$(B)/t_quitwait \
 	$(B)/t_quitwait_old \
 	$(B)/t_relr \
@@ -385,7 +392,21 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ c with a row" $(B)/t_options_nocheck.log; then \
 	   cat $(B)/t_options_nocheck.log; echo "t_options_nocheck: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_options_nocheck: an option written without checking its originals is half applied, as expected"
+	$(B)/t_cheat_vm
+	$(B)/t_cheats
+	@for v in t_cheat_vm_flat t_cheats_norw; do status=0; $(B)/$$v > $(B)/$$v.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/$$v.log)" -ne 1 ]; then cat $(B)/$$v.log; echo "$$v: unexpected negative-control result ($$status)"; exit 1; fi; done; \
+	 echo "t_cheat_vm_flat / t_cheats_norw: the nesting ignored, the rewriter's words unchecked fail one each, as expected"
 	$(B)/t_padmap
+	$(B)/t_pchtxt 2>/dev/null
+	@status=0; $(B)/t_pchtxt_nocheck > $(B)/t_pchtxt_nocheck.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_pchtxt_nocheck.log)" -ne 5 ]; then \
+	   cat $(B)/t_pchtxt_nocheck.log; echo "t_pchtxt_nocheck: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_pchtxt_nocheck: patches over the rewritten code fail the five refusals, as expected"
+	@status=0; $(B)/t_padmap_posall > $(B)/t_padmap_posall.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_padmap_posall.log)" -ne 2 ]; then \
+	   cat $(B)/t_padmap_posall.log; echo "t_padmap_posall: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_padmap_posall: Nintendo controllers by position fail their two checks, as expected"
 	$(B)/t_quitwait
 	@status=0; $(B)/t_quitwait_old > $(B)/t_quitwait_old.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "waits until the game leaves it *✗" $(B)/t_quitwait_old.log; then \
@@ -617,6 +638,20 @@ $(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_arbiter.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_padmap.c
+$(B)/t_pchtxt: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_pchtxt.c
+$(B)/t_pchtxt_nocheck: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_NO_CHECK -I.. -o $@ t_pchtxt.c
+$(B)/t_cheat_vm: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_cheat_vm.c
+$(B)/t_cheat_vm_flat: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CHEAT_FLAT_SKIP -I.. -o $@ t_cheat_vm.c
+$(B)/t_cheats: t_cheats.c ../cheats.c ../cheat_vm.c ../cheat_vm.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_cheats.c ../cheat_vm.c
+$(B)/t_cheats_norw: t_cheats.c ../cheats.c ../cheat_vm.c ../cheat_vm.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CHEATS_NO_REWRITE_CHECK -I.. -o $@ t_cheats.c ../cheat_vm.c
+$(B)/t_padmap_posall: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -DDM_TEST_FACE_POS_ALL -I.. -o $@ t_padmap.c
 $(B)/t_sead: t_sead.c ../sead.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_sead.c
 $(B)/t_sead_broken: t_sead.c ../sead.c ../dm.h | $(B)
