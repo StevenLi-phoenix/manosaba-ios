@@ -19,7 +19,7 @@
 #                             ($DM_ROOT/run/ios/sim.png) and Documents/boot.txt (sim_boot.txt). DM_SIM_BG=<at>,<len>: at <at> s the Settings app
 #                             is opened (this one goes to the background) and after <len> s this one again, then tools/lifecycle_check.py judges it
 #   run.sh sim-stop           shut the Simulators down (a booted one keeps its memory; sim-run boots it again)
-# Build switches: DM_FREE_ACCOUNT=1 (free developer account: no iCloud / memory / sustained-execution entitlements), DM_IOS_M3=1 (older-API build,
+# Build switches: DM_FREE_ACCOUNT=1 (free developer account: no iCloud / extended VA / sustained-execution entitlements), DM_IOS_M3=1 (older-API build,
 # iOS 18), DM_DEVICE_FAMILY=1 (iPhone only), DM_ENV_FILE=<file> (DM_* switches read at launch, as Documents/env.txt is).
 set -u
 cd "$(dirname "$0")"

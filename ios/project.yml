@@ -60,7 +60,7 @@ targets:
                 UISceneDelegateClassName: SceneDelegate
     entitlements:
       path: Sources/DmIOS.entitlements
-      properties:   # tools/project_free.py removes these six for a free (personal team) account
+      properties:   # tools/project_free.py removes all but the increased memory limit for a free (personal team) account
         com.apple.developer.kernel.increased-memory-limit: true
         com.apple.developer.kernel.extended-virtual-addressing: true
         com.apple.developer.sustained-execution: true

@@ -13,9 +13,9 @@ Requirements: iOS 26 (the graphics backend uses Metal 4; `DM_IOS_M3=1` builds fo
 Copy `local.env.example` to `local.env` (ignored by git) and fill in: `DM_GAME`, the device (`DM_DEVICE` from `xcrun devicectl list devices`,
 and `DM_IOS_UDID` for a free account), `DM_TEAM_ID`, your own `DM_BUNDLE_ID`, and `DM_FREE_ACCOUNT=1` for a free (personal team) account.
 
-A free account cannot sign iCloud, increased memory limit, extended virtual addressing or sustained execution entitlements; the build leaves
-them out. Its profiles expire after 7 days (rebuild and reinstall), and before the first launch you trust the developer in Settings → General →
-VPN & Device Management.
+A free account cannot sign iCloud, extended virtual addressing or sustained execution entitlements; the build leaves them out. It does sign the
+increased memory limit (on an iPhone 17 Pro the limit went from about 3.4 to 6.1 GB, 2026-10-21). Its profiles expire after 7 days (rebuild and
+reinstall), and before the first launch you trust the developer in Settings → General → VPN & Device Management.
 
 ## run.sh
 

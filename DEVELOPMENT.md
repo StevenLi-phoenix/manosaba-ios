@@ -53,7 +53,7 @@ What works is in the README's status. Open, roughly by value:
    (`DM_HEAP_WATCH`); the old sets stay referenced. Live data grows about 20 MB per load, the heap about 28 MB (`GC_FREE_SPACE_DIVISOR=8` saves
    35–50 MB, not the rate). Root reference not found. Next: trace all old instances of the two managers (not samples), bound each object by its
    class's `instance_size` (`host/hle_svc.c`), scan the guest stacks too; then clear the root from a `games/manosaba` hook after a load.
-2. **Trial loading peak on 8 GB iPads.** Without the increased memory limit entitlement (a free account cannot sign it) an iPad mini 7 gives about
+2. **Trial loading peak on 8 GB iPads.** Without the increased memory limit entitlement (a free account signs it since 65) an iPad mini 7 gives about
    3.35–3.4 GB; a trial's start adds about 1.4 GB in 0.2 s (about 116 character render targets, 0.9 GB of Metal memory). A fresh session keeps about
    725 MB of headroom, a two-hour one does not (the leak). Render resolution does not help; memoryless depth needs pass merging first. A signer
    whose profile has the entitlement (3) may lift the limit; not tried on the iPad mini.
@@ -286,7 +286,7 @@ Evidence the open items rely on:
 - 65: BotWRecomp `ios/PORTING.md` (Xcode made a Personal Team profile with increased-memory-limit) and mush8 `make-ios.sh` (FREE=1 keeps it) say a
   free account can sign it; `ios/tools/project_free.py` strips it and `ios/README.md` says it cannot. MacNativeGames played 1.4.3 on an iPhone 14
   and an A16 iPad "signed with a personal development team in Xcode", with the entitlement (3.6 of 4 GB used). One signing attempt decides
-  (`embedded.mobileprovision`, `os_proc_available_memory`).
+  (`embedded.mobileprovision`, `os_proc_available_memory`). Decided on 2026-10-21: it can (65).
 - 66: upstream 46cb318 (issue #57: a Switch Pro on iPadOS 27.0.1 recognised as Nintendo and still swapped); Kamisorara 55c6fba is the same fix.
 - 68: MixWithOthers from upstream 9393b00, ours 46b63f4, never run on a device. 69: the overlay's game over flow is checked by bytes only
   (`games/totk/tests/t_romfs_overlay.py`). 70: its metallibs are built in `work/build/ios/dmsh_b/b-bab8d4746968`; the last device builds recorded
@@ -378,8 +378,8 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
 - Play or saves: 72 (a blood moon), 69 (game over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the
   checks of 161 (grass), 163 (hair and cloth), 165 (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
 - The console: 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
-- An iPhone or iPad: 65, 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 68, 106, 134,
-  135, 140, 173, 175, and manosaba's part of 142).
+- An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
+  134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
 - Tears of the Kingdom running on iOS first (62): 61d, 62c2, 62g, 62h, the checks of 62a, 62b, 62e, 63b (`DM_APP_POOL_ADD_MB`), 112, 113, 142,
   170 (the game's text), 172, 67e (the phone's pulses after a trip to the background).
@@ -968,7 +968,10 @@ Tier 4, large:
   `tools/tests/t_sim_metal.py`
 
 Tier 5, needs the user's devices, controller or account:
-- [ ] 65 increased-memory-limit with a free account (one signing attempt)
+- [x] batch 63 · 65 increased-memory-limit with a free account (one signing attempt): a personal team signs it (Xcode made the profile with it on
+  2026-10-21; with manosaba the iPhone 17 Pro's limit went from about 3.4 to 6.1 GB), so `ios/tools/project_free.py` keeps it (`t_ios_cpu`; dropping
+  it as before fails 1). Extended virtual addressing is refused to personal teams ("do not support the Extended Virtual Addressing capability"),
+  which bears on 62's address space with a free account
 - [ ] 66 a Switch Pro controller check of 2
 - [x] batch 59 · 67 gyro and rumble (implemented here; the checks with the controller and the phone are on the device list)
   - [x] batch 58 · 67a vibration handles per style, only the connected style forwarded, bool arguments masked: `host/hle_motion.c`. Handles as
