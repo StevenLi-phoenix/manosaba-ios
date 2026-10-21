@@ -382,7 +382,7 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
 - Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 61d, 62c2, 62g, 62h, 62j, 63b
-  (`DM_APP_POOL_ADD_MB`), 113, 170 (the game's text), 172, 67e (the phone's pulses after a trip to the background).
+  (`DM_APP_POOL_ADD_MB`), 113, 170 (the game's text), 172, 67e (the phone's pulses after a trip to the background), how 62l's 60 fps build plays.
 - The next game: 64's open sub-items.
 - Decisions: `DM_FRAME_STEP=vsync` as iOS's default (133: 35 % less CPU on the Mac); `DM_PRESENT_LATENCY=auto` as the default (after 153's
   check).
@@ -672,6 +672,14 @@ Tier 3c, iOS:
 - [x] batch 37 · 135 iOS: the frame rate setting held at 30 in Low Power Mode or from thermal state Serious up (`nvn_fps_policy` in
   `gfx/nvn/nvn_pace.h`, after super-mario-odyssey-ios's frame pacer, MIT), the reason logged; `ENABLE_DEBUG_DYLIB: NO` in `ios/project.yml`. On the
   iPhone 17 Pro (2026-10-21): Low Power Mode on and off logged "frame rate 30 fps (Low Power Mode)", then "frame rate 60 fps (the setting)"
+  - [x] batch 67 · 135a the thermal hold a switch, the player's choice (the user, 2026-10-22): "Hold 30 fps when hot" (`dm.hot_hold`, unset reads
+    as on, the behaviour before) in the Settings page and the in-game panel; off, the setting stays at any thermal state, Low Power Mode still
+    holds (`nvn_fps_policy(…, hold_hot)`; `t_pace`, -DDM_TEST_POLICY_HOT_ALWAYS fails 2); the boot line names it
+  - [x] batch 67 · 135b the target paces the game too: the thermal hold (or DM_FPS=30) only set the display link's rate, so Tears of the Kingdom's
+    60 fps build in its map screen kept presenting 60 frames a second at a 30 Hz link, half drawn and dropped (the overlay: "60 fps, on-screen
+    30"; 149-151 of every 300 presents discarded). `nvn_pace_hold` takes the lower of the game's hold and a target below 60 into
+    `nvn_hold_interval` (`win_interval`, the vsync step); `t_pace`, -DDM_TEST_TARGET_NOT_HELD fails 2. On the Mac product60 with DM_FPS=30: frame
+    time p50 33.34 ms. manosaba presents FIFO, which the 30 Hz link already held to 30
 - [x] batch 39 · 136 no option pages on iOS (iOS maps the signed executable's code): `ios/tools/gen_embed.py` builds the code options (DM_OPTIONS at
   build time, else the product's options.default) into the embedded image, each checked whole, and `options.c` `dm_options_embedded` reads them back,
   so `dm_option_on` answers as on the Mac; run-time choices stay data (the frame rate by the host's pacing, realtime and scene through the host page).
@@ -902,6 +910,14 @@ Tier 4, large:
     compute uniform pointers; `gfx/tests/t_ubren` 2c, 5b, 6 (`-DDM_TEST_UB_FLUSHED_SNAPSHOT` fails them). Frames 1400-1415 and the climb
     (1450-1650) keep the wall, the same picture as `DM_NVN_UB_RENAME=0` (0.8-1.6 % of pixels differ, particles). Found by elimination: not
     the occlusion queries (forced either way), conditional rendering, FPCR, the TBDR rewrites or the x18 rewrites of the culling code
+  - [x] batch 67 · 62l a 60 fps iPhone build. The app's frame rate setting is a ceiling, and the phone's build embedded the 30 fps product (the
+    game set interval 2 itself; the user's "60 fps on, still 30"). `ios/run.sh` takes `DM_PRODUCT=<dir>` (relative to DM_ROOT) and the options
+    with it: `DM_PRODUCT=build/totk/product60 DM_OPTIONS=fps60,realtime,scene` (no `output`, which makes the handheld swapchain 1080p, no
+    `aspect`); the game's controller picks 60 / 30 / 20. The app's render resolution setting now reaches Tears of the Kingdom: without
+    `DM_RENDER_RES`, `DM_RENDER_HEIGHT` asks for that many lines at 16:9 (`frame_step.c` scene_env; `t_frame_step`, -DDM_TEST_SCENE_NO_HEIGHT
+    fails 3); on the Mac `[scene size] 960x540 (DM_RENDER_HEIGHT)`. Budget seen on the phone at 30 fps outdoors: GPU p50 10-12 ms (24 in one
+    heavy place), the translation thread 12-16.5 ms of CPU a frame for 3,300-4,000 draws at 1.3-1.6 GHz once the thermal state is serious, when
+    the app holds 30 fps anyway; dips below 25 fps came from pipelines made on a first visit (up to 360 ms a frame) and from that CPU time
 - [x] batch 56 · 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
   - [-] 63a MetalFX's docked guard against the scene's content size (MacNativeGames ff092e3): their fix is in their replacement of the game's
     upscale pass; our present-time MetalFX (`fx_apply`) already compares the content size with the size on screen (63c: the valid region from the

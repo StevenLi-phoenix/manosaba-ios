@@ -73,14 +73,29 @@ static inline int nvn_hold_interval(int itv, int hz, int hold_fps) {
     return itv;
 }
 
+// The hold a frame is paced with: the lower of the game's hold (130: movies) and the player's frame rate target below 60 (DM_FPS=30, the iOS setting
+// or 135's thermal hold), 0 for none. The target alone used to set the display link's rate only: a game choosing interval 1 itself (Tears of the
+// Kingdom's 60 fps build in its map screen) kept presenting 60 frames a second at a 30 Hz link, half of them drawn and dropped (plan item 135b)
+static inline int nvn_pace_hold(int hold_fps, int target_fps) {
+#ifndef DM_TEST_TARGET_NOT_HELD   // negative control of t_pace only: the game's hold alone, as before
+    if (target_fps > 0 && target_fps < 60 && (!hold_fps || target_fps < hold_fps)) return target_fps;
+#else
+    (void)target_fps;
+#endif
+    return hold_fps;
+}
 // The iOS frame rate the device can afford (plan item 135, after super-mario-odyssey-ios's frame pacer, MIT): the player's setting, held at 30 in
 // Low Power Mode or from thermal state Serious up (NSProcessInfoThermalStateSerious = 2, Critical = 3), where iOS throttles the device anyway and a
-// game paced for 60 misses frames unevenly. Unit test tests/t_pace.c
-static inline int nvn_fps_policy(int user_fps, int low_power, int thermal) {
+// game paced for 60 misses frames unevenly. hold_hot 0 (the app's "Hold 30 fps when hot" off, plan item 135a) keeps the setting at any thermal
+// state: Tears of the Kingdom's 60 fps build picks 60, 30 or 20 itself. Unit test tests/t_pace.c
+static inline int nvn_fps_policy(int user_fps, int low_power, int thermal, int hold_hot) {
 #ifdef DM_TEST_POLICY_USER_ONLY   // negative control of t_pace only: the setting alone, as before
-    (void)low_power; (void)thermal; return user_fps;
+    (void)low_power; (void)thermal; (void)hold_hot; return user_fps;
 #endif
-    return (low_power || thermal >= 2) && user_fps > 30 ? 30 : user_fps;
+#ifdef DM_TEST_POLICY_HOT_ALWAYS   // negative control of t_pace only: held when hot whatever the switch, as before 135a
+    hold_hot = 1;
+#endif
+    return (low_power || (hold_hot && thermal >= 2)) && user_fps > 30 ? 30 : user_fps;
 }
 
 // Uncapped pacing (plan item 53, after MacNativeGames' TOTK_UNCAPPED, ly05010419/MacNativeGames, MIT): for a game whose step follows the measured

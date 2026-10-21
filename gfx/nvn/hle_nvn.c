@@ -1732,9 +1732,10 @@ static int fstep_on(void) { static int v = -1; if (v < 0) { const char *e = gete
     if (e && !strcmp(e, "vsync") && !v) LOG("[nvn] [red] DM_FRAME_STEP=vsync needs a game whose step the host sets (Tears of the Kingdom's option realtime)");
     if (v) LOG("[nvn] frame step in whole vsyncs: each frame shown k vsyncs of 60 Hz, the game steps k (DM_FRAME_STEP=vsync)"); } return v; }
 int nvn_fstep_step(void) { return fstep_on() ? g_fs_step : 0; }   // the step for the frame the game is about to make, in vsyncs (0 = not in this mode)
+int mtl_fps_target(void);   // nvn_mtl.m: the player's frame rate target (DM_FPS, the iOS setting, 135's thermal hold)
 static int win_interval(const win_t *o) {
     if (fstep_on()) return g_fs.k > 0 ? g_fs.k : 1;
-    return nvn_hold_interval(g_display_mode ? 1 : o->interval, g_hz, atomic_load(&g_fps_hold)); }
+    return nvn_hold_interval(g_display_mode ? 1 : o->interval, g_hz, nvn_pace_hold(atomic_load(&g_fps_hold), mtl_fps_target())); }   // (plan item 135b)
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *idx) {
     NVN_BLOCKING();
     uint64_t tr = trace_now();
@@ -2097,7 +2098,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         double shown = g_fs_prev_start && g_fs_start > g_fs_prev_start ? (g_fs_start - g_fs_prev_start) / vs : 0, cpu = g_fs_start && now > g_fs_start ? (now - g_fs_start) / vs : 0;
         double gpu = g_frame >= 8 ? mtl_gpu_ms(g_frame - 8) : -1, cost = gpu * 1e6 / vs > cpu ? gpu * 1e6 / vs : cpu;
         if (shown > 0) { g_fs_game += g_fs_step; g_fs_real += shown; }
-        g_fs_step = nvn_fstep_next(&g_fs, shown, cost, nvn_hold_interval(1, 60, atomic_load(&g_fps_hold)), FSTEP_MAX);
+        g_fs_step = nvn_fstep_next(&g_fs, shown, cost, nvn_hold_interval(1, 60, nvn_pace_hold(atomic_load(&g_fps_hold), mtl_fps_target())), FSTEP_MAX);
         g_fs_started = 0;
         if (g_fs.frames % 300 == 0) LOG("[frame step] vsync step at frame %llu: k %d, step %d; %llu late, %llu up, %llu down (%llu failed), %llu paid back, %.0f vsyncs dropped; game time / real time %.4f",
             (unsigned long long)g_fs.frames, g_fs.k, g_fs_step, (unsigned long long)g_fs.late, (unsigned long long)g_fs.ups, (unsigned long long)g_fs.downs, (unsigned long long)g_fs.failed,

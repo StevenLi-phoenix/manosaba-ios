@@ -253,16 +253,20 @@ static void *boot_thread(void *arg) {
     plog("boot: dm_main returned %d", rc);
     return NULL;
 }
-// Graphics settings (Settings app → this app, Settings.bundle): dm.fps 60 / 30, dm.render_height 0 (the game's own) / 900 / 720 / 540, dm.metalfx.
+// Graphics settings (Settings app → this app, Settings.bundle): dm.fps 60 / 30, dm.render_height 0 (the game's own) / 900 / 720 / 540, dm.metalfx,
+// dm.hot_hold (Hold 30 fps when hot, on unless turned off).
 // At start they become DM_FPS / DM_RENDER_HEIGHT / DM_UPSCALE, unless a launch already set those (devicectl --environment, tests). Frame rate and
 // MetalFX also follow a change made while the game runs (on returning to it); the render resolution is read by the game once, at startup.
 void mtl_fps_set(int fps); void mtl_upscale_set(int on);   // gfx/nvn/nvn_mtl.m
 static NSInteger g_gfx_fps, g_gfx_fx;   // the settings as last applied: a later change is applied, an unchanged one leaves a launch's variables alone
 // The frame rate applied is the setting held at 30 in Low Power Mode or from thermal state Serious up (nvn_fps_policy, plan item 135): iOS throttles
 // the device then anyway, and a game paced for 60 misses frames unevenly. Re-applied when the setting, the power mode or the thermal state changes
+// dm.hot_hold: "Hold 30 fps when hot" (plan item 135a), on unless the player turned it off (unset reads as on: the behaviour before the switch)
+static int hot_hold(void) { id v = [NSUserDefaults.standardUserDefaults objectForKey:@"dm.hot_hold"]; return v ? [v boolValue] : 1; }
 static int fps_afforded(NSInteger user, const char **why) {
-    NSProcessInfo *pi = NSProcessInfo.processInfo; int lp = pi.isLowPowerModeEnabled, th = (int)pi.thermalState, f = nvn_fps_policy((int)user, lp, th);
-    *why = f < user ? (lp ? "Low Power Mode" : th >= 3 ? "thermal state critical" : "thermal state serious") : "the setting";
+    NSProcessInfo *pi = NSProcessInfo.processInfo; int lp = pi.isLowPowerModeEnabled, th = (int)pi.thermalState, hold = hot_hold(), f = nvn_fps_policy((int)user, lp, th, hold);
+    *why = f < user ? (lp ? "Low Power Mode" : th >= 3 ? "thermal state critical" : "thermal state serious")
+                    : th >= 2 && !hold && user > 30 ? "the setting; hot, but Hold 30 fps when hot is off" : "the setting";
     return f;
 }
 static void gfx_settings_boot(void) {
@@ -272,7 +276,8 @@ static void gfx_settings_boot(void) {
     if (g_gfx_fps == 30) setenv("DM_FPS", "30", 0);
     if (h > 0) { char b[16]; snprintf(b, sizeof b, "%ld", (long)h); setenv("DM_RENDER_HEIGHT", b, 0); }
     if (g_gfx_fx) setenv("DM_UPSCALE", "metalfx", 0);
-    plog("boot: graphics settings: %ld fps (%s), render height %s, MetalFX %s", (long)g_gfx_fps, why, getenv("DM_RENDER_HEIGHT") ?: "the game's", g_gfx_fx ? "on" : "off");
+    plog("boot: graphics settings: %ld fps (%s), render height %s, MetalFX %s, hold 30 fps when hot %s", (long)g_gfx_fps, why, getenv("DM_RENDER_HEIGHT") ?: "the game's",
+         g_gfx_fx ? "on" : "off", hot_hold() ? "on" : "off");
 }
 static void gfx_settings_refresh(void) {
     if (!g_host_up) return;

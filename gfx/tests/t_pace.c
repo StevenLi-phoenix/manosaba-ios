@@ -137,19 +137,37 @@ int main(void) {
         int got = nvn_hold_interval(h[i].itv, h[i].hz, h[i].hold), ok = got == h[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", h[i].why, h[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
-    // The iOS frame rate policy (nvn_fps_policy, plan item 135); the setting alone (-DDM_TEST_POLICY_USER_ONLY) fails 3
-    struct { int user, lp, th, want; const char *why; } fp[] = {
-        {60, 0, 0, 60, "60 fps set, nominal: 60"},
-        {60, 0, 1, 60, "60 fps set, thermal Fair: 60"},
-        {60, 0, 2, 30, "60 fps set, thermal Serious: 30"},
-        {60, 0, 3, 30, "60 fps set, thermal Critical: 30"},
-        {60, 1, 0, 30, "60 fps set, Low Power Mode: 30"},
-        {30, 0, 0, 30, "30 fps set: 30"},
-        {30, 1, 3, 30, "30 fps set, Low Power and Critical: 30 (never above the setting)"},
+    // The iOS frame rate policy (nvn_fps_policy, plan item 135); the setting alone (-DDM_TEST_POLICY_USER_ONLY) fails 3 (4 with 135a's rows: the
+    // Low Power one); the switch "Hold 30 fps when hot" off (plan item 135a) keeps 60 when hot, not in Low Power Mode; held whatever the switch
+    // (-DDM_TEST_POLICY_HOT_ALWAYS) fails 2
+    struct { int user, lp, th, hold, want; const char *why; } fp[] = {
+        {60, 0, 0, 1, 60, "60 fps set, nominal: 60"},
+        {60, 0, 1, 1, 60, "60 fps set, thermal Fair: 60"},
+        {60, 0, 2, 1, 30, "60 fps set, thermal Serious: 30"},
+        {60, 0, 3, 1, 30, "60 fps set, thermal Critical: 30"},
+        {60, 1, 0, 1, 30, "60 fps set, Low Power Mode: 30"},
+        {30, 0, 0, 1, 30, "30 fps set: 30"},
+        {30, 1, 3, 1, 30, "30 fps set, Low Power and Critical: 30 (never above the setting)"},
+        {60, 0, 2, 0, 60, "hold when hot off, thermal Serious: 60 (135a)"},
+        {60, 0, 3, 0, 60, "hold when hot off, thermal Critical: 60 (135a)"},
+        {60, 1, 2, 0, 30, "hold when hot off, Low Power Mode: still 30"},
     };
     for (int i = 0; i < (int)(sizeof fp / sizeof *fp); i++) {
-        int got = nvn_fps_policy(fp[i].user, fp[i].lp, fp[i].th), ok = got == fp[i].want; n++;
+        int got = nvn_fps_policy(fp[i].user, fp[i].lp, fp[i].th, fp[i].hold), ok = got == fp[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", fp[i].why, fp[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
+    // The pacing hold with the player's target (nvn_pace_hold, plan item 135b); the game's hold alone (-DDM_TEST_TARGET_NOT_HELD) fails 2
+    struct { int hold, target, hz, itv, want; const char *why; } ph[] = {
+        {0, 60, 60, 1, 1, "no hold, target 60, the game's interval 1: 1"},
+        {0, 30, 60, 1, 2, "target 30 (thermal hold), the game's interval 1 at 60 Hz: 2 (30 fps, none drawn to be dropped)"},
+        {0, 30, 120, 1, 4, "target 30 at 120 Hz: 4"},
+        {30, 60, 60, 1, 2, "a movie's hold 30, target 60: 2"},
+        {30, 30, 60, 3, 3, "hold and target 30, the game's own 3: 3 (a longer interval stays)"},
+        {0, 30, 60, 2, 2, "target 30, the game's interval 2 already: 2"},
+    };
+    for (int i = 0; i < (int)(sizeof ph / sizeof *ph); i++) {
+        int got = nvn_hold_interval(ph[i].itv, ph[i].hz, nvn_pace_hold(ph[i].hold, ph[i].target)), ok = got == ph[i].want; n++;
+        printf("%-72s expected %3d → got %3d %s\n", ph[i].why, ph[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
     // FIFO consumption (nvn_fifo_due, plan item 140, see fifo_run); one frame every tick whatever its period (-DDM_TEST_FIFO_NO_PERIOD) fails 2
     {   fifo_sim nw = fifo_run(0, 1, 0, 0), ff = fifo_run(1, 1, 0, 0), f2 = fifo_run(1, 2, 0, 0), fs = fifo_run(1, 2, 200, 230);

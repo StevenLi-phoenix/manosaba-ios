@@ -10,7 +10,7 @@
 			<key>Title</key>
 			<string>Graphics</string>
 			<key>FooterText</key>
-			<string>30 fps halves the work per second and keeps the phone cooler. Frame rate and MetalFX take effect when you return to the game; render resolution at the next launch, and only in games that support it. MetalFX sharpens the picture when it is scaled up to the screen. iOS always shows frames in step with the display, so there is no V-Sync switch.</string>
+			<string>30 fps halves the work per second and keeps the phone cooler. Hold 30 fps when hot: from the thermal state Serious (and in Low Power Mode, whatever the switch) the frame rate is held at 30, as iOS slows the phone down then anyway; off, the setting stays and the phone runs warmer. Frame rate and MetalFX take effect when you return to the game; render resolution at the next launch, and only in games that support it. MetalFX sharpens the picture when it is scaled up to the screen. iOS always shows frames in step with the display, so there is no V-Sync switch.</string>
 		</dict>
 		<dict>
 			<key>Type</key>
@@ -31,6 +31,16 @@
 				<integer>60</integer>
 				<integer>30</integer>
 			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Hold 30 fps when hot</string>
+			<key>Key</key>
+			<string>dm.hot_hold</string>
+			<key>DefaultValue</key>
+			<true/>
 		</dict>
 		<dict>
 			<key>Type</key>

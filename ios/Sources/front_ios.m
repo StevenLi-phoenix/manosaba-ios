@@ -260,6 +260,9 @@ static UISwitch *panel_switch(NSString *key) {
     [s addAction:[UIAction actionWithHandler:^(UIAction *a) { [NSUserDefaults.standardUserDefaults setBool:((UISwitch *)a.sender).on forKey:key]; }] forControlEvents:UIControlEventValueChanged];
     return s;
 }
+static UISwitch *panel_switch_on(NSString *key) {   // a switch whose unset key reads as on (dm.hot_hold)
+    UISwitch *s = panel_switch(key); id v = [NSUserDefaults.standardUserDefaults objectForKey:key]; s.on = v ? [v boolValue] : YES; return s;
+}
 static UISegmentedControl *panel_choice(NSString *key, NSArray<NSString *> *titles, NSArray<NSNumber *> *values) {
     UISegmentedControl *c = [[UISegmentedControl alloc] initWithItems:titles]; NSInteger v = [NSUserDefaults.standardUserDefaults integerForKey:key];
     c.selectedSegmentIndex = MAX(0, (NSInteger)[values indexOfObject:@(v)] == NSNotFound ? 0 : (NSInteger)[values indexOfObject:@(v)]);
@@ -284,6 +287,7 @@ static UISlider *panel_slider(NSString *key, float lo, float hi, float def, NSAr
     [self.view addSubview:card]; [card addSubview:sc]; [sc addSubview:st];
     UILabel *t = [UILabel new]; t.text = @"Settings"; t.textColor = UIColor.whiteColor; t.font = [UIFont boldSystemFontOfSize:18]; [st addArrangedSubview:t];
     [st addArrangedSubview:panel_row(@"Frame rate", panel_choice(@"dm.fps", @[@"60", @"30"], @[@60, @30]))];
+    [st addArrangedSubview:panel_row(@"Hold 30 fps when hot", panel_switch_on(@"dm.hot_hold"))];
     [st addArrangedSubview:panel_row(@"Render resolution (next launch)", panel_choice(@"dm.render_height", @[@"Game", @"900", @"720", @"540"], @[@0, @900, @720, @540]))];
     [st addArrangedSubview:panel_row(@"MetalFX upscaling", panel_switch(@"dm.metalfx"))];
     [st addArrangedSubview:panel_row(@"Show frame rate", panel_switch(@"dm.perf_line"))];

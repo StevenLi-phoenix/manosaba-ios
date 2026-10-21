@@ -108,11 +108,17 @@ it signed with every entitlement of its profile (increased memory limit included
   is noticed at the next launch (`Documents/boot.running`, `host/rundiag.h`): a red line says so and its log is kept as
   `boot.interrupted.txt` until another such session replaces it.
 - **Graphics settings** (Settings app → this app → Graphics): frame rate 60 / 30 fps (`DM_FPS`; the display link and ProMotion follow), render
-  resolution (`DM_RENDER_HEIGHT`, only for games whose hooks apply it — manosaba: `games/manosaba/graphics.c`; read at startup) and MetalFX
+  resolution (`DM_RENDER_HEIGHT`, only for games whose hooks apply it — manosaba: `games/manosaba/graphics.c`; Tears of the Kingdom built with
+the code option `scene`: `games/totk/frame_step.c`, that many lines at 16:9; read at startup) and MetalFX
   spatial upscaling of the presented picture (`DM_UPSCALE=metalfx`, `gfx/nvn/nvn_mtl.m` `fx_apply`; for a game whose profile names its own upscale
   or compose pass, that pass too: `fxp_dock` / `fxp_scene`, plan item 63). Frame rate and MetalFX follow a change on
   returning to the game; a variable set at launch wins until the setting is changed. iOS has no V-Sync switch: `CAMetalLayer.displaySyncEnabled`
   is macOS-only, a layer always presents in step with the display.
+  The frame rate applied is held at 30 in Low Power Mode and, while "Hold 30 fps when hot" is on (`dm.hot_hold`, the default), from the
+  thermal state Serious up (`nvn_fps_policy`, plan items 135 / 135a); the boot line says which.
+  The frame rate setting is a ceiling: a game paced at 30 fps by its own code stays there (Tears of the Kingdom's default product). Its 60 fps
+  build for a phone (plan item 62l): `DM_PRODUCT=build/totk/product60 DM_OPTIONS=fps60,realtime,scene ios/run.sh build` (the game's controller
+  then picks 60, 30 or 20 by its frame time; the options `output` and `aspect` stay out).
 - **Lifecycle**: in the background the guest clock, audio and graphics are suspended and pending iCloud uploads are flushed.
 
 ## Files

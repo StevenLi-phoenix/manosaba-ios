@@ -12,7 +12,9 @@
 // parameter's): DM_RENDER_RES=<w>x<h> (64 up to 1920x1080, the output size; 2560x1440 and 3200x1800 ran the game's texture heap out at main+0x1c2f20
 // in its first seconds), else the parameter's own size for the operation mode, which a probe at main 0x585e4c read once at boot (docked 1600x900,
 // handheld 1280x720), so the game looks as before unless asked. Above 1920x1080 with the RomFS overlay games/totk/heapdef.py writes (plan item 95):
-// its HeapDef grows the heap for a scene size it notes beside it (.dm_scene), up to which DM_RENDER_RES is then taken.
+// its HeapDef grows the heap for a scene size it notes beside it (.dm_scene), up to which DM_RENDER_RES is then taken. Without DM_RENDER_RES,
+// DM_RENDER_HEIGHT=<lines> (the iOS app's render resolution setting, Settings → the app; manosaba's graphics.c reads it too) asks for that many
+// lines at 16:9 (540 → 960x540), so the 60 fps iPhone build can trade resolution for GPU time (plan item 62l).
 // +24 / +32: the swapchain and the canvas size, each width | height << 32 (rules.py option output, plan item 63: main 0xbdb578 / 0xbdb584 read the
 // swapchain's, the code cave at 0x3dcb28 the canvas's, which the game composes its UI and the scene's final upscale in). DM_OUTPUT_RES=<w>x<h>
 // (640x360 up to 1920x1080, or up to the size the heap overlay notes, .dm_output: games/totk/heapdef.py --output) makes both that size; else the
@@ -41,6 +43,17 @@ static double frame_mean_add(frame_mean *m, uint64_t now_ns) {
     m->dt[m->next++ % 5] = dt; if (m->n < 5) m->n++;
     double sum = 0; for (unsigned i = 0; i < m->n; i++) sum += m->dt[i];
     return sum / m->n;
+}
+// The size asked for: DM_RENDER_RES as it is, else DM_RENDER_HEIGHT's lines at 16:9 (width rounded to even) written into buf, else NULL
+static const char *scene_env(const char *res, const char *height, char *buf, size_t n) {
+    if (res && *res) return res;
+#ifndef DM_TEST_SCENE_NO_HEIGHT   // negative control of t_frame_step only: DM_RENDER_HEIGHT ignored, as before
+    char extra; unsigned h;
+    if (height && sscanf(height, "%u%c", &h, &extra) == 1 && h > 0) { snprintf(buf, n, "%ux%u", (h * 16 / 9 + 1) & ~1u, h); return buf; }
+#else
+    (void)height; (void)buf; (void)n;
+#endif
+    return NULL;
 }
 // The scene size for the page; returns 1 when it comes from env (DM_RENDER_RES), 0 for the game's own, -1 for a value it refused (the game's own).
 // max: the largest the heap allows, "<w>x<h>" (the overlay's note), NULL for the output size 1920x1080
@@ -90,11 +103,12 @@ void dm_game_boot(void) {
     if (dm_option_on("scene")) {
         char note[1024], max[32] = ""; FILE *f = dm_overlay_file("System/HeapSize/Product.Nin_NX_NVN.HeapDef.dm_scene", note, sizeof note) ? fopen(note, "r") : NULL;
         if (f) { if (!fgets(max, sizeof max, f)) max[0] = 0; fclose(f); max[strcspn(max, "\r\n")] = 0; }
-        float sz[2]; int from = scene_size(getenv("DM_RENDER_RES"), dm_opmode(), max[0] ? max : NULL, sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
-        if (from < 0) LOG("[red] DM_RENDER_RES=%s: expected <width>x<height>, from 64x64 up to %s; the game's own size", getenv("DM_RENDER_RES"),
+        char hb[32]; const char *want = scene_env(getenv("DM_RENDER_RES"), getenv("DM_RENDER_HEIGHT"), hb, sizeof hb), *src = want == hb ? "DM_RENDER_HEIGHT" : "DM_RENDER_RES";
+        float sz[2]; int from = scene_size(want, dm_opmode(), max[0] ? max : NULL, sz); memcpy((uint8_t *)g_page + 16, sz, sizeof sz);
+        if (from < 0) LOG("[red] %s=%s: expected <width>x<height>, from 64x64 up to %s; the game's own size", src, want,
                           max[0] ? max : "1920x1080 (more needs the heap overlay of games/totk/heapdef.py)");
         else if (max[0]) LOG("[scene size] the RomFS overlay's heap allows up to %s", max);
-        LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? "DM_RENDER_RES" : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
+        LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? src : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
     } else if (getenv("DM_RENDER_RES")) LOG("[red] DM_RENDER_RES needs the option scene (DM_OPTIONS)");
     if (dm_option_on("output")) {
         char note[1024], max[32] = ""; FILE *f = dm_overlay_file("System/HeapSize/Product.Nin_NX_NVN.HeapDef.dm_output", note, sizeof note) ? fopen(note, "r") : NULL;

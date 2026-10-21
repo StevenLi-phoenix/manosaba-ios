@@ -20,7 +20,10 @@
 #                             is opened (this one goes to the background) and after <len> s this one again, then tools/lifecycle_check.py judges it
 #   run.sh sim-stop           shut the Simulators down (a booted one keeps its memory; sim-run boots it again)
 # Build switches: DM_FREE_ACCOUNT=1 (free developer account: no iCloud / extended VA / sustained-execution entitlements), DM_IOS_M3=1 (older-API build,
-# iOS 18), DM_DEVICE_FAMILY=1 (iPhone only), DM_ENV_FILE=<file> (DM_* switches read at launch, as Documents/env.txt is).
+# iOS 18), DM_DEVICE_FAMILY=1 (iPhone only), DM_ENV_FILE=<file> (DM_* switches read at launch, as Documents/env.txt is), DM_PRODUCT=<dir> (another
+# product than the profile's workspace.product, relative to DM_ROOT or absolute; e.g. Tears of the Kingdom's build/totk/product60 with
+# DM_OPTIONS=fps60,realtime,scene for 60 fps on a phone, plan item 62l), DM_OPTIONS (the code options written into the app, else the product's
+# options.default; ios/tools/gen_embed.py).
 set -u
 cd "$(dirname "$0")"
 source tools/local_env.sh
@@ -38,6 +41,9 @@ CMD=${1:-}
 if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
   if [ "$CMD" != build ]; then local_env_need DM_BUNDLE_ID || exit 1; else local_env_need DM_TEAM_ID DM_BUNDLE_ID || exit 1; fi
   OUT=$(ws product); MODS=$(get modules); TITLE=$(get title)
+  if [ -n "${DM_PRODUCT:-}" ]; then case "$DM_PRODUCT" in /*) OUT=$DM_PRODUCT;; *) OUT=$ROOT/$DM_PRODUCT;; esac
+    [ -f "$OUT/main.patched.bin" ] || { t "[red] DM_PRODUCT=$DM_PRODUCT: no product at $OUT"; exit 1; }
+    t "product $OUT (DM_PRODUCT), code options ${DM_OPTIONS:-its options.default}"; fi
   rm -rf Gen; mkdir -p Gen/dm Gen/msl
   # Host sources, header paths and frameworks from host/Makefile; the game's modules as embedded code
   python3 tools/gen_build.py ../host Gen "$GAME" > Gen/dm.xcconfig || { t "[red] gen_build failed"; exit 1; }
@@ -48,7 +54,8 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
   elif [ -f "$VPX/lib/libvpx.a" ]; then python3 tools/vpx_check.py "$VPX/lib/libvpx.a" 18.0 || exit 1; VPXL="\"$VPX/lib/libvpx.a\""; VPXI="\"$VPX/include\""
   else t "no iOS libvpx in $VPX: VP8 / VP9 movies will not play (ios/tools/build_libvpx.sh builds it)"; fi
   { echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F $VPXL"; echo "DM_VPX_INC = $VPXI"; echo "DM_GAME_TITLE = $TITLE"; } >> Gen/dm.xcconfig
-  for m in $MODS; do cp "$OUT/$m.fixups.tsv" "$OUT/$m.gates.tsv" Gen/dm/ || exit 1; done
+  PF=$(python3 tools/product_files.py "$OUT" $MODS) || { t "[red] the product's module lists are incomplete"; exit 1; }   # fixups, gates, option lists
+  while IFS= read -r f; do cp "$f" Gen/dm/ || exit 1; done <<< "$PF"   # one path a line: the workspace path may hold a space
   cp "$(ws shader_map)" Gen/dm/shader_map.tsv || { t "[red] no shader stage map"; exit 1; }
   if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || exit 1; t "env switches baked in from $DM_ENV_FILE"; fi   # read at launch (host/envfile.h)
   C1=$(ws c1) && [ -f "$C1" ] && cp "$C1" Gen/dm/c1_full.tsv

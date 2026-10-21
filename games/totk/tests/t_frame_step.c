@@ -2,7 +2,8 @@
 // page carries at +16 (DM_RENDER_RES or the game's own for the operation mode, plan item 52). Built and run by
 // games/totk/check_frame_rate.py (clang -DFRAME_STEP_TEST -I host). The heap overlay's note ignored (-DDM_TEST_SCENE_NO_HEAP) fails 1; +8 not
 // written (-DDM_TEST_CLOTH_NO_SECONDS) fails 1. The output size at +24 / +32 (DM_OUTPUT_RES, plan item 63); the canvas left to the game
-// (-DDM_TEST_OUTPUT_NO_CANVAS) fails 3.
+// (-DDM_TEST_OUTPUT_NO_CANVAS) fails 3. DM_RENDER_HEIGHT at 16:9 when DM_RENDER_RES is unset (plan item 62l); ignored (-DDM_TEST_SCENE_NO_HEIGHT)
+// fails 3.
 #include <stdio.h>
 #include <math.h>
 #define FRAME_STEP_TEST 1
@@ -43,6 +44,12 @@ int main(void) {
     for (int i = 0; i < 8; i++) { char what[64]; r = scene_size(bad[i], 0, NULL, sz); snprintf(what, sizeof what, "%s: refused (-1), the game's own 1280", bad[i]);
         expect(what, 1280 * 10 - 1, sz[0] * 10 + r, 0); }
     // The heap overlay's note (games/totk/heapdef.py, plan item 95) raises the largest size to its own, never above 3840x2160
+    { char b[32]; const char *w;
+      w = scene_env(NULL, "540", b, sizeof b); r = scene_size(w, 0, NULL, sz); expect("DM_RENDER_HEIGHT=540 alone: 960 ...", 960, sz[0], 0); expect("... x 540, taken (1)", 540 * 10 + 1, sz[1] * 10 + r, 0);
+      w = scene_env(NULL, "900", b, sizeof b); r = scene_size(w, 0, NULL, sz); expect("DM_RENDER_HEIGHT=900 alone: 1600x900 (width 1600)", 1600, sz[0], 0);
+      w = scene_env("1280x720", "540", b, sizeof b); r = scene_size(w, 0, NULL, sz); expect("DM_RENDER_RES=1280x720 wins over DM_RENDER_HEIGHT=540", 1280, sz[0], 0);
+      w = scene_env(NULL, "0", b, sizeof b); expect("DM_RENDER_HEIGHT=0: nothing asked (the game's own)", 1, w == NULL, 0);
+      w = scene_env(NULL, "720p", b, sizeof b); expect("DM_RENDER_HEIGHT=720p: not a number, nothing asked", 1, w == NULL, 0); }
     r = scene_size("2560x1440", 1, "2560x1440", sz); expect("2560x1440 with an overlay for 2560x1440: taken (1)", 1440 * 10 + 1, sz[1] * 10 + r, 0);
     r = scene_size("2560x1440", 1, "1920x1080", sz); expect("2560x1440 with an overlay for 1920x1080: refused (-1)", 1600 * 10 - 1, sz[0] * 10 + r, 0);
     r = scene_size("3200x1800", 1, "2560x1440", sz); expect("3200x1800 above the overlay's 2560x1440: refused (-1)", 1600 * 10 - 1, sz[0] * 10 + r, 0);
