@@ -377,7 +377,7 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
   checks of 123 (the 30 fps setting) and 127.
 - Play or saves: 72 (a blood moon), 69 (game over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the
   checks of 161 (grass), 163 (hair and cloth), 165 (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
-- The console: 62k (the cave wall from the same angles), 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
+- The console: 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
 - An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
@@ -837,7 +837,7 @@ Tier 4, large:
     device run
 - [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
   2026-10-21, the first device run (iPhone 17 Pro, iOS 26.4, free account, the 30 fps product, handheld): into the prologue's cave and play; 30 fps,
-  GPU p50 8-20 ms, RSS 2.3 GB with 3.8 GB to the limit, the Mac prologue's three red lines and no other. Left: a movie (62b), 62j, 62k, the census
+  GPU p50 8-20 ms, RSS 2.3 GB with 3.8 GB to the limit, the Mac prologue's three red lines and no other. Left: a movie (62b), 62j, 62k (batch 65), the census
   - [x] batch 54 · 62a guest memory reserved at the top of `main()`, before UIKit and Metal (`svc_reserve_early`; `host/guest_as.h`: the lowest free
     gap from 4 GiB, 2 MiB aligned, ending at or below 2^39, from 6 GiB down by 256 MiB to what the game needs; `vm_map` fixed, mmap's choice if that
     fails, the free gaps logged when short). Every platform: a block past 2^39 is moved below it (macOS 27 reserves about 24 GiB in
@@ -885,11 +885,15 @@ Tier 4, large:
     (the prologue's frame 1300 from an empty save); off, the picture is the Mac's, so Tears of the Kingdom runs without them on iOS too since batch
     64 (`games/totk/defaults.c`). Each rewrite off in turn (store lookahead, load elision, same-target continuation, clear-only hoist, on-demand
     depth-stencil) against that shot names it
-  - [ ] 62k a cave wall missing from some camera angles (the player on the iPhone; on the Mac too, every run alike: the iPhone's cave save, Link
-    walked left onto the rock and the camera turned with the new right stick keys `RSR` etc., frames 1450-1650 show him climbing in front of
-    nothing). Not the TBDR rewrites, the translation thread, the operation mode, the occlusion results (`DM_NVN_OCC_FORCE=100000`), face culling
-    (`DM_NVN_NOCULL`) or texture write-back (`DM_NVN_WB_IDLE_SUBS=1`). The camera is close to the rock while Link climbs: the game's own camera
-    inside the rock would look the same, so the console decides first
+  - [x] batch 65 · 62k a cave wall missing from some camera angles (the player on the iPhone, not on the console; on the Mac too: the iPhone's
+    cave save, Link climbing the rock at the cave's start). The wall was two draws (6636 and 1647 indices) that the game left out whenever its
+    CPU frustum test put their bounds outside the view, which was right: they were drawn where another mesh is. The cave meshes decode their
+    vertices with constants updated inline before each draw; a draw bound after `upd_flush` had written the submission's updates (a copy or a
+    dispatch in between) got the uniform snapshot of the submit call without them, because the private copies were gated on updates still
+    unwritten (`g_nupd`). Now they follow every update of the submission (`upd_any`, `gfx/nvn/nvn_mtl.m`), for draws, replay-time reads and
+    compute uniform pointers; `gfx/tests/t_ubren` 2c, 5b, 6 (`-DDM_TEST_UB_FLUSHED_SNAPSHOT` fails them). Frames 1400-1415 and the climb
+    (1450-1650) keep the wall, the same picture as `DM_NVN_UB_RENAME=0` (0.8-1.6 % of pixels differ, particles). Found by elimination: not
+    the occlusion queries (forced either way), conditional rendering, FPCR, the TBDR rewrites or the x18 rewrites of the culling code
 - [x] batch 56 · 63 the 2K canvas and MetalFX (veneers in the rewriter, HeapDef overlay, larger application pool; after 52 and 95)
   - [-] 63a MetalFX's docked guard against the scene's content size (MacNativeGames ff092e3): their fix is in their replacement of the game's
     upscale pass; our present-time MetalFX (`fx_apply`) already compares the content size with the size on screen (63c: the valid region from the

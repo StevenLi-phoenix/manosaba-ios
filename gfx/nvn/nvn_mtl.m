@@ -967,8 +967,9 @@ static int pend_read_x(uint64_t a, void *out, uint64_t n, int upto, int depth) {
 }
 static int g_nupd, g_upd_flushing;   // renamed inline uniform updates not yet in memory (see upd_log)
 static void upd_apply(uint64_t lo, uint8_t *out, uint64_t n);
+static int upd_any(void);   // the submission logged inline uniform updates (written to memory or not): a snapshot alone predates them
 static int pend_read(uint64_t a, void *out, uint64_t n) {
-    { const us_ent *u = us_find(a, n); if (u) { memcpy(out, u->cpu + (a - u->lo), n); if (g_nupd) upd_apply(a, out, n); return 1; } }   // not dropped: no GPU write of this submission reached it but renamed updates
+    { const us_ent *u = us_find(a, n); if (u) { memcpy(out, u->cpu + (a - u->lo), n); if (upd_any()) upd_apply(a, out, n); return 1; } }   // not dropped: no GPU write of this submission reached it but renamed updates
     return pend_read_x(a, out, n, g_npend, 0);
 }
 typedef struct { uint64_t ser; uint16_t level, slice; } zskip_zero;
@@ -5458,6 +5459,17 @@ static void upd_log(uint64_t lo, uint64_t hi, const uint8_t *data) {
     upd_dirty_stages(lo, hi);
 }
 static void upd_sub_end(void) { ul_clear(&g_uh); }   // mtl_sub_commit, after upd_flush
+// Not g_nupd: once upd_flush has written the updates (a copy, a dispatch or upd_guard_draw before the draw), g_nupd is 0 but the snapshot still holds
+// the bytes of the submit call, without them. Gating the private copies on g_nupd gave a draw bound after such a write the snapshot itself: Tears of
+// the Kingdom's cave meshes then decoded their vertices with the constants another mesh had at the submit call and were drawn where that mesh is,
+// and a cave wall came and went with the culling of the mesh drawn in its place (plan item 62k)
+static int upd_any(void) {
+#ifndef DM_TEST_UB_FLUSHED_SNAPSHOT   // negative control of t_nvn 5a3 only: private copies only while updates are unwritten, as before
+    return g_uh.n > 0;
+#else
+    return g_nupd > 0;
+#endif
+}
 static uint64_t upd_overlap_seq(uint64_t lo, uint64_t hi) { return ul_seq(&g_upd, lo, hi); }   // updates not in memory yet
 static void upd_apply(uint64_t lo, uint8_t *out, uint64_t n) { ul_apply(&g_uh, lo, out, n); }   // over a snapshot: every update of the submission
 // Private copies of updated uniform ranges, found through a direct-mapped index by (range, newest overlapping update): later draws binding the same
@@ -5597,7 +5609,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(30, "CBDUMP cannot write %s", p);
                 }
             }
-            void *rb_ = NULL; uint64_t rg_ = g_nupd ? upd_shadow(u->addr, u->size, &rb_) : 0;   // logged updates over it: its private copy
+            void *rb_ = NULL; uint64_t rg_ = upd_any() ? upd_shadow(u->addr, u->size, &rb_) : 0;   // logged updates over it: its private copy
             const us_ent *sc = rg_ ? NULL : us_find(u->addr, u->size);   // contents as of the submit call
             if (rg_) { gpu = rg_; mb = rb_; } else if (sc) { gpu = sc->gpu + (u->addr - sc->lo); mb = sc->buf; }
             slots[aid] = gpu;
@@ -5660,8 +5672,10 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             const p_bind_buf *u = reg < 16 ? (b->kind == NVN_RB_UBOP ? &S.ubo[nvn_stage][reg] : &S.ssbo[nvn_stage][reg]) : NULL;
             void *mb; uint64_t mo, gpu;
             if (b->kind == NVN_RB_SBUFP && b->rw && u && u->addr) us_drop(u->addr, u->size ? u->size : 1);   // the shader may write it
-            const us_ent *sc = b->kind == NVN_RB_UBOP && u ? us_find(u->addr, u->size) : NULL;   // compute uniforms as of the submit call
-            if (sc) { slots[aid] = sc->gpu + (u->addr - sc->lo); USE((__bridge id<MTLBuffer>)sc->buf, MTLResourceUsageRead); }
+            void *rb_ = NULL; uint64_t rg_ = b->kind == NVN_RB_UBOP && u && u->addr && upd_any() ? upd_shadow(u->addr, u->size, &rb_) : 0;   // with the submission's updates (see upd_any)
+            const us_ent *sc = !rg_ && b->kind == NVN_RB_UBOP && u ? us_find(u->addr, u->size) : NULL;   // compute uniforms as of the submit call
+            if (rg_) { slots[aid] = rg_; USE((__bridge id<MTLBuffer>)rb_, MTLResourceUsageRead); }
+            else if (sc) { slots[aid] = sc->gpu + (u->addr - sc->lo); USE((__bridge id<MTLBuffer>)sc->buf, MTLResourceUsageRead); }
             else if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { use_rec("buf", u->addr, u->size, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
@@ -6982,7 +6996,7 @@ static int ubo_float(int slot, uint16_t ref, float *out) {   // Component cmp of
     if (slot < 0 || slot >= 6 || sl < 0 || sl >= 16) return 0;
     const p_bind_buf *u = &S.ubo[slot][sl]; uint64_t off = (uint64_t)vec * 16 + (uint64_t)cmp * 4;
     if (!u->addr || off + 4 > u->size) return 0;
-    { const us_ent *sc = us_find(u->addr + off, 4); if (sc) { memcpy(out, sc->cpu + (u->addr + off - sc->lo), 4); if (g_nupd) upd_apply(u->addr + off, (uint8_t *)out, 4); return 1; } }   // what the GPU reads
+    { const us_ent *sc = us_find(u->addr + off, 4); if (sc) { memcpy(out, sc->cpu + (u->addr + off - sc->lo), 4); if (upd_any()) upd_apply(u->addr + off, (uint8_t *)out, 4); return 1; } }   // what the GPU reads
     if (pend_hits(u->addr + off, 4)) return 0;
     void *mb; uint64_t mo; const uint8_t *base;
     if (!mtl_addr(u->addr + off, 4, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 0;

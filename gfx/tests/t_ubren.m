@@ -3,6 +3,8 @@
 // one render pass, and memory holds the update once the submission is done. Also: a storage buffer over the updated range writes the updates first,
 // a depth-tested draw after an update keeps the depth attachment (ds_scan goes on past it), a replay-time read of the range sees the update.
 // Negative control: DM_NVN_UB_RENAME=0 fails the "one render pass" checks (each update ended the pass); with --expect-split it checks the old path.
+// 2c, 5b, 6 (plan item 62k): once the updates are written (a copy or a dispatch in the submission), a draw, a replay-time read and a compute uniform
+// pointer still see them over the snapshot; -DDM_TEST_UB_FLUSHED_SNAPSHOT (private copies only while updates are unwritten, as before) fails them.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -18,7 +20,7 @@ static tex_t tex(unsigned w, int fmt) { static uint64_t s=9600; tex_t t={.serial
 static void ds(chain *c, int dt, int df) { ds_st d = {0}; d.dt = dt; d.df = df; d.sf_f = d.sf_b = NVN_STENCIL_FUNC_ALWAYS; p_bind_state xs = {.kind = 5}; memcpy(xs.bytes, &d, sizeof d); emit(c, OP_BIND_STATE, &xs, sizeof xs); }
 static void scissor(chain *c, int x, int w) { p_scissor sc = {x, 0, w, 8}; emit(c, OP_SCISSOR, &sc, sizeof sc); }
 static void update(chain *c, uint64_t dst, const float v[4]) { uint8_t up[16 + 16]; uint64_t len = 16; memcpy(up, &dst, 8); memcpy(up + 8, &len, 8); memcpy(up + 16, v, 16); emit(c, OP_UPDATE_UB, up, sizeof up); }
-static uint8_t *g_mem; static prog_t g_pg, g_pg2, g_pg3; static uint64_t g_ubo;
+static uint8_t *g_mem; static prog_t g_pg, g_pg2, g_pg3, g_pgc; static uint64_t g_ubo;
 static const float RED[4] = {1, 0, 0, 1}, GREEN[4] = {0, 1, 0, 1}, BLUE[4] = {0, 0, 1, 1};
 // One submission on an 8x8 RGBA8 target (and a depth target if depth), returns the pixels at (1, 4) and (6, 4) and the render passes it opened
 static void run(chain *c, const tex_t *t, uint32_t *left, uint32_t *right, uint64_t *passes) {
@@ -52,7 +54,9 @@ int main(int argc, char **argv) { @autoreleasepool {
         "struct A { constant float4 *fp_c3 [[id(0)]]; };\n"
         "fragment float4 f(constant A &a [[buffer(0)]]) { return a.fp_c3[0]; }\n"
         "struct A3 { device float4 *fp_s0 [[id(0)]]; };\n"
-        "fragment float4 f3(constant A3 &a [[buffer(0)]]) { return a.fp_s0[0]; }\n" options:nil error:&e];
+        "fragment float4 f3(constant A3 &a [[buffer(0)]]) { return a.fp_s0[0]; }\n"
+        "struct AC { device float4 *cp_s0 [[id(0)]]; constant float4 *cp_u0 [[id(1)]]; };\n"
+        "kernel void kc(constant AC &a [[buffer(0)]]) { a.cp_s0[0] = a.cp_u0[0]; }\n" options:nil error:&e];
     if (!l) { printf("%s\n", e.localizedDescription.UTF8String); return 1; }
     NSDictionary *j = @{@"route": @"B", @"stage": @"fs", @"c2": @{@"tex": @[@(mtl_c2_tex_base()), @128], @"samp": @[@(mtl_c2_samp_base()), @128]},
         @"bindings": @[@{@"msl_name": @"fp_c3", @"kind": @"cbuf", @"reg": @3, @"arg_id": @0}], @"drv_reads": @{}};
@@ -71,6 +75,13 @@ int main(int argc, char **argv) { @autoreleasepool {
     g_pg3.serial = 8902; NvProg *p3 = [NvProg new]; p3->sh[0] = [NvShader new]; p3->sh[0]->fn = p->sh[0]->fn;
     p3->sh[1] = [NvShader new]; p3->sh[1]->stage = 1; p3->sh[1]->fn = [l newFunctionWithName:@"f3"]; p3->sh[1]->rf = rf3; p3->sh[1]->ae = [p3->sh[1]->fn newArgumentEncoderWithBufferIndex:0];
     serial_put(g_pg3.serial, p3);
+    // a compute program copying uniform slot 0 (a device pointer, as the compute stage reads uniforms) to storage slot 0 (case 6)
+    NSDictionary *jc = @{@"route": @"B", @"stage": @"cs", @"c2": @{@"tex": @[@(mtl_c2_tex_base()), @128], @"samp": @[@(mtl_c2_samp_base()), @128]},
+        @"bindings": @[@{@"msl_name": @"cp_s0", @"kind": @"sbuf", @"reg": @0, @"arg_id": @0, @"rw": @YES}, @{@"msl_name": @"cp_u0", @"kind": @"ubo_ptr", @"reg": @0, @"arg_id": @1}],
+        @"drv_reads": @{}, @"threadgroup_size": @[@1, @1, @1]};
+    nvn_refl rfc; if (nvn_refl_from_json(jc, &rfc, err, sizeof err)) { printf("reflection: %s\n", err); return 1; }
+    g_pgc.serial = 8903; NvProg *pc = [NvProg new]; pc->sh[5] = [NvShader new]; pc->sh[5]->stage = 5; pc->sh[5]->fn = [l newFunctionWithName:@"kc"];
+    pc->sh[5]->rf = rfc; pc->sh[5]->ae = [pc->sh[5]->fn newArgumentEncoderWithBufferIndex:0]; serial_put(g_pgc.serial, pc);
     const uint32_t R_ = 0xff0000ff, G_ = 0xff00ff00, B_ = 0xffff0000;
     int rename = ub_rename_on(), passes = argc > 1 && !strcmp(argv[1], "--expect-split") ? 2 : 1;   // --expect-split: DM_NVN_UB_RENAME=0 run, each update ends the pass
     // 0. The first draw of a new pipeline keeps its scissor: the parallel precompile walks the rest of the submission through state_op, which sets the
@@ -108,6 +119,18 @@ int main(int argc, char **argv) { @autoreleasepool {
       EXPECT("... right: green's r, g with the second update's b, a (0, 1, 1, 1)", 0xffffff00, rp);
       if (rename) { EXPECT("... nothing written before that draw (the snapshot stayed)", 0, g_ren_guard - g0);
                     EXPECT("... written twice: by the copy and at the end", 2, g_ren_flushes - f0); } }
+    // 2c. updates written to memory in the middle (a buffer copy elsewhere) and no update after: the next draw binds the range again (its stage was
+    //     marked for encoding by the update) and must get the snapshot with the update over it, not the snapshot alone (red). Tears of the Kingdom's
+    //     cave meshes read their vertex decoding constants this way and were drawn where another mesh is (plan item 62k)
+    { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
+      uint64_t f0 = g_ren_flushes;
+      begin(&c, &t, NULL); scissor(&c, 0, 4); draw3(&c); update(&c, g_ubo, GREEN);
+      uint64_t cp[3] = {(uint64_t)(uintptr_t)(g_mem + 0x3000), (uint64_t)(uintptr_t)(g_mem + 0x3100), 64}; emit(&c, OP_COPY_B2B, cp, sizeof cp);
+      scissor(&c, 4, 4); draw3(&c);
+      uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
+      EXPECT("written in the middle, no update after: left red", R_, lp);
+      EXPECT("... right reads the update (green) [-DDM_TEST_UB_FLUSHED_SNAPSHOT: the snapshot, red]", G_, rp);
+      if (rename) EXPECT("... written by the copy, before that draw", 1, g_ren_flushes - f0 >= 1); }
     // 3. a storage buffer over the updated range: the updates are written before that draw, which reads them from memory (green)
     { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
       uint64_t g0 = g_ren_guard;
@@ -139,5 +162,27 @@ int main(int argc, char **argv) { @autoreleasepool {
       EXPECT("replay-time read before the update: red", 1, before);
       EXPECT("replay-time read after the update: green (the snapshot with the update over it)", 1, after);
       EXPECT("ubo_float after the update: green's g = 1", 1, okf && f1 == 1.0f); }
+    // 5b. the same once the update is written to memory (a copy or a dispatch in the submission would): the snapshot alone is still red
+    if (rename) { memcpy((void *)(uintptr_t)g_ubo, RED, 16);
+      chain c = chain_new(); p_bind_buf ub = {NVN_SHADER_STAGE_FRAGMENT, 3, g_ubo, 256}; emit(&c, OP_BIND_UBO, &ub, sizeof ub); emit(&c, OP_END, NULL, 0);
+      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_snapshot(&hh, 1);
+      mtl_sub_update(GREEN, g_ubo, 16); upd_flush();
+      float out[4]; pend_read(g_ubo, out, 16); int after = !memcmp(out, GREEN, 16);
+      float f1; uint16_t ref = 3 << 8 | 0 << 2 | 1; S.ubo[1][3] = ub; int okf = ubo_float(1, ref, &f1);
+      mtl_wait(mtl_sub_commit(), 5000000000ull);
+      EXPECT("replay-time read after the update was written: green [-DDM_TEST_UB_FLUSHED_SNAPSHOT: red]", 1, after);
+      EXPECT("ubo_float after the update was written: green's g = 1 [same]", 1, okf && f1 == 1.0f); }
+    // 6. a compute uniform pointer after an inline update: dispatch() writes the update first, and the kernel must read it (green), not the snapshot
+    { memcpy((void *)(uintptr_t)g_ubo, RED, 16); float *o = (float *)(g_mem + 0x2000); memset(o, 0, 16);
+      chain c = chain_new();
+      emit(&c, OP_BIND_PROGRAM, &(p_bind_program){&g_pgc, NVN_SHADER_STAGE_COMPUTE_BIT}, sizeof(p_bind_program));
+      p_bind_buf sb = {NVN_SHADER_STAGE_COMPUTE, 0, (uint64_t)(uintptr_t)o, 256}; emit(&c, OP_BIND_SSBO, &sb, sizeof sb);
+      p_bind_buf ub = {NVN_SHADER_STAGE_COMPUTE, 0, g_ubo, 256}; emit(&c, OP_BIND_UBO, &ub, sizeof ub);
+      update(&c, g_ubo, GREEN);
+      p_dispatch d = {1, 1, 1, 0}; emit(&c, OP_DISPATCH, &d, sizeof d); emit(&c, OP_END, NULL, 0);
+      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+      int done = mtl_wait(mtl_sub_commit(), 5000000000ull);
+      EXPECT("compute: submission completed", 1, done);
+      EXPECT("compute: the kernel reads the inline update (green) [-DDM_TEST_UB_FLUSHED_SNAPSHOT: the snapshot, red]", 1, !memcmp(o, GREEN, 16)); }
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }
