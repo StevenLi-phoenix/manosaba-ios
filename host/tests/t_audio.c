@@ -1,7 +1,8 @@
 // hle_audio.c unit test (silent sink): 3 buffers of 100 ms each -> released in order at about 100/200/300 ms, each release triggering the event.
 // Expected values are computed directly from the sample rate and block length: 4800 frames / 48 kHz = 100 ms.
-// Host PCM output (the audio renderer's): dm_pcmout_wait returns when the first 100 ms block is released (90-115 ms after start), not a poll
-// interval later, and times out with 0 when nothing is playing.
+// Host PCM output (the audio renderer's): dm_pcmout_wait returns when the first 100 ms block is released (90-190 ms after start: before the
+// second block's 200, with room for a CI runner's virtual machine, which took 116.6), not at its timeout, and times out with 0 when nothing
+// is playing.
 // Backend changes (nxnative 8530042): three real outputs, two threads starting and stopping them at random while a third suspends and resumes (as going
 // to the background does): never a second consumer on one output (two silent sinks, or a sink beside the AudioUnit), no hang, all stopped at the end.
 // Start used to pick its backend outside the lock the suspend holds. Without an output device (a CI runner) only the silent sink path runs.
@@ -11,6 +12,7 @@
 // (-DDM_TEST_AUDIO_NO_UNDERRUN) that fails. The AudioUnit watchdog (a real output device only; after nxnative b301431's scenario, MIT): the unit
 // stopped behind the host's back (as iOS does when Siri, an alarm or a call takes the session) → within 0.5 s the silent sink plays on (blocks
 // keep being released) and about a second later the unit is started again; without the watchdog (-DDM_TEST_AUDIO_NO_WATCHDOG) that fails.
+// A device that does not take blocks by itself first (a CI runner's virtual one: none in 0.3 s, then the watchdog stepping in) is not checked.
 #include "../hle_audio.c"
 #include <fcntl.h>
 #include <signal.h>
@@ -99,8 +101,8 @@ int main(void) {
     for (int i = 0; i < 2; i++) { h_au_SetBuf(&b3[i], pcm3[i], sizeof pcm3[i], sizeof pcm3[i]); dm_pcmout_append(po, &b3[i]); }
     uint64_t t3 = now_ns(); dm_pcmout_start(po);
     int w3 = dm_pcmout_wait(po, 1000000000); double ms3 = (now_ns() - t3) / 1e6; gbuf *r3 = dm_pcmout_released(po);
-    int ok3 = w3 == 1 && ms3 >= 90 && ms3 <= 115 && r3 == &b3[0];
-    printf("pcmout wait: returned %d after %.1f ms with block %ld released (want 1, 90-115 ms, block 0) %s\n", w3, ms3, r3 ? (long)(r3 - b3) : -1L, ok3 ? "ok" : "FAIL");
+    int ok3 = w3 == 1 && ms3 >= 90 && ms3 < 190 && r3 == &b3[0];
+    printf("pcmout wait: returned %d after %.1f ms with block %ld released (want 1, 90-190 ms, block 0) %s\n", w3, ms3, r3 ? (long)(r3 - b3) : -1L, ok3 ? "ok" : "FAIL");
     while (dm_pcmout_wait(po, 300000000)) if (dm_pcmout_released(po) == &b3[1]) break;   // the second block
     int w4 = dm_pcmout_wait(po, 20000000);
     printf("pcmout wait with nothing playing: %d after the 20 ms timeout (want 0) %s\n", w4, w4 == 0 ? "ok" : "FAIL");
@@ -159,21 +161,31 @@ int main(void) {
         if (!a->au) printf("watchdog: no output device here (CI): not checked\n");
         else {
             for (int i = 0; i < 40; i++) { h_au_SetBuf(&b7[i], p7[i], sizeof p7[i], sizeof p7[i]); h_au_Append(o7, &b7[i]); }
-            h_au_Start(o7); usleep(300000);
-            int rel = 0; while (h_au_Released(o7)) rel++;
-            int playing = a->backend == BK_AU;
-            AudioOutputUnitStop(a->au);   // behind the host's back
-            uint64_t t7 = now_ns(); int took = 0, rel2 = 0, back = 0; double took_ms = 0, back_ms = 0;
-            while (now_ns() - t7 < 2500000000ull) {
-                pthread_mutex_lock(&g_aos_lock); int bk = a->backend; pthread_mutex_unlock(&g_aos_lock);
-                if (!took && bk == BK_NULL) { took = 1; took_ms = (now_ns() - t7) / 1e6; }
-                if (took && bk == BK_AU) { back = 1; back_ms = (now_ns() - t7) / 1e6; break; }
-                while (h_au_Released(o7)) rel2++;
+            h_au_Start(o7);
+            // The unit must take blocks by itself first: a CI runner's virtual sound device may not call back for seconds, and then the watchdog
+            // steps in on its own before the test stops anything
+            int rel = 0, own = 1;
+            for (int i = 0; i < 30 || (!rel && i < 230); i++) {
                 usleep(10000);
+                pthread_mutex_lock(&g_aos_lock); own &= a->backend == BK_AU; pthread_mutex_unlock(&g_aos_lock);
+                while (h_au_Released(o7)) rel++;
             }
-            ok7 = playing && rel > 0 && took && took_ms < 500 && rel2 > 0 && back && back_ms > 900;
-            printf("watchdog: playing on the unit %d (%d blocks released); stopped behind the host's back: the silent sink after %.0f ms (want < 500), %d blocks released meanwhile, the unit again after %.0f ms (want about 1,200) %s\n",
-                   playing, rel, took_ms, rel2, back_ms, ok7 ? "ok" : "FAIL");
+            int playing = a->backend == BK_AU;
+            if (!rel || !own) printf("watchdog: the output device %s (a virtual device): not checked\n", own ? "took no block in 2.3 s" : "stopped calling back by itself");
+            else {
+                AudioOutputUnitStop(a->au);   // behind the host's back
+                uint64_t t7 = now_ns(); int took = 0, rel2 = 0, back = 0; double took_ms = 0, back_ms = 0;
+                while (now_ns() - t7 < 2500000000ull) {
+                    pthread_mutex_lock(&g_aos_lock); int bk = a->backend; pthread_mutex_unlock(&g_aos_lock);
+                    if (!took && bk == BK_NULL) { took = 1; took_ms = (now_ns() - t7) / 1e6; }
+                    if (took && bk == BK_AU) { back = 1; back_ms = (now_ns() - t7) / 1e6; break; }
+                    while (h_au_Released(o7)) rel2++;
+                    usleep(10000);
+                }
+                ok7 = playing && rel > 0 && took && took_ms < 500 && rel2 > 0 && back && back_ms > 900;
+                printf("watchdog: playing on the unit %d (%d blocks released); stopped behind the host's back: the silent sink after %.0f ms (want < 500), %d blocks released meanwhile, the unit again after %.0f ms (want about 1,200) %s\n",
+                       playing, rel, took_ms, rel2, back_ms, ok7 ? "ok" : "FAIL");
+            }
         }
         h_au_Stop(o7); h_au_Close(o7); unsetenv("DM_AUDIO"); }
     return !ok2 || !ok3 || w4 != 0 || !okc || !ok4 || !ok5 || !ok6 || !ok7;
