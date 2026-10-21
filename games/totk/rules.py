@@ -7,6 +7,7 @@
 #   realtime  the real-time frame step (host page +0 / +4, games/totk/frame_step.c), and the cloth and hair clock from it (CAVES, host page +8)
 #   scene     the scene render size from the host page +16 (DM_RENDER_RES)
 #   output    the swapchain and canvas size from the host page +24 / +32 (DM_OUTPUT_RES)
+#   aspect    the cameras' aspect ratio × the host page +40, for a wide picture (DM_ASPECT, the Mac's View → Wide Picture; CAVES)
 CUTS = {}
 OBS = {}
 PARAMS = {}
@@ -22,6 +23,25 @@ HOSTREFS = {}
 # the routine calls it and branches back (the update's return address is in the patch area: Tears of the Kingdom has no C++ exceptions to unwind).
 # games/totk/tests/check_cloth_clock.py runs the four in Unicorn after the PR's table.
 _HOST_X8 = ('adrp_host', 8)
+# A wide picture (plan item 154, after MacNativeGames' aspect_patch.h at 1.4.3, ly05010419/MacNativeGames, MIT, written anew): the game keeps
+# drawing into its 16:9 canvas, but with its cameras' aspect ratio widened, so the canvas holds a wider view squeezed horizontally, which the
+# present pass stretches over a window of that shape (gfx/nvn/nvn_mtl.m mtl_present_stretch). The four places that hand an aspect ratio to the
+# perspective projection (its +0xb0, found by MacNativeGames with a watchpoint): 0x628c74 the camera update (ldr s0, [x19, #0x140], the camera
+# parameter's ratio, stored at x20 +0xb0), 0xb43460 the camera setup (ldr s0, [x22, #0x68], stored at x23 +0xb0), 0x1ff04f4 and 0x253fbb0 the
+# viewport routines (fdiv s0, s0, s1: width / height, stored at x8 +0xb0). Each runs its instruction, then multiplies the ratio by the host page
+# +40 (games/totk/frame_step.c: the wide ratio / (16 / 9) while the wide picture is on), or by 1 while +40 holds 0 (off; also a page never
+# written). MacNativeGames puts the wide ratio itself in place of every camera's; a factor gives the main camera the same ratio (16:9 × factor) and
+# keeps a camera of another shape whose picture lands in the canvas (stretched with it at present) in proportion. The ratio's bits r become
+# r | (0x3f800000 & ~mask), mask = (r | -r) >> 31 (arithmetic): no branch (the routine must not be PC-relative) and no flags (whether they are live
+# after each site is not checked). Scratch x10, x11 and q16, kept below sp (no red zone in the guest's ABI) and restored. Not adjusted, as in
+# MacNativeGames: the HUD, drawn into the same canvas, is stretched with the picture. games/totk/check_aspect.py runs the four in Unicorn.
+def _aspect(rd):   # the routine after an instruction that leaves the ratio in s<rd>
+    assert rd != 16
+    return [('orig',), 0xa93f2fea, 0x3c9e03f0, ('adrp_host', 10), 0xb940294a, 0x4b0a03eb, 0x2a0a016b, 0x131f7d6b, 0x2a2b03eb, 0x1209196b,
+            0x2a0b014a, 0x1e270150, 0x1e300800 | rd << 5 | rd, 0xa97f2fea, 0x3cde03f0]
+_ASPECT_WHY = ('; stp x10, x11, [sp, #-16]; stur q16, [sp, #-32]; x10 = host page; ldr w10, [x10, #40]; neg w11, w10; orr w11, w11, w10; '
+               'asr w11, w11, #31; mvn w11, w11; and w11, w11, #0x3f800000; orr w10, w10, w11 (1.0 when 0); fmov s16, w10; fmul s0, s0, s16; '
+               'ldp x10, x11, [sp, #-16]; ldur q16, [sp, #-32]')
 CAVES = {
     '277178b7dba1b6d4949a84778d4abc58': [   # main 1.4.3
         (0x246eac, '1e200940', [_HOST_X8, 0xbd400100, 0x1e200940, 0xbd0367e0, 0xbd400900, 0x1e200940],
@@ -44,6 +64,11 @@ CAVES = {
         (0x3dcb28, 'd360fc64', [('adrp_host', 9), 0xf940112a, 0xf9400a6b, 0xf100015f, 0x9a831143, 0x9a8b114b, 0xf9000a6b, ('orig',)],
          'canvas: lsr x4, x3, #32 → x10 = page+32; if x10: x3 = x10, canvas +0x10 = x10 (ldr x10, [x9, #32]; ldr x11, [x19, #0x10]; cmp x10, #0; '
          'csel x3, x10, x3, ne; csel x11, x10, x11, ne; str x11, [x19, #0x10]); then lsr x4, x3, #32', 'output'),
+        # The wide picture (plan item 154, see _aspect above)
+        (0x628c74, 'bd414260', _aspect(0), 'camera update: ldr s0, [x19, #0x140]' + _ASPECT_WHY, 'aspect'),
+        (0xb43460, 'bd406ac0', _aspect(0), 'camera setup: ldr s0, [x22, #0x68]' + _ASPECT_WHY, 'aspect'),
+        (0x1ff04f4, '1e211800', _aspect(0), 'viewport: fdiv s0, s0, s1' + _ASPECT_WHY, 'aspect'),
+        (0x253fbb0, '1e211800', _aspect(0), 'viewport: fdiv s0, s0, s1' + _ASPECT_WHY, 'aspect'),
     ],
 }
 OPTIONS = {

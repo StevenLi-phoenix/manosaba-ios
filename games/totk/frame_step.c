@@ -17,12 +17,16 @@
 // swapchain's, the code cave at 0x3dcb28 the canvas's, which the game composes its UI and the scene's final upscale in). DM_OUTPUT_RES=<w>x<h>
 // (640x360 up to 1920x1080, or up to the size the heap overlay notes, .dm_output: games/totk/heapdef.py --output) makes both that size; else the
 // swapchain 1920x1080 (the game's constant) and the canvas 0, which the cave leaves as the game laid it out, so the game looks as before.
+// +40: the factor on the cameras' aspect ratio (rules.py option aspect, plan item 154: four code caves multiply by it, by 1 while it is 0):
+// the wide picture's ratio (host/aspect.c: DM_ASPECT, the Mac's View → Wide Picture) over the game's 16:9 while it is on, 0 off; written at
+// every present, so a switch reaches the next frame's cameras.
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "dm.h"
 #include "game.h"
+#include "aspect.h"
 int dm_opmode(void);   // hle_oe.c
 int dm_overlay_file(const char *rel, char *out, size_t n);   // hle_fs.c: the file in the RomFS overlay layers
 
@@ -77,6 +81,7 @@ static _Atomic uint64_t *g_page;
 static frame_mean g_mean;
 static double g_pin;
 static int g_realtime;   // the option realtime is on: the step is the measured frame time
+static int g_aspect;     // the option aspect is on: +40 follows the wide picture
 void dm_game_boot(void) {
     g_page = dm_host_page("main");
     if (!g_page) { LOG("[red] frame step: main has no host page (product built without rules.py HOSTREFS): the game's step stays at its chosen interval"); return; }
@@ -101,6 +106,8 @@ void dm_game_boot(void) {
         if (from > 0) LOG("[output size] swapchain and canvas %ux%u (DM_OUTPUT_RES)", (unsigned)sz[0], (unsigned)(sz[0] >> 32));
         else LOG("[output size] the game's own (swapchain 1920x1080, the canvas as the game lays it out)");
     } else if (getenv("DM_OUTPUT_RES")) LOG("[red] DM_OUTPUT_RES needs the option output (DM_OPTIONS)");
+    if ((g_aspect = dm_option_on("aspect"))) dm_aspect_init();
+    else if (getenv("DM_ASPECT")) LOG("[red] DM_ASPECT needs the option aspect (DM_OPTIONS)");
     if (!(g_realtime = dm_option_on("realtime"))) { LOG("[frame step] the game's own (option realtime not on: DM_OPTIONS or the product's options.default)"); return; }
     if (g_pin > 0) LOG("[frame step] pinned at %.3f ms (DM_FRAME_STEP_MS, diagnostics)", g_pin * 1000);
     else LOG("[frame step] real time: the mean of the last five present intervals (1/120 .. 1/15 s each)");
@@ -108,6 +115,8 @@ void dm_game_boot(void) {
 int dm_game_realtime_step(void) { return g_realtime && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
 int nvn_fstep_step(void);   // gfx/nvn/hle_nvn.c: DM_FRAME_STEP=vsync, the host's step in vsyncs of 60 Hz (plan item 133), 0 otherwise
 void dm_game_present(void) {
+    if (g_aspect) { float f = dm_aspect_factor(dm_aspect_now(), 16.0 / 9); uint32_t b; memcpy(&b, &f, sizeof b);
+                    atomic_store_explicit((_Atomic uint32_t *)(void *)((uint8_t *)g_page + 40), b, memory_order_relaxed); }
     if (!g_realtime || g_pin > 0) return;
     int k = nvn_fstep_step(); if (k > 0) { frame_step_store(g_page, k / 60.0); return; }
     double s = frame_mean_add(&g_mean, guest_ns());

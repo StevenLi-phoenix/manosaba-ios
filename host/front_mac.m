@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
 #include "mouse_route.h"
+#include "aspect.h"
 #include "cloud.h"
 #include "dm.h"
 #include "dm_input.h"
@@ -21,14 +22,17 @@ static NSWindow *g_win;
 static NSView *g_view;
 static double g_aspect = 16.0 / 9;   // game picture aspect ratio, from the profile's screen size
 
-// Where the game picture sits in the view: fitted by its aspect ratio (the whole view when they match, black bars otherwise)
+// Where the game picture sits in the view: fitted by its aspect ratio (the whole view when they match, black bars otherwise); with the wide picture
+// on (host/aspect.c, plan item 154) by the wide ratio, over which the present pass stretches the game's picture
 static NSRect game_rect(void) {
     NSSize b = g_view.bounds.size; CGFloat w = b.width, h = b.height;
-    if (fabs(w / h / g_aspect - 1) < 0.003) { }   // within 0.3% (window height rounding): fill
-    else if (w > h * g_aspect) w = round(h * g_aspect); else h = round(w / g_aspect);
+    double wide = dm_aspect_now(), asp = wide > 0 ? wide : g_aspect;
+    if (fabs(w / h / asp - 1) < 0.003) { }   // within 0.3% (window height rounding): fill
+    else if (w > h * asp) w = round(h * asp); else h = round(w / asp);
     return NSMakeRect(floor((b.width - w) / 2), floor((b.height - h) / 2), w, h);
 }
 static void layout_game(void) {
+    if (g_view.bounds.size.height > 0) dm_aspect_view(g_view.bounds.size.width / g_view.bounds.size.height);   // (DM_ASPECT=window follows it)
     NSRect r = game_rect(); if (NSEqualRects(r, g_layer.frame)) return;
     CGFloat sc = g_view.window.backingScaleFactor ?: 2;   // a sublayer's drawableSize does not follow its frame by itself
     [CATransaction begin]; [CATransaction setDisableActions:YES]; g_layer.frame = r; g_layer.contentsScale = sc; g_layer.drawableSize = CGSizeMake(round(r.size.width * sc), round(r.size.height * sc)); [CATransaction commit];
@@ -45,7 +49,8 @@ static void show_keys(void) {
     NSAlert *a = [NSAlert new]; a.messageText = @"Controls";
     a.informativeText = @"Mouse: left button = touch, right button = B, wheel = scroll (right stick)\n"
                          "WASD = left stick, arrow keys = D-pad\nJ = A, K = B, U = X, I = Y, Space = A\nQ = L, E = R, Z = ZL, C = ZR\n"
-                         "F / G = press left / right stick\nReturn or = = +, Tab = −\nA connected game controller works as well.";
+                         "F / G = press left / right stick\nReturn or = = +, Tab = −\nA connected game controller works as well.\n"
+                         "⌘4 = wide picture (View menu; where the game offers it)";
     [a addButtonWithTitle:@"OK"]; [a runModal];
 }
 // Help → Share Log…: zip this run's and the previous run's log (~/Library/Logs/<game>/host.log, host.prev.log) with a version note, ask where to save it
@@ -95,7 +100,17 @@ static void share_logs_ui(void) {
 - (void)quit:(id)s { (void)s; app_quit("menu quit"); }
 - (void)keys:(id)s { (void)s; show_keys(); }
 - (void)share:(id)s { (void)s; share_logs_ui(); }
+- (void)wide:(id)s { (void)s; dm_aspect_toggle(); }
+- (BOOL)validateMenuItem:(NSMenuItem *)it {   // View → Wide Picture: only for a game that offers it, ticked while on
+    if (it.action != @selector(wide:)) return YES;
+    it.state = dm_aspect_now() > 0 ? NSControlStateValueOn : NSControlStateValueOff;
+    return dm_aspect_available() != 0;
+}
 @end
+// The wide picture switched (any thread): the present pass stretches the picture, the layer takes the new shape
+static void aspect_changed(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ void mtl_present_stretch(int on); mtl_present_stretch(dm_aspect_now() > 0); layout_game(); });
+}
 static uint64_t g_btn;
 static int g_w, g_a, g_s, g_d;
 static int g_wheel;   // +1 / −1 = right stick pushed up / down for a moment (lists scroll with the right stick)
@@ -136,11 +151,13 @@ static void *guest_tramp(void *p) {
 // DM_TEST_PRESENT_SHOT=<s>:<path>[;...] saves the next presented picture as PNG (what is on screen, bars included, nvn_mtl.m mtl_grab_next_present);
 // DM_TEST_NSMOUSE=<file> posts real NSEvents, one per line "<s> down|move|up x,y", "<s> dbl x,y", "<s> dragto x,y" (from the last down),
 //   "<s> key <keycode>", "<s> type <text>" (x,y = point in the content area, origin top left); DM_TEST_SHARELOG=<path> packs the logs there at 8 s;
-// DM_TEST_QUIT_AT=<s> quits.
+// DM_TEST_ASPECT_AT=<s>[;<s>...] switches the wide picture (View → Wide Picture); DM_TEST_QUIT_AT=<s> quits.
 static NSPoint g_test_last;
 static void tests_start(NSWindow *win, NSView *v) {
     const char *e; int w, h;
     if ((e = getenv("DM_TEST_WINSIZE")) && sscanf(e, "%dx%d", &w, &h) == 2) { [win setContentSize:NSMakeSize(w, h)]; layout_game(); }
+    if ((e = getenv("DM_TEST_ASPECT_AT"))) for (const char *q = e; q && *q; q = strchr(q, ';') ? strchr(q, ';') + 1 : NULL)
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(atof(q) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (!dm_aspect_toggle()) LOG("[red] DM_TEST_ASPECT_AT: the game offers no wide picture"); });
     if ((e = getenv("DM_TEST_FULLSCREEN_AT"))) for (const char *q = e; q && *q; q = strchr(q, ';') ? strchr(q, ';') + 1 : NULL)
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(atof(q) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [win toggleFullScreen:nil]; });
     if ((e = getenv("DM_TEST_PRESENT_SHOT"))) { void mtl_grab_next_present(void (^cb)(CGImageRef img));
@@ -239,13 +256,15 @@ void front_run(void (*guest)(void)) {
         g_layer.device = MTLCreateSystemDefaultDevice();
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
-        [v.layer addSublayer:g_layer]; layout_game();
+        [v.layer addSublayer:g_layer]; dm_aspect_on_change(aspect_changed); aspect_changed(); layout_game();
         [win center];
         {   // menu bar: app (Quit Cmd-Q) / View (Full Screen Ctrl-Cmd-F) / Help (controls, share log)
             NSMenu *bar = [NSMenu new];
             NSMenu *(^add)(NSString *) = ^NSMenu *(NSString *t) { NSMenuItem *it = [NSMenuItem new]; [bar addItem:it]; NSMenu *m = [[NSMenu alloc] initWithTitle:t]; it.submenu = m; return m; };
             [[add(@"") addItemWithTitle:[NSString stringWithFormat:@"Quit %@", @(dm_game.title)] action:@selector(quit:) keyEquivalent:@"q"] setTarget:ctl];
-            NSMenuItem *fs = [add(@"View") addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]; fs.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
+            NSMenu *vm = add(@"View");
+            NSMenuItem *fs = [vm addItemWithTitle:@"Toggle Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]; fs.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
+            [[vm addItemWithTitle:@"Wide Picture" action:@selector(wide:) keyEquivalent:@"4"] setTarget:ctl];   // (plan item 154; MacNativeGames' key 4)
             NSMenu *hm = add(@"Help"); [[hm addItemWithTitle:@"Controls" action:@selector(keys:) keyEquivalent:@""] setTarget:ctl]; [[hm addItemWithTitle:@"Share Log…" action:@selector(share:) keyEquivalent:@""] setTarget:ctl];
             NSApp.mainMenu = bar;
         }

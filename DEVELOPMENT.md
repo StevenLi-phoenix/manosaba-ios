@@ -1671,8 +1671,17 @@ Tier 3c, Tears of the Kingdom:
   (watchpoint, 70-80 s on the sky island, docked and handheld, also with x = 3); so the 0xA1B94 budget factor has nothing to act on yet (131a).
   Probes: `DM_PROBE_FP=1` adds s0..s7, and x4..x7 are printed. Tests: `t_ts` (17; every report at the end fails 7), `t_nvn` (a report before
   24 busy copies is 37.7 ms earlier than the one after them; 0.00 with the old timing)
-- [ ] 131a what sets the dynamic resolution's enable bit (the object at heap+0x234f3630, +0x1c bit 0; T5eng saw TotK's scene size change on an
-  iPhone Air), then its time budget from the frame rate (FPSLocker's factor at main 0xA1B94: target / 30000)
+- [-] batch 61 · 131a what sets the dynamic resolution's enable bit (the object at heap+0x234f3630, +0x1c bit 0; T5eng saw TotK's scene size change on an
+  iPhone Air), then its time budget from the frame rate (FPSLocker's factor at main 0xA1B94: target / 30000): not found, and it never runs here.
+  The object is one per game (the pointer at main's data 0x3968ab8, +0x58), handed to the renderer at +0x3ae0 (0x8e569c) and set up at
+  0x8c4eb0 with +0x1c = 0x804, a constant (bit 0 clear). The view size routine 0xd5c24 gets it as its eighth argument only while that bit is
+  set (0xd59ac; the same test at 0x76a90, 0xbe7ac and 0x2889584), and only then reads the multiplier (0xd5d80). Probes on the cliff save with
+  the GPU reported 30 ms late (`DM_NVN_TS_LATE_US=30000`: the game moved between interval 2 and 3 22 times): 0xd5c24 called 789 times in
+  60 s, its eighth argument 0 each time; 0xd5d5c and 0xd5d64 (the paths with the object) never reached in 190 s. No store in main sets the bit
+  by the usual forms (32-bit orr #1 / bfxil before a store to +0x1c: only the frame-time objects around 0x3e5b00; byte stores to +0x1c: 322,
+  bool fields and the flags of vector classes near 0x8bcbf4). T5eng's line is an inference (their frame interpolation's scene detection
+  stopped "once its dynamic-resolution scene size changes"), not a measured enable. To look at again if a device log ever shows the scene's
+  render size changing
 - [ ] 132 the wave program's wide lines (2026-10-20: not reached: no `SetLineWidth` other than 1 in the prologue, on the cliff save or in the five
   other saves of `save_play` in 75 s each, all early game; the wave program's shaders 0cd9edc0a623c237 / e04d541253557805 are not in our capture;
   totk-mobile expands them by editing those shaders' source, so it needs both: a save where the game draws them, from the user)
@@ -2472,9 +2481,40 @@ Tier 6, optional (seen, not planned before; listed at the user's request 2026-10
     nesting ignored: 1 fails), `t_cheats` (7, which cheats go into the code at load; the rewriter's words unchecked: 1 fails)
 - [-] batch 60 · 151 the save-loading crash workaround at 1.4.3 main+0x1bd01c4 (MacNativeGames dd0e893), if it is ever seen: not seen. No
   log here (work/run, the session's runs) has that address; to take if it ever shows up
-- [ ] 152 frame interpolation by replaying the frame (LASRecomp `frame-interp-rt`)
-- [ ] 153 frame latency 2 at 30 Hz, measured
-- [ ] 154 the ultrawide aspect patch on the Mac (MacNativeGames `aspect_patch.h`)
+- [-] batch 61 · 152 frame interpolation by replaying the frame (LASRecomp `frame-interp-rt`): not taken. peiikai/LASRecomp's branch
+  (`runtime/nvn/interp.c`, dc1842b..777fe71, MIT, work in progress and off by default) runs each frame's command lists again with every draw's
+  uniforms blended between the last two frames (the RT64 approach), with dozens of heuristic exceptions added within two days. Here: Tears of
+  the Kingdom's product60 already presents at 120 Hz on the Mac (prologue p50 8.3 ms, GPU p50 4.5-4.8 ms, batch 60's smoke), so a replayed
+  frame buys nothing there; on a phone a replay costs a frame's GPU work again, and what limits Tears of the Kingdom on a phone is not measured
+  yet (it does not run there). To look at again once it does, if the GPU has room and the CPU side is the limit
+- [x] batch 61 · 153 frame latency 2 at 30 Hz (lfkdsk/switch-appletv-port-skill references/05-perf.md §5.3, MIT: with the link at 30 Hz,
+  `preferredFrameLatency` 2 took the present-to-present standard deviation 0.603 → 0.301 ms over 1,530 frames and frames above 40 ms 4 → 1, for
+  33 ms more latency; 60 Hz keeps 1; a setting given wins): `DM_PRESENT_LATENCY=auto` (`gfx/nvn/nvn_pace.h` `nvn_latency_setting` /
+  `nvn_frame_latency`) takes 2 while the display link ticks at 30 Hz (the power-saving mode, or a present rate of 30) and 1 otherwise, applied
+  where the link is made and with its rate when the mode changes (`link_latency_sync`, one log line per change); a number fixes it as
+  before; unset stays 1. Not measured here: the link needs a window or a device, and the gain is in jitter of a fraction of a millisecond, so
+  the default waits for a device check (the present interval spread at the 30 fps setting with and without `auto`). `t_pace` +8 ("auto" taking 2
+  at every rate: 2 fail)
+- [x] batch 61 · 154 the ultrawide aspect patch on the Mac (MacNativeGames `aspect_patch.h` at 1.4.3, MIT, written anew): Tears of the
+  Kingdom's option `aspect` (`games/totk/rules.py`, four gated code caves at MacNativeGames' sites: the camera update 0x628c74 and setup 0xb43460,
+  the viewport routines 0x1ff04f4 / 0x253fbb0, each handing the perspective projection its ratio at +0xb0). Each runs its instruction, then
+  multiplies the ratio by the host page +40, or by 1 while that holds 0 (r | (0x3f800000 & ~mask), mask from r | -r: no branch, no flags;
+  scratch x10, x11 and q16 below sp, restored). MacNativeGames puts the wide ratio itself in place of every camera's; a factor gives the main
+  camera the same 21:9 and keeps a camera of another shape whose picture lands in the canvas in proportion after the stretch.
+  `games/totk/frame_step.c` writes +40 at every present: the wide ratio over 16:9 while on, 0 off. `host/aspect.c` keeps the state:
+  `DM_ASPECT=<w>:<h>`, `<w>x<h>`, a ratio from 1 to 4, or `window` (the window's shape, followed while on) starts with it on; unset, the Mac's
+  View → Wide Picture (⌘4, MacNativeGames' key 4) switches 21:9. The front end lays the game picture out at the wide ratio and the present
+  pass stretches it over the target (`mtl_present_stretch`; MetalFX only when larger in both directions). iOS: `DM_ASPECT` refused in red
+  (a phone could fill its screen this way instead of bars: not tried, the HUD would stretch by 1.22 at 19.5:9). Not adjusted, as in
+  MacNativeGames: the HUD, drawn into the same canvas, stretches with the picture. Measured in the prologue: headless with `DM_ASPECT=21:9` the
+  canvas holds the wider view squeezed (Zelda's face 205 → 155 px, 0.756 against 1/1.3125 = 0.762), subtitles unchanged; in a 1260x540 window
+  the presented 2520x1080 picture has her proportions back with more of the cave either side, the subtitles stretched; switched off
+  (`DM_TEST_ASPECT_AT`) 16:9 with bars again. Tests: `games/totk/check_aspect.py <product> <main NSO>` (25 in Unicorn: per site the ratio as
+  the original's at 0, × 1.3125 at 1.3125, the page ignored by the original and by the product without the option, x0-x28 / sp / q16 /
+  flags as the original's; multiplying by the page as it is: the four "off" cases fail), `t_aspect` (10; "window" keeping its first shape: 1
+  fails), `t_present_vp` +2 (the aspect ratio kept with the stretch on: 1 fails). `work/build/totk/product60` rebuilt (main: the earlier bytes
+  the same, 4 routines of 16 words appended, 4 option rows; the previous one is `product60.prev154`), `options.default` =
+  `fps60,realtime,scene,output,aspect`; check_frame_rate / render_size / cloth_clock / output_res pass on it
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

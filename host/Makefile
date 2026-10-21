@@ -18,6 +18,7 @@ CFLAGS += -DDM_REWRITER_STAMP=0x$(REWRITER_STAMP)ull
 # Host sources, one per line in alphabetical order; the hle_*.c service files are taken by wildcard
 SRC = \
 	app_mac.m \
+	aspect.c \
 	cloud.m \
 	cloudsync.c \
 	cheat_vm.c \

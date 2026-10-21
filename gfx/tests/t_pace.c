@@ -88,6 +88,22 @@ int main(void) {
         int got = nvn_promotion_hz(pm[i].rt, pm[i].phz, pm[i].pro, pm[i].disp, pm[i].now), ok = got == pm[i].want; n++;
         printf("%-72s expected %3d → got %3d %s\n", pm[i].why, pm[i].want, got, ok ? "✓" : "✗"); fail += !ok;
     }
+    // Display-link frame latency (nvn_latency_setting / nvn_frame_latency, plan item 153): unset 1; a number wins at every rate; "auto" 2 at a
+    // 30 Hz link only. "auto" taking 2 at every rate (-DDM_TEST_LATENCY_AUTO_ANY) fails 2
+    struct { const char *env; int lhz, want; const char *why; } fl[] = {
+        {NULL, 30, 1, "DM_PRESENT_LATENCY unset, 30 Hz link: 1 (as before)"},
+        {"2", 60, 2, "DM_PRESENT_LATENCY=2, 60 Hz link: 2 (a setting given wins)"},
+        {"1", 30, 1, "DM_PRESENT_LATENCY=1, 30 Hz link: 1"},
+        {"auto", 30, 2, "auto, 30 Hz link (power-saving mode): 2"},
+        {"auto", 60, 1, "auto, 60 Hz link: 1"},
+        {"auto", 120, 1, "auto, 120 Hz link (mode 2): 1"},
+        {"0", 30, 1, "DM_PRESENT_LATENCY=0 (not above 0): as unset, 1"},
+        {"x", 30, 1, "DM_PRESENT_LATENCY=x: as unset, 1"},
+    };
+    for (int i = 0; i < (int)(sizeof fl / sizeof *fl); i++) {
+        int got = nvn_frame_latency(nvn_latency_setting(fl[i].env), fl[i].lhz), ok = got == fl[i].want; n++;
+        printf("%-72s expected %3d → got %3d %s\n", fl[i].why, fl[i].want, got, ok ? "✓" : "✗"); fail += !ok;
+    }
     // Display-link ticks a frame takes (nvn_link_step, plan item 123); the old step (-DDM_TEST_LINK_STEP_FIXED, the interval whatever the link's
     // rate) fails the three power-saving cases at interval 2, 3 and 4
     struct { unsigned itv, hz, lhz, want; const char *why; } k[] = {

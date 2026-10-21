@@ -69,6 +69,8 @@ run: \
 	$(B)/t_motion \
 	$(B)/t_procon \
 	$(B)/t_procon_raw \
+	$(B)/t_aspect \
+	$(B)/t_aspect_nofollow \
 	$(B)/t_motion_allstyles \
 	$(B)/t_motion_nobias \
 	$(B)/t_motion_nograv \
@@ -270,6 +272,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_procon_raw.log)" -ne 3 ]; then \
 	   cat $(B)/t_procon_raw.log; echo "t_procon_raw: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_procon_raw: the raw axes as they come fail the three axis checks, as expected"
+	$(B)/t_aspect 2>/dev/null
+	@status=0; $(B)/t_aspect_nofollow > $(B)/t_aspect_nofollow.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_aspect_nofollow.log)" -ne 1 ]; then \
+	   cat $(B)/t_aspect_nofollow.log; echo "t_aspect_nofollow: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_aspect_nofollow: \"window\" keeping its first shape fails the resize check, as expected"
 	@for v in allstyles nobias nograv nopeak; do status=0; $(B)/t_motion_$$v > $(B)/t_motion_$$v.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_motion_$$v.log)" -ne 1 ]; then \
 	   cat $(B)/t_motion_$$v.log; echo "t_motion_$$v: unexpected negative-control result ($$status)"; exit 1; \
@@ -734,6 +741,10 @@ $(B)/t_procon: t_procon.c ../procon.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_procon.c
 $(B)/t_procon_raw: t_procon.c ../procon.h | $(B)
 	clang -O1 -Wall -I.. -DDM_TEST_PROCON_RAW_AXES -o $@ t_procon.c
+$(B)/t_aspect: t_aspect.c ../aspect.c ../aspect.h ../dm.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_aspect.c
+$(B)/t_aspect_nofollow: t_aspect.c ../aspect.c ../aspect.h ../dm.h | $(B)
+	clang -O1 -Wall -I.. -DDM_TEST_ASPECT_NO_FOLLOW -o $@ t_aspect.c
 MOTION_DEPS = t_motion.c ../hle_hid.c ../hle_motion.c ../hle.h ../dm.h ../dm_input.h ../front.h
 $(B)/t_motion: $(MOTION_DEPS) | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_motion.c

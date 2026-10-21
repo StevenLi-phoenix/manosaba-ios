@@ -152,6 +152,7 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_TEST_WORK_MS=<ms>` | Each frame's first submission waits until that long after the previous present (a game whose work takes that long; pacing tests) |
 | `DM_FPS=30` | Present at 30 Hz (default 60) |
 | `DM_PRESENT_HZ=0` | No frame limit (profiling only: some game logic counts frames) |
+| `DM_PRESENT_LATENCY=<n>` or `auto` | The display link's frame latency (`preferredFrameLatency`; default 1); `auto` takes 2 while the link ticks at 30 Hz (the power-saving mode) and 1 otherwise: steadier 30 fps for 33 ms more latency (lfkdsk's measurement; `nvn_pace.h` `nvn_frame_latency`) |
 
 ## Known limitations
 

@@ -71,6 +71,7 @@
 #include "nvn_depth_clear.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree
 #include "nvn_hmap.h"
+#include "nvn_pace.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
@@ -130,7 +131,7 @@ static uint64_t g_link_tick_ns, g_link_tick_n;
 static uint64_t g_link_dropped;
 static int g_pq_inflight;   // Under g_pq_mu: number of presents committed to the GPU whose completion callback has not arrived yet
 int g_dm_present_link;   // Present pacing mode (runtime value of DM_PRESENT_LINK, modified directly during same-process alternating measurement): 0 = acquire the drawable itself; 1 = display link at 60 Hz; 2 = display link at 120 Hz, the game presents a frame every other display-link tick
-static int g_present_latency = 1;
+static int g_latency_set = -1;   // DM_PRESENT_LATENCY (nvn_pace.h nvn_latency_setting): n, 0 = auto (2 at a 30 Hz link), -1 = unset (1)
 static uint64_t g_pq_done;
 static uint64_t g_pq_read;
 #if DM_NVN_M3
@@ -343,8 +344,8 @@ void mtl_init(void) { @autoreleasepool {
     if (g_dev) return;
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
-    const char *latency = getenv("DM_PRESENT_LATENCY");
-    if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
+    g_latency_set = nvn_latency_setting(getenv("DM_PRESENT_LATENCY"));
+    if (!g_latency_set) MLOG("display link frame latency: auto (2 while the link ticks at 30 Hz, 1 otherwise; DM_PRESENT_LATENCY)");
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("no Metal device");
@@ -3967,7 +3968,6 @@ static void shmap_load(void) {
 #include "nvn_pso_skey.h"
 #include "nvn_warm_list.h"
 #include "nvn_aniso.h"
-#include "nvn_pace.h"
 #include "nvn_retry.h"
 @interface NvProg : NSObject { @public NvShader *sh[6]; int sum_ok, sum_img, sum_imgw; uint32_t sum_cmask; } @end   // sum_*: udc_note_draw's per-program summary
 @implementation NvProg @end
@@ -8645,11 +8645,21 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTe
     [en endEncoding];
     return 1;
 }
+// The wide picture (plan item 154, host/aspect.c): the game widened its cameras and the front end shaped the target to the wide ratio, so the
+// picture, which holds the wider view squeezed into the game's canvas, is stretched over the whole target. Any thread (the front end's)
+static _Atomic int g_present_stretch;
+void mtl_present_stretch(int on) {
+    int v = on != 0; if (atomic_exchange(&g_present_stretch, v) != v) MLOG("present: the game picture %s", v ? "stretched over the target (the wide picture)" : "at its own aspect ratio");
+}
 // Viewport of the game picture (cw x ch) on a dw x dh target: its aspect ratio kept and centered; a ratio difference under 1% fills the target.
+// With the wide picture on (mtl_present_stretch) the whole target.
 // The size is rounded (and held to the target) before it is centred (plan item 155, after Touchable 5cab3ac, MIT): floor((dh - ch * s) / 2) with
 // ch * s a hair over dh (contracted to a fused multiply-add, or rounded so) gave an origin of -1 and a picture one pixel off the target. Unit test
 // gfx/tests/t_present_vp.m
 static MTLViewport present_vp(double dw, double dh, double cw, double ch) {
+#ifndef DM_TEST_STRETCH_IGNORED   // negative control of t_present_vp only: the aspect ratio kept with the wide picture on
+    if (atomic_load(&g_present_stretch)) return (MTLViewport){0, 0, dw, dh, 0, 1};
+#endif
     double s = fmin(dw / cw, dh / ch);
     if (fabs((dw / dh) / (cw / ch) - 1) < 0.01) return (MTLViewport){0, 0, dw, dh, 0, 1};
 #ifndef DM_TEST_PRESENT_VP_OLD   // negative control of t_present_vp only: centred before rounding, as before
@@ -8740,7 +8750,7 @@ static int fx_ready(id<MTLTexture> src, NSUInteger ow, NSUInteger oh) {
 static void fx_state(int st) {
     if (st == g_fx.state) return;
     g_fx.state = st;
-    if (st == 2) MLOG("MetalFX upscaling: the picture is not shown larger than the game renders it, bilinear");
+    if (st == 2) MLOG("MetalFX upscaling: the picture is not shown larger than the game renders it in both directions, bilinear");
     if (st == 3) MLOG("MetalFX upscaling: the game's crop rectangle does not start at the texture's origin, bilinear");
 }
 // Encodes the upscale into cb and returns its output (out_crop = the whole output; *wait = the fence the present pass must wait on), or nil: bilinear
@@ -8757,7 +8767,7 @@ static id<MTLTexture> fx_apply(CBUF cb, id<MTLTexture> src0, const int crop[4], 
     }
     MTLViewport vp = present_vp(dst.width, dst.height, cw, ch);
     NSUInteger ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
-    if (ow <= cw && oh <= ch) { fx_state(2); return nil; }
+    if (ow <= cw || oh <= ch) { fx_state(2); return nil; }   // (larger in both directions only: the wide picture stretches one way)
     if (!fx_ready(src, ow, oh)) return nil;
     fx_state(1);
     if (cw != g_fx.log_cw || ch != g_fx.log_ch || ow != g_fx.log_ow || oh != g_fx.log_oh) {   // the crop changes without a new scaler (e.g. the game lowers its resolution)
@@ -9179,6 +9189,13 @@ static CAFrameRateRange link_range(int mode) {
     return mode == 3 ? CAFrameRateRangeMake(30, 30, 30) : mode == 2 ? CAFrameRateRangeMake(60, 120, 120) : CAFrameRateRangeMake(hz, hz, hz);
 }
 static int g_link_mode = 1;   // Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
+static int link_hz_of(int mode) { return mode == 3 ? 30 : mode == 2 ? 120 : atomic_load(&g_link_hz); }
+static int g_link_latency;   // the link's preferredFrameLatency: set where it is made, and on the present thread with its rate (link_latency_sync)
+static void link_latency_sync(CAMetalDisplayLink *link, int mode) {
+    int l = nvn_frame_latency(g_latency_set, link_hz_of(mode)); if (l == g_link_latency) return;
+    MLOG("display link frame latency %d → %d (%d Hz link, frame %llu)", g_link_latency, l, link_hz_of(mode), (unsigned long long)atomic_load(&g_cur_frame));
+    g_link_latency = l; link.preferredFrameLatency = l;
+}
 static void *link_main(void *arg) {   // Display link thread: started when switching to display-link mode, exits when switching back to 0
     (void)arg;
     pthread_setname_np("nvn-present-link");
@@ -9188,7 +9205,7 @@ static void *link_main(void *arg) {   // Display link thread: started when switc
     NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
     CAMetalDisplayLink *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
     link.preferredFrameRateRange = link_range(g_link_mode);
-    link.preferredFrameLatency = g_present_latency;
+    link.preferredFrameLatency = g_link_latency = nvn_frame_latency(g_latency_set, link_hz_of(g_link_mode));
     link.delegate = delegate;
     [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
     g_link_rl = CFRunLoopGetCurrent(); g_link = link;
@@ -9206,7 +9223,7 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     if (want && mtl_fps_target() == 30) want = 3;   // Power-saving mode: display link at 30 Hz
     int hz = atomic_load(&g_link_hz);
     if (want == applied && (want != 1 || hz == applied_hz || !g_link)) return;
-    if (want == applied) { g_link.preferredFrameRateRange = link_range(want); MLOG("display link rate %d → %d Hz (frame %llu)", applied_hz, hz, (unsigned long long)atomic_load(&g_cur_frame)); applied_hz = hz; return; }
+    if (want == applied) { g_link.preferredFrameRateRange = link_range(want); link_latency_sync(g_link, want); MLOG("display link rate %d → %d Hz (frame %llu)", applied_hz, hz, (unsigned long long)atomic_load(&g_cur_frame)); applied_hz = hz; return; }
     applied_hz = hz;
     g_link_mode = want;
     if (!g_link_started) {
@@ -9216,7 +9233,7 @@ static void link_sync(void) {   // Called every frame by the game's present thre
         return;   // The display link object is created on a new thread; align again next frame
     }
     CAMetalDisplayLink *link = g_link; if (!link) return;
-    if (want) link.preferredFrameRateRange = link_range(want);
+    if (want) { link.preferredFrameRateRange = link_range(want); link_latency_sync(link, want); }
     else { CFRunLoopRef rl = g_link_rl; g_link = nil; CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{ [link invalidate]; pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu); CFRunLoopStop(rl); }); CFRunLoopWakeUp(rl); }
     MLOG("present pacing mode %d → %d (frame %llu)", applied, want, (unsigned long long)atomic_load(&g_cur_frame));
     applied = want;

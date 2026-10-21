@@ -110,3 +110,22 @@ static inline int nvn_uncapped_hz(int realtime_step, const char *present_hz, con
     int v = !cap || !*cap ? 120 : !strcmp(cap, "display") ? (display_hz > 0 ? display_hz : 60) : atoi(cap);
     return v < 30 ? 30 : v > 120 ? 120 : v;
 }
+// Display-link frame latency (plan item 153, after lfkdsk/switch-appletv-port-skill references/05-perf.md §5.3, MIT: with the link at 30 Hz,
+// preferredFrameLatency 2 halved the present-to-present standard deviation, 0.603 → 0.301 ms over 1,530 frames, and frames above 40 ms went 4 → 1,
+// for 33 ms more latency; at 60 Hz they keep 1, with no headroom to trade; a setting given always wins). DM_PRESENT_LATENCY=<n> fixes it; "auto"
+// takes 2 while the link ticks at 30 Hz (the power-saving mode, or a present rate of 30) and 1 otherwise; unset, 1 as before (to be measured on
+// a device: a device check). nvn_latency_setting: n, 0 for "auto", -1 unset or not a number above 0
+static inline int nvn_latency_setting(const char *e) {
+    if (!e || !*e) return -1;
+    if (!strcmp(e, "auto")) return 0;
+    int v = atoi(e); return v > 0 ? v : -1;
+}
+static inline int nvn_frame_latency(int setting, int link_hz) {
+    if (setting > 0) return setting;
+    if (setting < 0) return 1;
+#ifndef DM_TEST_LATENCY_AUTO_ANY   // negative control of t_pace only: "auto" takes 2 at every rate
+    return link_hz <= 30 ? 2 : 1;
+#else
+    (void)link_hz; return 2;
+#endif
+}

@@ -2,6 +2,8 @@
 // full screen, 1080p) and game pictures (1080p, 720p, 540p, 1600x900, 1440x1080), the picture stays whole on the target (origin at 0 or more, the far
 // edge inside), within a pixel of its scaled size, centred to a pixel, and a ratio within 1 % fills the target. Centred before rounding
 // (-DDM_TEST_PRESENT_VP_OLD, as before): the origin goes to -1 at 2868x1320 and 3456x2234 (Touchable's cases) and 2796x1290, 2556x1179: 2 fail
+// The wide picture (plan item 154, mtl_present_stretch): the whole target while on, the picture's own ratio again after; the aspect ratio kept
+// while on (-DDM_TEST_STRETCH_IGNORED): 1 fails
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -30,5 +32,10 @@ int main(void) { @autoreleasepool {
     CHECK(size, "... within a pixel of its scaled size");
     CHECK(centre, "... centred to a pixel");
     CHECK(fills, "a ratio within 1 %% fills the target");
+    mtl_present_stretch(1); MTLViewport ws = present_vp(2520, 1080, 1920, 1080), wl = present_vp(3456, 2234, 1920, 1080);
+    mtl_present_stretch(0); MTLViewport wo = present_vp(2520, 1080, 1920, 1080);
+    CHECK(ws.originX == 0 && ws.originY == 0 && ws.width == 2520 && ws.height == 1080 && wl.width == 3456 && wl.height == 2234,
+          "the wide picture on (mtl_present_stretch): 1920x1080 over the whole of 2520x1080 and 3456x2234");
+    CHECK(wo.width == 1920 && wo.height == 1080 && wo.originX == 300, "... off again: 1920x1080 centred on 2520x1080");
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }
