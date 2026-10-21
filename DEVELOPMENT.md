@@ -381,7 +381,7 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
 - An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
-- Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 61d, 62c2, 62g, 62h, 62j, the checks of 62b (a movie), 63b
+- Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 61d, 62c2, 62g, 62h, 62j, 63b
   (`DM_APP_POOL_ADD_MB`), 113, 170 (the game's text), 172, 67e (the phone's pulses after a trip to the background).
 - The next game: 64's open sub-items.
 - Decisions: `DM_FRAME_STEP=vsync` as iOS's default (133: 35 % less CPU on the Mac); `DM_PRESENT_LATENCY=auto` as the default (after 153's
@@ -837,7 +837,7 @@ Tier 4, large:
     device run
 - [ ] 62 Tears of the Kingdom on iOS: guest memory layout, VP9 on iOS, BC → ASTC, a device run (after 19, 25, 59); the cold-texture census of 56 under its memory limit; code options (57) through embedded changed pages (tomodachi-native afd88e9)
   2026-10-21, the first device run (iPhone 17 Pro, iOS 26.4, free account, the 30 fps product, handheld): into the prologue's cave and play; 30 fps,
-  GPU p50 8-20 ms, RSS 2.3 GB with 3.8 GB to the limit, the Mac prologue's three red lines and no other. Left: a movie (62b), 62j, 62k (batch 65), the census
+  GPU p50 8-20 ms, RSS 2.3 GB with 3.8 GB to the limit, the Mac prologue's three red lines and no other. Left: a movie (62b, 62b2 in batch 66), 62j, 62k (batch 65), the census
   - [x] batch 54 · 62a guest memory reserved at the top of `main()`, before UIKit and Metal (`svc_reserve_early`; `host/guest_as.h`: the lowest free
     gap from 4 GiB, 2 MiB aligned, ending at or below 2^39, from 6 GiB down by 256 MiB to what the game needs; `vm_map` fixed, mmap's choice if that
     fails, the free gaps logged when short). Every platform: a block past 2^39 is moved below it (macOS 27 reserves about 24 GiB in
@@ -848,6 +848,14 @@ Tier 4, large:
     `$DM_ROOT/build/ios/libvpx`; `ios/run.sh` links it after `ios/tools/vpx_check.py`, hle_movie.c finds the headers through `DM_VPX_INC`; without
     it a line says movies will not play. `tools/tests/t_vpx_check.py`. A cutscene on the phone is a device check once Tears of the Kingdom runs
     there
+  - [x] batch 66 · 62b2 the iOS libvpx built right: the opening cutscene (1080p VP9) ran at 3 fps on the iPhone 17 Pro, frames growing from 49 to
+    331 ms with the GPU at 1.3 ms and the audio starving. libvpx's configure fixes the iOS minimum of a static build at 7.0 and adds
+    `-miphoneos-version-min=7.0`; against our `-target arm64-apple-ios18.0` its `-Werror` feature checks failed ("overriding
+    '-miphoneos-version-min=7.0' option"), so the library had no NEON, no `-O3` (the code is `-O0`'s) and assertions in. `build_libvpx.sh`
+    sets the minimum in the unpacked configure.sh to 18.0 and stops unless `HAVE_NEON 1` and `-DNDEBUG -O3` come out; `vpx_check.py` refuses a
+    library without `_vpx_convolve8_neon` or referencing `___assert_rtn` (`t_vpx_check.py`, `T_VPX_CHECK_NO_NEON=1` fails 2). The rebuilt one
+    (140 NEON functions) plays the cutscene smoothly on the phone (the user, 2026-10-21). Hardware VP9 through VideoToolbox is open to apps from
+    iOS 26.2 (`VTRegisterSupplementalVideoDecoderIfAvailable`, SDK header) and not needed for now
   - [x] batch 54 · 62c BC1 → ASTC 4x4 on the GPU on GPUs without BC (MacNativeGames `nvn_bc1astc.c`, `nvn_bctc.metal`): `gfx/tex/nvn_bc1astc.c` and
     the kernel b1a (nvn_mtl.m), the three-colour midpoint and alpha exact; WriteTexels, texture → buffer copies and ReadTexels of BC textures
     without BC refused in red. `DM_NVN_BC1_ASTC=0`: decompressed as before. `gfx/tests/t_bc1astc.m`. Prologue at frame 3840 (DM_TEST_NO_BC=1): 2,314

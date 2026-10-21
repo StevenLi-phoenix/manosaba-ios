@@ -19,11 +19,19 @@ GOT=$(shasum -a 256 "$A" | cut -d' ' -f1)
 W=$(mktemp -d "${TMPDIR:-/tmp}/dm-libvpx.XXXXXX"); trap 'rm -rf "$W"' EXIT
 case "$W" in *" "*) echo "[red] the temporary directory $W has a space: set TMPDIR"; exit 1;; esac
 tar -xzf "$A" -C "$W"; SRC=$W/libvpx-$VER; mkdir -p "$W/build"; cd "$W/build"
+# configure.sh fixes the iOS minimum of a static build at 7.0 (IOS_VERSION_MIN from the environment is overwritten) and adds
+# -miphoneos-version-min=7.0; against our -target arm64-apple-ios18.0 its -Werror feature checks then failed ("overriding
+# '-miphoneos-version-min=7.0' option"), which turned NEON off and left -DNDEBUG -O3 out: a C-only, unoptimized decoder with assertions, 3 fps
+# on a 1080p cutscene on an iPhone 17 Pro (plan item 62b2). The minimum is set to ours, and the build stops unless NEON and -DNDEBUG -O3 came out on
+sed -i '' 's/IOS_VERSION_MIN="7.0"/IOS_VERSION_MIN="18.0"/' "$SRC/build/make/configure.sh"
+grep -q 'IOS_VERSION_MIN="18.0"' "$SRC/build/make/configure.sh" || { echo "[red] libvpx $VER: the iOS minimum in configure.sh is not where it was: check it"; exit 1; }
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 export CC="$(xcrun --sdk iphoneos --find clang)" CXX="$(xcrun --sdk iphoneos --find clang++)" IOS_VERSION_MIN=18.0
 export CFLAGS="-target arm64-apple-ios18.0 -isysroot $SDK" CXXFLAGS="-target arm64-apple-ios18.0 -isysroot $SDK" LDFLAGS="-target arm64-apple-ios18.0 -isysroot $SDK"
 "$SRC/configure" --target=arm64-darwin-gcc --prefix="$W/install" --disable-examples --disable-tools --disable-docs --disable-unit-tests \
   --disable-shared --enable-static --disable-vp8-encoder --disable-vp9-encoder > configure.log 2>&1 || { tail -20 configure.log; exit 1; }
+grep -q '^#define HAVE_NEON 1' vpx_config.h || { echo "[red] configure turned NEON off:"; grep -B2 -A2 -i 'neon' config.log | tail -12; exit 1; }
+grep -q -- '-DNDEBUG -O3' libs-*.mk || { echo "[red] configure left NDEBUG or -O3 out (assertions compiled in, not optimized)"; exit 1; }
 make -j"${DM_JOBS:-4}" > make.log 2>&1 || { tail -30 make.log; exit 1; }
 make install > install.log 2>&1 || { tail -20 install.log; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT"; cp -R "$W/install/include" "$W/install/lib" "$OUT/"
