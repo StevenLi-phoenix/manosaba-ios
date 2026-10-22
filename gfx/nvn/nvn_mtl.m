@@ -643,7 +643,14 @@ typedef struct { uint64_t lo, hi, fence; } us_gw;      // GPU writes, with the f
 static us_gw *g_us_gw; static int g_us_gwn, g_us_gwcap;
 static uint64_t g_us_subs, g_us_ranges, g_us_copies, g_us_bytes, g_us_drops, g_us_skip_gpu, g_us_ns;
 static inline void args_dirty_all(void);
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf);
+// arena_alloc's buffer comes back unretained (plan item 185): the arena holds it until the submission completes, and an autoreleasing out parameter
+// cost a retain, an autorelease and a release per call, several per draw (t_fbx ar; -DDM_TEST_ARENA_AUTORELEASING as before)
+#ifndef DM_TEST_ARENA_AUTORELEASING
+#define ARENA_OUT __unsafe_unretained
+#else
+#define ARENA_OUT __autoreleasing
+#endif
+static size_t arena_alloc(size_t n, ARENA_OUT id<MTLBuffer> *buf);
 uint64_t mtl_done_fence(void);
 static int g_us_on = -1;   // -1: not read yet (tests set it directly)
 static int us_on(void) {
@@ -864,7 +871,7 @@ static void us_from_cap(const mtl_cap *c) {   // mtl_sub_snapshot with a capture
             int hit = 0; for (int j = a; j < ng && g_us_gw[j].lo < c->r[i].hi; j++) if (g_us_gw[j].hi > c->r[i].lo) { hit = 1; break; }
             if (hit) { g_us_skip_gpu++; continue; }
         }
-        id<MTLBuffer> ab; uint64_t pad = c->r[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;
+        ARENA_OUT id<MTLBuffer> ab; uint64_t pad = c->r[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;
         us_ent *e = &g_us[g_us_n++];
         e->lo = c->r[i].lo; e->hi = c->r[i].hi; e->cpu = (uint8_t *)ab.contents + off; e->gpu = ab.gpuAddress + off; e->buf = (__bridge void *)ab; e->dropped = 0;
         memcpy(e->cpu, c->data + c->off[i], (size_t)sz);
@@ -907,7 +914,7 @@ void mtl_sub_snapshot(const uint64_t *h, int n) {   // hle_nvn.c nvnQueueSubmitC
             int hit = 0; for (int j = a; j < ng && g_us_gw[j].lo < u[i].hi; j++) if (g_us_gw[j].hi > u[i].lo) { hit = 1; break; }
             if (hit) { g_us_skip_gpu++; continue; }
         }
-        id<MTLBuffer> ab; uint64_t pad = u[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original
+        ARENA_OUT id<MTLBuffer> ab; uint64_t pad = u[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original
         us_ent *c = &g_us[g_us_n++];
         c->lo = u[i].lo; c->hi = u[i].hi; c->cpu = (uint8_t *)ab.contents + off; c->gpu = ab.gpuAddress + off; c->buf = (__bridge void *)ab; c->dropped = 0;
         g_us_bytes += sz;
@@ -3893,11 +3900,13 @@ static void rt_dims(NSUInteger *tw, NSUInteger *th) {
     if (!t0 && R.rt.depth) { t0 = tex_mtl(R.rt.depth); level = R.rt.has_dview && R.rt.dview.set_levels ? R.rt.dview.base_level : 0; }
     *tw = t0 ? mip_extent(t0.width, level) : 1; *th = t0 ? mip_extent(t0.height, level) : 1;
 }
-// There are pending clears but no draw in the pass: open a pass once to land the clears
+// There are pending clears but no draw in the pass: open a pass once to land the clears (counted with the bytes they store: plan item 187)
+static uint64_t g_clear_only_n, g_clear_only_bytes;
+void mtl_clear_only_stats(uint64_t *n, uint64_t *bytes) { *n = g_clear_only_n; *bytes = g_clear_only_bytes; }
 static void rp_flush(void) {
     int pend = R.clear_d || R.clear_s;
     for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
-    if (pend && !g_enc && g_cb) rp_begin_ex(1);
+    if (pend && !g_enc && g_cb) { uint64_t st0 = g_bw_store; rp_begin_ex(1); rp_end(); g_clear_only_n++; g_clear_only_bytes += g_bw_store - st0; return; }
     rp_end();
 }
 static int scissor_full_of(const p_scissor *sc, int has_sc, const tex_t *t, const view_t *v, int has_v) {
@@ -4642,19 +4651,20 @@ static inline __attribute__((always_inline)) void *samp_fast(int sid) {
 }
 
 // ---------- Argument buffer blocks: one block per submission, reclaimed after the GPU completes ----------
-@interface NvArena : NSObject { @public id<MTLBuffer> buf; uint64_t gpu, fence; size_t used; } @end
+@interface NvArena : NSObject { @public id<MTLBuffer> buf; uint64_t gpu, fence; size_t used, cap; uint8_t *cpu; } @end   // cap, cpu: buf's length and contents
 @implementation NvArena @end
 static NSMutableArray<NvArena *> *g_arenas; static NvArena *g_cur_arena; static NSMutableArray<NvArena *> *g_sub_arenas;
 static NvArena *arena_new(void) {
     // The for-in loop variable does not retain the object: take a strong reference first and then remove it from the array, otherwise what is returned after the array releases it is a dangling pointer
     for (NvArena *it in g_arenas) if (it->fence && it->fence <= g_done) { NvArena *r = it; [g_arenas removeObject:r]; r->fence = 0; r->used = 0; return r; }
-    NvArena *a = [NvArena new]; a->buf = [g_dev newBufferWithLength:4 << 20 options:MTLResourceStorageModeShared]; a->gpu = a->buf.gpuAddress; res_add(a->buf); return a;
+    NvArena *a = [NvArena new]; a->buf = [g_dev newBufferWithLength:4 << 20 options:MTLResourceStorageModeShared]; a->gpu = a->buf.gpuAddress; a->cap = a->buf.length; a->cpu = a->buf.contents;
+    res_add(a->buf); return a;
 }
 void arena_begin(void) { if (!g_arenas) { g_arenas = [NSMutableArray array]; g_sub_arenas = [NSMutableArray array]; } g_cur_arena = nil; }
 void arena_commit(uint64_t fence) { for (NvArena *a in g_sub_arenas) { a->fence = fence; [g_arenas addObject:a]; } [g_sub_arenas removeAllObjects]; g_cur_arena = nil; }
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf) {
+static size_t arena_alloc(size_t n, ARENA_OUT id<MTLBuffer> *buf) {
     n = (n + 255) & ~(size_t)255;
-    if (!g_cur_arena || g_cur_arena->used + n > g_cur_arena->buf.length) {
+    if (!g_cur_arena || g_cur_arena->used + n > g_cur_arena->cap) {
         pthread_mutex_lock(&g_mu); g_cur_arena = arena_new(); pthread_mutex_unlock(&g_mu);
         [g_sub_arenas addObject:g_cur_arena];
     }
@@ -4815,6 +4825,10 @@ static const uint8_t *g_pso_lmap; static id<MTLFunction> g_pso_fsfn; static pso_
 static os_unfair_lock g_fz_fn_lock = OS_UNFAIR_LOCK_INIT;
 static NSMutableDictionary<NSString *, id<MTLFunction>> *g_bf_fn_cache;
 static NSMutableDictionary<NSString *, id<MTLLibrary>> *g_bf_lib_cache;
+// bf_fn's results by a binary key (plan item 185): the NSString keys it formatted for every draw that reads the tile took ~16 % of the translation
+// thread's busy time in the iPhone's shrine save on the Mac (sample(1), 2026-10-22); the strings are made only the first time a key is seen
+typedef struct { char base[24]; uint8_t fbmask, nfc, lmap[8], pad[6]; int32_t fx[32]; } bf_key;
+static nvn_hmap g_bf_fast = {.klen = sizeof(bf_key)}; static uint64_t g_bf_fast_hits;
 static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
 static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // keys whose pipeline failed to build: not rebuilt on every draw (each attempt is a synchronous compile)
 // The main0_vi variant specialized for these unsigned / signed locations (function constants 128 + loc / 144 + loc, dmsh_build.py vi_variant); cached per
@@ -5601,7 +5615,7 @@ static uint64_t upd_shadow(uint64_t lo, uint64_t size, void **buf) {   // GPU ad
     if (!sc && !pending) return 0;   // no snapshot (a GPU write of this submission reached it) and its updates written: memory on the GPU timeline is right
     uint64_t hh = (lo >> 4) ^ (lo >> 19) ^ (size * 0x9E3779B97F4A7C15ull); ub_shadow *e = &g_shadow[(hh ^ (hh >> 32)) & (UB_SHADOW_N - 1)];
     if (e->lo == lo && e->size == size && e->seq == seq && e->gpu) { *buf = e->buf; g_ren_reuse++; return e->gpu; }   // seq only grows: an entry of an earlier submission never matches
-    id<MTLBuffer> ab; uint64_t pad = lo & 255; size_t off = arena_alloc((size_t)(size + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original (as the snapshots)
+    ARENA_OUT id<MTLBuffer> ab; uint64_t pad = lo & 255; size_t off = arena_alloc((size_t)(size + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original (as the snapshots)
     uint8_t *cpu = (uint8_t *)ab.contents + off;
     if (sc) { memcpy(cpu, sc->cpu + (lo - sc->lo), (size_t)size); upd_apply(lo, cpu, size); }
     else {   // no snapshot and updates not written (upd_guard_draw could not write them first): memory with the pending writes, the updates among them
@@ -5620,7 +5634,7 @@ static void upd_flush(void) {   // the updates not in memory yet into memory on 
         for (; j < l->n && l->e[j].lo <= hi; j++) hi = MAX(hi, l->e[j].hi);   // overlapping or touching: covered whole by updates, one copy
         void *db; uint64_t dof;
         if (mtl_addr(lo, hi - lo, &db, &dof)) {
-            id<MTLBuffer> sb; size_t so = arena_alloc((size_t)(hi - lo), &sb);
+            ARENA_OUT id<MTLBuffer> sb; size_t so = arena_alloc((size_t)(hi - lo), &sb);
             ul_apply(l, lo, (uint8_t *)sb.contents + so, hi - lo);
             enc_b_copy_buffer(blit(), sb, so, (__bridge id<MTLBuffer>)db, dof, hi - lo);
         } else {   // touching updates in two pools: each on its own, oldest first (blit() orders them)
@@ -5819,7 +5833,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             int bank = b->kind == NVN_RB_DRV2 ? 2 : 0;
             if (!sh->rf.drv_read[bank]) { slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); }
             else {
-                id<MTLBuffer> db; size_t doff = arena_alloc(0xA00, &db); uint8_t *d = (uint8_t *)db.contents + doff;
+                ARENA_OUT id<MTLBuffer> db; size_t doff = arena_alloc(0xA00, &db); uint8_t *d = g_cur_arena->cpu + doff;
                 drv_fill(d, bank, nvn_stage);
                 if (bank == 0) for (int r = 0; r < 16 && nvn_stage < 6; r++) { uint64_t a = S.ssbo[nvn_stage][r].addr; uint32_t n = (uint32_t)S.ssbo[nvn_stage][r].size;
                     if (a && n) us_drop(a, n); }   // reached through the table: whether the shader writes it is not known
@@ -5832,8 +5846,8 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
     #undef USE_SAMP
     pthread_mutex_unlock(&g_rmu);
     NSUInteger arg_len = sh->arg_len ? sh->arg_len : sh->ae.encodedLength;
-    id<MTLBuffer> ab; size_t off = arena_alloc(arg_len, &ab);
-    memcpy((uint8_t *)ab.contents + off, slots, arg_len);
+    ARENA_OUT id<MTLBuffer> ab; size_t off = arena_alloc(arg_len, &ab);
+    memcpy(g_cur_arena->cpu + off, slots, arg_len);
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; g_args_dirty[nvn_stage] = 0;
     g_stat_args_enc++;
@@ -7088,8 +7102,16 @@ planned:
 }
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap) {   // The readable tile version is specialized by constants (cached)
     os_unfair_lock_lock(&g_fz_fn_lock);
+    size_t kl = strlen(fs->key);
+    bf_key bk; memset(&bk, 0, sizeof bk); memcpy(bk.base, fs->key, MIN(kl > 2 ? kl - 2 : kl, sizeof bk.base)); bk.fbmask = fbmask; bk.nfc = fs->rf.nfc;
+#ifndef DM_TEST_BF_KEY_NO_LMAP   // negative control of t_fbx only: the key without the attachment map
+    memcpy(bk.lmap, lmap, 8);
+#endif
+    for (int i = 0; i < fs->rf.nfc && i < 32; i++) bk.fx[i] = fx[i];
+    void *hit = nvn_hm_get(&g_bf_fast, &bk);
+    if (hit) { g_bf_fast_hits++; os_unfair_lock_unlock(&g_fz_fn_lock); return (__bridge id<MTLFunction>)hit; }
     if (!g_bf_fn_cache) { g_bf_fn_cache = [NSMutableDictionary dictionary]; g_bf_lib_cache = [NSMutableDictionary dictionary]; }
-    size_t kl = strlen(fs->key); NSString *base = [NSString stringWithFormat:@"%.*s", (int)(kl > 2 ? kl - 2 : kl), fs->key];
+    NSString *base = [NSString stringWithFormat:@"%.*s", (int)(kl > 2 ? kl - 2 : kl), fs->key];
     id<MTLLibrary> lib = g_bf_lib_cache[base];
     if (!lib) {
         NSError *e = nil; NSString *path = [NSString stringWithFormat:@"%@/%@_bf.metallib", g_msl_dir, base];
@@ -7103,14 +7125,14 @@ static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const 
     for (int j = 0; j < 8; j++) [k appendFormat:@"/%02x", lmap[j]];
     NSString *cacheKey = [NSString stringWithFormat:@"%@|%@", base, k];
     id<MTLFunction> f = g_bf_fn_cache[cacheKey];
-    if (f) { os_unfair_lock_unlock(&g_fz_fn_lock); return f; }
+    if (f) { nvn_hm_put(&g_bf_fast, &bk, (__bridge_retained void *)f); os_unfair_lock_unlock(&g_fz_fn_lock); return f; }
     MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
     for (int i = 0; i < fs->rf.nfc; i++) { int v = fx[i]; [cv setConstantValue:&v type:MTLDataTypeInt atIndex:(NSUInteger)i]; }
     for (int q = 0; q < 8; q++) { bool b = fbmask >> q & 1; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(32 + q)]; }
     for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) { bool b = lmap[q] == fs->rf.fo_color[j]; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(64 + 8 * j + q)]; }
     NSError *e = nil; f = [lib newFunctionWithName:@"main0" constantValues:cv error:&e];
     if (!f) { MLOG("[red] readable tile version specialization failed %s (%s): %s", fs->key, k.UTF8String, e.localizedDescription.UTF8String); os_unfair_lock_unlock(&g_fz_fn_lock); return nil; }
-    g_bf_fn_cache[cacheKey] = f; os_unfair_lock_unlock(&g_fz_fn_lock); return f;
+    g_bf_fn_cache[cacheKey] = f; nvn_hm_put(&g_bf_fast, &bk, (__bridge_retained void *)f); os_unfair_lock_unlock(&g_fz_fn_lock); return f;
 }
 static int ubo_float(int slot, uint16_t ref, float *out) {   // Component cmp of vector vec of the uniform slot (read on the CPU side; not read if it falls within a buffer write pending execution in this submit)
     int sl = ref >> 8, vec = ref >> 2 & 63, cmp = ref & 3;
@@ -7324,7 +7346,7 @@ static uint64_t wide_u8_gpu(const p_draw_idx *di, int r8) {
     void *mb; uint64_t mo, src;
     if (!mtl_gpu_addr(di->ibuf, (uint64_t)di->count, &mb, &mo, &src)) return 0;
     rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
-    id<MTLBuffer> ob; size_t oo = arena_alloc((size_t)di->count * 2, &ob); id<MTLBuffer> pb; size_t po = arena_alloc(16, &pb);
+    ARENA_OUT id<MTLBuffer> ob; size_t oo = arena_alloc((size_t)di->count * 2, &ob); ARENA_OUT id<MTLBuffer> pb; size_t po = arena_alloc(16, &pb);
     uint32_t *p = (uint32_t *)((uint8_t *)pb.contents + po); p[0] = (uint32_t)di->count; p[1] = (uint32_t)(mo & 15); p[2] = (uint32_t)r8; p[3] = 0;
     CENC ce = (CENC)enc_c_begin(NULL);
 #if DM_NVN_M3
@@ -7860,7 +7882,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
             }
             if (pend_hits(di->ibuf, (uint64_t)di->count)) RED_ONCE(83, "8-bit indices written by the GPU earlier in this submission are widened from memory (first case %#llx)", (unsigned long long)di->ibuf);
             use_rec("buf", di->ibuf, (uint64_t)di->count, 0, NULL);
-            id<MTLBuffer> ab; size_t ao = arena_alloc((size_t)di->count * 2, &ab); uint16_t *d16 = (uint16_t *)((uint8_t *)ab.contents + ao);
+            ARENA_OUT id<MTLBuffer> ab; size_t ao = arena_alloc((size_t)di->count * 2, &ab); uint16_t *d16 = (uint16_t *)((uint8_t *)ab.contents + ao);
             int r8 = rs && S.restart_idx == 0xff, hit = 0;
             for (int k = 0; k < di->count; k++) { int r = r8 && src8[k] == 0xff; hit |= r; d16[k] = r ? 0xffff : src8[k]; }
             if (hit && !strip) RED_ONCE(84, "primitive restart in a list (index %#x): Metal restarts only strips, drawn without the restart", S.restart_idx);
@@ -7880,7 +7902,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
                 } else if (!strip) {
                     for (int k = 0; k < di->count; k++) { uint32_t v = 0; memcpy(&v, src + w * k, w); if (v == S.restart_idx) { RED_ONCE(84, "primitive restart in a list (index %#x): Metal restarts only strips, drawn without the restart", S.restart_idx); break; } }
                 } else {
-                    id<MTLBuffer> ab; size_t ao = arena_alloc((size_t)di->count * w, &ab); uint8_t *dst = (uint8_t *)ab.contents + ao;
+                    ARENA_OUT id<MTLBuffer> ab; size_t ao = arena_alloc((size_t)di->count * w, &ab); uint8_t *dst = (uint8_t *)ab.contents + ao;
                     for (int k = 0; k < di->count; k++) { uint32_t v = 0; memcpy(&v, src + w * k, w); if (v == S.restart_idx) v = ones; else if (v == ones) RED_ONCE(54, "all-ones index in a strip whose restart index is %#x: Metal restarts there", S.restart_idx); memcpy(dst + w * k, &v, w); }
                     gpu = g_cur_arena->gpu + ao; len = (NSUInteger)di->count * w;
                 }

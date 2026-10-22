@@ -1891,9 +1891,10 @@ static void power_line(uint64_t frame) {
     if (pt && t > pt) { double s = (t - pt) / 1e9, nf = frame > pf ? (double)(frame - pf) : 1;
         LOG("[nvn] power up to frame %llu: CPU energy %.2f W, %.1f mJ a frame (%.1f frames/s); CPU %.0f%% (100 = one core), %.0f%% of it on performance cores; %.0f wakeups/s; most yields: %s",
             frame, (e - pe) / 1e9 / s, (e - pe) / 1e6 / nf, nf / s, (cpu - pcpu) / 1e7 / s, cpu > pcpu ? 100.0 * (double)(p - pp) / (double)(cpu - pcpu) : 0, (iw - piw) / s, yt);
-        uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
-        LOG("[nvn] render targets up to frame %llu: %.1f MB loaded / %.1f MB stored a frame, %.1f passes a frame load and store everything, %.1f MB a frame of stores saved (DM_NVN_UNWRITTEN_DC)",
-            frame, (ld - pld) / 1048576.0 / nf, (st - pst) / 1048576.0 / nf, (fu - pfu) / nf, (udc - pudc) / 1048576.0 / nf);
+        uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(), con, cob; mtl_bw(&ld, &st, &fu); mtl_clear_only_stats(&con, &cob); static uint64_t pcon, pcob;
+        LOG("[nvn] render targets up to frame %llu: %.1f MB loaded / %.1f MB stored a frame, %.1f passes a frame load and store everything, %.1f MB a frame of stores saved (DM_NVN_UNWRITTEN_DC); "
+            "%.1f passes a frame only land clears, storing %.1f MB",
+            frame, (ld - pld) / 1048576.0 / nf, (st - pst) / 1048576.0 / nf, (fu - pfu) / nf, (udc - pudc) / 1048576.0 / nf, (con - pcon) / nf, (cob - pcob) / 1048576.0 / nf); pcon = con; pcob = cob;
         char tc[400]; dm_thread_cpu(tc, sizeof tc, s);
         LOG("[nvn] threads up to frame %llu: guest CPU %s", frame, tc);
         uint64_t rep[32], rst[32], fold; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &fold);

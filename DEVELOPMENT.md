@@ -1072,7 +1072,12 @@ Tier 5, needs the user's devices, controller or account:
     in focus, tried again 2 s after a failed start, doubling up to 30 s (`haptics_map.h` `dm_phone_engine_due`, `gamepad.m`; `t_haptics`)
     Checked on the iPhone 17 Pro on 2026-10-22 (Tears of the Kingdom): after switching to another app and back, the vibration test pulses again
 - [x] batch 62 · 68 MixWithOthers on an iPhone: another app's music plays on under the game (iPhone 17 Pro, 2026-10-21; "mixes with other apps: yes")
-- [ ] 69 the game over flow with the overlay, in play
+- [x] batch 75 · 69 the game over flow with the overlay, in play. iPhone 17 Pro, 2026-10-22, the 60 fps build with the RomFS overlay served (194),
+  driven through the command channel from a copy of slot_00 of the 05:09 install backup (the only slot in the copy, so "continue" loads it):
+  walking off Great Sky Island's edge, GAME OVER with 重試 selected, A, the loading screen with its tips, and back on the island at the save
+  point with the area's name. GPU time there (DM_NVN_PASSGPU): the island in daylight ~25 ms a frame (the 60 fps build runs it at 30: four
+  720x720 depth passes ~3 ms, 1280x720 passes loading 4-5 attachments the most), the black game over screen ~20 ms (six passes a frame
+  loading five 1280x720 attachments, 6.6 ms: the world is still drawn behind it); both for 62j / 186's tile loads
 - [x] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
   2026-10-21 on the iPhone 17 Pro (chain ca5eb9623812): `ios/run.sh lifecycle` LIFECYCLE OK, the home button and the app switcher fine by
   hand, "CoreAudio output opened in 4.1 ms". The on-screen controls of 58 with `DM_TOUCH=pad` not wanted: manosaba plays by touch natively and
@@ -1151,16 +1156,39 @@ the device the user's iPhone 17 Pro):
   95-122 s → 5.9 s, pipeline time in long frames 1,452 → 102 ms; its pitfalls: many pipelines in one file, 142 files searched, `gpuarchiver-*`
   folders), Apple's offline `metal-tt` route from our metallibs or Metal 4's `MTL4Archive`; a seed `pso_manifest.tsv` from Mac runs (the slot of
   78 no tool fills); MacNativeGames PR #166's prediction rescans
-- [ ] 185 the replay's CPU per draw (22,000-34,000 instructions): `prog_get` returns an `__unsafe_unretained` pointer ARC ignores (a retain and
-  autorelease per draw; DavidZande/MacNativeGames b484570), a vertex-binding cache (nxnative 697df75), a view cache by serial (nxnative 9b7cb76),
-  `g_rmu` as an `os_unfair_lock` (MacNativeGames 5f5de5e), MacNativeGames' replay caches (dfa7ec4, shrine submit 7.1 → 6.0 ms on a Mac), `-O2`
-  against the iOS default `-Os`; first a per-stage CPU split of the draw path (GirlNet's `DM_NVN_SUBPROF`)
+- [x] batch 75 · 185 the replay's CPU per draw (22,000-34,000 instructions): `prog_get` returns an `__unsafe_unretained` pointer ARC ignores (a
+  retain and autorelease per draw; DavidZande/MacNativeGames b484570), a vertex-binding cache (nxnative 697df75), a view cache by serial (nxnative
+  9b7cb76), `g_rmu` as an `os_unfair_lock` (MacNativeGames 5f5de5e), MacNativeGames' replay caches (dfa7ec4, shrine submit 7.1 → 6.0 ms on a
+  Mac), `-O2` against the iOS default `-Os`; first a per-stage CPU split of the draw path (GirlNet's `DM_NVN_SUBPROF`).
+  The split by sampling instead (`sample(1)` of the translation thread for 10 s, the iPhone's shrine save on the Mac, 6,960 draws a frame, 30 fps):
+  `bf_fn`, which picks a decal's readable-tile function, formatted three NSStrings and up to 16 `appendFormat:`s as its cache key at every draw
+  that reads the tile (since 181): ~16 % of the thread's busy time. Now a binary key (`bf_key`: the shader key, colour mask, constants and
+  attachment map) in an `nvn_hmap`, the strings only the first time a key is seen. `arena_alloc` handed its buffer back through an
+  autoreleasing out parameter (a retain, an autorelease and a release per call, several per draw): now unretained (the arena holds it until the
+  submission completes), with the buffer's length and contents kept in the arena. Per frame there: 19,400 → 12,700 instructions a draw,
+  25.5 → 17.8 M cycles (the thread busy 25.6 → 21.2 % of the time); the CPU milliseconds move less because the Mac lowers the clock with the
+  load. Not taken, as measured: `-O2` (and `-Os`) against the Mac's `-O1`: 17.7-18.6 M cycles a frame in all three; the vertex-buffer lookups
+  (`mtl_gpu_addr` from `draw`, 1.7 % of the thread's time), `prog_get` and `g_rmu` (under 0.2 % each) are too small to chase. `t_fbx` bk (3;
+  `-DDM_TEST_BF_KEY_NO_LMAP` fails 1), ar (`-DDM_TEST_ARENA_AUTORELEASING`: +100 on the buffer's retain count). Device check: the iPhone's
+  "translation" lines in the shrine
 - [ ] 186 62j's leads: shared storage tracked by serial (`stor_key_of`, the store lookahead and hoist), clear quads that leave `g_sd[].wrote` unset
   while `udc_dead` stores DontCare, `attr_read` without `pend_hits` (`fz_load_covers`) (DavidZande/MacNativeGames 907138d, 14142f8); the load probe's
   readback not ordered after the probed pass on Metal 4 (`lp_finish`); `DM_NVN_XV=0` in the one-at-a-time list; sentinel clears; the iPhone run with
   `DM_NVN_TBDR=1` under Metal API validation
-- [ ] 187 passes: lazy clears without the TBDR set (nxnative f5646ef), narrower encoder-start barriers with a vertex-stage check (tvc97 12ca537)
-- [ ] 188 attachment copies: copy textures without `PixelFormatView` (lossless compression), only the drawn level and layer
+- [-] batch 75 · 187 passes: lazy clears without the TBDR set (nxnative f5646ef), narrower encoder-start barriers with a vertex-stage check (tvc97
+  12ca537). Measured, not taken (Mac M5, Tears of the Kingdom with the TBDR rewrites off, its default). The render-target line now counts the
+  passes opened only to land clears and what they store: the prologue 3.2-5.8 a frame storing 19-34 MB, the iPhone's shrine save 9-11.7 storing
+  22-25 MB. Lazy clears written after nxnative (a waiting clear taken as the load action of the next pass on the same texture, level, layer and
+  view; `t_lazyclear`, 14 checks with a level-blind negative) took about 2 clears a frame in the prologue (clear-only passes 3.6 → 3.5, stored
+  19.8 → 19.5 MB) and 0-1 in the shrine. A logging run gave why the others landed: the next pass was on other targets (10,300 of ~14,000),
+  then render enables, sampling and compute dispatches; letting them wait across passes that do not touch them made it worse (sampling inside a
+  later pass split it: 22 MB more loaded and stored a frame). Removed again, the counter kept. Encoder-start barriers: in the shrine, GPU p50
+  with the full barrier 7.85-9.34 ms, with none at all 7.22-8.69 ms and with tvc97's narrow pair 7.35-8.82 ms over two rounds each, inside the
+  run-to-run spread; Apple's documentation does not say which stage an attachment's load belongs to, so a narrower barrier risks races a
+  screenshot would not show, for no measured gain
+- [-] batch 75 · 188 attachment copies: copy textures without `PixelFormatView` (lossless compression), only the drawn level and layer. Measured,
+  not taken: since 181 the decals read the tile, and the copies left are 0 a frame in the prologue and the shrine on the Mac and 5 a frame on
+  the iPhone's game over screen, the same 5 in its 20 ms and its 11.6 ms stretches (69), so they are not what costs there
 - [ ] 189 back up to 60 fps after a step down (nxnative 9409472 / b53bb89, tvc97 `nvn_cap_auto.h`: under 30 % on performance cores in two windows)
 - [ ] 190 a scene size driven by dropped frames (upstream `hle_oe.c`: an iPhone 17 Pro Max's dropped frames 23 % → 10 %), when TotK's scene size
   can change while it runs

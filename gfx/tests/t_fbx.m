@@ -21,6 +21,10 @@
 // with the vertex side not proven: one copy), fd (a viewport over part of the target: one copy). -DDM_TEST_FBX_NO_FETCH fails fa, fb and fr (4).
 // fr: an R32Float target sampled through the swizzle (red, zero, zero, one), its format's own expansion, read from the tile: (0.5, 0, 0, 1), no copy;
 // fs: the swizzle (red, red, red, one) changes what a sample returns: a copy, (0.5, 0.5, 0.5). -DDM_TEST_FBX_SWIZZLE_ANY fails fs (2).
+// bk: bf_fn's binary-keyed results (plan item 185): the same inputs give the very function the first call made, from the fast table; another
+// attachment map, colour mask or constant another one. -DDM_TEST_BF_KEY_NO_LMAP (the key without the map) fails the map check (1).
+// ar: arena_alloc hands its buffer back unretained (plan item 185): 100 allocations leave the buffer's retain count as it was.
+// -DDM_TEST_ARENA_AUTORELEASING (the autoreleasing out parameter, as before) fails it (+100).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -231,5 +235,15 @@ int main(void) { @autoreleasepool {
       uint32_t px = run(&c, &T, 1); printf("     e: %06x\n", px);
       EXPECT("e   drawing level 1, sampling level 0: C + 0.25 in level 1", 1, near(px, 0.45f, 0.65f, 0.85f));
       EXPECT("e   ... no copy (the level it reads is not the one it draws)", 0, copies() - c0); }
+    { NvShader *f = g_tfbx_keep[3]->sh[1]; int fx0[1] = {0}, fx1[1] = {1};
+      uint8_t lm0[8] = {0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, lm1[8] = {0xff, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+      id<MTLFunction> a = bf_fn(f, fx0, 1, lm0); uint64_t h0 = g_bf_fast_hits; id<MTLFunction> b = bf_fn(f, fx0, 1, lm0);
+      EXPECT("bk  the same inputs again: the same function, from the binary-keyed table", 1, a && a == b && g_bf_fast_hits == h0 + 1);
+      id<MTLFunction> m = bf_fn(f, fx0, 1, lm1), k = bf_fn(f, fx0, 3, lm0), x = bf_fn(f, fx1, 1, lm0);
+      EXPECT("bk  ... another attachment map: another function", 1, m && m != a);
+      EXPECT("bk  ... another colour mask or constant: other functions", 1, k && x && k != a && x != a && k != x); }
+    @autoreleasepool { ARENA_OUT id<MTLBuffer> b = nil; arena_alloc(256, &b); CFIndex r0 = CFGetRetainCount((__bridge CFTypeRef)b);
+      for (int i = 0; i < 100; i++) arena_alloc(256, &b);
+      EXPECT("ar  100 arena allocations: the buffer's retain count as it was (nothing autoreleased)", 0, (long)(CFGetRetainCount((__bridge CFTypeRef)b) - r0)); }
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }

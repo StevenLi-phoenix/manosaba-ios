@@ -366,8 +366,8 @@ run: \
 	DM_NVN_FBX=all MTL_DEBUG_LAYER=1 ./t_fbx
 	DM_NVN_FBX=split MTL_DEBUG_LAYER=1 ./t_fbx
 	@if echo "$(CFLAGS)" | grep -q DM_NVN_M3; then DM_TEST_NO_RESIDENCY_SET=1 MTL_DEBUG_LAYER=1 ./t_fbx > t_fbx_noset.log 2>&1; \
-	  if ! grep -q "no residency set: " t_fbx_noset.log || ! grep -q "22 checks, 0 failed" t_fbx_noset.log; then cat t_fbx_noset.log; echo "t_fbx without a residency set (plan item 176): failed"; exit 1; fi; \
-	  echo "t_fbx without a residency set (a virtual GPU's path, plan item 176): 22 checks, 0 failed"; fi
+	  if ! grep -q "no residency set: " t_fbx_noset.log || ! grep -q "26 checks, 0 failed" t_fbx_noset.log; then cat t_fbx_noset.log; echo "t_fbx without a residency set (plan item 176): failed"; exit 1; fi; \
+	  echo "t_fbx without a residency set (a virtual GPU's path, plan item 176): 26 checks, 0 failed"; fi
 	MTL_DEBUG_LAYER=1 ./t_extent
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_passgpu
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_pairs
