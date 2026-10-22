@@ -984,6 +984,8 @@ static zskip_zero g_zskip_zero[4096]; static int g_zskip_n, g_zskip_count;
 static zskip_zero g_zskip_cand[8]; static uint8_t g_zskip_cand_ok[8];
 static void zskip_clear(void);
 static int tbdr_on(void);
+enum { TBP_ZSKIP = 1, TBP_XV = 2, TBP_COVER = 4, TBP_STORE = 8, TBP_SDX = 16, TBP_DEFER = 32, TBP_FUSE = 64, TBP_HOIST = 128, TBP_DS = 256, TBP_RANGE = 512, TBP_CONT = 1024, TBP_RTHEAP = 2048 };
+static int tbdr_part(int bit);   // DM_NVN_TBDR_OFF (plan item 62j)
 static id g_cb;
 static BENC g_blit;
 static NSMutableArray<dispatch_block_t> *g_commit_blocks;
@@ -2681,7 +2683,7 @@ static int rt_heap_on(void) {
     if (v < 0) {
         const char *e = getenv("DM_NVN_RT_HEAP"), *s = getenv("DM_NVN_RT_HEAP_SCALE");   // scale: experiments only
         if (s && atof(s) >= 1) g_rth_scale = atof(s);
-        v = rt_heap_decide(e, DM_NVN_M3, DM_NVN_M3 ? 0 : tbdr_on());
+        v = rt_heap_decide(e, DM_NVN_M3, DM_NVN_M3 ? 0 : tbdr_part(TBP_RTHEAP));
         if (e && !strcmp(e, "1") && !v) {
             if (DM_NVN_M3) MLOG("DM_NVN_RT_HEAP=1: not on Metal 3 (its hazard tracking is not known to order two textures of one heap): render targets keep textures of their own");
             else MLOG("DM_NVN_RT_HEAP=1: off while the TBDR rewrites run (DM_NVN_TBDR=0 turns them off)");
@@ -3042,7 +3044,7 @@ void zskip_test_add(const char *key, int ubo_slot, int vec, int comp) {
 }
 int zskip_test_count(void) { return g_zskip_count; }
 static int g_zskip_env = -1;   // Cache of DM_NVN_ZSKIP (−1 = not read). This function is called on every draw, and getenv once took about 8% of the submit path; unit tests set it back to −1 after toggling the switch mid-run
-static int zskip_on(void) { if (g_zskip_env < 0) { const char *e = getenv("DM_NVN_ZSKIP"); g_zskip_env = !e || strcmp(e, "0"); } return g_zskip_env && tbdr_on(); }
+static int zskip_on(void) { if (g_zskip_env < 0) { const char *e = getenv("DM_NVN_ZSKIP"); g_zskip_env = !e || strcmp(e, "0"); } return g_zskip_env && tbdr_part(TBP_ZSKIP); }
 static void zskip_clear(void) { g_zskip_n = 0; memset(g_zskip_cand_ok, 0, sizeof g_zskip_cand_ok); }
 static void zskip_del(uint64_t ser) { for (int i = 0; i < g_zskip_n;) if (g_zskip_zero[i].ser == ser) g_zskip_zero[i] = g_zskip_zero[--g_zskip_n]; else i++; }
 static int zskip_has(uint64_t ser, int lv, int sl) { for (int i = 0; i < g_zskip_n; i++) if (g_zskip_zero[i].ser == ser && g_zskip_zero[i].level == lv && g_zskip_zero[i].slice == sl) return 1; return 0; }
@@ -3158,6 +3160,19 @@ static int udc_on(void) {
 // Diagnostic DM_NVN_TBDR=0: turns off all TBDR optimizations (store lookahead, load elision, same-target continuation, clear-only pass hoist, on-demand depth-stencil attach); replay takes the plainest 'attach all, load all, store all' path.
 // Only for equivalence comparison (the same replay run on / off, comparing the picture byte by byte), not a product configuration
 static int tbdr_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_TBDR"), *r = getenv("DM_NVN_RULER"); v = !(e && !strcmp(e, "0")); g_ruler_truth = r && !strcmp(r, "1"); if (!v) MLOG("DM_NVN_TBDR=0: all TBDR optimizations off (the reference for equivalence checks; Tears of the Kingdom's default on the Mac, games/totk/defaults.c)"); } return v && !g_ruler_truth; }
+// DM_NVN_TBDR_OFF=<part>[,<part>...] (diagnostic, plan item 62j): with the TBDR rewrites on, the parts named stay off: zskip, xv, cover (load
+// elision by coverage), store (store decisions), sdx (the store lookahead index), defer, fuse, hoist, ds (on-demand depth-stencil), range, cont
+// (same-target continuation), rtheap; "all" is DM_NVN_TBDR=0's set of parts
+static int tbdr_part(int bit) {
+    static int off = -1;
+    if (off < 0) { off = 0; const char *e = getenv("DM_NVN_TBDR_OFF");
+        static const char *const nm[] = {"zskip", "xv", "cover", "store", "sdx", "defer", "fuse", "hoist", "ds", "range", "cont", "rtheap"};
+        for (const char *q = e; q && *q; q = strchr(q, ',') ? strchr(q, ',') + 1 : q + strlen(q)) { size_t n = strcspn(q, ",");
+            if (n == 3 && !strncmp(q, "all", 3)) off = ~0;
+            for (int i = 0; i < 12; i++) if (strlen(nm[i]) == n && !strncmp(q, nm[i], n)) off |= 1 << i; }
+        if (e && *e) MLOG("DM_NVN_TBDR_OFF=%s: these TBDR rewrites stay off (mask %#x)", e, off); }
+    return tbdr_on() && !(off & bit);
+}
 static int rt_range_on(void) { static int v = -1; if (v < 0) { const char *e=getenv("DM_NVN_RT_RANGE"); v=e && !strcmp(e,"1"); } return v; }   // Narrow candidate, off by default
 static uint64_t g_sd_dead_bytes, g_sd_n_dead, g_sd_n_all;
 // ---------- Cross-submission attachment validity ledger ----------
@@ -3220,7 +3235,7 @@ static int xv_first_good(uint64_t ser, uint32_t lv, uint32_t sl) { for (int i = 
 static int xv_present(uint64_t ser) { for (int i = 0; i < g_xv_npresent; i++) if (g_xv_present[i] == ser) return 1; return 0; }
 static void xv_forward(void);
 static int tbdr_on(void);
-static int xv_on(void) { static int off = -1; if (off < 0) { const char *e = getenv("DM_NVN_XV"); off = e && !strcmp(e, "0"); } return !off && tbdr_on(); }
+static int xv_on(void) { static int off = -1; if (off < 0) { const char *e = getenv("DM_NVN_XV"); off = e && !strcmp(e, "0"); } return !off && tbdr_part(TBP_XV); }
 void mtl_xv_window_tex(uint64_t serial) { if (!xv_present(serial) && g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = serial; }   // Window (swapchain) texture: never enters the ledger
 void xv_test_counts(int *dc, int *viol) { if (dc) *dc = (int)g_xv_dc; if (viol) *viol = (int)g_xv_viol; }
 static void sd_finish(void);
@@ -3732,7 +3747,7 @@ static RENC rp_begin_ex(int clear_only) {
         pd.colorAttachments[i].clearColor = R.cc[i];
         { static long long rtc = -2; if (rtc == -2) { const char *e = getenv("DM_NVN_RTCLEAR"); rtc = e ? atoll(e) : -1; }   // diagnostic: passes on this colour serial start cleared to magenta (does the attachment reach the texture?)
           if (rtc >= 0 && R.rt.color[i]->serial == (uint64_t)rtc) { pd.colorAttachments[i].loadAction = MTLLoadActionClear; pd.colorAttachments[i].clearColor = MTLClearColorMake(1, 0, 1, 1); } }
-        int cov = tbdr_on() && !R.clear_c[i] && (g_fd_dw || g_fd_di) && fz_load_covers(i, pd.colorAttachments[i].texture, pd.colorAttachments[i].level);
+        int cov = tbdr_part(TBP_COVER) && !R.clear_c[i] && (g_fd_dw || g_fd_di) && fz_load_covers(i, pd.colorAttachments[i].texture, pd.colorAttachments[i].level);
         if (!R.clear_c[i] && (g_fd_dw || g_fd_di) && !cov) PD("Q %llu c%d load not elidable why=%d", g_stat_pass + 1, i, g_fd_why);
         if (cov) {
             static int probe = -1; if (probe < 0) { probe = getenv("DM_NVN_LOADPROBE") ? atoi(getenv("DM_NVN_LOADPROBE")) : 0; if (probe) MLOG("DM_NVN_LOADPROBE: attachments with an elidable load are cleared to a sentinel color instead and read back for verification"); }
@@ -3937,6 +3952,17 @@ static void clear_quad_draw(RENC en, id<MTLRenderPipelineState> ps, id<MTLDepthS
     enc_r_cull(en, MTLCullModeNone); enc_r_fill(en, MTLTriangleFillModeFill); enc_r_depth_bias(en, 0, 0, 0); enc_r_depth_clip(en, YES); enc_r_depth_bounds(en, 0, 1);
     enc_r_draw_instanced(en, MTLPrimitiveTypeTriangle, 0, 3, 1, 0);
 }
+// A clear drawn as a quad writes its attachments like a draw (plan item 62j): without this a pass that loaded them and had only such clears stored
+// DontCare (udc_dead), and the clear was lost. Tears of the Kingdom with the TBDR rewrites on: the prologue's glow over half the picture and the
+// trail behind Zelda's torch (iPhone and Mac, product60). t_clearquad; -DDM_TEST_CLEARQUAD_UNNOTED as before
+static void sd_note_quad(int color_idx, int depth, int stencil) {
+#ifndef DM_TEST_CLEARQUAD_UNNOTED
+    for (int i = 0; i < g_nsd; i++) { sd_att *t = &g_sd[i];
+        if ((t->depth == 0 && color_idx >= 0 && t->idx == color_idx) || (t->depth == 1 && depth) || (t->depth == 2 && stencil)) { t->wrote = 1; t->wwhy = 6; t->pw = 1; } }
+#else
+    (void)color_idx; (void)depth; (void)stencil;
+#endif
+}
 static void clear_quad(const p_clear_color *c) {
     if (!(c->mask & 0xf) || c->index < 0 || c->index >= 8) return;
     // A slot attached at two indices is attached once (rt_dup_slot): its clear goes to the index kept (seedds/nxnative 7dde056, MIT; t_nvn 6c3)
@@ -3972,7 +3998,7 @@ static void clear_quad(const p_clear_color *c) {
         if (!ps) { RED_ONCE(76, "partial color clear of attachment %d (Metal format %u) not drawn: %s (first case; an integer format needs an integer clear shader)", i, g_pass.cfmt[i], e.localizedDescription.UTF8String); return; }
         cache[key] = ps;
     }
-    clear_quad_draw(en, ps, dss, 0, sc);
+    clear_quad_draw(en, ps, dss, 0, sc); sd_note_quad(at, 0, 0);
 }
 static void clear_ds_quad(const p_clear_ds *c) {
     if (g_enc && ((c->depth_mask && !g_pass.hd) || ((c->stencil_mask & 255) && !g_pass.hs))) rp_end();
@@ -4009,7 +4035,7 @@ static void clear_ds_quad(const p_clear_ds *c) {
             st.depthStencilPassOperation = MTLStencilOperationReplace; st.writeMask = sm; d.frontFaceStencil = d.backFaceStencil = st; }
         ds = [g_dev newDepthStencilStateWithDescriptor:d]; states[dk] = ds;
     }
-    clear_quad_draw(en, ps, ds, (uint32_t)c->stencil, sc);
+    clear_quad_draw(en, ps, ds, (uint32_t)c->stencil, sc); sd_note_quad(-1, (int)dw, sm != 0);
 }
 
 
@@ -5975,7 +6001,7 @@ static void sd_need(sd_att *t, int why) { if (!t->state) { t->state = 1; t->why 
 static int sdx_decide(uint8_t st[9]);   // Store lookahead decision (for the index see mtl_sub_index)
 static void sd_finish(void) {
     if (!g_nsd) return;
-    if (!tbdr_on()) {   // All optimizations off: always write back
+    if (!tbdr_part(TBP_STORE)) {   // All optimizations off: always write back
         for (int i = 0; i < g_nsd; i++) { sd_att *t = &g_sd[i];
             enc_r_store(g_enc, t->depth, MTLStoreActionStore, (NSUInteger)t->idx); }
         g_nsd = 0; return; }
@@ -5999,7 +6025,7 @@ static void sd_finish(void) {
         g_sd_n_all++; if (dead) { g_sd_n_dead++; g_sd_dead_bytes += t->bytes; g_bw_store -= t->bytes; if (udc_dead) g_udc_saved_bytes += t->bytes; }
         if (!t->state) t->why = 5;
         PD("Z %llu %s ser=%llu lv%u sl%u %s why=%d by=%s slot=%d", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, xvdead ? "dontcare-xv" : dead ? "dontcare" : "store", dead ? 0 : t->why, t->why == 1 && t->wkey ? t->wkey : "-", t->wslot);
-        if (udc_on()) PD("U %llu %s ser=%llu lv%u sl%u runtime=%s reason=%s state=%d load=%d", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, t->wrote ? "wrote" : "not-written", t->wwhy == 1 ? "image-write" : t->wwhy == 2 ? "color-write-mask" : t->wwhy == 3 ? "fragment-output" : t->wwhy == 4 ? "depth-write" : t->wwhy == 5 ? "stencil-write" : "none", t->state, t->load);
+        if (udc_on()) PD("U %llu %s ser=%llu lv%u sl%u runtime=%s reason=%s state=%d load=%d", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, t->wrote ? "wrote" : "not-written", t->wwhy == 1 ? "image-write" : t->wwhy == 2 ? "color-write-mask" : t->wwhy == 3 ? "fragment-output" : t->wwhy == 4 ? "depth-write" : t->wwhy == 5 ? "stencil-write" : t->wwhy == 6 ? "clear-quad" : "none", t->state, t->load);
     }
     g_nsd = 0;
 }
@@ -6526,7 +6552,7 @@ static void sdx_walk(const uint8_t *p, int depth) {
     }
 }
 void mtl_sub_index(const uint64_t *h, int n) {   // Start of submit (hle_nvn.c QueueSubmitCommands): build this submit's store lookahead index
-    g_xv_ntouch = 0; g_sdx_n = g_sdx_nop = 0; g_rtx_n = g_drx_n = 0; g_exec_seq = 0; g_sdx_ok = tbdr_on();
+    g_xv_ntouch = 0; g_sdx_n = g_sdx_nop = 0; g_rtx_n = g_drx_n = 0; g_exec_seq = 0; g_sdx_ok = tbdr_part(TBP_SDX);
     if (!g_sdx_ok) { g_xv_n = 0; g_xv_block = 1; return; }   // Index unavailable: clear the ledger and add nothing in this submit (the next touch cannot be verified)
     g_xv_block = 0;
     memset(g_sdx_hk, 0, sizeof g_sdx_hk); g_sdx_nb = 0;
@@ -6733,9 +6759,9 @@ static int prog_samples_ser(const prog_t *pg, uint64_t tex[6][128], uint64_t img
 static int g_defer_env_ab, g_defer_env_off;   // Environment switches: read once at the start of each submit (defer_reset); the hot path does not call getenv
 static void defer_env(void) { const char *x = getenv("DM_NVN_DEFER_AB"), *e = getenv("DM_NVN_DEFER"); g_defer_env_ab = x && !strcmp(x, "1"); g_defer_env_off = e && !strcmp(e, "0"); }
 static int defer_on(void) {
-    if (!g_defer_env_ab) return tbdr_on() && !g_defer_env_off;
+    if (!g_defer_env_ab) return tbdr_part(TBP_DEFER) && !g_defer_env_off;
     if (g_defer_ab < 0) { g_defer_ab = 0; g_defer_ab_on = 0; }
-    return tbdr_on() && (g_defer_ab || g_defer_ab_on); }
+    return tbdr_part(TBP_DEFER) && (g_defer_ab || g_defer_ab_on); }
 static int defer_handle_sub(uint64_t h, const p_set_rt *r, int k, int cover) {
     int tid = h_tid(h); if (!tid || tid >= g_ntreg || !g_treg[tid].ok) return 0;
     uint64_t ser; int lv, sl; rt_sub(r, k, &ser, &lv, &sl); if (!ser || g_treg[tid].t.serial != ser) return 0;
@@ -6998,7 +7024,7 @@ static void fuse_try(void) {
             case OP_SET_RT: {
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
                 if (rt_same(&R.rt, a)) {
-                    if (g_enc_mode == 1 || pend || !R.has_rt || !tbdr_on() || nreuse >= 8) return;
+                    if (g_enc_mode == 1 || pend || !R.has_rt || !tbdr_part(TBP_FUSE) || nreuse >= 8) return;
                     reuse[nreuse++] = p; continue;
                 }
                 r2 = a; r2op = p; continue;
@@ -7729,11 +7755,11 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         if (x1 <= x0 || y1 <= y0) return;
     }
     int defer_q_draw = !g_enc && !g_defer_replaying && g_defer_natq > 0;   // The draw that opens Q's render pass: after the render pass is opened as usual through hoist_try / fuse_try, replay P first and then draw this one
-    if (!g_enc && tbdr_on()) hoist_try();   // First hoist and execute the pure-clear render passes sandwiched between this render pass and its continuation (before rp_begin_ex, not occupying this render pass)
+    if (!g_enc && tbdr_part(TBP_HOIST)) hoist_try();   // First hoist and execute the pure-clear render passes sandwiched between this render pass and its continuation (before rp_begin_ex, not occupying this render pass)
     // The deferral decision comes after hoist_try: hoisted pure-clear render passes are skipped in the lookahead, and only then can P's same-target continuation segment be recognized
-    if (!g_enc && tbdr_on() && !defer_has_in_p() && !g_defer_replaying && !g_fz.active && !g_fz_checking && g_exec_next) { defer_try(dw, di); if (g_defer_cur->active && g_defer_cur->in_p) return; }
-    if (!g_enc && tbdr_on() && !g_fz_checking) fuse_try();   // Readable tile render pass merge is on by default; when the structure / same-pixel proof does not hold it still falls back to a normal render pass, and it is not re-entered during the CHECK redraw
-    int need = g_enc || !tbdr_on() ? 3 : pass_ds_need(), mode = defer_q_draw ? 0 : need == 0 ? 2 : need == 2 ? 3 : need == 1 ? 4 : 0;   // 2 attach neither, 3 attach stencil only, 4 attach depth only
+    if (!g_enc && tbdr_part(TBP_DEFER) && !defer_has_in_p() && !g_defer_replaying && !g_fz.active && !g_fz_checking && g_exec_next) { defer_try(dw, di); if (g_defer_cur->active && g_defer_cur->in_p) return; }
+    if (!g_enc && tbdr_part(TBP_FUSE) && !g_fz_checking) fuse_try();   // Readable tile render pass merge is on by default; when the structure / same-pixel proof does not hold it still falls back to a normal render pass, and it is not re-entered during the CHECK redraw
+    int need = g_enc || !tbdr_part(TBP_DS) ? 3 : pass_ds_need(), mode = defer_q_draw ? 0 : need == 0 ? 2 : need == 2 ? 3 : need == 1 ? 4 : 0;   // 2 attach neither, 3 attach stencil only, 4 attach depth only
     int skip_d = mode != 0;
     if (!g_enc) { g_fd_dw = dw; g_fd_di = di; }
     id<MTLRenderCommandEncoder> en = rp_begin_ex(mode);
@@ -8495,13 +8521,13 @@ void mtl_exec(const uint8_t *p) {
                 const p_set_rt *r = a;
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
-                if (g_enc && !pend && R.has_rt && tbdr_on() && rt_range_same(&R.rt,r)) {
+                if (g_enc && !pend && R.has_rt && tbdr_part(TBP_RANGE) && rt_range_same(&R.rt,r)) {
                     g_rt_merged = g_rt_range_active = g_rt_range_pending = 1; R.rt = *r; break; }
-                if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_on() && rt_same(&g_fz.rt1, r)) {
+                if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_part(TBP_FUSE) && rt_same(&g_fz.rt1, r)) {
                     g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); break; }
                 // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)
                 if (g_enc && g_lay.active && !pend && lay_continue(r)) break;   // another layer of the layered pass
-                if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && tbdr_on() && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); R.rt = *r; break; }
+                if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && tbdr_part(TBP_CONT) && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); R.rt = *r; break; }
                 rp_flush(); R.rt = *r; R.has_rt = 1; break;
             }
             case OP_RENDER_ENABLE: { const p_render_enable *r = a;   // SetRenderEnable: off discards clears and draws until it is on again (queue state, kept across command buffers)

@@ -917,19 +917,33 @@ Tier 4, large:
     fps on a cool phone, 30 on a hot one): `host/coolstart.h`, `host/tests/t_coolstart.c`
   - [ ] 62g one varying interface as a fallback library (bayonetta3: every vertex shader exports the union of the pixel inputs) if a device's log
     shows a "not written by vertex shader" failure (item 137: none on the Mac since chain bab8d4746968; the red line names both keys)
-  - [ ] 62h render targets of virtual pools in a heap on for iOS (`DM_NVN_RT_HEAP=1`, item 138: 140-190 MB less GPU memory on the cliff save)
+  - [x] batch 76 · 62h render targets of virtual pools in a heap on for iOS (`DM_NVN_RT_HEAP=1`, item 138: 140-190 MB less GPU memory on the cliff save)
     after screenshot comparisons over more scenes; with the TBDR rewrites on it needs them alias-aware (pass merges and content facts by heap
     range) or stays off. Since batch 64 Tears of the Kingdom runs without the TBDR rewrites on iOS, so the heap is on there by default (the iPhone's
-    log of 2026-10-21 says so); the comparisons over more scenes are still to do
+    log of 2026-10-21 says so). Compared on the iPhone 17 Pro on 2026-10-22 (product60): the prologue from an empty save (12 shots, frames 1300-3500)
+    and Great Sky Island standing (5 shots): with `DM_NVN_RT_HEAP=0` the same pictures (looked at; on the island the difference to a heap run is
+    below that between two heap runs). GPU memory on the island 2,076-2,088 MB with the heap against 2,186 MB without (RSS 3.6 GB there), the
+    prologue 1,933 / 1,920 MB. Kept on
   - [x] batch 64 · 62i what the first device run needed: the game data located off the main thread with a screen saying so (the 16 RomFS parts took
     4.5 minutes to unpack and the 304,243 files 14 s to walk; on the main thread the launch watchdog ends the app); `DM_CACHE` in Library/Caches on
     iOS (unset, the Mac's default path does not exist there and CreateCacheStorage failed 933,995 times in 10 s into the log, now at most 3 lines);
     `games/totk/survey.c` through vm_read_overwrite (the iOS SDK's mach_vm.h is an #error). Install before copying the parts: `run.sh install` backs
     the app's Documents up, parts included (16 GB back to the Mac)
-  - [ ] 62j the TBDR rewrite that breaks on the phone: with them on the iPhone drew a trail behind Zelda's torch and a glow over half the picture
+  - [x] batch 76 · 62j the TBDR rewrite that breaks on the phone: with them on the iPhone drew a trail behind Zelda's torch and a glow over half the picture
     (the prologue's frame 1300 from an empty save); off, the picture is the Mac's, so Tears of the Kingdom runs without them on iOS too since batch
     64 (`games/totk/defaults.c`). Each rewrite off in turn (store lookahead, load elision, same-target continuation, clear-only hoist, on-demand
-    depth-stencil) against that shot names it
+    depth-stencil) against that shot names it.
+    Found 2026-10-22: the Mac shows it too with product60 at 60 Hz (`DM_NVN_TBDR=1`, frames 2300 and 3500 of the prologue: brightness 83.8 / 119.8
+    against 45.1 / 75.9). `DM_NVN_TBDR_OFF=<part>[,...]` (new, diagnostic) turns single rewrites off: only `store` cured it (44.8 / 75.8); the
+    other eleven parts and the store lookahead alone did not. The store decision's unwritten-DontCare (a pass that loaded an attachment and did
+    not write it stores DontCare) never saw clears drawn as quads (`clear_quad`, `clear_ds_quad`: scissored or masked clears), so a pass that
+    loaded a target and only cleared part of it lost the clear (186's lead from DavidZande/MacNativeGames 907138d). Such a clear now marks its
+    attachments written (`sd_note_quad`). With it `DM_NVN_TBDR=1` gives the TBDR-off picture on the Mac (43.8 / 74.9, looked at) and on the
+    iPhone 17 Pro (the prologue, no glow and no trail). `gfx/tests/t_clearquad.m` (`-DDM_TEST_CLEARQUAD_UNNOTED` fails q1).
+    The default stays off on iOS too: on the iPhone 17 Pro (Great Sky Island, standing, product60, two runs each, alternating) `DM_NVN_TBDR=1`
+    loaded 194 MB and stored 205 MB a frame against 229-244 / 263-279 MB, its passes took 22.8 against 24.3 ms of GPU, but frames took 66.6
+    against 33.4 ms: the translation thread's CPU rose from 7.4-7.8 to 12.5-12.7 ms a frame and, without the mid-submission commits the
+    rewrites rule out, the GPU starts only once the submission is encoded (12.7 + 25 ms misses the 30 fps slot)
   - [x] batch 65 · 62k a cave wall missing from some camera angles (the player on the iPhone, not on the console; on the Mac too: the iPhone's
     cave save, Link climbing the rock at the cave's start). The wall was two draws (6636 and 1647 indices) that the game left out whenever its
     CPU frustum test put their bounds outside the view, which was right: they were drawn where another mesh is. The cave meshes decode their
@@ -1169,10 +1183,11 @@ the device the user's iPhone 17 Pro):
   25.5 → 17.8 M cycles (the thread busy 25.6 → 21.2 % of the time); the CPU milliseconds move less because the Mac lowers the clock with the
   load. Not taken, as measured: `-O2` (and `-Os`) against the Mac's `-O1`: 17.7-18.6 M cycles a frame in all three; the vertex-buffer lookups
   (`mtl_gpu_addr` from `draw`, 1.7 % of the thread's time), `prog_get` and `g_rmu` (under 0.2 % each) are too small to chase. `t_fbx` bk (3;
-  `-DDM_TEST_BF_KEY_NO_LMAP` fails 1), ar (`-DDM_TEST_ARENA_AUTORELEASING`: +100 on the buffer's retain count). Device check: the iPhone's
-  "translation" lines in the shrine
+  `-DDM_TEST_BF_KEY_NO_LMAP` fails 1), ar (`-DDM_TEST_ARENA_AUTORELEASING`: +100 on the buffer's retain count). On the iPhone 17 Pro (batch 76's
+  install, Great Sky Island standing, ~4,300 draws a frame, against batch 74's on the same save): 28,500-28,900 → 22,700-23,500 instructions a
+  draw, 31-33 → 28-30 M cycles and 7.8-9.7 → 7.1-7.8 ms of translation CPU a frame
 - [ ] 186 62j's leads: shared storage tracked by serial (`stor_key_of`, the store lookahead and hoist), clear quads that leave `g_sd[].wrote` unset
-  while `udc_dead` stores DontCare, `attr_read` without `pend_hits` (`fz_load_covers`) (DavidZande/MacNativeGames 907138d, 14142f8); the load probe's
+  while `udc_dead` stores DontCare (done in 62j: it was the glow), `attr_read` without `pend_hits` (`fz_load_covers`) (DavidZande/MacNativeGames 907138d, 14142f8); the load probe's
   readback not ordered after the probed pass on Metal 4 (`lp_finish`); `DM_NVN_XV=0` in the one-at-a-time list; sentinel clears; the iPhone run with
   `DM_NVN_TBDR=1` under Metal API validation
 - [-] batch 75 · 187 passes: lazy clears without the TBDR set (nxnative f5646ef), narrower encoder-start barriers with a vertex-stage check (tvc97
