@@ -16,7 +16,7 @@ typedef struct { uint64_t t[PERFLINE_RING]; unsigned n; } perfline_ring;
 typedef struct {
     perfline_ring game, screen;                                   // present times, on-screen times (writer only)
     double gpu[PERFLINE_AVG], gpu_sum; unsigned ngpu;
-    _Atomic double fps, screen_fps, gpu_ms; _Atomic uint64_t last_ns;   // what readers see
+    _Atomic double fps, screen_fps, gpu_ms; _Atomic uint64_t last_ns, screen_seen_ns;   // what readers see; screen_seen_ns: the last present when a screen time came
 } perfline;
 
 // Adds t (not before the last one) and returns the rate over the second up to it
@@ -40,6 +40,7 @@ static inline void perfline_screen(perfline *p, uint64_t shown) {
     if (!shown) return;
     if (p->screen.n && shown <= p->screen.t[(p->screen.n - 1) % PERFLINE_RING]) return;   // not a new frame on screen
     atomic_store_explicit(&p->screen_fps, perfline_rate(&p->screen, shown), memory_order_relaxed);
+    atomic_store_explicit(&p->screen_seen_ns, atomic_load_explicit(&p->last_ns, memory_order_relaxed), memory_order_relaxed);
 }
 static inline void perfline_gpu(perfline *p, double ms) {
 #ifndef DM_TEST_PERFLINE_SINCE_START
@@ -50,13 +51,21 @@ static inline void perfline_gpu(perfline *p, double ms) {
     p->gpu_sum += ms; p->ngpu++; atomic_store_explicit(&p->gpu_ms, p->gpu_sum / p->ngpu, memory_order_relaxed);
 #endif
 }
-// "30 fps · on screen 30 · GPU 6.1 ms" (no screen part without a window, "GPU –" before the first GPU time), "no frame yet", or "no frame for
-// 3.2 s"; returns snprintf's count
+// "30 fps · on screen 30 · GPU 6.1 ms" (no screen part without a window, "on screen –" without a screen time for 1.5 s, "GPU –" before the
+// first GPU time), "no frame yet", or "no frame for 3.2 s"; returns snprintf's count
 static inline int perfline_fmt(perfline *p, uint64_t now, char *out, size_t n) {
     uint64_t last = atomic_load_explicit(&p->last_ns, memory_order_acquire);
     if (!last) return snprintf(out, n, "no frame yet");
     if (now > last && now - last > 1500000000ull) return snprintf(out, n, "no frame for %.1f s", (now - last) / 1e9);
     double fps = atomic_load_explicit(&p->fps, memory_order_relaxed), sc = atomic_load_explicit(&p->screen_fps, memory_order_relaxed), g = atomic_load_explicit(&p->gpu_ms, memory_order_relaxed);
     char gs[24]; if (g > 0) snprintf(gs, sizeof gs, "%.1f ms", g); else snprintf(gs, sizeof gs, "–");
+    // No screen time for 1.5 s of presents (plan item 215): every frame discarded, or none shown at all, as while an iPhone is mirrored (locked:
+    // presentedTime 0 for every frame, 2026-10-22); the old rate stayed ("on screen 98" long after)
+    uint64_t seen = atomic_load_explicit(&p->screen_seen_ns, memory_order_relaxed);
+#ifndef DM_TEST_PERFLINE_STALE_SCREEN   // negative control of t_perfline only: the last rate kept, as before
+    if (sc > 0 && last > seen && last - seen > 1500000000ull) return snprintf(out, n, "%.0f fps · on screen – · GPU %s", fps, gs);
+#else
+    (void)seen;
+#endif
     return sc > 0 ? snprintf(out, n, "%.0f fps · on screen %.0f · GPU %s", fps, sc, gs) : snprintf(out, n, "%.0f fps · GPU %s", fps, gs);
 }

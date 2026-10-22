@@ -1,0 +1,9 @@
+# Shaders whose MSL source the iOS app carries for their sampler border variants (plan item 214; gfx/nvn/nvn_mtl.m border_variant): an iOS app
+# carries only the libraries, and these sample through a sampler whose border colour Metal lacks (the grass interaction map's (0.5, 0.5, 0.5,
+# 0.5): drawn as transparent black the Mac's grass lay flat and could not be cut, plan item 161; without its variant the edge colour is drawn).
+# Seen in the Mac's runs and the iPhone's of 2026-10-21 / 22; one not listed here is named in red on the device ("its MSL source is not here").
+# TotK has 7,751 vertex shaders that sample a texture (370 MB of MSL): all of them would be too much to carry as text.
+ff9def5b3c418851_b
+8126ed56ae359349_b
+86b5745642f11b32_b
+11687c00bab7d73b_b

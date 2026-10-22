@@ -5044,7 +5044,8 @@ static void pair_note(NvShader *vs, NvShader *fs) {
 // coordinate is outside [0, 1]: its MSL with each `X.sample(spvDescriptorSet0.<sampler>, ` made `dm_border_sample(colour, X, spvDescriptorSet0.<sampler>, `
 // (2D, 2D array and 3D textures; cubes have no border; depth gives the colour's red), compiled as dmsh_build.py compiles (safe math, invariance kept).
 // The variant is another NvShader with the same reflection, so its pipelines have keys of their own while the warm-up list records the plain ones.
-// The source is the shader's .metal beside its library: the Mac's workspace has it, an iOS app does not (a red line once: drawn with the edge colour).
+// The source is the shader's .metal beside its library: the Mac's workspace has it; an iOS app carries those of the game's border_msl.txt (plan
+// item 214, ios/tools/border_msl.py) and compiles the variant on the device; another one gets a red line once and the edge colour.
 // Tears of the Kingdom's grass interaction map samples with border (0.5, 0.5, 0.5, 0.5): drawn as transparent black, the grass lay flat and could not
 // be cut. Checked by gfx/tests/t_border.m
 // ax: the axes whose wrap mode is a border (bit 0 s, 1 t, 2 r; plan item 204, MacNativeGames PR #148 / be82504, MIT): a coordinate outside [0, 1]

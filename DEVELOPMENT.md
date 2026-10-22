@@ -1256,6 +1256,19 @@ iOS:
   reads the default C string encoding (Mac Roman), so UTF-8's "·" became "¬∑"; the Mac window's title, "<game title> — <fps line>", the same
   with a Chinese or Japanese title. `host/ns_text.h` `dm_ns_text` (UTF-8, other bytes one character each) in `log_overlay.m` and `front_mac.m`;
   the other `%s` in NSString formats carry ASCII (game id, chain, shader keys). `host/tests/t_ns_text.m`; `DM_TEST_NS_TEXT_DEFAULT_ENCODING` fails 2
+- [x] batch 73 · 214 sampler border colours Metal lacks on iOS (161 there): the walk on the iPhone (2026-10-22, the user's save on the Great Sky
+  Island) named `ff9def5b3c418851_b` in red, "its MSL source is not here": the grass interaction map's (0.5, 0.5, 0.5, 0.5), which drawn as
+  transparent black laid the Mac's grass flat (161); without the variant the edge colour is drawn. `games/totk/border_msl.txt` lists the shaders
+  met (ff9def5b3c418851_b, 8126ed56ae359349_b, 86b5745642f11b32_b, 11687c00bab7d73b_b: each walk met another grass vertex shader), and
+  `ios/tools/border_msl.py` copies their .metal from the Mac's MSL (the iOS libraries are compiled from the same MSL) with every vertex shader
+  whose texture bindings are a listed vertex shader's (309 more, 7.3 MB in all; TotK's 7,751 vertex shaders that sample are 370 MB of MSL);
+  `border_variant` compiles the variant on the device (MacNativeGames 852f862 builds its variants into the app ahead of time). On the iPhone 17
+  Pro: 7 variants compiled in the first world load (ff9def5b3c418851_b and six vertex shaders, four of them found by their bindings), no border
+  red line, one 40 ms frame at the first; 60 fps, GPU 11.8 ms. `tools/tests/t_border_msl.py` (`DM_TEST_BORDER_MSL_NONE=1` fails 2,
+  `DM_TEST_BORDER_MSL_LISTED_ONLY=1` fails 1)
+- [x] batch 73 · 215 the fps line kept its last "on screen" rate when no frame came with a screen time: while an iPhone is mirrored (locked) every frame's
+  presentedTime is 0 (the walk: "[perf] ... intervals 0/0/0, dropped 600" in every 10 s), so a session mirrored after play showed "on screen 98"
+  for good. Now "on screen –" after 1.5 s of presents without one. `t_perfline` +3 (`DM_TEST_PERFLINE_STALE_SCREEN` fails 1)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the
