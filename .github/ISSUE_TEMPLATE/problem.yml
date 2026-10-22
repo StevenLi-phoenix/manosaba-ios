@@ -1,0 +1,46 @@
+name: Problem report
+description: Something does not work or looks wrong in a game on iPhone, iPad or Mac
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Do not attach game files, keys, dumps, rewritten modules or IPAs.
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options:
+        - Tears of the Kingdom 1.4.3
+        - 魔法少女ノ魔女裁判 (manosaba) 2.0.4b
+        - Another game (say which below)
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and system
+      placeholder: iPhone 17 Pro, iOS 26.4 / MacBook Air M3, macOS 26.1
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: The commit (git rev-parse --short HEAD), iOS 26 or iOS 18 (DM_IOS_M3=1), and for Tears of the Kingdom the 30 or 60 fps product.
+      placeholder: 5ee1644, iOS 26, 60 fps product
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, what you expected, and how to get there (where in the game, what you pressed). Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Diagnostics or log
+      description: |
+        iOS: touch and hold the app's icon → Export Diagnostics, and attach the file.
+        Mac: ~/Library/Logs/<game id>/host.log for the .app, or the terminal output of host/dmhost.

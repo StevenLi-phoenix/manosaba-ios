@@ -5,9 +5,10 @@ processor, so the game's own aarch64 code executes directly. Only the few instru
 offline; the console's system services and its NVN graphics API are reimplemented by a small host on Apple's frameworks and Metal; the game's
 shaders are translated to Metal ahead of time.
 
-The supported game is **魔法少女ノ魔女裁判** (manosaba), Switch version 2.0.4b. **The Legend of Zelda: Tears of the Kingdom** 1.4.3 is in
-progress on the Mac ([status](#status-tears-of-the-kingdom-143-in-progress)). The code is organized so that another game is a new directory
-under `games/` plus whatever services and graphics paths that game needs: see [PORTING.md](PORTING.md).
+The games are **魔法少女ノ魔女裁判** (manosaba), Switch version 2.0.4b, and **The Legend of Zelda: Tears of the Kingdom** 1.4.3, which plays
+on the Mac and on the iPhone and is newer and less tested ([status](#status-tears-of-the-kingdom-143)). The code is organized so that another
+game is a new directory under `games/` plus whatever services and graphics paths that game needs: see [PORTING.md](PORTING.md). Found a
+problem? [Report it](#reporting-problems).
 
 It is a fork of [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile), which ported Diablo II: Resurrected the same way; the D2R-specific code
 has been removed here.
@@ -44,13 +45,24 @@ with their parsed scripts and UI objects (a census of the managed heap after 9 r
 The Switch version is reported to end with an error now and then in long sessions too, and version 2.0.4's notes say such errors were made less
 likely.
 
-## Status (Tears of the Kingdom 1.4.3, in progress)
+## Status (Tears of the Kingdom 1.4.3)
 
-On the Mac, in a window: the title screen, the prologue with its tutorial and pre-rendered cutscenes (VP9 movies, decoded with libvpx), and the
-dive from the Great Sky Island. The default product runs at 30 fps; a product with the frame-rate rules runs at 60 fps and up, with a RomFS
-overlay that `games/totk/romfs_overlay.py` builds from your own RomFS. Open: a crash after skipping the second blood moon movie; alpha test
-and stencil views not modelled; six-axis and vibration are stubs. iPhone and iPad: not verified; known to be missing there are a VP9 decoder
-in the iOS app and the BC render target path for GPUs without BC. Details: [DEVELOPMENT.md](DEVELOPMENT.md#next-game-tears-of-the-kingdom-started-2026-10-17).
+Played on a Mac (Apple silicon, macOS 26) in a window and on an iPhone 17 Pro (iOS 26.4, free developer account, handheld mode):
+
+- the title screen, the prologue with its tutorial and pre-rendered cutscenes (VP9 movies, decoded with libvpx, also on the iPhone), the dive
+  from the Great Sky Island and play after it;
+- frame rate: the default product runs at 30 fps; a product with the frame-rate rules runs at 60 fps (on the iPhone the game's own controller
+  then picks 60, 30 or 20 by its frame time) with a RomFS overlay that `games/totk/romfs_overlay.py` builds from your own RomFS: without it
+  the quick menus (the ability wheel) draw over black;
+- on the iPhone: on-screen controls (a floating stick, the buttons and a camera swipe; a game controller turns them off), the RomFS carried
+  as 1 GiB parts and unpacked at the first launch ([ios/README.md](ios/README.md#on-the-device)), and the increased memory limit signed by a
+  free account (6.1 GB on the iPhone 17 Pro).
+
+Not verified or known open: other iPhones and iPads (iPhones with an A14, A15 or A16 have no BC texture support: BC1 is turned into ASTC, the
+other BC formats are decompressed, so the game needs more memory there); the iOS 18 (Metal 3) build with this game; stencil views are not
+modelled; motion controls and a controller's rumble are implemented but not yet checked with a controller. A crash after skipping the blood
+moon movie (Mac, 2026-10-19) did not come back when the movie was skipped on the iPhone with the 60 fps product (2026-10-22); with the 30 fps
+product it has not been tried again. Details: [DEVELOPMENT.md](DEVELOPMENT.md#next-game-tears-of-the-kingdom-started-2026-10-17).
 
 ## How it works
 
@@ -79,6 +91,19 @@ in the iOS app and the BC render target path for GPUs without BC. Details: [DEVE
    ```
 
 4. iPhone / iPad: [ios/README.md](ios/README.md). Mac app: `tools/mac_app.sh`.
+
+## Reporting problems
+
+Problems are welcome as [GitHub issues](https://github.com/iceorange-dev/manosaba-ios/issues/new/choose). Please say:
+
+- the game and its version, the device and its iOS or macOS version;
+- the build: the commit, iOS 26 or iOS 18 (`DM_IOS_M3=1`), and for Tears of the Kingdom the 30 or 60 fps product;
+- what happened and how to get there (where in the game, what you pressed);
+- on iOS, attach the diagnostics file: touch and hold the app's icon → Export Diagnostics (device, GPU, memory, settings and the last logs;
+  [ios/README.md](ios/README.md#on-the-device)). On the Mac, the log: `~/Library/Logs/<game id>/host.log` for the `.app`, the terminal
+  output for `host/dmhost`.
+
+Do not attach game files, keys, dumps, rewritten modules or IPAs.
 
 ## Documentation
 

@@ -171,7 +171,8 @@ the references for a symptom before building probes, then measure to confirm the
 crashed 3 s later in its resource control thread (0x1006, loop main+0x154bd0, which names `ClearCachesForKeepAllocSize` / `Unload(ForSync)`):
 main+0xa2ef08 reads the resource at +0x28 of a binder of type 0xe (+0xc) after waiting for it (`WaitLightEvent` at 0xa2ee2c) and +0x28 is null;
 registers name `Obj_TreeWhiteBirch…`. The SDK's `WaitLightEvent` trusts a 0 result of `WaitForAddress`, and our address arbiter only returns 0
-from `SignalToAddress`. Not reproduced yet; the thread dump marks the thread that writes it.
+from `SignalToAddress`. Not reproduced yet; the thread dump marks the thread that writes it. 2026-10-22: the user skipped the blood moon
+movie in play on the iPhone (the 60 fps product, 5ee1644) and the game went on without a crash.
 
 Known gaps as of 2026-10-19: alpha test and depth-stencil (stencil) views are not modelled; an integer render target's partial clear is not drawn
 (red line); iOS needs `DM_CACHE` and the large heap. Since taken up in the plan: the BC render target path for GPUs without BC (62c3), hid
@@ -387,8 +388,9 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
 
 - The user at the Mac (a window, sudo, a display): 97 (`powermetrics`), 71b (the covered window), 71d (a display above 120 Hz), the window
   checks of 123 (the 30 fps setting) and 127.
-- Play or saves: 72 (a blood moon), 69 (game over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the
-  checks of 161 (grass), 163 (hair and cloth), 165 (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
+- Play or saves: 72 (a blood moon skip with the 30 fps product; with the 60 fps one on the iPhone the game went on, 2026-10-22), 69 (game
+  over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the checks of 161 (grass), 163 (hair and cloth), 165
+  (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
 - The console: 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
 - An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
   134, 135, 140, 173, 175, and manosaba's part of 142).
@@ -1166,4 +1168,5 @@ the device the user's iPhone 17 Pro):
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the
-  hold, without it (`DM_INACTIVITY_FPS=0`) and with the 30 fps product (needs a blood moon in play: the user)
+  hold, without it (`DM_INACTIVITY_FPS=0`) and with the 30 fps product (needs a blood moon in play: the user). 2026-10-22: skipped with the
+  hold on the iPhone (the 60 fps product, 5ee1644), no crash (the user); left: a skip with the 30 fps product

@@ -86,7 +86,11 @@ it signed with every entitlement of its profile (increased memory limit included
 
 - **Game data**: RomFS in `Library/Application Support/romfs` (`push-data`), `Documents/RomFS` (Files app; file sharing is on) or the app's
   own `RomFS` (`run.sh ipa` with `DM_IPA_DATA=1`), the first complete one in that order; system fonts in `sysfont` in the same three places. The
-  RomFS is checked against the profile before the game starts; if something is missing the app shows what and where.
+  RomFS is checked against the profile before the game starts; if something is missing the app shows what and where. A RomFS of many files
+  (Tears of the Kingdom: 304,243 files, about 17 GB) is quicker and safer to carry as parts: `tools/romfs_parts.py pack <RomFS> <out>` writes
+  `romfs.000.dmrp` … and `romfs.dmri`; copy them into `Documents` (Files app or Finder), and the next launch checks each part's SHA-256,
+  unpacks it into `Library/Application Support/romfs` and deletes it (16 parts in about 4.5 minutes on an iPhone 17 Pro; a launch cut short
+  carries on at the next; `host/romfs_parts.c`).
 - **RomFS overlay** (Tears of the Kingdom's quick-menu backgrounds and game over flow at 60 fps and up, `games/totk/romfs_overlay.py`):
   `romfs_overlay` in the same three places (`push-data overlay` copies the workspace's `build/<game>/romfs_overlay`), served when its
   `manifest.tsv` says it was made from the RomFS beside it (`host/romfs_validate.c`); `DM_ROMFS_OVERLAY` in env.txt names another, empty turns
