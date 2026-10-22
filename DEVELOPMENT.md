@@ -1196,12 +1196,17 @@ Correctness, small:
   nxport's 0001 / 0002), manosaba 70 / 14; with the default (debug: no expression propagation) 0 / 0. `Program.cs` says the semantics are unchanged.
   Any change there gives a new chain version (dmsh_chain.py hashes dmsh_build.py, Program.cs and the translator): done with the chain rebuild at
   the end of this tier
-- [ ] 201 the rewriter's red zone: a save below sp kept inside Apple's 128 bytes for a post-index pop larger than 16 (`patch_nso.py` checks only
-  the offset's lower side; upstream 373b402 is the Android form, no save below sp at all), and `equiv.py` counting reads below the current sp
-  (4f0603f); today's outputs unchanged
-- [ ] 202 a guest thread stopped inside a rewrite block: there the guest values of the block's two scratch registers sit below the reported sp,
-  outside what manosaba's IL2CPP collector scans (`hle_thread.c` set_activity / get_context3); resume and stop again until pc is outside the
-  patch area (from reading the code; not observed)
+- [x] batch 71 · 201 the rewriter's red zone: for a post-index pop larger than 16, `site_plain`'s save at −112 lies past Apple's 128 bytes below
+  the new sp until the restore (`ldp x18, x19, [sp], #0x40`: −176; upstream 373b402 is the Android form, no save below sp at all). None of our
+  modules has one (the games' sdk pops by 16: −128). `verify/equiv.py` now refuses a patched side that touches memory more than 128 bytes below
+  the CURRENT sp where the original did not ("redzone"; it watched the start sp's 128 bytes; upstream 4f0603f counts the Android form), so a game
+  that has one fails `regress.sh` before it runs; the rewriter itself is unchanged (a change re-stamps every product). `regress.sh --fuzz`: TotK
+  (both products) and manosaba EQUIV OK. `t_rewriter_synth` +2 (a pop by 0x40 flagged, by 0x10 not); `DM_TEST_EQUIV_RZ_START=1` fails 1
+- [x] batch 71 · 202 a guest thread stopped inside a rewrite block: there the guest values of the block's two scratch registers sit below the
+  reported sp, outside what manosaba's IL2CPP collector scans (`hle_thread.c` set_activity / get_context3); now resumed and stopped again until pc
+  is outside the patch area (`in_patch_area`), up to 2,000 tries (a copied exclusive section may spin on a lock the pausing thread holds: then
+  stopped there, a line once). From reading the code; not observed. `t_hstack` 9 (a thread half its time in a fake patch area: 0 of 50 stops
+  inside, 20 runs); `t_hstack_inpatch` (`DM_TEST_STOP_IN_PATCH`) 26 of 50 inside, fails 1
 Correctness, Tears of the Kingdom:
 - [x] batch 70 · 203 GPU write-back decided by the texture's own bytes (MacNativeGames 8a29e0a, PR #188): ours skipped a write-back when any page
   of the texture was written since (16 KiB pages hold neighbours); the iPhone's log of 2026-10-22 skipped 1 of the first 4 terrain normal maps
@@ -1224,9 +1229,16 @@ Performance (measure first where marked):
   (MacNativeGames 30a1b93)
 - [ ] 210 single-draw passes as compute kernels (nxport `tiny_kernels.rs`; 61e): on the iPhone (batch 69) 100 single-draw passes took 3.6 of 12.4 ms GPU
 iOS:
-- [ ] 211 the unsigned IPA signed ad hoc with its entitlements (LNPANDY c3bccb5: AltStore keeps the ~3,375 MB default without them), and a
-  warning for a data IPA as large as iOS refused (13d9191: 16.6 GB)
-- [ ] 212 `-Werror=unguarded-availability-new` for the iOS 18 build (acnh-mobile a98d127)
+- [x] batch 71 · 211 the unsigned IPA signed ad hoc with the increased memory limit alone (`ios/tools/ipa_sign.py`; LNPANDY c3bccb5: AltStore
+  keeps the ~3,375 MB default without it; a free account signs no other of ours), read back from the signature; the packaging line gives the size
+  and above 4 GiB (ZIP64) names the 16.6 GB IPA iOS refused (13d9191) and the RomFS parts. `tools/tests/t_ipa_sign.py`; `DM_TEST_IPA_UNSIGNED=1`
+  fails 1
+- [x] batch 71 · 212 `-Werror=unguarded-availability-new` for the iOS 18 build (acnh-mobile a98d127; `ios/tools/project_m3.py`). `t_ios_cpu` +1;
+  `DM_TEST_M3_NO_WERROR=1` fails 1
+- [x] batch 71 · 213 the iPhone's fps line showed "60 fps ¬∑ on screen 98 ¬∑ GPU 11.4 ms" (seen through mirroring, 2026-10-22): NSString's `%s`
+  reads the default C string encoding (Mac Roman), so UTF-8's "·" became "¬∑"; the Mac window's title, "<game title> — <fps line>", the same
+  with a Chinese or Japanese title. `host/ns_text.h` `dm_ns_text` (UTF-8, other bytes one character each) in `log_overlay.m` and `front_mac.m`;
+  the other `%s` in NSString formats carry ASCII (game id, chain, shader keys). `host/tests/t_ns_text.m`; `DM_TEST_NS_TEXT_DEFAULT_ENCODING` fails 2
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

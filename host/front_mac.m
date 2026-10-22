@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
 #include "mouse_route.h"
+#include "ns_text.h"
 #include "aspect.h"
 #include "cloud.h"
 #include "dm.h"
@@ -246,7 +247,7 @@ void front_run(void (*guest)(void)) {
         if (getenv("DM_PERF_LINE") && strcmp(getenv("DM_PERF_LINE"), "0")) {   // the fps / GPU line in the title, twice a second (gfx/nvn/nvn_perfline.h)
             int dm_perf_line(char *out, size_t n);
             [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; char b[128]; dm_perf_line(b, sizeof b);
-                g_win.title = [NSString stringWithFormat:@"%s — %s", dm_game.title, b]; }];
+                g_win.title = [NSString stringWithFormat:@"%@ — %@", dm_ns_text(dm_game.title), dm_ns_text(b)]; }];   // UTF-8 (ns_text.h)
         }
         NSView *v = win.contentView; g_view = v;
         v.wantsLayer = YES; v.layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);

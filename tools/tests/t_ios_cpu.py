@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The iOS builds' CPU (plan item 108) and their single binary (item 135: ENABLE_DEBUG_DYLIB NO in project.yml and kept by project_m3.py; a Debug
 build would move the app's code and the embedded game images into a separate debug dylib): ios/project.yml compiles for apple-a14, the oldest Metal 4 chip (A14 / M1), so one IPA covers every device
-iOS 26 runs Metal 4 on; tools/project_m3.py keeps it for the iOS 18 build and adds DM_NVN_M3 and the iOS 18 target; tools/project_free.py leaves it.
+iOS 26 runs Metal 4 on; tools/project_m3.py keeps it for the iOS 18 build and adds DM_NVN_M3, -Werror=unguarded-availability-new (plan item 212)
+and the iOS 18 target (without the flag, DM_TEST_M3_NO_WERROR=1: 1 fails); tools/project_free.py leaves it.
 tools/project_free.py keeps the increased memory limit, which a personal team signs (item 65), and drops extended virtual addressing, sustained
 execution and the three iCloud keys; dropping the memory limit too, as before (DM_TEST_FREE_DROP_MEMORY=1), fails 1.
 With an app executable (argument or DM_TEST_APP_BIN, e.g. work/run/ios/dd-ipa/Build/Products/Release-iphoneos/DmIOS.app/DmIOS), its host code
@@ -25,7 +26,8 @@ with tempfile.TemporaryDirectory() as td:
     out = os.path.join(td, 'm3.yml')
     r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ios', 'tools', 'project_m3.py'), YML, out], capture_output=True, text=True)
     m3 = open(out, encoding='utf-8').read() if r.returncode == 0 else ''
-    check('project_m3.py: apple-a14 with DM_NVN_M3=1, iOS 18.0', cflags(m3).split() == ['$(inherited)', '-mcpu=apple-a14', '-DDM_NVN_M3=1'] and 'iOS: "18.0"' in m3)
+    check('project_m3.py: apple-a14 with DM_NVN_M3=1, iOS 18.0', cflags(m3).split()[:3] == ['$(inherited)', '-mcpu=apple-a14', '-DDM_NVN_M3=1'] and 'iOS: "18.0"' in m3)
+    check('project_m3.py: an API newer than iOS 18 without an availability check is an error (plan item 212)', '-Werror=unguarded-availability-new' in cflags(m3).split())
     check('project_m3.py: ENABLE_DEBUG_DYLIB NO kept', no_debug_dylib(m3))
     out = os.path.join(td, 'free.yml')
     r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ios', 'tools', 'project_free.py'), YML, out], capture_output=True, text=True)

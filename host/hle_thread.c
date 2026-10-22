@@ -310,6 +310,11 @@ void thr_svc_exit(void) {
     atomic_store(&t->parked, 0);
     pthread_mutex_unlock(&G);
 }
+// Inside a module's patch area (the rewriter's blocks and caves; plan item 202): a block keeps the guest values of the scratch registers it uses
+// below sp until it returns to the guest code, so a context taken there reports block values in those registers and a collector scanning from sp
+// up (manosaba's IL2CPP) misses the guest's (found by reading upstream 373b402's red-zone change; not seen in a run)
+static int in_patch_area(uint64_t pc) { module_t *m = module_of((void *)pc); return m && m->patch_off && pc >= (uint64_t)m->base + m->patch_off; }
+static uint64_t g_stop_in_patch __attribute__((unused));   // stops left inside a block after the tries (a copied exclusive section can spin on a lock the pauser holds)
 static uint32_t set_activity(uint32_t h, uint32_t act) {
     if (act > 1) return R_BAD_ENUM;
     pthread_mutex_lock(&G);
@@ -325,12 +330,16 @@ static uint32_t set_activity(uint32_t h, uint32_t act) {
     atomic_store(&t->pause_req, 1);
     pthread_mutex_unlock(&G);
     static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, waitstub_init);
-    for (unsigned n = 0;; n++) {
+    for (unsigned n = 0, in_block __attribute__((unused)) = 0;; n++) {
         if (atomic_load(&t->in_svc) || atomic_load(&t->parked)) { t->stop_kind = 1; return 0; }
         if (thread_suspend(t->mport) != KERN_SUCCESS) { LOG("[red] SetThreadActivity: suspending thread %#x failed", h); t->stop_kind = 0; return 0; }
         arm_thread_state64_t st; mach_msg_type_number_t c = ARM_THREAD_STATE64_COUNT;
         uint64_t pc = thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &c) == KERN_SUCCESS ? (uint64_t)__darwin_arm_thread_state64_get_pc(st) : 0;
         if (atomic_load(&t->in_svc) || atomic_load(&t->parked)) { thread_resume(t->mport); t->stop_kind = 1; return 0; }   // Entered a gate just before being suspended
+#ifndef DM_TEST_STOP_IN_PATCH   // negative control of t_hstack only: stopped inside a block too, as before
+        if (pc && in_patch_area(pc) && in_block++ < 2000) { thread_resume(t->mport); usleep(20); continue; }   // let it leave the block first
+        if (pc && in_patch_area(pc) && !g_stop_in_patch++) LOG("SetThreadActivity: thread %#x stayed in a rewrite block (pc=%#llx) through 2000 tries: stopped there (first case)", h, pc);
+#endif
         if (pc && (module_of((void *)pc) || in_waitstub(pc))) { t->stop_kind = 2; return 0; }
         thread_resume(t->mport);
         if (n == 100000) LOG("[red] SetThreadActivity: thread %#x has been in host code for long (pc=%#llx), still waiting for it to return to guest code", h, pc);

@@ -13,7 +13,10 @@
 //   6  the least free guest stack at svc entries, and the line below 1 KiB;
 //   7  the libc functions hle_table.c calls direct, each run on a painted stack with ordinary and slow-path arguments: at most 1 KiB each, and
 //      the list measured is the table's;
-//   8  the cost of a wrapped call and of a gate round trip (printed).
+//   8  the cost of a wrapped call and of a gate round trip (printed);
+//   9  (plan item 202) SetThreadActivity of a thread that spends half its time in a rewrite block (the fake module's patch area) never stops it
+//      inside one: there the guest values of the block's scratch registers sit below sp. Stopped inside too (t_hstack_inpatch,
+//      -DDM_TEST_STOP_IN_PATCH): 9 fails.
 // Negative controls (host/tests/Makefile): `DM_HSTACK=0 t_hstack deep` faults on the page below the guest stack (1 on the guest stack);
 // t_hstack_old (-DDM_TEST_HSTACK_OLD_CONTEXT: the context as before) fails 5. `DM_HSTACK=0 t_hstack` runs 1-5 without the 64 KiB, the exact
 // entry checks and 6 (the old path, kept).
@@ -37,7 +40,7 @@
 typedef struct { uint64_t fn, sp, ret, kept, ra, fp, x1, x2, x3, lr; } tg_t;   // t_hstack_guest.S
 void tg_call(tg_t *t); void tg_svc(tg_t *t); void tg_svc_at(tg_t *t, uint64_t sp); void tg_entry(uint64_t arg);
 uint64_t tg_on_stack(uint64_t (*fn)(void *), void *arg, uint64_t top); void tg_gate_loop(uint64_t n);
-extern char tg_code_begin[], tg_code_end[];
+extern char tg_code_begin[], tg_code_end[], tg_patch_begin[]; void tg_spin_entry(uint64_t flag);
 extern uint64_t unimpl_stubs[];
 extern uint64_t dm_hstk_off;
 int svc_thread(int num, uint64_t *regs);
@@ -310,6 +313,21 @@ int main(int argc, char **argv) {
         wait_blocked(3); ctx_check("5 svc inside a host call", h, &g_tf, 1); release(3);
     }
     uint64_t w[31] = {0, (uint64_t)&h, 1, (uint64_t)-1}; svc_thread(0x18, w);
+    if (!deep_only) {   // 9 (plan item 202): a thread that spends half its time in a "rewrite block" is never stopped inside one
+        g_fake.base = (uint8_t *)tg_code_begin; g_fake.size = (size_t)(tg_code_end - tg_code_begin); g_fake.patch_off = (uint64_t)(tg_patch_begin - tg_code_begin);
+        static volatile uint32_t stop; uint64_t c9[31] = {0, RAW_FN(tg_spin_entry), (uint64_t)&stop, (uint64_t)g_glo + GSTACK - 64, 44, 0};
+        svc_thread(0x08, c9); uint32_t h9 = (uint32_t)c9[1]; { uint64_t s9[31] = {h9}; svc_thread(0x09, s9); }
+        usleep(2000); int inside = 0, stops = 0;
+        for (int i = 0; i < 50; i++) {
+            uint64_t a[31] = {h9, 1}; svc_thread(0x32, a); if (a[0]) continue;
+            _Alignas(16) uint8_t ctx[0x320]; uint64_t c[31] = {(uint64_t)ctx, h9}; svc_thread(0x33, c);
+            uint64_t pc = ((const uint64_t *)ctx)[32]; stops++; inside += pc >= (uint64_t)tg_patch_begin && pc < (uint64_t)tg_code_end;
+            uint64_t r[31] = {h9, 0}; svc_thread(0x32, r); usleep(300);
+        }
+        CHECK(stops == 50 && !inside, "9: 50 stops of a thread half the time inside a rewrite block: none inside it (%d of %d)", inside, stops);
+        stop = 1; uint64_t w9[31] = {0, (uint64_t)&h9, 1, (uint64_t)-1}; svc_thread(0x18, w9);
+        g_fake.patch_off = 0;
+    }
     CHECK(w[0] == 0, "the guest thread exited through ExitThread (from its host stack when on)");
 
     CHECK(g_t1.ret == 0x600d, "1: host function: arguments, stack, %sguest return address, frame walk (%#llx)", g_deep ? "64 KiB, " : "", (unsigned long long)g_t1.ret);

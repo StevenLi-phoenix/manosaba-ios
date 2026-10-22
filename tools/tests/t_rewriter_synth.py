@@ -24,6 +24,8 @@ right taken alone, only the exclusive monitor breaks); DM_TEST_EQUIV_CBZ_NOP=1 (
 loops back to its load until the step limit, which each side reaches at another instruction);
 DM_TEST_EQUIV_TSD_WIDE=1 (every write into the slot area dropped): 1 fail; DM_TEST_CAVE_NO_BACK=1 (a routine without its branch back): 4 fail (both caves);
 DM_TEST_CAVE_GATE_WRITTEN=1 (a cave behind an option written into the image as well): 3 fail.
+Plan item 201: a third module pops sp by 0x40 at an x18 site (the save past the red zone after the pop) and by 0x10; equiv must flag the first.
+DM_TEST_EQUIV_RZ_START=1 (only the start sp's 128 bytes watched): 1 fail.
 Needs capstone, lz4, unicorn (the venv: work/build/cache/dm/venv/bin/python) and llvm-objdump (Xcode)."""
 import os, re, struct, subprocess, sys, tempfile
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
@@ -235,6 +237,16 @@ with tempfile.TemporaryDirectory() as td:
     check('a code cave with a PC-relative word: refused', code != 0 and 'cannot run in the patch area' in log, log.strip().splitlines()[-1] if log.strip() else '')
     w2 = dict(words); w2[0x104] = 0xD53BE000   # mrs x0, cntfrq_el0
     check('0x104 of the second module decodes as mrs x0, cntfrq_el0', next(md.disasm(struct.pack('<I', w2[0x104]), 0x104)).op_str == 'x0, cntfrq_el0')
+    # Plan item 201: a pop by more than 16 (ldp x18, x19, [sp], #0x40) leaves the block's scratch save 176 bytes below the new sp, past Apple's
+    # 128-byte red zone, while equiv watched only the start sp's: it must differ there; the pop by 16 (the games' sdk, 128 bytes) must not
+    w3 = dict(words); w3[0x108] = 0xA8C44FF2; w3[0x114] = 0xA8C14FF2
+    check('the third module: ldp x18, x19, [sp], #0x40 at 0x108 and ldp x18, x19, [sp], #0x10 at 0x114',
+          [next(md.disasm(struct.pack('<I', w3[a]), a)).op_str for a in (0x108, 0x114)] == ['x18, x19, [sp], #0x40', 'x18, x19, [sp], #0x10'])
+    nso3 = os.path.join(td, 'm3'); open(nso3, 'wb').write(build(w3)); out3 = os.path.join(td, 'out3')
+    code, log = run('-I', PATCH, nso3, out3, 'm3', env=env)
+    code, eo = run(EQUIV, out3, 'm3', nso3, '--jobs', '2', '--mutate', '0', env=env) if code == 0 else (code, log)
+    check('201: equiv: the pop by 0x40 differs (redzone), the pop by 0x10 does not', 0x108 in diffs(eo) and 'redzone' in eo and 0x114 not in diffs(eo),
+          eo.strip().splitlines()[-1] if eo.strip() else '')
     nso2 = os.path.join(td, 'm2'); open(nso2, 'wb').write(build(w2))
     code, log = run('-I', PATCH, nso2, os.path.join(td, 'out2'), 'm2', env=env)
     check('the rewriter refuses mrs x0, cntfrq_el0', code != 0 and 'cntfrq_el0' in log and 'a system register the rewriter does not handle' in log,

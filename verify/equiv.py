@@ -4,6 +4,9 @@
 # Coverage: a trial where both sides take a memory access fault only compares the fault address and does not count as "effective"; each site needs at least min-eff effective trials, extra draws are made if short (≤max-extra), and sites still short are listed by name.
 # A trial whose original instruction reads the 128 bytes below sp is not compared and not effective (redzone_reads): the rewrite blocks keep their scratch
 # registers there (Apple's red zone), and real code never reads below sp (TotK main 0x5cc0ac ldr x18, [x17] drew x17 = sp - 14 and read the saved x0 / x1).
+# A patched side that touches memory more than 128 bytes below the CURRENT sp (Apple's red zone; an exception may write below it) where the original
+# did not differs ("redzone"): a block's scratch save past the red zone after the instruction moved sp (a post-index pop larger than 16 with the
+# save at -112; upstream 373b402 / 4f0603f count the Android form; plan item 201). The start sp's 128 bytes alone used to be watched.
 # Mutation self-check: draw mutate ordinary rewrite blocks; in half the replaced instruction is changed to nop, in half the target of the trampoline exit b gets +4; all must be judged divergent (a negative control showing the criterion can discriminate).
 # Host gate (svc / cntpct / cntvct) semantics are defined by the host and are not run here, structck.py does the structural check; registered cuts (cuts.tsv) are intentional semantic changes and likewise only have their bytes checked by structck.
 import sys, os, struct, random, argparse, multiprocessing as mp
@@ -152,18 +155,25 @@ if A.mutate:
     pat_mut = bytes(pat_mut)
 
 
-def mk(image, arena0):
+RZ_CURRENT = not os.environ.get('DM_TEST_EQUIV_RZ_START')   # negative control of t_rewriter_synth only: no check against the current sp, as before
+def mk(image, arena0, patched=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     sz = (len(image) + 0xFFFF) & ~0xFFFF
     u.mem_map(IB, sz, UC_PROT_ALL); u.mem_write(IB, bytes(image))
     u.mem_map(ARENA, ARENA_SZ); u.mem_write(ARENA, arena0)
     u.mem_map(TSD, 0x10000)
     u.reg_write(UC_ARM64_REG_TPIDRRO_EL0, TSD)
-    st = {'w': [], 'fault': None, 'arena': arena0, 'rz': False}
-    def wr(uc, acc, addr, size, val, d): st['w'].append((addr, size, val & ((1 << (8 * size)) - 1)))
+    st = {'w': [], 'fault': None, 'arena': arena0, 'rz': False, 'r': [], 'deep': []}
+    def below(uc, addr):   # patched side: more than 128 bytes below the current sp, within its 4 KiB
+        if patched and RZ_CURRENT:
+            sp = uc.reg_read(UC_ARM64_REG_SP)
+            if sp - 0x1000 <= addr < sp - 128: st['deep'].append(addr)
+    def wr(uc, acc, addr, size, val, d): st['w'].append((addr, size, val & ((1 << (8 * size)) - 1))); below(uc, addr)
     def bad(uc, acc, addr, size, val, d): st['fault'] = (acc, addr); return False
     def rd(uc, acc, addr, size, val, d):
         if addr < SP0 and addr + size > SP0 - 128: st['rz'] = True
+        if not patched: st['r'].append(addr)
+        below(uc, addr)
     u.hook_add(UC_HOOK_MEM_WRITE, wr)
     u.hook_add(UC_HOOK_MEM_READ, rd)
     u.hook_add(UC_HOOK_MEM_INVALID, bad)
@@ -172,7 +182,7 @@ def mk(image, arena0):
 def restore(u, st):
     for a, s, v in st['w']:
         if ARENA <= a < ARENA + ARENA_SZ: u.mem_write(a, st['arena'][a:a + s])
-    st['w'].clear(); st['fault'] = None; st['rz'] = False
+    st['w'].clear(); st['fault'] = None; st['rz'] = False; st['r'].clear(); st['deep'].clear()
 
 def state(u, st, patched):
     g = [u.reg_read(r) for r in GP]
@@ -259,13 +269,15 @@ def trial(UO, SO, UP, SP, a, init):
     sp_ = sp_[:4] + ([x for x in sp_[4] if not ((SP0 - 128 <= x[0] < SP0 or tsd_slot_write(x)) and x[0] not in ow)],) + sp_[5:]
     both = bool(so[5] and sp_[5])
     same = (so[5] == sp_[5]) if (so[5] or sp_[5]) else (so == sp_)
+    deep = [x for x in SP['deep'] if x not in ow and x not in SO['r']]
+    if deep and not both: return False, both, [k for k, (x, y) in enumerate(zip(so, sp_)) if x != y] + ['redzone'], False
     return same, both, [k for k, (x, y) in enumerate(zip(so, sp_)) if x != y], False
 
 def work(job):
     idx, chunk, mutated = job
     rng = random.Random(A.seed * 1000003 + idx * 2 + mutated)
     arena0 = rng.randbytes(ARENA_SZ)
-    UO, SO = mk(orig, arena0); UP, SP = mk(pat_mut if mutated else pat, arena0)
+    UO, SO = mk(orig, arena0); UP, SP = mk(pat_mut if mutated else pat, arena0, True)
     out = []
     for a in chunk:
         n = eff = nrz = 0; diffs = []

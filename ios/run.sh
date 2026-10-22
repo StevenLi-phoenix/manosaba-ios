@@ -92,8 +92,9 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
     t "built $R/dd-sim/Build/Products/Release-iphonesimulator/DmIOS.app"; exit 0
   fi
   if [ "$CMD" = ipa ]; then
-    # No signature and no entitlements: whoever installs it signs it with their own certificate and profile, which decide what the app may use
-    # (iCloud save sync, increased memory limit, ...). Its own derived data, so the signed build of run.sh build stays installable
+    # Built without signing; packaged signed ad hoc with the increased memory limit alone (below). Whoever installs it signs it with their own
+    # certificate and profile, which decide what the app may use (iCloud save sync, ...). Its own derived data, so the signed build of run.sh
+    # build stays installable
     DDI=$R/dd-ipa; OSV=ios26; [ "${DM_IOS_M3:-0}" = 1 ] && OSV=ios18
     t "building $TITLE ($GAME) unsigned, build number $BN"
     xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destination 'generic/platform=iOS' -derivedDataPath "$DDI" \
@@ -115,12 +116,15 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
       if [ -d "$ov" ]; then t "adding $ov as romfs_overlay"; ditto "$ov" "$W/Payload/DmIOS.app/romfs_overlay" || { t "[red] copying the overlay failed"; exit 1; }; fi
     fi
     xattr -cr "$W/Payload"
+    # Signed ad hoc with the increased memory limit (plan item 211, tools/ipa_sign.py): AltStore asks for the App ID features the app's own signature
+    # names; another signer replaces this signature with its own
+    python3 tools/ipa_sign.py sign "$W/Payload/DmIOS.app" || { t "[red] signing the app ad hoc failed"; exit 1; }
     # Files already compressed are stored, not deflated again (nxnative's zip_store, MIT): 130 MB of Tears of the Kingdom's .zs took 1.66 s to
     # deflate into a 17 KB larger archive, 0.26 s to store. DM_ZIP_STORE replaces the suffix list
     ZS=${DM_ZIP_STORE:-.zs:.webm:.mp4:.png:.jpg:.ogg:.opus}
     (cd "$W" && zip -qryX -n "$ZS" "$IPA" Payload -x '*/.DS_Store') || { t "[red] zip failed"; exit 1; }
     t "stored without deflate ($ZS): $(zipinfo "$IPA" | awk '$6 == "stor" && $NF !~ /\/$/' | wc -l | tr -d ' ') files"
-    rm -rf "$W"; t "packaged $IPA ($(du -h "$IPA" | cut -f1))"; exit 0
+    rm -rf "$W"; t "packaged $IPA ($(python3 tools/ipa_sign.py size "$IPA"))"; exit 0
   fi
   DEST='generic/platform=iOS'
   if [ -n "$FREE" ]; then

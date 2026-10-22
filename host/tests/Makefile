@@ -62,6 +62,7 @@ run: \
 	$(B)/t_hid_script_norstick \
 	$(B)/t_hstack \
 	$(B)/t_hstack_old \
+	$(B)/t_hstack_inpatch \
 	$(B)/t_ktrace \
 	$(B)/t_loader_weak \
 	$(B)/t_logstamp \
@@ -120,6 +121,8 @@ run: \
 	$(B)/t_pchtxt \
 	$(B)/t_pchtxt_nocheck \
 	$(B)/t_pchtxt_oldflags \
+	$(B)/t_ns_text \
+	$(B)/t_ns_text_default \
 	$(B)/t_padmap_posall \
 	$(B)/t_quitwait \
 	$(B)/t_quitwait_old \
@@ -323,6 +326,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '^FAIL 5' $(B)/t_hstack_old.log)" -lt 3 ] || grep -q '^FAIL [^5]' $(B)/t_hstack_old.log; then \
 	   cat $(B)/t_hstack_old.log; echo "t_hstack_old: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_hstack_old: the context as before misses the guest's stack in all three pauses, as expected"
+	@status=0; $(B)/t_hstack_inpatch > $(B)/t_hstack_inpatch.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '^FAIL ' $(B)/t_hstack_inpatch.log)" -ne 1 ] || ! grep -q '^FAIL 9:' $(B)/t_hstack_inpatch.log; then \
+	   cat $(B)/t_hstack_inpatch.log; echo "t_hstack_inpatch: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_hstack_inpatch: stopped inside rewrite blocks as before, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_ktrace 2>/dev/null
 	$(B)/t_loader_weak 2>/dev/null
 	$(B)/t_logstamp
@@ -436,6 +443,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_pchtxt_oldflags.log)" -ne 5 ]; then \
 	   cat $(B)/t_pchtxt_oldflags.log; echo "t_pchtxt_oldflags: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_pchtxt_oldflags: with every @flag skipped the five offset and flag checks fail, as expected"
+	$(B)/t_ns_text
+	@status=0; $(B)/t_ns_text_default > $(B)/t_ns_text_default.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_ns_text_default.log)" -ne 2 ]; then \
+	   cat $(B)/t_ns_text_default.log; echo "t_ns_text_default: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_ns_text_default: with %s the middle dots and the titles come out garbled, as expected"
 	@status=0; $(B)/t_padmap_posall > $(B)/t_padmap_posall.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_padmap_posall.log)" -ne 2 ]; then \
 	   cat $(B)/t_padmap_posall.log; echo "t_padmap_posall: unexpected negative-control result ($$status)"; exit 1; \
@@ -681,6 +693,10 @@ $(B)/t_pchtxt_nocheck: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_NO_CHECK -I.. -o $@ t_pchtxt.c
 $(B)/t_pchtxt_oldflags: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_OLD_FLAGS -I.. -o $@ t_pchtxt.c
+$(B)/t_ns_text: t_ns_text.m ../ns_text.h | $(B)
+	clang -O1 -Wall -fobjc-arc -I.. -o $@ t_ns_text.m -framework Foundation
+$(B)/t_ns_text_default: t_ns_text.m ../ns_text.h | $(B)
+	clang -O1 -Wall -fobjc-arc -DDM_TEST_NS_TEXT_DEFAULT_ENCODING -I.. -o $@ t_ns_text.m -framework Foundation
 $(B)/t_cheat_vm: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_cheat_vm.c
 $(B)/t_cheat_vm_flat: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
@@ -905,6 +921,8 @@ $(B)/t_hstack: $(T_HSTACK_SRC) ../dm.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -I.. -o $@ $(T_HSTACK_SRC)
 $(B)/t_hstack_old: $(T_HSTACK_SRC) ../dm.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -DDM_TEST_HSTACK_OLD_CONTEXT -I.. -o $@ $(T_HSTACK_SRC)
+$(B)/t_hstack_inpatch: $(T_HSTACK_SRC) ../dm.h | $(B)
+	clang -O1 -g -Wall -Wno-unused-function -DDM_TEST_STOP_IN_PATCH -I.. -o $@ $(T_HSTACK_SRC)
 $(B)/t_thread_exit: $(T_THREAD_EXIT_SRC) ../dm.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -I.. -o $@ $(T_THREAD_EXIT_SRC)
 $(B)/t_thread_exit_old: $(T_THREAD_EXIT_SRC) ../dm.h | $(B)

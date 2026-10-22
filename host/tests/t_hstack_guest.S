@@ -288,5 +288,35 @@ _tg_entry:
     bl _dm_gate
     brk #1
 
+// tg_spin_entry(flag): plan item 202's thread: until *flag != 0, 200 turns of a loop in "guest code" (tg_spin), then 200 turns of one in the
+// "patch area" (tg_patch_begin .. tg_code_end, as t_hstack.c sets the fake module's patch_off), then back; then ExitThread through the gate
+    .globl _tg_spin_entry
+    .p2align 2
+_tg_spin_entry:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+_tg_spin:
+    ldr w9, [x0]
+    cbnz w9, 1f
+    mov x11, #200
+2:  subs x11, x11, #1
+    b.ne 2b
+    mov x10, #200
+    b _tg_patch_spin
+_tg_spin_back:
+    b _tg_spin
+1:  mov x16, #0x0A
+    stp x29, x30, [sp, #-16]!
+    bl _dm_gate
+    brk #1
+
+    .globl _tg_patch_begin
+    .p2align 2
+_tg_patch_begin:
+_tg_patch_spin:
+    subs x10, x10, #1
+    b.ne _tg_patch_spin
+    b _tg_spin_back
+
     .globl _tg_code_end
 _tg_code_end:

@@ -6,6 +6,7 @@
 // The log itself stays a plain file that stderr writes directly (a crash backtrace must reach it even when no other thread runs again); the overlay
 // reads that file through its own descriptor, 4 times a second, only while shown. The view takes no touches: they reach the game underneath.
 #import <UIKit/UIKit.h>
+#include "ns_text.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -42,7 +43,7 @@ static DmLogOverlay *g_ov;
     } else if (!pon && self.perfTimer) { [self.perfTimer invalidate]; self.perfTimer = nil; }
 }
 - (void)perfTick {
-    char b[128]; dm_perf_line(b, sizeof b); self.perf.text = [NSString stringWithFormat:@" %s ", b];
+    char b[128]; dm_perf_line(b, sizeof b); self.perf.text = [NSString stringWithFormat:@" %@ ", dm_ns_text(b)];   // UTF-8 (its "·"; %s showed "¬∑")
     UIView *sv = self.perf.superview; UIEdgeInsets in = sv.safeAreaInsets; CGSize sz = [self.perf sizeThatFits:CGSizeMake(sv.bounds.size.width, 40)];
     self.perf.frame = CGRectMake(sv.bounds.size.width - in.right - 4 - sz.width, in.top + 4, sz.width, sz.height + 4);
     [sv bringSubviewToFront:self.perf];
