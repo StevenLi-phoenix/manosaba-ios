@@ -1376,9 +1376,18 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
   (`thread_selfcounts` per perf level, 225), at that clock. The frame is one chain: the game's main thread waits every frame for the GPU to finish the
   frame it just handed over (main 0x2db99c, the sync fenced right after the frame's one submission; the acquire's sync at 0x2db958 returns at once)
   before the render thread submits the next; the submit call (the capture) took 1.14 ms of it, the translation 9-13 ms with the GPU following its
-  parts, starved 3.2-3.8 ms a frame (median) and 1.9-2.1 ms before its first part. So each thread is moderately busy, and iOS's controller, which
-  sees busy time and not the frame's deadline, keeps the clocks where the chain makes ~50 fps. Interval workgroups, the API for telling it about a
-  deadline, are audio-only (the SDK's os/workgroup_interval.h); Game Mode's keys were set already (21). Shorter work on the chain is the lever
+  parts, starved 3.2-3.8 ms a frame (median) and 1.9-2.1 ms before its first part. Interval workgroups, the API for telling iOS about a deadline,
+  are audio-only (the SDK's os/workgroup_interval.h); Game Mode's keys were set already (21)
+- What sets the sustained level (night of 2026-10-23, the island at 120 Hz, sustained fps against a run of the same build without the switch: 54.3
+  for the first, 56.0 for the others): the GPU kept busy (`DM_NVN_KEEPALIVE=1`) 40.2, its frame 14.2 → 8.3 ms but the translation thread moved to
+  the efficiency cores at 1.41 GHz and the CPU to 0.33 W; the GPU one frame behind (227) 54.2, the clock lowered; the TBDR rewrites without the
+  merging ones (228) 55.1 with 12 % less traffic; yields backing off (`DM_YIELD_BACKOFF=250:2000`, about one a frame) 54.3; the scene at 960x540
+  (`DM_RENDER_RES`) 59.6, 98 % of the frames shown at 16.7 ms, 41 % less traffic, the CPU 1.29 → 1.44 W and the translation thread 1.81 → 2.09
+  GHz. So after its first minute the phone holds the CPU,
+  the GPU and memory to one power budget: work moved between them or kept busy is taken back as lower clocks, and only less energy a frame turns
+  into frames (225: 50.6 → 56.0). The scene size is set once, at boot (main+0x585e64 hit once in a run), so a dynamic resolution of our own
+  through the host page would rebuild the render targets, and the game's own is off (131a). The user keeps the game's 720p as the default
+  (2026-10-23); Settings → the app → Graphics → Render resolution 540p (MetalFX upscaling on) holds about 60 on the island
 - [x] batch 77 · 216 frame-rate trials (`gfx/nvn/nvn_fptrial.h`, `DM_FPS_TRIAL=1`): a game whose step the host sets, held at interval 2 or 3 for
   5 s with the target at 60, reads its report times drawn toward their submission's GPU start (× 0.35) until it picks interval 1 and 1 s after,
   so the clock can come up; a trial that steps back within 4 s on the real times has failed and the wait doubles (up to 32 s). Only at a 60 Hz
@@ -1430,13 +1439,25 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
     leaves the copies after it made; `DM_TEST_US_GUARD_EACH` fails 1)
   - `DM_NVN_GPUWATCH`'s check off the per-binding path when off; the translation thread's time and clock per CPU kind in the translation detail
     line (`thread_selfcounts` THSC_TIME_CPI_PER_PERF_LEVEL)
-  On the phone (120 Hz, island standing, three runs from cool): sustained 50.6 → 52.9 → 54.3 fps, the CPU's power 1.45 → 1.28 W, on-screen 16.7 ms
-  intervals 71 → 79 %; iOS took about half the saving as a lower clock
+  On the phone (120 Hz, island standing, four runs): sustained 50.6 → 52.9 → 54.3 → 56.0 fps (the last with the one fault guard), the
+  CPU's power 1.45 → 1.29 W, on-screen 16.7 ms intervals 71 → 85 %, the GPU starved 3.75 → 1.26 ms a frame (median, `DM_NVN_TRACE`); iOS took
+  about half the saving as a lower clock
 - [ ] 226 next on the chain, measured: the submit call's capture walks every command of the frame on the game's thread (52 % of the call; the
   records it wants could be noted when they are recorded) and copies 1.5 MB of uniform data that the snapshot then copies again; the snapshot
   lookup and the newest-update cache still miss between draws binding several blocks (4 % and 2.6 % of the thread); texture views are checked or
   made again in 6 % of it (textures initialized over live storage ~2,000 a second bump the generations); the render pass begins are 18 %
   (Metal's own), which fewer passes (217, 218) cut
+- [-] 227 the GPU one frame behind made safe (after 224): a snapshot range that an inline update flush of the previous frame still writes was laid
+  over with that flush's bytes, which are known, instead of being left to memory (the CPU wrote 1 of 63,392 such ranges before the next submit
+  call on the Mac, while loading), so the passes stayed at 183, and no vertex or index range changed in flight (`DM_NVN_GPUWATCH`, three frames
+  on the phone). On the phone 54.2 fps against 56.0 on the same build, the GPU starved about as long (1.50 against 1.26 ms a frame, median) and the
+  translation thread's clock went 1.81 → 1.47 GHz. Measured, not taken; the code is not kept
+- [x] batch 78 · 228 mid-submission commits with the TBDR rewrites that neither merge nor defer passes: they stopped while any rewrite was on, but
+  only defer, fuse and hoist build passes across the submission; the others decide within a pass or at its end, and a commit comes only where no
+  encoder is open. `t_chunk --tbdr-nomerge` (on with defer, fuse and hoist off, two targets: committed in parts) and `--tbdr-all` (one command
+  buffer), 4 checks each; `DM_TEST_CHUNK_ANY_TBDR` fails 1. Store decisions and same-target continuation alone (`DM_NVN_TBDR=1
+  DM_NVN_TBDR_OFF=defer,fuse,hoist,cover,sdx,xv,zskip,ds,range,rtheap`): the Mac's island 671 → 588 MB of loads and stores a frame at the same CPU,
+  the prologue 640 → 545 MB with its pictures as before; on the phone 679 → 598 MB, translation cycles +6 %, 55.1 fps against 56.0. Not a default
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

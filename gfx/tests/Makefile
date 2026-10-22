@@ -436,6 +436,8 @@ run: \
 	./t_keepalive
 	MTL_DEBUG_LAYER=1 ./t_chunk
 	./t_chunk --no-chunks
+	MTL_DEBUG_LAYER=1 ./t_chunk --tbdr-nomerge
+	MTL_DEBUG_LAYER=1 ./t_chunk --tbdr-all
 	MTL_DEBUG_LAYER=1 ./t_esfilter
 	MTL_DEBUG_LAYER=1 ./t_vbelide
 	./t_uppool

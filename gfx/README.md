@@ -148,6 +148,8 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_FBX=all` or `0` | Copy the attachment for every draw that samples it (default: only after a texture barrier), or never |
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |
 | `DM_NVN_TBDR=0` | Turn off all pass optimizations (attach, load and store everything), for equivalence comparisons |
+| `DM_NVN_TBDR_OFF=<part>[,<part>...]` | With the pass optimizations on, keep the parts named off: `zskip`, `xv`, `cover`, `store`, `sdx`, `defer`, `fuse`, `hoist`, `ds`, `range`, `cont`, `rtheap`, or `all` (plan item 62j). Mid-submission commits stay on while `defer`, `fuse` and `hoist` are off (plan item 228) |
+| `DM_NVN_CHUNK_DRAWS=<n>`, `DM_NVN_CHUNK_FIRST=<n>` | Mid-submission commits: the work encoded so far goes to the GPU as a command buffer of its own after the first `DM_NVN_CHUNK_FIRST` draws (default 60), then every `DM_NVN_CHUNK_DRAWS` draws (default 75); either at 0 turns them off |
 | `DM_NVN_NOCULL=1` | Draw with face culling off (does a missing draw come back?) |
 | `DM_NVN_OCC_FORCE=<n>` | Every samples-passed (occlusion) result reported as n (does a missing object come back with n large?; a diagnostic) |
 | `DM_NVN_RTCLEAR=<serial>` | Passes on that colour texture start cleared to magenta (does the attachment reach the texture?) |
