@@ -58,6 +58,10 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
   PF=$(python3 tools/product_files.py "$OUT" $MODS) || { t "[red] the product's module lists are incomplete"; exit 1; }   # fixups, gates, option lists
   while IFS= read -r f; do cp "$f" Gen/dm/ || exit 1; done <<< "$PF"   # one path a line: the workspace path may hold a space
   cp "$(ws shader_map)" Gen/dm/shader_map.tsv || { t "[red] no shader stage map"; exit 1; }
+  # The pipeline warm-up's seed (plan item 209, tools/pso_merge.py): pso_seed.tsv beside the map goes in as pso_manifest.tsv, which the warm-up
+  # reads before the player's own list. The Mac host does not read pso_seed.tsv (its prologue: 55 long frames with the seed warming, 29 without)
+  PM="$(dirname "$(ws shader_map)")/pso_seed.tsv"; rm -f Gen/dm/pso_manifest.tsv
+  if [ -f "$PM" ]; then cp "$PM" Gen/dm/pso_manifest.tsv && t "pipeline warm-up seed: $(grep -vc '^#' "$PM") rows ($PM)"; fi
   if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || exit 1; t "env switches baked in from $DM_ENV_FILE"; fi   # read at launch (host/envfile.h)
   C1=$(ws c1) && [ -f "$C1" ] && cp "$C1" Gen/dm/c1_full.tsv
   # iOS shaders of the current translation chain version (the Simulator's own: ios/tools/sim_metal.py)

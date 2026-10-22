@@ -14,6 +14,12 @@ int nvn_swizzle(const nvn_texdesc *d, unsigned level, unsigned layer, const void
 // Single-point address: within this level and layer, linear (x byte, y block row, z slice) → block-linear byte offset relative to the start of this level and layer (unit tests verify against hand calculation)
 uint64_t nvn_bl_offset(uint32_t x, uint32_t y, uint32_t z, uint32_t row_bytes, uint32_t rows, unsigned tileH, unsigned tileD);
 
+// A region of level / layer between storage and linear rows (plan item 206; MacNativeGames PR #185's nvn_bl_region, MIT, written anew): x0 / wb in
+// bytes of block rows, y0 / hb in block rows, z0 / nz in slices (3D; 0 / 1 otherwise); linear row r of slice k at lin + k × img + r × pitch.
+// Only the region's bytes move (ReadTexels / WriteTexels of a 64x64 region of a 2048² texture: the whole level twice, before). -1 when the
+// texture is not block linear or the region leaves the level
+int nvn_region_move(const nvn_texdesc *d, unsigned level, unsigned layer, void *storage, void *lin, size_t pitch, size_t img,
+                    uint32_t x0, uint32_t y0, uint32_t z0, uint32_t wb, uint32_t hb, uint32_t nz, int to_linear);
 int nvn_deswizzle_geom(const nvn_texdesc *d, unsigned level, unsigned layer,
                        uint32_t *row_bytes, uint32_t *rows, uint32_t *slices,
                        uint64_t *base, unsigned *tileH, unsigned *tileD, uint32_t *bpb);

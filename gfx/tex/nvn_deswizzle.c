@@ -58,6 +58,28 @@ static int move(const nvn_texdesc *d, unsigned level, unsigned layer, uint8_t *b
     return 0;
 }
 
+int nvn_region_move(const nvn_texdesc *d, unsigned level, unsigned layer, void *storage, void *lin_, size_t pitch, size_t img,
+                    uint32_t x0, uint32_t y0, uint32_t z0, uint32_t wb, uint32_t hb, uint32_t nz, int to_linear) {
+    uint32_t row_bytes, rows, slices, bpb; uint64_t base; unsigned th, td;
+    if (nvn_deswizzle_geom(d, level, layer, &row_bytes, &rows, &slices, &base, &th, &td, &bpb)) return -1;
+    if (!wb || !hb || !nz || x0 + wb > row_bytes || y0 + hb > rows || z0 + nz > slices || pitch < wb) return -1;
+    uint8_t *bl = (uint8_t *)storage + base, *lin = lin_;
+    for (uint32_t k = 0; k < nz; k++)
+        for (uint32_t r = 0; r < hb; r++) {
+            uint8_t *row = lin + k * img + (size_t)r * pitch;
+            for (uint32_t x = x0; x < x0 + wb;) {   // up to the next 16-byte boundary: 16 bytes are contiguous within a GOB
+#ifndef DM_TEST_REGION_NO_SPLIT   // negative control of t_tex only: a row moved as one piece
+                uint32_t n = 16 - x % 16; if (n > x0 + wb - x) n = x0 + wb - x;
+#else
+                uint32_t n = x0 + wb - x;
+#endif
+                uint8_t *p = bl + nvn_bl_offset(x, y0 + r, z0 + k, row_bytes, rows, th, td);
+                if (to_linear) memcpy(row + (x - x0), p, n); else memcpy(p, row + (x - x0), n);
+                x += n;
+            }
+        }
+    return 0;
+}
 int nvn_deswizzle(const nvn_texdesc *d, unsigned level, unsigned layer, const void *src, void *dst, size_t dst_pitch) {
     return move(d, level, layer, (uint8_t *)src, (uint8_t *)dst, dst_pitch, 1);
 }

@@ -7927,6 +7927,27 @@ static void copy_t2b(const p_copy_b2t *c) {
             enc_b_copy_texture_buffer(b, t, layer0 + c->r.zoffset + z, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, 0), MTLSizeMake(c->r.width, c->r.height, 1), (__bridge id<MTLBuffer>)mb, mo + z * img, row, img);
 }
 // CPU texture read (ReadTexels): for packaged textures the pool memory is the ground truth, de-layout and read directly; the rest are read back from the MTLTexture by blit (the caller has already waited for the GPU per NVN rules)
+// CPU Read / WriteTexels on storage (plan item 206): the region's bytes alone (nvn_region_move; MacNativeGames PR #185, MIT: frames over 40 ms
+// 25.9 → 1.0 a minute on an M5 Max, 1.1.2, a 64x64 region of a 2048² texture 1.9 → 0.0025 ms), the whole level as before when the region cannot
+// be moved alone; counted, a line at the 1st, 2nd, 4th, ... call
+static uint64_t g_tx_n, g_tx_region, g_tx_level, g_tx_bytes, g_tx_ns;
+static void texels_count(int whole, size_t bytes, uint64_t t0) {
+    uint64_t n = ++g_tx_n; whole ? g_tx_level++ : g_tx_region++; g_tx_bytes += bytes; g_tx_ns += bp_now() - t0;
+    if (!(n & (n - 1))) MLOG("CPU Read / WriteTexels on storage: %llu calls, %llu by region, %llu by whole level, %.1f MB moved, %.2f ms in all",
+                             (unsigned long long)n, (unsigned long long)g_tx_region, (unsigned long long)g_tx_level, g_tx_bytes / 1048576.0, g_tx_ns / 1e6);
+}
+static int texels_region(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *lin, size_t row, size_t img, int to_linear) {
+#ifdef DM_TEST_TEXELS_WHOLE_LEVEL   // negative control of t_writetexels only: the whole level, as before
+    (void)t; (void)level; (void)layer0; (void)r; (void)lin; (void)row; (void)img; (void)to_linear; return -1;
+#else
+    int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh); if (!bpb) return -1;
+    uint32_t x0 = (uint32_t)(r->xoffset / bw) * (uint32_t)bpb, y0 = (uint32_t)(r->yoffset / bh), wb = (uint32_t)((r->width + bw - 1) / bw) * (uint32_t)bpb, hb = (uint32_t)((r->height + bh - 1) / bh);
+    uint32_t nz = r->depth ? (uint32_t)r->depth : 1;
+    if (t->d.target == 2) return nvn_region_move(&t->d, level, 0, t->mem, lin, row, img, x0, y0, (uint32_t)r->zoffset, wb, hb, nz, to_linear);
+    for (uint32_t z = 0; z < nz; z++) if (nvn_region_move(&t->d, level, layer0 + (unsigned)r->zoffset + z, t->mem, lin + z * img, row, img, x0, y0, 0, wb, hb, 1, to_linear)) return -1;
+    return 0;
+#endif
+}
 void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img) { @autoreleasepool {
     xv_check(t->serial, level, layer0, "CPU readback");
     PD("U cpu_read ser=%llu lv%u sl%u xyz=%d,%d,%d size=%d,%d,%d dst=%p row=%lu img=%lu", t->serial, level, layer0, r->xoffset, r->yoffset, r->zoffset, r->width, r->height, r->depth, dst, (unsigned long)row, (unsigned long)img);
@@ -7934,6 +7955,8 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
     size_t wb = (size_t)((r->width + bw - 1) / bw) * bpb, hb = (r->height + bh - 1) / bh, x0 = (size_t)(r->xoffset / bw) * bpb, y0 = r->yoffset / bh;
     int nz = r->depth ? r->depth : 1, is3d = t->d.target == 2;
     if (tex_membacked(t)) {   // packaged or CPU-filled: the pool memory is the content
+        uint64_t t0 = bp_now();
+        if (!texels_region(t, level, layer0, r, dst, row, img, 1)) { texels_count(0, wb * hb * nz, t0); return; }
         uint32_t lw = MAX(t->d.width >> level, 1u), lh = MAX(t->d.height >> level, 1u), lz = is3d ? MAX(t->d.depth >> level, 1u) : 1;
         size_t lp = (size_t)((lw + bw - 1) / bw) * bpb, lr = (lh + bh - 1) / bh;
         uint8_t *lin = malloc(lp * lr * lz);
@@ -7943,7 +7966,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
             const uint8_t *src = lin + (is3d ? (size_t)(r->zoffset + z) * lp * lr : 0);
             for (size_t y = 0; y < hb; y++) memcpy(dst + z * img + y * row, src + (y0 + y) * lp + x0, wb);
         }
-        free(lin);
+        free(lin); texels_count(1, lp * lr * lz, t0);
         return;
     }
     id<MTLTexture> mt = tex_mtl(t);
@@ -7978,6 +8001,8 @@ void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVN
     size_t wb = (size_t)((r->width + bw - 1) / bw) * bpb, hb = (r->height + bh - 1) / bh, x0 = (size_t)(r->xoffset / bw) * bpb, y0 = r->yoffset / bh;
     int nz = r->depth ? r->depth : 1, is3d = t->d.target == 2;
     if (tex_membacked(t)) {   // packaged or CPU-filled: patch the pool memory, dirty-page tracking re-uploads it
+        uint64_t t0 = bp_now();
+        if (!texels_region(t, level, layer0, r, (uint8_t *)src, row, img, 0)) { texels_count(0, wb * hb * nz, t0); return; }
         uint32_t lw = MAX(t->d.width >> level, 1u), lh = MAX(t->d.height >> level, 1u), lz = is3d ? MAX(t->d.depth >> level, 1u) : 1;
         size_t lp = (size_t)((lw + bw - 1) / bw) * bpb, lr = (lh + bh - 1) / bh;
         uint8_t *lin = malloc(lp * lr * lz);
@@ -7992,7 +8017,7 @@ void mtl_write_texels(const tex_t *t, unsigned level, unsigned layer0, const NVN
 #endif
             if ((is3d && z == nz - 1) || !is3d) if (nvn_swizzle(&t->d, level, layer, lin, lp, t->mem)) { RED_ONCE(57, "WriteTexels swizzle failed format %#x target %d", t->d.format, t->d.target); free(lin); return; }
         }
-        free(lin);
+        free(lin); texels_count(1, 2 * lp * lr * lz, t0);
         return;
     }
     uint32_t upf; int ubpp;

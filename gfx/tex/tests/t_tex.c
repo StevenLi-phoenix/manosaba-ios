@@ -1,4 +1,5 @@
-// Block-linear deswizzle unit tests (seconds). A round trip; B hand-calculated addresses; E hand-built 3D block-linear.
+// Block-linear deswizzle unit tests (seconds). A round trip; B hand-calculated addresses; E hand-built 3D block-linear; G regions moved alone
+// (nvn_region_move, plan item 206) against the whole level: a row moved as one piece (-DDM_TEST_REGION_NO_SPLIT) fails 6.
 // Usage: t_tex (no arguments; needs no game files).
 #include "../nvn_deswizzle.h"
 #include <stdio.h>
@@ -44,7 +45,45 @@ static void roundtrip(const char *tag, int target, int fmt, uint32_t w, uint32_t
     free(st);
 }
 
+// ---------- G (plan item 206): a region moved by nvn_region_move equals the same region of a whole-level deswizzle, and writing it leaves the
+// storage as a whole-level deswizzle, patch and swizzle does (40 random regions per texture: levels, layers, slices, odd offsets in blocks) ----------
+static void region(const char *tag, int target, int fmt, uint32_t w, uint32_t h, uint32_t depth, uint32_t levels) {
+    nvn_texdesc d = {target, fmt, 0, 0, w, h, depth, levels, 0}; nvn_texlayout L; nvn_tex_layout(&d, &L);
+    uint8_t *st = malloc(L.size), *st2 = malloc(L.size); for (size_t i = 0; i < L.size; i++) st[i] = (uint8_t)rnd(); memcpy(st2, st, L.size);
+    int bw, bh, bpb = nvn_fmt_bpb(fmt, &bw, &bh), ok = 1;
+    for (int it = 0; it < 40 && ok; it++) {
+        unsigned l = rnd() % levels, y = rnd() % L.layers; uint32_t rb, rows, sl; dims(&d, l, &rb, &rows, &sl);
+        uint32_t bx = rb / (uint32_t)bpb, x0 = (uint32_t)(rnd() % bx) * (uint32_t)bpb, wb = (uint32_t)(1 + rnd() % (bx - x0 / (uint32_t)bpb)) * (uint32_t)bpb;
+        uint32_t y0 = rnd() % rows, hb = 1 + rnd() % (rows - y0), z0 = rnd() % sl, nz = 1 + rnd() % (sl - z0);
+        size_t full = (size_t)rb * rows * sl, pitch = wb + 8, img = pitch * hb;
+        uint8_t *lin = malloc(full), *reg = malloc(img * nz);
+        nvn_deswizzle(&d, l, y, st, lin, rb);
+        if (nvn_region_move(&d, l, y, st, reg, pitch, img, x0, y0, z0, wb, hb, nz, 1)) ok = 0;
+        for (uint32_t k = 0; k < nz && ok; k++) for (uint32_t r = 0; r < hb && ok; r++)
+            ok = !memcmp(reg + k * img + r * pitch, lin + ((size_t)(z0 + k) * rows + y0 + r) * rb + x0, wb);
+        for (size_t i = 0; i < img * nz; i++) reg[i] = (uint8_t)rnd();
+        nvn_region_move(&d, l, y, st, reg, pitch, img, x0, y0, z0, wb, hb, nz, 0);
+        nvn_deswizzle(&d, l, y, st2, lin, rb);
+        for (uint32_t k = 0; k < nz; k++) for (uint32_t r = 0; r < hb; r++) memcpy(lin + ((size_t)(z0 + k) * rows + y0 + r) * rb + x0, reg + k * img + r * pitch, wb);
+        nvn_swizzle(&d, l, y, lin, rb, st2);
+        if (ok && memcmp(st, st2, L.size)) ok = 0;
+        free(lin); free(reg);
+    }
+    uint32_t rb, rows, sl; dims(&d, 0, &rb, &rows, &sl); uint8_t one[64];
+    int refused = nvn_region_move(&d, 0, 0, st, one, 64, 64, rb - (uint32_t)bpb, 0, 0, 2 * (uint32_t)bpb, 1, 1, 1) == -1;
+    checks += 2; fails += !ok + !refused;
+    printf("  G %-34s 40 regions read and written %s; one past the row %s\n", tag, ok ? "as with the whole level" : "DIFFER ✗", refused ? "refused" : "taken ✗");
+    free(st); free(st2);
+}
+
 int main(void) {
+    printf("G regions (plan item 206)\n");
+    region("2D 100×37 RGBA8 4 levels", 1, 0x25, 100, 37, 1, 4);
+    region("2D 300×300 BC1 5 levels", 1, 0x42, 300, 300, 1, 5);
+    region("2D 260×260 RG8 9 levels", 1, 0x0D, 260, 260, 1, 9);
+    region("2D array 100×37×3 RGBA16F 3 levels", 4, 0x29, 100, 37, 3, 3);
+    region("3D 64×64×20 R8 4 levels", 2, 0x01, 64, 64, 20, 4);
+    region("3D 40×30×9 RGBA32F 3 levels", 2, 0x2E, 40, 30, 9, 3);
     printf("A round trip (random data, non-power-of-two sizes)\n");
     roundtrip("2D 100×37 R8 4 levels", 1, 0x01, 100, 37, 1, 4);
     roundtrip("2D 100×37 RG8 4 levels", 1, 0x0D, 100, 37, 1, 4);

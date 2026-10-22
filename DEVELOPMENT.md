@@ -1191,11 +1191,13 @@ Correctness, small:
   red line 115). `gfx/tests/t_cubearr.m`; `DM_TEST_CUBE_DEPTH_SILENT` fails 1
 - [x] batch 70 · 199 `tools/sdis.py --xref` / `--callers` to the end of the PLT, and an image without sized exports (nxnative 108d483).
   `tools/tests/t_sdis.py` (a synthetic image: code after the last sized export, then every export unsized); `DM_TEST_SDIS_OLD_END=1` fails 4
-- [ ] 200 `XLATE_DEBUG=0` refused or made safe: with it our translator gives Tears of the Kingdom 306 failures (call arguments) and 4,175 modules
+- [-] batch 72 · 200 `XLATE_DEBUG=0` refused or made safe: with it our translator gives Tears of the Kingdom 306 failures (call arguments) and 4,175 modules
   whose else-if bodies are unreachable (the AST optimizer's ElseIf blocks, which the SPIR-V generator never branches to; nsCHaojIMaLiAo,
   nxport's 0001 / 0002), manosaba 70 / 14; with the default (debug: no expression propagation) 0 / 0. `Program.cs` says the semantics are unchanged.
-  Any change there gives a new chain version (dmsh_chain.py hashes dmsh_build.py, Program.cs and the translator): done with the chain rebuild at
-  the end of this tier
+  Any change there gives a new chain version (dmsh_chain.py hashes dmsh_build.py, Program.cs and the translator), and such a chain is not loaded:
+  the host loads only the default options' version (dmsh_chain.py: "other options give another V, which the host does not load"), so the
+  trap takes a change in two places. The comment's correction and a refusal of XLATE_DEBUG=0 (or nxport's 0001 / 0002) wait for the next chain
+  rebuild made for another reason
 - [x] batch 71 · 201 the rewriter's red zone: for a post-index pop larger than 16, `site_plain`'s save at −112 lies past Apple's 128 bytes below
   the new sp until the restore (`ldp x18, x19, [sp], #0x40`: −176; upstream 373b402 is the Android form, no save below sp at all). None of our
   modules has one (the games' sdk pops by 16: −128). `verify/equiv.py` now refuses a patched side that touches memory more than 128 bytes below
@@ -1220,14 +1222,29 @@ Performance (measure first where marked):
 - [x] batch 70 · 205 pipeline prediction scans again after a scan that stopped at its budget, keys already pending skipped before they count
   (MacNativeGames PR #166: pipeline time in long frames 35.8 / 7.1 / 2.3 s → 5.5 / 2.9 / 1.05 s, M4 Max, world entry); the pending table 768, 64
   keys; `pp_scan_due` / `pp_pending`, `DM_NVN_PSO_RESCANS` (32; 0 as before). `t_ppred` +5; `DM_TEST_PP_ONE_SCAN` fails 1
-- [ ] 206 CPU Read / WriteTexels of a region copy only the region's block-linear bytes (MacNativeGames PR #185: frames over 40 ms 25.9 → 1.0 a
-  minute, M5 Max, 1.1.2); measure Tears of the Kingdom 1.4.3's calls first
-- [ ] 207 occlusion results' freshness (nxport `report_guard.rs`): measure when Tears of the Kingdom 1.4.3 reads its reports against our write
-- [ ] 208 the dirty tracker's fault-around and page-exact GPU pages (dodola 2e58d47 / 58d3aa2): measure `@faults` / `@mprotect_ms` on the iPhone first
-- [ ] 209 184's warm-up seed from the players' `pso_user.tsv` lists merged (upstream 08f51a8); archive notes: an archive serves a specialised
-  function only when it holds that specialisation, and a fail-on-miss request counts its hits (nxport 17d527f); no idle rule by draw counts
-  (MacNativeGames 30a1b93)
-- [ ] 210 single-draw passes as compute kernels (nxport `tiny_kernels.rs`; 61e): on the iPhone (batch 69) 100 single-draw passes took 3.6 of 12.4 ms GPU
+- [x] batch 72 · 206 CPU Read / WriteTexels of a region copy only the region's block-linear bytes (MacNativeGames PR #185: frames over 40 ms
+  25.9 → 1.0 a minute, M5 Max, 1.1.2): `nvn_region_move` (gfx/tex), used on storage by `mtl_read_texels` / `mtl_write_texels`, the whole level
+  when the region cannot move alone; counted (a line at the 1st, 2nd, 4th, ... call). Tears of the Kingdom 1.4.3's cliff save, 70 s on the Mac:
+  no such call (its 42 WriteTexels are on GPU-written textures), so nothing measurable there. `t_tex` G (40 random regions each of six textures
+  against the whole level; `DM_TEST_REGION_NO_SPLIT` fails 6), `t_writetexels` +1 (`DM_TEST_TEXELS_WHOLE_LEVEL` fails 1)
+- [-] batch 72 · 207 occlusion results' freshness (nxport `report_guard.rs`): when the game reads a report its GPU work has not written, it reads
+  an older value, as it would on a console reading before its GPU finished. Seeing those reads takes a read guard on the report pages, which is
+  nxport's change itself; its numbers (72.6 against 65.9 fps) compare with an occlusion wait we never had, and no run here showed the objects
+  missing for frames at detail switches that it describes. Not taken
+- [-] batch 72 · 208 the dirty tracker's fault-around and page-exact GPU pages (dodola 2e58d47 / 58d3aa2): the iPhone's logs of 2026-10-21 give
+  57 write-protect faults a second over 288 s and 168 over 1,536 s (peak 2,670 a second, about 45 a frame at 60 fps), against dodola's 420 a
+  frame before its change: at most about 1 ms a frame at the peak, under 0.1 ms on average. Not taken
+- [x] batch 72 · 209 184's warm-up seed from the players' `pso_user.tsv` lists merged (upstream 08f51a8): `tools/pso_merge.py` (each row once, in
+  the order met; rows the warm-up does not read dropped) writes `pso_seed.tsv` beside the shader map, and `ios/run.sh build` packs it as the
+  app's `pso_manifest.tsv`, which the warm-up reads before the player's list: a new install warms what earlier play met. Tears of the Kingdom's
+  from the iPhone's list (05:09 backup) and the Mac's: 6,365 rows (2,895 shaders, 3,411 render pipelines, 59 compute). Not for the Mac host: its
+  own list already covers the prologue (1 pipeline, 3 ms in long frames), and warming the seed there (16.8 s in the background) gave 55 long frames
+  against 29. On the user's iPhone it repeats the player's own list; a fresh install's first play with it is not measured. `tools/tests/t_pso_merge.py` (`DM_TEST_PSO_MERGE_NO_DEDUPE=1` fails 2). For 184's
+  archives, noted: an archive serves a specialised function only when it holds that specialisation, and a fail-on-miss request counts its hits
+  (nxport 17d527f); no idle rule by draw counts (MacNativeGames 30a1b93)
+- [-] batch 72 · 210 single-draw passes as compute kernels (nxport `tiny_kernels.rs`; 61e): on the iPhone (batch 69) 100 single-draw passes took
+  3.6 of 12.4 ms GPU, mostly 1280x720 passes loading their attachments, while nxport moves only rectangles up to 640x360 (its full-size post
+  passes as compute "nearly doubled the frame's GPU time"). The cost there is the loads: 62j and 187. Not taken
 iOS:
 - [x] batch 71 · 211 the unsigned IPA signed ad hoc with the increased memory limit alone (`ios/tools/ipa_sign.py`; LNPANDY c3bccb5: AltStore
   keeps the ~3,375 MB default without it; a free account signs no other of ours), read back from the signature; the packaging line gives the size

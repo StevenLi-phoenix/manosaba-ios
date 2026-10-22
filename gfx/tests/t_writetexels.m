@@ -3,7 +3,9 @@
 // 2x1 region at (1, 2) of face 3 lands there and leaves its neighbours (bytes 35 and 44 of the face still 4); a BC4 region of 8x6 texels at (4, 4),
 // ending inside a block row, writes its four whole blocks and no other; two 320x320 RGB565-sized (format 0x3b) MINIMAL_LAYOUT textures back to back
 // (the layout of item 82: 204,800 bytes each) each read back and nothing past the second is touched. A write whose rows are placed at the
-// region's width instead of the level's (-DDM_TEST_WT_ROWS_AT_REGION) fails 2.
+// region's width instead of the level's (-DDM_TEST_WT_ROWS_AT_REGION, in the whole-level path: with -DDM_TEST_TEXELS_WHOLE_LEVEL) fails 2 more.
+// The regions are moved alone (plan item 206, nvn_region_move; its correctness against the whole level: gfx/tex/tests/t_tex G); the whole level as
+// before (-DDM_TEST_TEXELS_WHOLE_LEVEL) fails 1.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -50,6 +52,8 @@ int main(void) { @autoreleasepool {
     }
     CHECK(ok && inside, "two 320x320 MINIMAL_LAYOUT textures back to back (204,800 bytes each): each reads back, nothing past them touched");
     free(lin); free(rb);
+    // Plan item 206: every one of these regions moved by itself, none through the whole level (-DDM_TEST_TEXELS_WHOLE_LEVEL fails it)
+    CHECK(g_tx_region > 0 && g_tx_level == 0, "206: the regions moved alone (%llu), not with their whole level (%llu)", (unsigned long long)g_tx_region, (unsigned long long)g_tx_level);
     printf("WRITETEXELS %s %d/%d\n", fail ? "FAIL" : "OK", n - fail, n);
     return fail != 0;
 } }
