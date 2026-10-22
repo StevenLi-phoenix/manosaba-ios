@@ -401,7 +401,7 @@ What is left (2026-10-21): every item the Mac can do alone is done. The open ite
   over), 71c (product60's 30 fps systems), 132 (a save where the wave program draws), and the checks of 161 (grass), 163 (hair and cloth), 165
   (`DM_NVN_FBX=split` over paved ground or decals), 167 (an overworld save for towns).
 - The console: 94a (Link close to the camera, the Great Sky Island grass), 124 (stick diagonals).
-- An iPhone or iPad: 70 (the on-screen controls), 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
+- An iPhone or iPad: 71b's Metal 4 screen; the checks of 148, 153, 171 (done on 2026-10-21: 65, 68, 106,
   134, 135, 140, 173, 175, and manosaba's part of 142).
 - A controller: 66, 67 (67b, 67c, 67d).
 - Tears of the Kingdom on the phone (it runs since 2026-10-21, 62): 62c2, 62g, 62h, 62j, 63b
@@ -1073,9 +1073,10 @@ Tier 5, needs the user's devices, controller or account:
     Checked on the iPhone 17 Pro on 2026-10-22 (Tears of the Kingdom): after switching to another app and back, the vibration test pulses again
 - [x] batch 62 · 68 MixWithOthers on an iPhone: another app's music plays on under the game (iPhone 17 Pro, 2026-10-21; "mixes with other apps: yes")
 - [ ] 69 the game over flow with the overlay, in play
-- [ ] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
+- [x] 70 manosaba's iOS app with chain bab8d4746968 on the devices (was 1e41705de87b), with the host stack of 40 (both IPAs built with it); `ios/run.sh lifecycle` there, and the home button and the app switcher by hand (51); the log's "CoreAudio output opened in" time there (55); the on-screen controls of 58 with `DM_TOUCH=pad` (`DM_TEST_TOUCHPAD=check:30`, then by hand: the stick, the camera drag, the eye, a controller connected)
   2026-10-21 on the iPhone 17 Pro (chain ca5eb9623812): `ios/run.sh lifecycle` LIFECYCLE OK, the home button and the app switcher fine by
-  hand, "CoreAudio output opened in 4.1 ms"; left: the on-screen controls of 58 with `DM_TOUCH=pad`
+  hand, "CoreAudio output opened in 4.1 ms". The on-screen controls of 58 with `DM_TOUCH=pad` not wanted: manosaba plays by touch natively and
+  needs no stick (the user, 2026-10-22); they are Tears of the Kingdom's, used in the user's play on the iPhone (2026-10-22, seen through mirroring)
 - [-] 71 not done: iOS 17 is not supported (59)
 - [ ] 71b the covered-window check of 27 in a window (`DM_WINDOW=1 DM_TEST_COVER=30,10`, display on); the Metal 4 screen of 19 on a device
   (`DM_TEST_NO_METAL4=1` in Documents/env.txt); the backup exclusion of 20 in Settings → iCloud → Backups; uncapped pacing of 53 in a window (product60, `DM_WINDOW=1`)
