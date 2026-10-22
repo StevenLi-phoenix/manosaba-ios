@@ -99,6 +99,8 @@ t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_bc1astc: t_bc1astc.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_bc1astc.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_bcd: t_bcd.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bcd.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_writetexels: t_writetexels.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -251,6 +253,7 @@ run: \
 	t_bindfreeze \
 	t_trace \
 	t_bc1astc \
+	t_bcd \
 	t_nvn64a \
 	t_copycmd \
 	t_dbounds \
@@ -383,6 +386,7 @@ run: \
 	TMPDIR=. ./t_trace
 	MTL_DEBUG_LAYER=1 ./t_bc1astc
 	./t_bc1astc off   # DM_NVN_BC1_ASTC=0: BC1 decompressed as before (plan item 62c)
+	MTL_DEBUG_LAYER=1 ./t_bcd
 	./t_nvn64a
 	./t_copycmd
 	MTL_DEBUG_LAYER=1 ./t_dbounds

@@ -66,6 +66,8 @@ run: \
 	$(B)/t_ktrace \
 	$(B)/t_loader_weak \
 	$(B)/t_logstamp \
+	$(B)/t_thermal \
+	$(B)/t_thermal_weak \
 	$(B)/t_logstamp_every \
 	$(B)/t_memsnap \
 	$(B)/t_haptics \
@@ -98,6 +100,7 @@ run: \
 	$(B)/t_survey \
 	$(B)/t_lang \
 	$(B)/t_lang_region \
+	$(B)/t_lang_regfirst \
 	$(B)/t_guest_as \
 	$(B)/t_romfs_parts \
 	$(B)/t_coolstart \
@@ -333,6 +336,10 @@ run: \
 	TMPDIR="$(abspath $(B))" $(B)/t_ktrace 2>/dev/null
 	$(B)/t_loader_weak 2>/dev/null
 	$(B)/t_logstamp
+	$(B)/t_thermal
+	@status=0; $(B)/t_thermal_weak > $(B)/t_thermal_weak.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || ! grep -q "✗" $(B)/t_thermal_weak.log; then cat $(B)/t_thermal_weak.log; echo "t_thermal_weak: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_thermal_weak: with the weak default alone the state reads -1, as expected"
 	@status=0; $(B)/t_logstamp_every > $(B)/t_logstamp_every.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ no stamp inside a line" $(B)/t_logstamp_every.log; then \
 	   cat $(B)/t_logstamp_every.log; echo "t_logstamp_every: unexpected negative-control result ($$status)"; exit 1; \
@@ -383,9 +390,13 @@ run: \
 	TMPDIR="$(abspath $(B))" $(B)/t_survey
 	$(B)/t_lang
 	@status=0; $(B)/t_lang_region > $(B)/t_lang_region.log 2>/dev/null || status=$$?; \
-	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_lang_region.log)" -ne 5 ]; then \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_lang_region.log)" -ne 6 ]; then \
 	   cat $(B)/t_lang_region.log; echo "t_lang_region: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_lang_region: the language alone loses Traditional Chinese, British English, Canadian French and Latin American Spanish, as expected"
+	@status=0; $(B)/t_lang_regfirst > $(B)/t_lang_regfirst.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_lang_regfirst.log)" -ne 1 ] || ! grep -q "zh-Hans-HK.*✗" $(B)/t_lang_regfirst.log; then \
+	   cat $(B)/t_lang_regfirst.log; echo "t_lang_regfirst: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_lang_regfirst: the region before the script makes zh-Hans-HK Traditional Chinese, as expected"
 	$(B)/t_guest_as
 	@status=0; $(B)/t_guest_as_nolimit > $(B)/t_guest_as_nolimit.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_guest_as_nolimit.log)" -ne 2 ]; then \
@@ -733,6 +744,10 @@ $(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MODS_CASE -I.. -o $@ t_mods.c
 $(B)/t_mods_nopin: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MODS_NO_PIN -I.. -o $@ t_mods.c
+$(B)/t_thermal: t_thermal.m ../thermal.m | $(B)
+	clang -O1 -Wall -fobjc-arc -o $@ t_thermal.m ../thermal.m -framework Foundation
+$(B)/t_thermal_weak: t_thermal.m | $(B)
+	clang -O1 -Wall -fobjc-arc -DDM_TEST_THERMAL_WEAK_ONLY -o $@ t_thermal.m -framework Foundation
 $(B)/t_logstamp: t_logstamp.c ../logstamp.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_logstamp.c
 $(B)/t_logstamp_every: t_logstamp.c ../logstamp.h | $(B)
@@ -882,6 +897,8 @@ $(B)/t_lang: t_lang.c ../lang.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_lang.c
 $(B)/t_lang_region: t_lang.c ../lang.h | $(B)
 	clang -O1 -Wall -Werror -I.. -DDM_TEST_LANG_REGION_IGNORED -o $@ t_lang.c
+$(B)/t_lang_regfirst: t_lang.c ../lang.h | $(B)
+	clang -O1 -Wall -Werror -I.. -DDM_TEST_LANG_REGION_FIRST -o $@ t_lang.c
 $(B)/t_survey: ../../games/totk/tests/t_survey.c ../../games/totk/survey.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -I.. -o $@ ../../games/totk/tests/t_survey.c
 $(B)/t_survey_cols: ../../games/totk/tests/t_survey.c ../../games/totk/survey.c ../dm.h ../game.h | $(B)

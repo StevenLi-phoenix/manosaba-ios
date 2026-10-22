@@ -128,9 +128,9 @@ snapshots and steady / network clocks (from Ryujinx), NVN functions (13 names in
   a failed pipeline writes `<DM_SHDUMP>/fout.tsv`, which `dmsh_build.py` passes to the translator (chain `530a8546d06c`). Vertex shaders padded
   for their pixel shaders (`vs_pad`).
 - `engines/bnsh/shader_extract.py` reads the shipped BNSH (`Pack/Bootup`, `Lib/**`, `Shader/**`, as MacNativeGames' prepare_shader_seed.py),
-  plus `Effect/**.esetb.byml.zs`, 0x88c-byte control sections and the sharcb archives, into `work/build/totk/shader_capture` (27077 shaders,
-  27075 translate; SPIRV-Cross fails on one vertex shader of `AglShader.sharcb` and one compute shader of `agl_technique_pfx.sharcb`). Shaders
-  in main stay run-time captures. `c1_guard`: 49 shaders whose c1 index is not proven bounded.
+  plus `Effect/**.esetb.byml.zs`, 0x88c-byte control sections and the sharcb archives, into `work/build/totk/shader_capture` (with the
+  run-time captures 28,652 shaders; every one has a Mac and an iOS library, checked 2026-10-22, including the vertex shader of `AglShader.sharcb`
+  and the compute shader of `agl_technique_pfx.sharcb` on which SPIRV-Cross once failed). Shaders in main stay run-time captures. `c1_guard`: 49 shaders whose c1 index is not proven bounded.
 
 **Replay** (`gfx/nvn`):
 - 8-bit index buffers widened to 16-bit; RGB10A2SN; a view swizzle replaces the texture's (`view_t` stays 10 bytes); views Metal cannot make are
@@ -1139,9 +1139,14 @@ the device the user's iPhone 17 Pro):
   clocks, frame time, with and without `DM_RT_DECL=old`, after a cooldown). Done 2026-10-22 (iPhone 17 Pro, shrine save, alternating, warm, no
   cooldown between runs): `DM_RT_DECL=old` 1.75 W, 2.62 GHz, performance cores 66.1 %, frame p50 19.9 ms against 1.73-1.74 W, 2.63-2.64 GHz,
   65.8-65.9 %, 19.2-19.5 ms: no difference once warm (the first, cooler run of either is higher)
-- [ ] 183 guest yields: `host/hle_thread.c` turns them into `sched_yield`, and the iPhone's log shows the game's main thread yielding 14,000-20,000
-  times (15-25 ms) a frame; Apple's Tech Talk 110147 says a yield drops the thread's priority for up to 10 ms and spinning keeps a thread from moving
-  to a performance core. Measure, then try a short spin and a block (nxnative PR #37: 30 µs before sleeping, M4 Pro frame p50 8.8 → 8.34 ms)
+- [-] batch 74 · 183 guest yields: `host/hle_thread.c` turns them into `sched_yield`, and the iPhone's log showed the game's main thread yielding
+  14,000-20,000 times (15-25 ms) a frame; Apple's Tech Talk 110147 says a yield drops the thread's priority for up to 10 ms and spinning keeps a
+  thread from moving to a performance core. Measured, not taken: those numbers were the 10 fps shrine before 181. The iPhone 17 Pro's logs of
+  2026-10-22 with the 60 fps build (b72walk, b73stand3; the 300-frame "translation detail" lines) show 182-6,697 yields a frame taking 0.2-2.8 ms,
+  0.4-0.6 µs each: the yields come straight back. In XNU (osfmk/kern/syscall_subr.c) `sched_yield` is `swtch_pri(0)`, which returns at once when
+  no other thread waits for the processor and lowers the priority (for at most one 10 ms quantum, undone when the thread runs again) only when one
+  does; so a spin or a block could win back at most those 0.2-2.8 ms. `thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0)` (libpthread's
+  `sched_yield` with `PTHREAD_YIELD_TO_ZERO=0`) yields without lowering the priority, if it is ever needed
 - [ ] 184 pipelines compiled at first sight (up to 360 ms a frame on the iPhone): MacNativeGames' one binary archive per pipeline (iPhone 14: warm-up
   95-122 s → 5.9 s, pipeline time in long frames 1,452 → 102 ms; its pitfalls: many pipelines in one file, 142 files searched, `gpuarchiver-*`
   folders), Apple's offline `metal-tt` route from our metallibs or Metal 4's `MTL4Archive`; a seed `pso_manifest.tsv` from Mac runs (the slot of
@@ -1159,13 +1164,33 @@ the device the user's iPhone 17 Pro):
 - [ ] 189 back up to 60 fps after a step down (nxnative 9409472 / b53bb89, tvc97 `nvn_cap_auto.h`: under 30 % on performance cores in two windows)
 - [ ] 190 a scene size driven by dropped frames (upstream `hle_oe.c`: an iPhone 17 Pro Max's dropped frames 23 % → 10 %), when TotK's scene size
   can change while it runs
-- [ ] 191 correctness from the review: `QueryHostSupportsTextureGatherOffsets() => false` (totk-mobile eaec4e4; our `agl_technique_pfx` failure),
-  `host/lang.h` checking the script before the region and `AppleLanguages` first (Touchable 69ddbd5 / PR #3), an `EFAULT` retry after unprotecting
-  guest pages (yokeyhh v18), 64-bit driver handles and the BC kernel cast (aerolithink), region-only Read / WriteTexels (MacNativeGames PR #143),
-  batched write-back on an invalidate (DavidZande 8c46687), SDK 27's Metal4FX barrier properties (bayonetta3)
+- [x] batch 74 · 191 correctness from the review:
+  - `QueryHostSupportsTextureGatherOffsets() => false` (totk-mobile eaec4e4): in place another way since 686b81e (`third_party/ryujinx`'s dm
+    patch: a four-offset gather becomes four one-offset gathers, after nxnative 771f62f); the `agl_technique_pfx` compute shader with register
+    offsets has its four gathers in its MSL, and every captured shader has a Mac and an iOS library (the Shaders note above was stale)
+  - `host/lang.h` reads the script before the region (Touchable 69ddbd5): "zh-Hans-HK", "zh-Hans-TW" and "zh-Hans-MO" gave Traditional Chinese.
+    `AppleLanguages` first not taken: an Apple engineer calls it "an implementation detail, not something that's considered API" (Apple
+    developer forums, thread 769769), and a developer there reports `Locale.preferredLanguages.first` follows the per-app language; the boot
+    line logs the tag. `t_lang` (+1; `-DDM_TEST_LANG_REGION_FIRST` fails 1, `-DDM_TEST_LANG_REGION_IGNORED` now 6)
+  - the `EFAULT` retry: 196; region-only Read / WriteTexels: 206
+  - 64-bit driver handles (aerolithink e218be4): not needed. Tears of the Kingdom's shaders read no c2 at run time (`dmsh_build.log`: c2 0),
+    manosaba's five read only the handles' low words (their words sit at multiples of 8 from the tables' bases 0x168 and 0x568)
+  - the BC kernel's casts (aerolithink 4e98460): the bytes are widened to `uint` before they are shifted (C++14's shift rules, which MSL
+    follows, already define the old `b[7] << 24`; aerolithink shows no miscompile). New `gfx/tests/t_bcd.m`: the kernel against the CPU decoder,
+    1,024 random blocks of each of RGB_DXT1, RGBA_DXT1, DXT3, DXT5, BC4 and BC5 (unsigned, signed), every channel within 1
+    (`-DDM_TEST_BCD_HIGH_BYTE_LOST` fails the four BC1-3 checks)
+  - write-back batched (DavidZande/MacNativeGames 8c46687, MIT, written anew: a 9-level texture took a command buffer per level, ~1.25 ms each,
+    ~110 ms stalls after spawning there): every level, layer and texture of an invalidate, and of the idle pass, in one command buffer with one
+    wait (`wb_textures`); `DM_NVN_WB_BATCH=0` as before; an "invalidate N ms" line when one takes over 20 ms. `t_wb` (+4: one command buffer for
+    a 4-level texture and another, the levels intact; `DM_NVN_WB_BATCH=0` fails the count, 5)
+  - SDK 27's Metal4FX barrier properties (bayonetta3): nothing to do, the builds already use Xcode 27.0 (27A266a) with the iOS and macOS 27.0
+    SDKs and none of those properties
 - [ ] 192 touch controls after Touchable (476fb39): its fixed 8-way D-pad, Liquid Glass, face-button slides and layout; Touchable has no analog stick
   or camera drag, so the left side, the stick's origin, how presses look, the extra controls and opacity wait for the user's choices
-- [ ] 193 the iOS logs' `thermal -1`: `dm_thermal_now` has no iOS definition (`gfx/nvn/hle_nvn.c` says `front_ios.m` has one)
+- [x] batch 74 · 193 the iOS logs' `thermal -1`: `dm_thermal_now` had no iOS definition (`gfx/nvn/hle_nvn.c` said `front_ios.m` had one), so the
+  `[perf] thermal` lines and perf.txt read -1 while `main.m`'s frame rate policy read the real state. `host/thermal.m` (in the host's sources, so
+  the Mac and the iOS app): NSProcessInfo's thermal state. `host/tests/t_thermal.m` (with only the weak default, `-DDM_TEST_THERMAL_WEAK_ONLY`: -1,
+  fails). Device check: the iPhone's `[perf] thermal` line 0-3
 - [x] batch 69 · 194 the ability wheel (hold L) over black on the iPhone (2026-10-22, the user's screenshot after 62l's 60 fps build): the RomFS
   overlay's quick-menu fix (MacNativeGames' menu capture; the RomFS overlay note above) was never served on iOS: `games/totk/defaults.c`
   looks under the workspace, which the app does not have. The app now serves `romfs_overlay` from the RomFS's places (`main.m`

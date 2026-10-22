@@ -1,5 +1,6 @@
 // The game's language from a device language tag (host/lang.h, plan item 170): iOS tags with script and region to nn::settings codes, then only the
-// game's own languages. Negative control: -DDM_TEST_LANG_REGION_IGNORED (the language alone) fails 5.
+// game's own languages. Negative controls: -DDM_TEST_LANG_REGION_IGNORED (the language alone) fails 6, -DDM_TEST_LANG_REGION_FIRST (the region
+// before the script) fails 1.
 #include "../lang.h"
 #include <stdio.h>
 static int n, fail;
@@ -9,6 +10,9 @@ int main(void) {
     check("zh-Hant-TW, zh-HK, zh-Hant, yue → zh-Hant; zh-Hans-CN, zh, zh_CN, zh-SG → zh-Hans",
           is(dm_lang_from_tag("zh-Hant-TW"), "zh-Hant") && is(dm_lang_from_tag("zh-HK"), "zh-Hant") && is(dm_lang_from_tag("zh-Hant"), "zh-Hant") && is(dm_lang_from_tag("yue"), "zh-Hant")
           && is(dm_lang_from_tag("zh-Hans-CN"), "zh-Hans") && is(dm_lang_from_tag("zh"), "zh-Hans") && is(dm_lang_from_tag("zh_CN"), "zh-Hans") && is(dm_lang_from_tag("zh-SG"), "zh-Hans"));
+    check("the script before the region (plan item 191): zh-Hans-HK, zh-Hans-TW, zh-Hans-MO → zh-Hans; zh-Hant-CN, zh-Hant-SG → zh-Hant",
+          is(dm_lang_from_tag("zh-Hans-HK"), "zh-Hans") && is(dm_lang_from_tag("zh-Hans-TW"), "zh-Hans") && is(dm_lang_from_tag("zh-Hans-MO"), "zh-Hans")
+          && is(dm_lang_from_tag("zh-Hant-CN"), "zh-Hant") && is(dm_lang_from_tag("zh-Hant-SG"), "zh-Hant"));
     check("en-GB, en-AU → en-GB; en, en-US, en-CA → en-US",
           is(dm_lang_from_tag("en-GB"), "en-GB") && is(dm_lang_from_tag("en-AU"), "en-GB") && is(dm_lang_from_tag("en"), "en-US") && is(dm_lang_from_tag("en-US"), "en-US") && is(dm_lang_from_tag("en-CA"), "en-US"));
     check("fr-CA → fr-CA, fr-FR → fr; es-ES, es → es; es-MX, es-419 → es-419",

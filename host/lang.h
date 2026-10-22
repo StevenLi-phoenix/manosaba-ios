@@ -4,7 +4,9 @@
 // nn::settings language codes (NintendoSDK: ja, en-US, fr, de, it, es, zh-CN, ko, nl, pt, ru, zh-TW, en-GB, fr-CA, es-419, zh-Hans, zh-Hant), the
 // best one the game supports. Here: the tag's language and script or region give the code; a code the game does not list (game.json "languages")
 // gives the profile's own language, as an unknown tag does.
-//   zh (cmn, wuu, hak, nan): Hant, TW, HK, MO → zh-Hant, else zh-Hans; yue → zh-Hant
+//   zh (cmn, wuu, hak, nan): the script first (Hans → zh-Hans, Hant → zh-Hant: iOS stores a per-app language with the device's region, so
+//   Simplified Chinese chosen in Hong Kong is "zh-Hans-HK"; Touchable 69ddbd5, plan item 191), without one TW, HK, MO → zh-Hant, else zh-Hans;
+//   yue → zh-Hant
 //   en: GB, IE, AU, NZ, ZA → en-GB, else en-US        fr: CA → fr-CA, else fr        es: ES or none → es, else es-419 (Latin America)
 //   pt → pt; ja ko de it nl ru as they are
 #pragma once
@@ -24,8 +26,12 @@ static inline const char *dm_lang_from_tag(const char *tag) {
 #ifdef DM_TEST_LANG_REGION_IGNORED   // negative control of t_lang only: the language alone
     np = 1;
 #endif
-    if (!strcasecmp(l, "zh") || !strcasecmp(l, "cmn") || !strcasecmp(l, "wuu") || !strcasecmp(l, "hak") || !strcasecmp(l, "nan"))
+    if (!strcasecmp(l, "zh") || !strcasecmp(l, "cmn") || !strcasecmp(l, "wuu") || !strcasecmp(l, "hak") || !strcasecmp(l, "nan")) {
+#ifndef DM_TEST_LANG_REGION_FIRST   // negative control of t_lang only: the region before the script, as before
+        if (has("Hans")) return "zh-Hans";
+#endif
         return has("Hant") || has("TW") || has("HK") || has("MO") ? "zh-Hant" : "zh-Hans";
+    }
     if (!strcasecmp(l, "yue")) return "zh-Hant";
     if (!strcasecmp(l, "en")) return has("GB") || has("IE") || has("AU") || has("NZ") || has("ZA") ? "en-GB" : "en-US";
     if (!strcasecmp(l, "fr")) return has("CA") ? "fr-CA" : "fr";

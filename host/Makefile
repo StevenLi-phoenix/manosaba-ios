@@ -49,6 +49,7 @@ SRC = \
 	romfs_validate.c \
 	sdktest.c \
 	sead.c \
+	thermal.m \
 	thread.c \
 	touchpad.c \
 	$(sort $(wildcard hle_*.c)) \

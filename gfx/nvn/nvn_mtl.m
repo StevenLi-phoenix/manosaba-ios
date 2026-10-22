@@ -1869,7 +1869,15 @@ static const char k_bcd_msl[] =
 "struct P { uint off, pitch, w, h, fmt, z; };\n"   // fmt: 1 BC1, 2 BC2, 3 BC3, 4 BC4, 5 BC4 signed, 6 BC5, 7 BC5 signed; z: bcd3's depth plane
 "static float3 c565(uint c) { return float3((c >> 11) & 31, (c >> 5) & 63, c & 31) / float3(31, 63, 31); }\n"
 "static void col(device const uchar *b, thread float4 *o, bool four) {\n"
-"  uint c0 = b[0] | (b[1] << 8), c1 = b[2] | (b[3] << 8), ix = b[4] | (b[5] << 8) | (b[6] << 16) | (b[7] << 24); float3 e0 = c565(c0), e1 = c565(c1); float4 p[4];\n"
+// the bytes widened to uint before they are shifted (aerolithink 4e98460: uchar promotes to int, and b[7] << 24 reaches the sign bit; checked by
+// gfx/tests/t_bcd.m against the CPU decoder; -DDM_TEST_BCD_HIGH_BYTE_LOST drops the index word's top byte there)
+"  uint c0 = uint(b[0]) | uint(b[1]) << 8, c1 = uint(b[2]) | uint(b[3]) << 8;\n"
+#ifndef DM_TEST_BCD_HIGH_BYTE_LOST
+"  uint ix = uint(b[4]) | uint(b[5]) << 8 | uint(b[6]) << 16 | uint(b[7]) << 24;\n"
+#else
+"  uint ix = uint(b[4]) | uint(b[5]) << 8 | uint(b[6]) << 16;\n"
+#endif
+"  float3 e0 = c565(c0), e1 = c565(c1); float4 p[4];\n"
 "  p[0] = float4(e0, 1); p[1] = float4(e1, 1);\n"
 "  if (four || c0 > c1) { p[2] = float4((2 * e0 + e1) / 3, 1); p[3] = float4((e0 + 2 * e1) / 3, 1); } else { p[2] = float4((e0 + e1) / 2, 1); p[3] = float4(0); }\n"
 "  for (int i = 0; i < 16; i++) o[i] = p[(ix >> (2 * i)) & 3]; }\n"
@@ -1877,7 +1885,7 @@ static const char k_bcd_msl[] =
 "  float a0 = sn ? max(float(as_type<char>(b[0])), -127.0) / 127 : b[0] / 255.0, a1 = sn ? max(float(as_type<char>(b[1])), -127.0) / 127 : b[1] / 255.0;\n"
 "  bool eight = sn ? as_type<char>(b[0]) > as_type<char>(b[1]) : b[0] > b[1]; float lo = sn ? -1 : 0; float p[8]; p[0] = a0; p[1] = a1;\n"
 "  for (int k = 2; k < 8; k++) p[k] = eight ? ((8 - k) * a0 + (k - 1) * a1) / 7 : (k < 6 ? ((6 - k) * a0 + (k - 1) * a1) / 5 : (k == 6 ? lo : 1));\n"
-"  uint lo24 = b[2] | (b[3] << 8) | (b[4] << 16), hi24 = b[5] | (b[6] << 8) | (b[7] << 16);\n"
+"  uint lo24 = uint(b[2]) | uint(b[3]) << 8 | uint(b[4]) << 16, hi24 = uint(b[5]) | uint(b[6]) << 8 | uint(b[7]) << 16;\n"
 "  for (int i = 0; i < 16; i++) o[i] = p[i < 8 ? (lo24 >> (3 * i)) & 7 : (hi24 >> (3 * (i - 8))) & 7]; }\n"
 "static void blk(device const uchar *src, device const P &p, uint2 g, thread float4 *o) {\n"
 "  uint bb = (p.fmt == 1 || p.fmt == 4 || p.fmt == 5) ? 8 : 16; device const uchar *b = src + p.off + g.y * p.pitch + g.x * bb; float a[16], c[16];\n"
@@ -2468,6 +2476,7 @@ static void wb_census_first(const tex_t *t) {   // a CPU-filled texture's first 
 // its storage once (totk-mobile's nvn_texture_writeback.inc writes back the first GPU write after 30 frames without one), so a CPU copy out of it
 // carries the texels the GPU drew
 static int wb_level(const tex_t *t, id<MTLTexture> mt, unsigned level, unsigned layer);
+static void wb_textures(const tex_t *const *t, __unsafe_unretained id<MTLTexture> const *mt, int n, int *ok);
 static uint64_t g_wb_idle_n;
 static void wb_idle_pass(void) {   // submit thread, before the submission's command buffer exists
     static int on = -1, subs = 30; if (on < 0) { on = getenv("DM_NVN_WB_IDLE") && atoi(getenv("DM_NVN_WB_IDLE"));
@@ -2478,12 +2487,15 @@ static void wb_idle_pass(void) {   // submit thread, before the submission's com
     for (uint32_t i = 0; i < g_wb.cap && nl < 16; i++) { wb_ent *e = g_wb.vals ? g_wb.vals[i] : NULL;
         if (e && !e->idle_stamp && g_sub_serial - e->sub >= (uint64_t)subs && !nvn_dirty_since(e->t.mem, e->t.size, e->stamp)) { e->idle_stamp = 1; list[nl++] = e; } }
     pthread_mutex_unlock(&g_wb_mu);
+    const tex_t *wt[16]; __unsafe_unretained id<MTLTexture> wm[16]; wb_ent *we[16]; int nw = 0, wok[16];   // the entries hold the textures
     for (int i = 0; i < nl; i++) {
         wb_ent *e = list[i]; const tex_t *t = &e->t; id o = (__bridge id)e->obj; id<MTLTexture> mt = [o isKindOfClass:[NvPkg class]] ? ((NvPkg *)o)->tex : o; uint32_t upf; int ubpp;
         { int r_, s_; if (!mt || bc_unpack(t->d.format, &upf, &ubpp) || bc1_astc(t->d.format, &r_, &s_) || t->d.target == 2 || t->d.samples > 1) continue; }
-        dm_guest_write_prepare(t->mem, t->size);
-        unsigned layers = t->d.target == NVN_TEXTURE_TARGET_2D || !t->layer_size ? 1 : t->size / t->layer_size, ok = 1;
-        for (unsigned l = 0; l < (t->d.levels ? t->d.levels : 1) && ok; l++) for (unsigned y = 0; y < layers && ok; y++) ok = wb_level(t, mt, l, y);
+        wt[nw] = t; wm[nw] = mt; we[nw++] = e;
+    }
+    wb_textures(wt, wm, nw, wok);
+    for (int i = 0; i < nw; i++) {
+        wb_ent *e = we[i]; const tex_t *t = wt[i]; int ok = wok[i];
         nvn_dirty_protect(t->mem, t->size);
         pthread_mutex_lock(&g_wb_mu); e->idle_stamp = nvn_dirty_now(); e->stamp = e->idle_stamp; pthread_mutex_unlock(&g_wb_mu);   // a later CPU write shows against this
         uint64_t n = ++g_wb_idle_n; if (n <= 4 || !(n % 100)) MLOG("idle write-back: texture %llu %ux%u format %#x (%llu so far, %s)", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (unsigned long long)n, ok ? "ok" : "failed");
@@ -2516,16 +2528,52 @@ static void wb_cpu_pass(void) {   // submit thread, before the submission
     }
 }
 static void wb_released(uint64_t serial) { pthread_mutex_lock(&g_wb_mu); wb_ent *e = nvn_hm_del(&g_wb, &serial); pthread_mutex_unlock(&g_wb_mu); wb_free(e); }   // fin_drain
-static int wb_level(const tex_t *t, id<MTLTexture> mt, unsigned level, unsigned layer) {
+static uint64_t g_wb_cbs;   // command buffers the write-backs committed (t_wb)
+static void wb_level_size(const tex_t *t, unsigned level, uint32_t *lw, uint32_t *lh, size_t *lp, size_t *lr) {
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-    uint32_t lw = MAX(t->d.width >> level, 1u), lh = MAX(t->d.height >> level, 1u);
-    size_t lp = (size_t)((lw + bw - 1) / bw) * bpb, lr = (lh + bh - 1) / bh;
+    *lw = MAX(t->d.width >> level, 1u); *lh = MAX(t->d.height >> level, 1u);
+    *lp = (size_t)((*lw + bw - 1) / bw) * bpb; *lr = (*lh + bh - 1) / bh;
+}
+static unsigned wb_layers(const tex_t *t) { return t->d.target == NVN_TEXTURE_TARGET_2D || !t->layer_size ? 1 : t->size / t->layer_size; }
+static int wb_level(const tex_t *t, id<MTLTexture> mt, unsigned level, unsigned layer) {   // one level of one layer, its own command buffer (DM_NVN_WB_BATCH=0)
+    uint32_t lw, lh; size_t lp, lr; wb_level_size(t, level, &lw, &lh, &lp, &lr);
     id<MTLBuffer> buf = [g_dev newBufferWithLength:lp * lr options:MTLResourceStorageModeShared]; if (!buf) return 0;
-    id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
+    id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb); g_wb_cbs++;
     [b copyFromTexture:mt sourceSlice:layer sourceLevel:level sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(lw, lh, 1) toBuffer:buf destinationOffset:0 destinationBytesPerRow:lp destinationBytesPerImage:lp * lr];
     enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
     if (cb.status == MTLCommandBufferStatusError || nvn_swizzle(&t->d, level, layer, buf.contents, lp, t->mem)) return 0;
     g_wb_bytes += lp * lr; return 1;
+}
+// Every level and layer of n textures back to their storage with one command buffer and one wait (plan item 191; DavidZande/MacNativeGames 8c46687,
+// MIT, written anew: Tears of the Kingdom invalidates a pool holding a 9-level GPU-rendered texture, and a command buffer per level, ~1.25 ms each and
+// almost all of it start delay, made ~110 ms stalls after spawning there). ok[i]: texture i written back. DM_NVN_WB_BATCH=0: wb_level per level
+static int wb_batch_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_WB_BATCH"); v = !(e && !strcmp(e, "0")); if (!v) MLOG("DM_NVN_WB_BATCH=0: a command buffer per level of a GPU write-back"); } return v; }
+static void wb_textures(const tex_t *const *t, __unsafe_unretained id<MTLTexture> const *mt, int n, int *ok) {
+    if (!wb_batch_on()) {
+        for (int i = 0; i < n; i++) { dm_guest_write_prepare(t[i]->mem, t[i]->size); ok[i] = 1;
+            for (unsigned l = 0; l < (t[i]->d.levels ? t[i]->d.levels : 1) && ok[i]; l++) for (unsigned y = 0; y < wb_layers(t[i]) && ok[i]; y++) ok[i] = wb_level(t[i], mt[i], l, y); }
+        return;
+    }
+    typedef struct { int i; unsigned level, layer; size_t lp, lr; } wb_job;
+    int nj = 0; for (int i = 0; i < n; i++) nj += (int)((t[i]->d.levels ? t[i]->d.levels : 1) * wb_layers(t[i]));
+    if (!nj) { for (int i = 0; i < n; i++) ok[i] = 0; return; }
+    wb_job *job = malloc(sizeof *job * (size_t)nj); NSMutableArray<id<MTLBuffer>> *bufs = [NSMutableArray arrayWithCapacity:(NSUInteger)nj];
+    id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb); g_wb_cbs++; int k = 0;
+    for (int i = 0; i < n; i++) { ok[i] = 1;
+        for (unsigned l = 0; l < (t[i]->d.levels ? t[i]->d.levels : 1); l++) for (unsigned y = 0; y < wb_layers(t[i]); y++) {
+            uint32_t lw, lh; size_t lp, lr; wb_level_size(t[i], l, &lw, &lh, &lp, &lr);
+            id<MTLBuffer> buf = ok[i] ? [g_dev newBufferWithLength:lp * lr options:MTLResourceStorageModeShared] : nil;
+            if (!buf) { ok[i] = 0; continue; }
+            [b copyFromTexture:mt[i] sourceSlice:y sourceLevel:l sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(lw, lh, 1) toBuffer:buf destinationOffset:0 destinationBytesPerRow:lp destinationBytesPerImage:lp * lr];
+            job[k] = (wb_job){i, l, y, lp, lr}; [bufs addObject:buf]; k++;
+        } }
+    enc_b_end(b); [cb commit]; [cb waitUntilCompleted];
+    int bad = cb.status == MTLCommandBufferStatusError;
+    for (int i = 0; i < n; i++) if (ok[i] && !bad) dm_guest_write_prepare(t[i]->mem, t[i]->size);
+    for (int j = 0; j < k; j++) { wb_job *x = &job[j]; const tex_t *u = t[x->i];
+        if (bad || !ok[x->i]) { ok[x->i] = 0; continue; }
+        if (nvn_swizzle(&u->d, x->level, x->layer, bufs[(NSUInteger)j].contents, x->lp, u->mem)) ok[x->i] = 0; else g_wb_bytes += x->lp * x->lr; }
+    free(job);
 }
 void mtl_pool_invalidate(const pool_t *p, uint64_t off, uint64_t n) { @autoreleasepool {   // hle_nvn.c nvnMemoryPoolInvalidateMappedRange (game thread)
     if (!p || !p->mem || !n) return;
@@ -2538,26 +2586,35 @@ void mtl_pool_invalidate(const pool_t *p, uint64_t off, uint64_t n) { @autorelea
             uint64_t k = e->t.serial; nvn_hm_del(&g_wb, &k); list[nl++] = e; again = 1; break; } }
     pthread_mutex_unlock(&g_wb_mu);
     if (!nl) return;
-    mtl_finish_gpu();
+    uint64_t t0 = bp_now(); mtl_finish_gpu(); uint64_t t1 = bp_now();
     int fresh[512];   // decided for all before anything is written (a write-back writes the pages); of several renderings of one memory only the newest
     for (int i = 0; i < nl; i++) { fresh[i] = !nvn_dirty_since(list[i]->t.mem, list[i]->t.size, list[i]->stamp);
         if (!fresh[i] && list[i]->snap && list[i]->snap_n == list[i]->t.size && !memcmp(list[i]->snap, list[i]->t.mem, list[i]->snap_n)) {   // its pages written, its bytes not
             fresh[i] = 1; if (++g_wb_exact <= 4 || !(g_wb_exact % 1000)) MLOG("GPU write-back on invalidate: texture %llu %ux%u format %#x: its pages were written since, its own bytes not: written back (%llu such)",
                 (unsigned long long)list[i]->t.serial, list[i]->t.d.width, list[i]->t.d.height, list[i]->t.d.format, (unsigned long long)g_wb_exact); } }
     for (int i = 0; i < nl; i++) for (int j = 0; j < nl; j++) if (i != j && fresh[i] == 1 && fresh[j] && list[j]->t.mem == list[i]->t.mem && list[j]->stamp > list[i]->stamp) { fresh[i] = 2; break; }
+    // per call (job threads invalidate at the same time); the entries hold the textures until wb_free below
+    const tex_t **wt = malloc(sizeof *wt * (size_t)nl); __unsafe_unretained id<MTLTexture> *wm = (__unsafe_unretained id<MTLTexture> *)calloc((size_t)nl, sizeof(id));
+    wb_ent **we = malloc(sizeof *we * (size_t)nl); int *wok = malloc(sizeof *wok * (size_t)nl), nw = 0;
     for (int i = 0; i < nl; i++) {
         wb_ent *e = list[i]; const tex_t *t = &e->t; id o = (__bridge id)e->obj; id<MTLTexture> mt = [o isKindOfClass:[NvPkg class]] ? ((NvPkg *)o)->tex : o; uint32_t upf; int ubpp;
         if (fresh[i] != 1) { if (!fresh[i]) g_wb_skip_cpu++; wb_free(e); continue; }
         int a1r_, a1s_; if (!mt || bc_unpack(t->d.format, &upf, &ubpp) || bc1_astc(t->d.format, &a1r_, &a1s_) || t->d.target == 2 || t->d.samples > 1) { RED_ONCE(88, "GPU write-back: texture format %#x target %d not supported (first case)", t->d.format, t->d.target); wb_free(e); continue; }
-        dm_guest_write_prepare(t->mem, t->size);
-        unsigned layers = t->d.target == NVN_TEXTURE_TARGET_2D || !t->layer_size ? 1 : t->size / t->layer_size, ok = 1;
-        for (unsigned l = 0; l < (t->d.levels ? t->d.levels : 1) && ok; l++) for (unsigned y = 0; y < layers && ok; y++) ok = wb_level(t, mt, l, y);
+        wt[nw] = t; wm[nw] = mt; we[nw++] = e;
+    }
+    uint64_t cbs = g_wb_cbs; wb_textures(wt, wm, nw, wok); uint64_t t2 = bp_now();
+    static _Atomic uint64_t slow; if (t2 - t0 > 20000000ull) { uint64_t k = atomic_fetch_add(&slow, 1) + 1;   // as DavidZande/MacNativeGames 8c46687's [invalidate] line
+        if (k <= 8 || !(k % 100)) MLOG("invalidate %.1f ms: waiting for the GPU %.1f ms, %d of %d textures written back with %llu command buffers in %.1f ms (%llu such)", (t2 - t0) / 1e6,
+            (t1 - t0) / 1e6, nw, nl, (unsigned long long)(g_wb_cbs - cbs), (t2 - t1) / 1e6, (unsigned long long)k); }
+    for (int i = 0; i < nw; i++) {
+        wb_ent *e = we[i]; const tex_t *t = wt[i]; int ok = wok[i];
         uint64_t d = ++g_wb_done;
         if (!ok) RED_ONCE(89, "GPU write-back of texture %llu (format %#x) failed (first case)", (unsigned long long)t->serial, t->d.format);
         else if (d <= 4 || !(d % 1000)) MLOG("GPU write-back on invalidate: texture %llu %ux%u format %#x (%llu so far, %.1f MB; %llu skipped, the CPU had written them since)", (unsigned long long)t->serial,
                                             t->d.width, t->d.height, t->d.format, (unsigned long long)d, g_wb_bytes / 1048576.0, (unsigned long long)g_wb_skip_cpu);
         wb_free(e);
     }
+    free(wt); free(wm); free(we); free(wok);
 } }
 // The GPU is about to write this texture: from now on its MTLTexture is the content. An upload of a CPU-filled texture carries on as that texture
 static void tex_gpu_write(const tex_t *t) {

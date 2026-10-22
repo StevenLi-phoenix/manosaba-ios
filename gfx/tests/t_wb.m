@@ -69,5 +69,21 @@ int main(int argc, char **argv) { @autoreleasepool {
     dm_guest_write_prepare(t.mem, 1); t.mem[0] ^= 1;
     mtl_pool_invalidate(&pl, 0, t.size);
     EXPECT("203: the CPU wrote one byte of the texture: its bytes stay (texel 7,7 still red)", 0xff0000ff, texel(&t, 7, 7));
+    // Plan item 191: every level and layer of an invalidate's textures in one command buffer and one wait (DavidZande/MacNativeGames 8c46687). A
+    // 4-level texture and a second texture in one invalidated range: one command buffer; the first's level 0 green, its levels 1-3 the CPU's bytes as
+    // uploaded, the second blue. DM_NVN_WB_BATCH=0 (a command buffer per level, as before): 5, and the count fails alone
+    tex_t m = {.serial = 9991}; m.d = t.d; m.d.width = m.d.height = 16; m.d.levels = 4; nvn_tex_layout(&m.d, &L); m.size = (uint32_t)L.size; m.mem = mem + 0x10000; m.pool = &pl;
+    tex_t s2 = {.serial = 9992}; s2.d = t.d; s2.size = t.size; s2.mem = mem + 0x20000; s2.pool = &pl;
+    dm_guest_write_prepare(mem + 0x10000, 0x20000);
+    for (unsigned l = 0; l < 4; l++) { uint32_t ml[256]; for (int i = 0; i < 256; i++) ml[i] = 0xa0a0a000u | l; nvn_swizzle(&m.d, l, 0, ml, (16 >> l) * 4, m.mem); }
+    for (int i = 0; i < 64; i++) lin[i] = 0x11223344; nvn_swizzle(&s2.d, 0, 0, lin, 32, s2.mem);
+    render_clear(&m, 0, 1, 0); render_clear(&s2, 0, 0, 1);
+    uint64_t cbs = g_wb_cbs; mtl_pool_invalidate(&pl, 0x10000, 0x20000);
+    EXPECT("191: an invalidate over a 4-level texture and another: command buffers", 1, g_wb_cbs - cbs);
+    uint32_t ml[256]; nvn_deswizzle(&m.d, 0, 0, m.mem, ml, 64);
+    EXPECT("191: ... the 4-level texture's level 0 green (texel 9,13)", 0xff00ff00, ml[13 * 16 + 9]);
+    int lv_ok = 1; for (unsigned l = 1; l < 4; l++) { nvn_deswizzle(&m.d, l, 0, m.mem, ml, (16 >> l) * 4); for (unsigned i = 0; i < (16u >> l) * (16u >> l); i++) lv_ok &= ml[i] == (0xa0a0a000u | l); }
+    EXPECT("191: ... its levels 1-3 the CPU's bytes as uploaded (every texel)", 1, lv_ok);
+    EXPECT("191: ... the other texture blue (texel 3,5)", 0xffff0000, texel(&s2, 3, 5));
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }
