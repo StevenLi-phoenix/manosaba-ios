@@ -462,11 +462,20 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
 }
 HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) {
     if (!h) { *out = 0; return RES_FAIL; }   // a file handle is an fd; 0 is stdin and never a file the game opened: the null handle it keeps using after a failed open
-    size_t got = 0; uint64_t t0 = g_flag.bootprof ? now_ns() : 0;
+    size_t got = 0; uint64_t t0 = g_flag.bootprof ? now_ns() : 0; int reprep = 0;
     dm_guest_write_prepare(buf, sz);   // The destination may be a texture pool page write-protected by the graphics layer: a kernel write to a read-only page returns EFAULT instead of page-faulting, so unprotect and mark dirty first
     while (got < sz) {
         ssize_t r = pread((int)h, (uint8_t *)buf + got, sz - got, off + got);
-        if (r < 0) { if (errno == EINTR) continue; return err_res("pread", "fd"); }
+        if (r < 0) { if (errno == EINTR) continue;
+#ifndef DM_TEST_FS_NO_REPREP   // negative control of t_fs only: one prepare, as before
+            // The graphics layer write-protects tracked pages again after each upload (gfx/nvn/nvn_dirty.c): a page made writable above can be read-only
+            // again by the time pread writes it, and a system call gets EFAULT where a plain store would fault into the tracker. Prepare the rest again
+            // and read on (nxnative 53d7aad, MIT; plan item 196: Monster Train 2 at 60 fps on a Mac lost a read in 2 of 3 runs, none in 4 after)
+            if (errno == EFAULT && reprep++ < 8) {
+                static _Atomic int once; if (!once++) LOG("[fs] ReadFile into %p+%#zx: the destination was write-protected again during the read, prepared again at +%#zx (first case)", buf, sz, got);
+                dm_guest_write_prepare((uint8_t *)buf + got, sz - got); continue; }
+#endif
+            return err_res("pread", "fd"); }
         if (r == 0) break;
         got += r;
     }

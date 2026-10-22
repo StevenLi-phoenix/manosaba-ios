@@ -1796,7 +1796,13 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
         case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
         case 8: d.textureType = MTLTextureTypeCube; break;
-        case 9: d.textureType = MTLTextureTypeCubeArray; d.arrayLength = MAX(t->d.depth / 6, 1u); break;   // NVN's depth counts faces, Metal's array length cubes
+        case 9: d.textureType = MTLTextureTypeCubeArray; d.arrayLength = MAX(t->d.depth / 6, 1u);   // NVN's depth counts faces, Metal's array length cubes
+#ifndef DM_TEST_CUBE_DEPTH_SILENT   // negative control of t_cubearr only: nothing said, as before
+            // faces past the last whole cube have no slice (blade2-mobile 4ebabb2 names them, MIT; plan item 198)
+            if (t->d.depth % 6) RED_ONCE(115, "cube array texture %llu: a depth of %u faces is not whole cubes, made with %lu (the last %u faces have no slice)",
+                                         (unsigned long long)t->serial, t->d.depth, (unsigned long)d.arrayLength, t->d.depth < 6 ? 0 : t->d.depth % 6);
+#endif
+            break;
         case 10: RED_ONCE(1, "buffer texture (TARGET_BUFFER) not implemented"); return nil;
         default: d.textureType = MTLTextureType2D; break;
     }
@@ -2392,9 +2398,26 @@ static int tex_membacked(const tex_t *t) {
 // block by block). Each GPU write of such a texture is noted (storage protected, a reference kept until its serial is released); an invalidate over
 // its storage waits for the GPU and writes every level and layer back in the NVN layout, unless the CPU wrote that memory since (its bytes are newer)
 // or a later rendering of the same memory supersedes it (t_wb)
-typedef struct { tex_t t; uint64_t stamp; void *obj; uint64_t sub, idle_stamp; } wb_ent;   // sub: submission of the last GPU write; idle_stamp: written back after it (DM_NVN_WB_IDLE), 0 = not yet
-static nvn_hmap g_wb = {.klen = 8}; static pthread_mutex_t g_wb_mu = PTHREAD_MUTEX_INITIALIZER; static uint64_t g_wb_done, g_wb_skip_cpu, g_wb_bytes;
-static void wb_free(wb_ent *e) { if (!e) return; if (e->obj) { defer_obj_unref((__bridge id)e->obj); CFRelease(e->obj); } free(e); }
+typedef struct { tex_t t; uint64_t stamp; void *obj; uint64_t sub, idle_stamp; uint8_t *snap; uint32_t snap_n; } wb_ent;   // sub: submission of the last GPU write; idle_stamp: written back after it (DM_NVN_WB_IDLE), 0 = not yet; snap: its own bytes then
+static nvn_hmap g_wb = {.klen = 8}; static pthread_mutex_t g_wb_mu = PTHREAD_MUTEX_INITIALIZER; static uint64_t g_wb_done, g_wb_skip_cpu, g_wb_bytes, g_wb_exact, g_wb_snap_total;
+// The texture's own bytes when the GPU write is noted (plan item 203; MacNativeGames 8a29e0a and PR #188, MIT, written anew): the dirty tracking is
+// per 16 KiB page, and a page the CPU wrote often holds other data next to the texture (Tears of the Kingdom's 260x260 terrain normal maps: the
+// iPhone's log of 2026-10-22 skipped 1 of the first 4 write-backs, MacNativeGames saw the tiles turn dark), so a write-back whose pages were written
+// but whose own bytes are as they were still goes ahead. Textures up to 256 KiB, 64 MiB of copies in all; DM_NVN_WB_EXACT=0 decides by pages only
+enum { WB_SNAP_MAX = 256 * 1024 }; static const uint64_t WB_SNAP_TOTAL = 64ull << 20;
+static int wb_exact_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_WB_EXACT"); v = !(e && !strcmp(e, "0")); if (!v) MLOG("DM_NVN_WB_EXACT=0: GPU write-backs decided by pages only"); } return v; }
+static void wb_snap(wb_ent *e) {   // g_wb_mu held
+    uint32_t n = e->t.size;
+#ifndef DM_TEST_WB_PAGE_ONLY   // negative control of t_wb only: no copy, the pages decide as before
+    if (wb_exact_on() && e->t.mem && n && n <= WB_SNAP_MAX && (e->snap_n == n || g_wb_snap_total + n <= WB_SNAP_TOTAL)) {
+        if (e->snap_n != n) { free(e->snap); g_wb_snap_total -= e->snap_n; e->snap = malloc(n); e->snap_n = e->snap ? n : 0; g_wb_snap_total += e->snap_n; }
+        if (e->snap) { memcpy(e->snap, e->t.mem, n); return; }
+    }
+#endif
+    free(e->snap); g_wb_snap_total -= e->snap_n; e->snap = NULL; e->snap_n = 0;
+}
+static void wb_free(wb_ent *e) { if (!e) return; if (e->obj) { defer_obj_unref((__bridge id)e->obj); CFRelease(e->obj); }
+    if (e->snap) { pthread_mutex_lock(&g_wb_mu); g_wb_snap_total -= e->snap_n; pthread_mutex_unlock(&g_wb_mu); free(e->snap); } free(e); }
 static id<MTLTexture> tex_mtl(const tex_t *ct);
 static void wb_note(const tex_t *t) {   // submit thread: the GPU writes t in this submission (every caller makes its MTLTexture right after)
     if (!t->mem || !t->size) return;
@@ -2403,8 +2426,8 @@ static void wb_note(const tex_t *t) {   // submit thread: the GPU writes t in th
     uint64_t stamp = nvn_dirty_now(), k = t->serial;
     pthread_mutex_lock(&g_wb_mu);
     wb_ent *e = nvn_hm_get(&g_wb, &k);
-    if (e) { e->stamp = stamp; e->t = *t; e->sub = g_sub_serial; e->idle_stamp = 0; }
-    else if (g_wb.n < 8192) { e = calloc(1, sizeof *e); if (!e) MDIE("write-back record"); e->t = *t; e->stamp = stamp; e->sub = g_sub_serial; e->obj = (void *)CFBridgingRetain(o); nvn_hm_put(&g_wb, &k, e); }
+    if (e) { e->stamp = stamp; e->t = *t; e->sub = g_sub_serial; e->idle_stamp = 0; wb_snap(e); }
+    else if (g_wb.n < 8192) { e = calloc(1, sizeof *e); if (!e) MDIE("write-back record"); e->t = *t; e->stamp = stamp; e->sub = g_sub_serial; e->obj = (void *)CFBridgingRetain(o); wb_snap(e); nvn_hm_put(&g_wb, &k, e); }
     else RED_ONCE(87, "GPU write-back table full (8192 textures): texture %llu is not written back on an invalidate", (unsigned long long)t->serial);
     pthread_mutex_unlock(&g_wb_mu);
 }
@@ -2517,7 +2540,10 @@ void mtl_pool_invalidate(const pool_t *p, uint64_t off, uint64_t n) { @autorelea
     if (!nl) return;
     mtl_finish_gpu();
     int fresh[512];   // decided for all before anything is written (a write-back writes the pages); of several renderings of one memory only the newest
-    for (int i = 0; i < nl; i++) fresh[i] = !nvn_dirty_since(list[i]->t.mem, list[i]->t.size, list[i]->stamp);
+    for (int i = 0; i < nl; i++) { fresh[i] = !nvn_dirty_since(list[i]->t.mem, list[i]->t.size, list[i]->stamp);
+        if (!fresh[i] && list[i]->snap && list[i]->snap_n == list[i]->t.size && !memcmp(list[i]->snap, list[i]->t.mem, list[i]->snap_n)) {   // its pages written, its bytes not
+            fresh[i] = 1; if (++g_wb_exact <= 4 || !(g_wb_exact % 1000)) MLOG("GPU write-back on invalidate: texture %llu %ux%u format %#x: its pages were written since, its own bytes not: written back (%llu such)",
+                (unsigned long long)list[i]->t.serial, list[i]->t.d.width, list[i]->t.d.height, list[i]->t.d.format, (unsigned long long)g_wb_exact); } }
     for (int i = 0; i < nl; i++) for (int j = 0; j < nl; j++) if (i != j && fresh[i] == 1 && fresh[j] && list[j]->t.mem == list[i]->t.mem && list[j]->stamp > list[i]->stamp) { fresh[i] = 2; break; }
     for (int i = 0; i < nl; i++) {
         wb_ent *e = list[i]; const tex_t *t = &e->t; id o = (__bridge id)e->obj; id<MTLTexture> mt = [o isKindOfClass:[NvPkg class]] ? ((NvPkg *)o)->tex : o; uint32_t upf; int ubpp;
@@ -4300,7 +4326,13 @@ void mtl_reg_samp(int sid, const samp_par *sp) { @autoreleasepool {
     pthread_mutex_lock(&g_rmu);
     if (id_ >= g_nsreg) { int n = id_ + 256; g_sreg = realloc(g_sreg, n * sizeof *g_sreg); g_sreg_ok = realloc(g_sreg_ok, n); g_sview = realloc(g_sview, n * sizeof *g_sview); g_srid = realloc(g_srid, n * sizeof *g_srid);
         memset(g_sreg_ok + g_nsreg, 0, n - g_nsreg); memset(g_sview + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview); memset(g_srid + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid); g_nsreg = n; }
+    // A replaced sampler may still be named (its gpuResourceID) by argument blocks of submissions the GPU has not run yet: released after them, as a
+    // texture slot's old view (acnh-mobile 029dd30, MIT; plan item 195)
+#ifndef DM_TEST_SAMP_RELEASE_AT_ONCE   // negative control of t_samp only: released at once, as before
+    if (g_sview[id_]) { defer_obj_unref((__bridge id)g_sview[id_]); CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
+#else
     if (g_sview[id_]) { CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
+#endif
     g_reg_gen++;
     g_sreg[id_] = *sp; g_sreg_ok[id_] = samp_border_custom(sp) ? 2 : 1;   // 2: a border colour Metal lacks (plan item 161)
     if (g_sreg_ok[id_] == 2) g_border_any = 1;
@@ -4896,8 +4928,12 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
 // compile still running keeps its slot: its worker writes into it). Before, a slot was freed only when its pipeline was taken, so the guesses for
 // the attach modes not used filled the 384 slots and kicks stopped for good. Each scan is bounded (PP_SCAN_OPS commands, PP_SCAN_KEYS keys per
 // queue, PP_SCAN_NS), its likely keys are kicked as they are found, and it guesses only from programs whose shaders are loaded (prog_peek).
-#define PSO_PEND_MAX 384
-enum { PP_SCAN_OPS = 8192, PP_SCAN_KEYS = 32, PP_STALE_SUBMITS = 2 };
+// A scan that stopped at a bound left the rest of the submission unscanned, and its other new pipelines were made on the submit thread one after
+// another (MacNativeGames PR #166, MIT: 265 in one frame on entering an area): the next miss scans again (pp_scan_due), up to DM_NVN_PSO_RESCANS
+// times a submission (32; 0 = one scan, as before), skipping keys already kicked (pp_pending) so that each scan moves on; 768 slots, 64 keys a scan
+// (plan item 205; MacNativeGames M4 Max world entry: pipeline time in long frames 35.8 / 7.1 / 2.3 s → 5.5 / 2.9 / 1.05 s)
+#define PSO_PEND_MAX 768
+enum { PP_SCAN_OPS = 8192, PP_SCAN_KEYS = 64, PP_STALE_SUBMITS = 2 };
 #define PP_SCAN_NS 2000000ull
 static struct { pso_key k; id<MTLRenderPipelineState> ps; uint64_t submit; int used, done; } g_pp[PSO_PEND_MAX];
 static pthread_mutex_t g_pp_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_pp_cv = PTHREAD_COND_INITIALIZER;
@@ -4905,6 +4941,16 @@ static uint64_t g_pp_submit_mark, g_pp_kicked, g_pp_taken;   // Whether this sub
 static uint64_t g_pp_freed, g_pp_full, g_pp_scans, g_pp_stop[3];   // guesses freed untaken, kicks refused with the table full, scans and the bound that ended them (commands, keys, time)
 static void pso_predict_rest(void);
 static int pso_pend_find(const pso_key *k) { for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && !memcmp(&g_pp[i].k, k, sizeof *k)) return i; return -1; }
+static int pp_pending(const pso_key *k) { pthread_mutex_lock(&g_pp_mu); int r = pso_pend_find(k) >= 0; pthread_mutex_unlock(&g_pp_mu); return r; }
+static int g_pp_more, g_pp_rescans;   // the last scan of this submission stopped at a bound; the scans after its first
+static int pso_rescans(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_PSO_RESCANS"); v = e ? atoi(e) : 32; if (v < 0) v = 0; } return v; }
+static int pp_scan_due(uint64_t sub) {   // a pipeline miss in submission sub: scan ahead now?
+    if (g_pp_submit_mark != sub) { g_pp_submit_mark = sub; g_pp_rescans = 0; g_pp_more = 0; return 1; }   // its first miss
+#ifndef DM_TEST_PP_ONE_SCAN   // negative control of t_ppred only: one scan a submission, as before
+    if (g_pp_more && g_pp_rescans < pso_rescans()) { g_pp_rescans++; return 1; }
+#endif
+    return 0;
+}
 static void pso_pend_reclaim(uint64_t submit) {   // g_pp_mu held
 #ifndef DM_TEST_PP_NO_RECLAIM   // negative control of t_ppred only: the old table, a slot freed only by a take
     for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && g_pp[i].done && submit - g_pp[i].submit > PP_STALE_SUBMITS) { g_pp[i].ps = nil; g_pp[i].used = 0; g_pp_freed++; }
@@ -5001,23 +5047,32 @@ static void pair_note(NvShader *vs, NvShader *fs) {
 // The source is the shader's .metal beside its library: the Mac's workspace has it, an iOS app does not (a red line once: drawn with the edge colour).
 // Tears of the Kingdom's grass interaction map samples with border (0.5, 0.5, 0.5, 0.5): drawn as transparent black, the grass lay flat and could not
 // be cut. Checked by gfx/tests/t_border.m
+// ax: the axes whose wrap mode is a border (bit 0 s, 1 t, 2 r; plan item 204, MacNativeGames PR #148 / be82504, MIT): a coordinate outside [0, 1]
+// on another axis repeats, mirrors or clamps as its sampler does (before, the colour was returned when any coordinate was outside)
+#ifndef DM_TEST_BORDER_ANY_AXIS   // negative control of t_border only: any axis outside, as before
+#define DM_BORDER_OUT2 "((ax & 1u) && (uv.x < 0.0 || uv.x > 1.0)) || ((ax & 2u) && (uv.y < 0.0 || uv.y > 1.0))"
+#define DM_BORDER_OUT3 DM_BORDER_OUT2 " || ((ax & 4u) && (uv.z < 0.0 || uv.z > 1.0))"
+#else
+#define DM_BORDER_OUT2 "any(uv < 0.0) || any(uv > 1.0)"
+#define DM_BORDER_OUT3 DM_BORDER_OUT2
+#endif
 static NSString *const BORDER_HELPER =
-    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texture2d<T> t, sampler s, float2 uv, A... a)\n"
-    @"{ return any(uv < 0.0) || any(uv > 1.0) ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
-    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texture2d_array<T> t, sampler s, float2 uv, A... a)\n"
-    @"{ return any(uv < 0.0) || any(uv > 1.0) ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
-    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texture3d<T> t, sampler s, float3 uv, A... a)\n"
-    @"{ return any(uv < 0.0) || any(uv > 1.0) ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
-    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, texturecube<T> t, sampler s, float3 uv, A... a) { return t.sample(s, uv, a...); }\n"
-    @"template<typename T, typename... A> static inline T dm_border_sample(float4 b, depth2d<T> t, sampler s, float2 uv, A... a)\n"
-    @"{ return any(uv < 0.0) || any(uv > 1.0) ? T(b.x) : t.sample(s, uv, a...); }\n";
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, uint ax, texture2d<T> t, sampler s, float2 uv, A... a)\n"
+    @"{ return " DM_BORDER_OUT2 " ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, uint ax, texture2d_array<T> t, sampler s, float2 uv, A... a)\n"
+    @"{ return " DM_BORDER_OUT2 " ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, uint ax, texture3d<T> t, sampler s, float3 uv, A... a)\n"
+    @"{ return " DM_BORDER_OUT3 " ? vec<T, 4>(b) : t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline vec<T, 4> dm_border_sample(float4 b, uint ax, texturecube<T> t, sampler s, float3 uv, A... a) { return t.sample(s, uv, a...); }\n"
+    @"template<typename T, typename... A> static inline T dm_border_sample(float4 b, uint ax, depth2d<T> t, sampler s, float2 uv, A... a)\n"
+    @"{ return " DM_BORDER_OUT2 " ? T(b.x) : t.sample(s, uv, a...); }\n";
 // The MSL with the samples through each named sampler member returning its colour outside the texture; *count the calls rewritten
-static NSString *border_src(NSString *src, NSArray<NSString *> *names, const float (*col)[4], int *count) {
+static NSString *border_src(NSString *src, NSArray<NSString *> *names, const float (*col)[4], const unsigned *axes, int *count) {
     NSMutableString *m = [src mutableCopy]; *count = 0;
     for (NSUInteger i = 0; i < names.count; i++) {
         NSString *pat = [NSString stringWithFormat:@"([A-Za-z_][A-Za-z0-9_\\.]*)\\.sample\\(\\s*(spvDescriptorSet0\\.%@)\\s*,", [NSRegularExpression escapedPatternForString:names[i]]];
         NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pat options:0 error:nil];
-        NSString *tpl = [NSString stringWithFormat:@"dm_border_sample(float4(%a, %a, %a, %a), $1, $2,", col[i][0], col[i][1], col[i][2], col[i][3]];
+        NSString *tpl = [NSString stringWithFormat:@"dm_border_sample(float4(%a, %a, %a, %a), %uu, $1, $2,", col[i][0], col[i][1], col[i][2], col[i][3], axes[i]];
         *count += (int)[re replaceMatchesInString:m options:0 range:NSMakeRange(0, m.length) withTemplate:tpl];
     }
     NSRange u = [m rangeOfString:@"using namespace metal;"];
@@ -5042,17 +5097,20 @@ static void border_rebind(int st, const uint64_t *h, int n) {
 static uint64_t g_border_variants, g_border_fallback;
 // The shader of stage st (0 vertex, 1 fragment) for the samplers bound now: sh itself, or its variant returning the border colours Metal lacks
 static NvShader *border_variant(NvShader *sh, int st) {
-    float col[16][4]; int aid[16], n = 0;
+    float col[16][4]; int aid[16], n = 0; unsigned axes[16];
     pthread_mutex_lock(&g_rmu);
     for (int i = 0; i < sh->rf.nb && n < 16; i++) {
         const nvn_rbind *b = &sh->rf.b[i]; if (b->kind != NVN_RB_SAMP && b->kind != NVN_RB_SAMPT) continue;
         int reg = b->reg, sid = reg < 128 ? h_sid(b->kind == NVN_RB_SAMPT ? S.tex[st][reg] : S.samp[st][reg]) : 0;
-        if (sid > 0 && sid < g_nsreg && g_sreg_ok[sid] == 2) { memcpy(col[n], g_sreg[sid].border, sizeof col[n]); aid[n++] = b->aid; }
+        if (sid > 0 && sid < g_nsreg && g_sreg_ok[sid] == 2) { const samp_par *p = &g_sreg[sid]; memcpy(col[n], p->border, sizeof col[n]);
+            axes[n] = (p->ws == NVN_WRAP_MODE_CLAMP_TO_BORDER || p->ws == NVN_WRAP_MODE_MIRROR_CLAMP_TO_BORDER ? 1u : 0u) | (p->wt == NVN_WRAP_MODE_CLAMP_TO_BORDER || p->wt == NVN_WRAP_MODE_MIRROR_CLAMP_TO_BORDER ? 2u : 0u)
+                    | (p->wr == NVN_WRAP_MODE_CLAMP_TO_BORDER || p->wr == NVN_WRAP_MODE_MIRROR_CLAMP_TO_BORDER ? 4u : 0u);
+            aid[n++] = b->aid; }
     }
     pthread_mutex_unlock(&g_rmu);
     if (!n) return sh;
     NSMutableString *key = [NSMutableString string];
-    for (int i = 0; i < n; i++) [key appendFormat:@"%d:%a,%a,%a,%a;", aid[i], col[i][0], col[i][1], col[i][2], col[i][3]];
+    for (int i = 0; i < n; i++) [key appendFormat:@"%d:%u:%a,%a,%a,%a;", aid[i], axes[i], col[i][0], col[i][1], col[i][2], col[i][3]];
     NvShader *v = sh->bdv[key];
     if (v) return v;
     if (!sh->bdv) sh->bdv = [NSMutableDictionary dictionary];
@@ -5063,7 +5121,7 @@ static NvShader *border_variant(NvShader *sh, int st) {
     NSDictionary *j = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
     NSMutableArray<NSString *> *names = [NSMutableArray array];
     for (int i = 0; i < n; i++) for (NSDictionary *b in j[@"bindings"]) if ([b[@"arg_id"] intValue] == aid[i] && [b[@"msl_name"] isKindOfClass:NSString.class]) { [names addObject:b[@"msl_name"]]; break; }
-    int cnt = 0; NSString *msl = src && names.count == (NSUInteger)n ? border_src(src, names, (const float (*)[4])col, &cnt) : nil;
+    int cnt = 0; NSString *msl = src && names.count == (NSUInteger)n ? border_src(src, names, (const float (*)[4])col, axes, &cnt) : nil;
     id<MTLLibrary> lib = nil; NSError *e = nil;
     if (msl && cnt) { MTLCompileOptions *o = [MTLCompileOptions new]; o.mathMode = MTLMathModeSafe; o.preserveInvariance = YES; lib = [g_dev newLibraryWithSource:msl options:o error:&e]; }
     id<MTLFunction> fn = lib ? (st == 1 && sh->alib ? alpha_plain(lib, j[@"entry"]) : [lib newFunctionWithName:j[@"entry"]]) : nil;
@@ -5099,7 +5157,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRen
     ps = g_pso_lmap ? nil : pso_pend_take(&k);
     if (ps) g_pp_taken++;
     else {
-        if (g_pp_submit_mark != g_sub_serial) { g_pp_submit_mark = g_sub_serial; pso_predict_rest(); }   // First miss in this submission: first kick the later ones out to compile in parallel, then synchronously compile the one at hand
+        if (pp_scan_due(g_sub_serial)) pso_predict_rest();   // a miss: first kick the later ones out to compile in parallel, then synchronously compile the one at hand
         MTLRenderPipelineDescriptor *d = pso_desc(&k, vs, fs, g_pso_fsfn, g_pso_lmap != NULL);
         int gave_up; ps = mtl_retry(^id(NSError **er) { return [g_dev newRenderPipelineStateWithDescriptor:d error:er]; }, &e, &gave_up);
         if (!ps && gave_up) { g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt; MLOG("[red] render pipeline not made, the compiler service kept failing (vertex %s, fragment %s): tried again at its next use", vs->key, fs ? fs->key : "-"); return nil; }
@@ -5971,7 +6029,7 @@ static void rt_sub(const p_set_rt *r, int k, uint64_t *ser, int *lv, int *sl);
 // Prediction for parallel precompilation (see the note before pso_get): scan from after the current operation to the end of this submit, replaying only state; at a draw, compute the pipeline key from "the state at that time + that render pass's attachment formats" and dispatch those not yet built to the background.
 // Whether a render pass actually attaches depth / stencil is only decided at replay (depth-only / stencil-only / neither attached are omitted), so one key is computed for each possible attach mode -- guessing too many only means wasted background compiles and does not affect the result.
 static void pso_predict_rest(void) {
-    if (!g_exec_next) return;
+    if (!g_exec_next) { g_pp_more = 0; return; }
     static typeof(S) Ssave; memcpy(&Ssave, &S, sizeof S);
     p_scissor sc0 = R.sc; int hsc0 = R.has_sc;   // state_op sets the scissor too: the draw that asked for the prediction used the last one walked over
     int pso_dirty = g_pso_dirty, dss_dirty = g_dss_dirty;
@@ -6003,7 +6061,7 @@ static void pso_predict_rest(void) {
                 if (v && dv[v] == dv[0] && sv[v] == sv[0]) continue;
                 if (v == 2 && !sfull) continue; if (v == 3 && (!dfull || !sfull)) continue;
                 pso_key k; pso_key_fill(&k, vs, fs, cf, dv[v], sv[v], samples, 0);
-                if (hm_get_id(&g_pso, &k)) continue;
+                if (hm_get_id(&g_pso, &k) || pp_pending(&k)) continue;   // made, or kicked by an earlier scan: not one of this scan's keys
                 int dup = 0; for (int i = 0; i < (v ? nb : na) && !dup; i++) dup = !memcmp(&(v ? qb : qa)[i].k, &k, sizeof k);
                 if (dup) continue;
                 if (!v && na < QN) { qa[na].k = k; qa[na].vs = (__bridge void *)vs; qa[na].fs = (__bridge void *)fs; na++; pso_pend_kick(&k, vs, fs); }
@@ -6017,6 +6075,7 @@ static void pso_predict_rest(void) {
     (void)df; (void)sf;
     for (int i = 0; i < nb; i++) pso_pend_kick(&qb[i].k, (__bridge NvShader *)qb[i].vs, (__bridge NvShader *)qb[i].fs);
     pthread_mutex_lock(&g_pp_mu); g_pp_scans++; if (stop) g_pp_stop[stop - 1]++; pthread_mutex_unlock(&g_pp_mu);
+    g_pp_more = stop != 0;
     memcpy(&S, &Ssave, sizeof S); args_dirty_all(); g_pso_dirty = pso_dirty; g_dss_dirty = dss_dirty; R.sc = sc0; R.has_sc = hsc0;
     static int logged; if (g_pp_kicked > (uint64_t)kicked0 && logged++ < 20) MLOG("parallel precompile: %d draws left in this submit, %d pipelines handed to the background", draws, (int)g_pp_kicked - kicked0);
 }

@@ -7,13 +7,16 @@
 //      the next transaction commits normally, and the final save = the content of the next transaction;
 //   (5) remounting discards uncommitted content.
 // Also the RomFS overlay layers, and a pinned file (dm_rom_pin, plan item 164) winning over them; the pins ignored (-DDM_TEST_ROM_NO_PIN=1) fails 1.
+// ReadFile into pages protected again after the prepare (plan item 196): prepared again; one prepare (-DDM_TEST_FS_NO_REPREP=1) fails 1.
 // IsSaveDataExisting from the save directory (plan item 64k): no until EnsureSaveData makes it; always yes (-DDM_TEST_SAVE_ALWAYS=1) fails 1.
 // "/rom:/…" and '\\' as a separator (plan item 64k); both refused (-DDM_TEST_PATH_STRICT=1) fails 2.
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/types.h>
+#include <unistd.h>
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
 #define pwrite fake_pwrite
 #include "../hle_fs.c"
@@ -21,7 +24,12 @@ static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
 ssize_t pwrite(int, const void *, size_t, off_t);
 
 struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; } void dm_prof_mark(const char *s) { (void)s; }   // stubs for log timestamps and the read path (not used by the write path)
-void dm_prof_add(int id, uint64_t ns, uint64_t b) { (void)id; (void)ns; (void)b; } void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
+void dm_prof_add(int id, uint64_t ns, uint64_t b) { (void)id; (void)ns; (void)b; }
+static int g_prep_mode, g_prep_calls;   // plan item 196: 1 = the first prepare is undone at once (the graphics layer protected the pages again), later ones unprotect
+void dm_guest_write_prepare(void *a, size_t n) {
+    g_prep_calls++; if (g_prep_mode != 1 || g_prep_calls < 2) return;
+    uintptr_t pg = (uintptr_t)getpagesize(), s = (uintptr_t)a & ~(pg - 1), e = ((uintptr_t)a + n + pg - 1) & ~(pg - 1); mprotect((void *)s, e - s, PROT_READ | PROT_WRITE);
+}
 void dm_fs_save_poison(int e);
 extern int g_nfail, g_lasterr;                                        // front-end notification count (the strong implementation in t_fs_stub.c replaces the weak one in hle_fs.c)
 static int g_mode, g_calls;                   // 0 write normally; 1 always return 0; 2 write only 3 bytes the first time
@@ -54,6 +62,7 @@ int main(void) {
     snprintf(rom, sizeof rom, "%s/rom", root); snprintf(overlay, sizeof overlay, "%s/overlay", root); snprintf(rdata, sizeof rdata, "%s/data", rom); snprintf(odata, sizeof odata, "%s/data", overlay);
     mkdir(rom, 0755); mkdir(overlay, 0755); mkdir(rdata, 0755); mkdir(odata, 0755);
     snprintf(fn, sizeof fn, "%s/same", rdata); put(fn, "base"); snprintf(fn, sizeof fn, "%s/same", odata); put(fn, "overlay"); snprintf(fn, sizeof fn, "%s/base", rdata); put(fn, "only-base"); snprintf(fn, sizeof fn, "%s/over", odata); put(fn, "only-overlay");
+    { FILE *f; snprintf(fn, sizeof fn, "%s/pages", rdata); f = fopen(fn, "w"); for (int i = 0; i < 3 * 16384; i++) fputc('a' + i % 26, f); fclose(f); }   // read by plan item 196's check
     {   // a directory with more names than the old listing cap (2048), made before the mount builds the RomFS name index (used below)
         char big[1300], obig[1300]; snprintf(big, sizeof big, "%s/big", rom); snprintf(obig, sizeof obig, "%s/big", overlay); mkdir(big, 0755); mkdir(obig, 0755);
         for (int i = 0; i < 3000; i++) { snprintf(fn, sizeof fn, "%s/f%04d", big, i); put(fn, "b"); }
@@ -66,6 +75,15 @@ int main(void) {
         char pin[1300]; snprintf(pin, sizeof pin, "%s/pinned", root); put(pin, "pinned"); dm_rom_pin("/data/same", pin);
         CHECK(read_fs("rom:/data/same", got, sizeof got) && !strcmp(got, "pinned"), "a pinned file wins over the overlay and the base");
         CHECK(read_fs("rom:/data/base", got, sizeof got) && !strcmp(got, "only-base"), "... the files not pinned as before"); g_npin = 0; }
+    // Plan item 196: ReadFile into pages protected again after the prepare (the graphics layer's tracker after an upload): pread gets EFAULT, the
+    // rest is prepared again and read; -DDM_TEST_FS_NO_REPREP (one prepare, as before) fails it
+    { enum { N = 3 * 16384 };   // (the file is made before the mount, with the others)
+      uint8_t *m = mmap(NULL, N, PROT_READ, MAP_ANON | MAP_PRIVATE, -1, 0); uint64_t fh = 0; size_t n2 = 0;
+      g_prep_mode = 1; g_prep_calls = 0;
+      Result r = h_fs_OpenFile(&fh, "rom:/data/pages", MODE_READ) ? RES_FAIL : h_fs_ReadFile(&n2, fh, 0, m, N);
+      int ok = r == RES_OK && n2 == N; for (int i = 0; ok && i < N; i++) ok = m[i] == 'a' + i % 26;
+      CHECK(ok && g_prep_calls >= 2, "ReadFile into pages protected again after the prepare: prepared again, all %d bytes read (%d prepares)", N, g_prep_calls);
+      if (fh) h_fs_CloseFile(fh); g_prep_mode = 0; munmap(m, N); }
     uint64_t rh; CHECK(h_fs_OpenFile(&rh, "rom:/data/same", MODE_WRITE) == RES_FAIL, "both layers refuse writes");
     {   // A file in the overlay (dm_overlay_file): layers joined by colons, searched in order, earlier ones win
         char l2[1100], two[2300], want[1300]; snprintf(l2, sizeof l2, "%s/pack", root); mkdir(l2, 0755); snprintf(two, sizeof two, "%s:%s", overlay, l2); setenv("DM_ROMFS_OVERLAY", two, 1);

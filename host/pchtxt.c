@@ -1,8 +1,11 @@
 // pchtxt patches at load (plan item 150a; after MacNativeGames 1b33531's TOTK_PCHTXT, MIT, written anew): DM_PCHTXT=<file>[:<file>...], emulator
 // ExeFS patches in the pchtxt form community mods ship (an aspect-ratio patch, say). A file's @nsobid names the module it is for: its build ID, compared
 // over the file's digits (at least 16 bytes' worth) with <module>.cuts.tsv's "# BUILD_ID" (patch_nso.py). The lines of its @enabled sections, up to
-// @disabled or @stop, are "<offset> <hex bytes>" in the module's image (offset_shift 0x100 is the NSO header the IPS form counts; the text form's
-// offsets are the image's, as MacNativeGames reads them); "//" starts a comment. They are written before the code is sealed, after the options. A
+// @disabled or @stop, are "<offset> <hex bytes>"; as IPSwitch defines the format (3096/ipswitch example/README.md), an offset counts from the start
+// of the uncompressed NSO file, its 0x100-byte header included, plus the latest "@flag offset_shift N" before it (0x100 in files written with .text
+// addresses, as the community's are), so the module's image offset is offset + shift - 0x100 (plan item 197; before, every @flag was skipped and
+// the shift taken as 0x100; MacNativeGames e55ad1c refuses any other). "@flag print_values" is taken, any other flag refuses the file; "#" lines are
+// information (logged); "//" starts a comment. They are written before the code is sealed, after the options. A
 // patch that touches a word the rewriter changed (<module>.sites.tsv's rewritten instructions, windows and regions; cuts.tsv; caves.tsv; every row
 // of options.tsv, applied or not) or lies outside the module's original image refuses the whole file with a red line: there the product does not
 // hold the original code the patch was made for. Mac only: iOS maps signed code (options.c). Checked by host/tests/t_pchtxt.c.
@@ -60,7 +63,7 @@ static void claim(const char *path) { for (int i = 0; i < g_nclaimed; i++) if (!
 // One file for this module: 1 applied, 0 not this module's, -1 refused
 static int one_file(const char *path, const char *dir, const char *module, const char *build, uint8_t *img, size_t orig) {
     FILE *f = fopen(path, "r"); if (!f) return 0;   // (dm_pchtxt_report names it)
-    char line[4096]; int enabled = 0, mine = -1, bad = 0, np = 0, cap = 0; pch_patch *p = NULL; char why[200] = "";
+    char line[4096]; int enabled = 0, mine = -1, bad = 0, np = 0, cap = 0; pch_patch *p = NULL; char why[200] = ""; long long shift = 0;
     while (fgets(line, sizeof line, f)) {
         char *c = strstr(line, "//"); if (c) *c = 0;
         char *t = line; while (isspace((unsigned char)*t)) t++;
@@ -74,13 +77,28 @@ static int one_file(const char *path, const char *dir, const char *module, const
         if (!strncasecmp(t, "@enabled", 8)) { enabled = 1; continue; }
         if (!strncasecmp(t, "@disabled", 9)) { enabled = 0; continue; }
         if (!strncasecmp(t, "@stop", 5)) break;
+#ifndef DM_TEST_PCHTXT_OLD_FLAGS   // negative control of t_pchtxt only: every @flag skipped and "#" not special, as before
+        if (*t == '#') { if (mine == 1) LOG("DM_PCHTXT %s: %.*s", path, (int)strcspn(t, "\r\n"), t); continue; }   // information (IPSwitch prints it)
+        if (!strncasecmp(t, "@flag", 5) && isspace((unsigned char)t[5])) {
+            char name[40] = "", val[40] = "", *ve = NULL; int k = sscanf(t + 5, "%39s %39s", name, val);
+            if (!strcmp(name, "offset_shift") && k == 2) { long long v = strtoll(val, &ve, 0); if (ve != val && !*ve) { shift = v; continue; } }
+            else if (!strcmp(name, "print_values")) continue;   // IPSwitch prints what it writes; the log line below counts it
+            snprintf(why, sizeof why, "a flag it cannot follow (%.40s)", t); bad = 1; break;
+        }
+#endif
         if (*t == '@' || !enabled) continue;
         char *e; uint64_t off = strtoull(t, &e, 16); while (*e == ' ' || *e == '\t') e++;
         int k = hexlen(e);
         if (e == t || !k || k % 2 || (e[k] && !isspace((unsigned char)e[k]))) { snprintf(why, sizeof why, "a line not \"<offset> <hex bytes>\" (%.40s)", t); bad = 1; break; }
         if (mine != 1) { snprintf(why, sizeof why, "patches before its @nsobid line"); bad = 1; break; }
+#ifndef DM_TEST_PCHTXT_OLD_FLAGS
+        long long io = (long long)off + shift - 0x100;   // the image offset: the NSO header's 0x100 bytes off the file offset
+        if (io < 0) { snprintf(why, sizeof why, "%#llx with offset_shift %#llx is before %s's image (offsets count the NSO header)", (unsigned long long)off, shift, module); bad = 1; break; }
+#else
+        long long io = (long long)off; (void)shift;
+#endif
         if (np == cap) { cap = cap ? cap * 2 : 64; p = realloc(p, (size_t)cap * sizeof *p); }
-        p[np].off = off; p[np].n = k / 2; p[np].b = malloc((size_t)p[np].n);
+        p[np].off = (uint64_t)io; p[np].n = k / 2; p[np].b = malloc((size_t)p[np].n);
         for (int i = 0; i < p[np].n; i++) { unsigned v; sscanf(e + 2 * i, "%2x", &v); p[np].b[i] = (uint8_t)v; }
         np++;
     }

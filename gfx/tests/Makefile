@@ -109,6 +109,8 @@ t_vfetch: t_vfetch.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vfetch.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_depth_plain: t_depth_plain.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_depth_plain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_cubearr: t_cubearr.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_cubearr.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_libcopy: t_libcopy.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_libcopy.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -229,6 +231,7 @@ run: \
 	t_dirty_shared \
 	t_drvseg \
 	t_depth_plain \
+	t_cubearr \
 	t_deswz_gpu \
 	t_dirty_race \
 	t_dirty_slots \
@@ -439,6 +442,7 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_vfetch
 	./t_writetexels 2>/dev/null
 	DM_NVN_DEPTH_PLAIN=1 ./t_depth_plain
+	./t_cubearr 2>/dev/null
 	DM_NVN_LIB_COPY=1 ./t_libcopy
 	./t_retry 2>/dev/null
 	python3 -I ../tools/msl_helpers.py t_fpcontract.metal > t_fpcontract_inl.metal && ./t_fpcontract t_fpcontract.metal t_fpcontract_inl.metal

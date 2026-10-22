@@ -5,7 +5,7 @@
 #       sdis.py <original image> --fn 0xaddr...     start of the containing function (eh_frame function table)
 #       sdis.py <original image> --find <substring>        list defined symbols whose name contains the substring
 #       sdis.py <original image> --callers <symbol name>   list call sites that directly bl/b to this symbol
-import struct, sys, bisect
+import os, struct, sys, bisect
 from capstone import *
 from capstone.arm64 import ARM64_OP_IMM
 
@@ -67,13 +67,21 @@ def fn_starts():               # All function starts in the eh_frame_hdr binary 
 def resolve(s):
     return int(s, 16) if s.startswith('0x') else defs[s][0]
 
+def text_end():   # where --xref / --callers stop: the end of the last sized export or of the PLT (just after the code), whichever is later
+    if os.environ.get('DM_TEST_SDIS_OLD_END') == '1':   # negative control of tools/tests/t_sdis.py only: the sized exports alone, as before
+        return max(v + s for v, s in defs.values() if v < 0x10000000 and s)
+    # an image whose exports are all unsized, or code after the last sized one, was not scanned (nxnative 108d483, MIT; plan item 199)
+    e = max((v + s for v, s in defs.values() if v < 0x10000000 and s), default=0)
+    if not plt: plt_scan()
+    return max(e, max(plt) + 16) if plt else (e or len(img))
+
 if sys.argv[2] == '--sym':      # sdis.py <image> --sym 0xoffset...  give the containing function for each one
     plt_scan()
     for a in sys.argv[3:]: print(a, name(int(a, 16)))
     sys.exit()
 if sys.argv[2] == '--xref':     # sdis.py <image> --xref 0xaddr...  find the instructions that build this address with adrp+add/ldr
     want = {int(a, 16) for a in sys.argv[3:]}
-    textend = max(v + s for v, s in defs.values() if v < 0x10000000 and s)
+    textend = text_end()
     for o in range(0, min(len(img), textend), 4):
         w = struct.unpack_from('<I', img, o)[0]
         if w & 0x9F000000 != 0x90000000: continue
@@ -98,7 +106,7 @@ if sys.argv[2] == '--find':
         if sys.argv[3] in n: print(f'{v:#x} {sz:#x} {n}')
     sys.exit()
 if sys.argv[2] == '--callers':
-    tgt = resolve(sys.argv[3]); textend = max(v + s for v, s in defs.values() if v < 0x10000000 and s)  # Coarse upper bound
+    tgt = resolve(sys.argv[3]); textend = text_end()  # Coarse upper bound
     for o in range(0, min(len(img), textend), 4):
         w = struct.unpack_from('<I', img, o)[0]
         if w >> 26 in (0x25, 0x05) and o + ((((w & 0x3ffffff) ^ 0x2000000) - 0x2000000) * 4) == tgt:

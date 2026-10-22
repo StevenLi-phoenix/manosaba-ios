@@ -260,6 +260,15 @@ dodola a7ab0c4; LASRecomp main da35b83, `beta_5` 5c7e498 (PR #238 iOS); SkyRecom
 8e1d2af; aerolithink 43cde9a; bluewater0121 30ca74e; DanielZhangyc 56737aa; realskyrin e508a1f (no licence). New: alanyangcn/smbwonder-ios (no
 licence: facts only; iPhone measurements of per-draw work and tile plans), armyja/nxnative-cuphead (MIT).
 
+Read through on 2026-10-22 afternoon (refresh; Tier 8 below): MacNativeGames 30a1b93 (PRs to #210); nxnative abcdbbd (PRs to #49); upstream main
+53e7c5b, `android` 3970f8b (`android-red-zone` 373b402 is part of it; PRs #113, #114); dodola 526ae46; acnh-mobile 029dd30, `ios18-compat`
+a98d127; GirlNet `codex/p5r-runtime` 5283340; blade2 4ebabb2; Touchable 04b6c1c; LASRecomp main b846e72, `beta_5` 80a2f90 (PRs to #300);
+SkyRecomp b3e22ed; mush8 9f6e2b7; d2r-port-radar d77c558; n2ray `fix/x18-context-cache-collisions` 8e58df8. Unchanged: tvc97 e8bd37d,
+DavidZande `performance` 1620f43, T5eng, totk-mobile, lordran, super-mario-odyssey-ios, yokeyhh, bluewater0121. New: nxporting/nxport (MIT, Rust,
+Tears of the Kingdom 1.1.2 only, independent; main 00e04bc), q520asdf0123/nsCHaojIMaLiAo (MIT, Super Mario 3D World on upstream),
+LNPANDY/nxnative-romfs-archive (MIT). MacNativeGames dab728a's `SignalToAddress` value − 2 is not taken: Atmosphère wrote − 2 from 7.0.0 until
+5f2d713fe4 (2022-06-08, "mea culpa (some time since 7.x)") made it − 1, as ours. Ryujinx is MIT.
+
 Not worth porting: nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK runtimes (dodola, imink/hades-ios), upstream's D2R-only parts.
 
 ### Reviews and the plan items they produced
@@ -1165,6 +1174,59 @@ the device the user's iPhone 17 Pro):
   behind the wheel in both runs with it (named by env.txt, then found by the app itself); the earlier runs that had looked fine ran at 30 fps. `t_romfs_validate` (+6; `DM_TEST_OVERLAY_ANY_ORIGINAL` fails 1). Also: the command channel's
   `texdump <path>` (the next frame's colour targets, as `DM_NVN_TEXDUMP`; `t_cmdchan`), and `t_ktrace` signals until the waiter woke (the
   2026-10-22 CI hang)
+
+Tier 8, correctness and performance from the upstream refresh of 2026-10-22 afternoon (the user: do them and test on the iPhone through mirroring).
+Correctness, small:
+- [x] batch 70 · 195 a replaced sampler released once the GPU is done with it (acnh-mobile 029dd30): `mtl_reg_samp` released it at once, while a
+  texture slot's old view already waits (`defer_obj_unref`). `t_samp` +2 (the old sampler waits in the deferred releases and leaves after two
+  submissions; a weak reference cannot tell, the device keeps sampler states of its own); `DM_TEST_SAMP_RELEASE_AT_ONCE` fails 1
+- [x] batch 70 · 196 `ReadFile` prepares its destination again on `EFAULT` (nxnative 53d7aad; 191's part from yokeyhh v18): the dirty-page
+  tracker write-protects pool pages again between the prepare and `pread` (Monster Train 2 at 60 fps on a Mac: a read lost in 2 of 3 runs, none in
+  4 after); up to 8 times, a line the first time. `t_fs` +1 (pages protected again after the first prepare); `DM_TEST_FS_NO_REPREP` fails 1
+- [x] batch 70 · 197 pchtxt `@flag offset_shift` applied to the lines after it and `#` information lines skipped (MacNativeGames e55ad1c;
+  IPSwitch's format, 3096/ipswitch example/README.md: an offset counts from the uncompressed NSO file, its 0x100-byte header included): the image
+  offset is offset + shift − 0x100; ours skipped every `@flag` (a shift other than 0x100 patched 0x100 bytes off) and refused a file with a `#`
+  line; `print_values` taken, any other flag or an offset before the image refuses the file. `t_pchtxt` +5; `DM_TEST_PCHTXT_OLD_FLAGS` fails 5
+- [x] batch 70 · 198 a cube array whose depth is not a multiple of 6 named in red (blade2-mobile 4ebabb2; ours already takes depth / 6;
+  red line 115). `gfx/tests/t_cubearr.m`; `DM_TEST_CUBE_DEPTH_SILENT` fails 1
+- [x] batch 70 · 199 `tools/sdis.py --xref` / `--callers` to the end of the PLT, and an image without sized exports (nxnative 108d483).
+  `tools/tests/t_sdis.py` (a synthetic image: code after the last sized export, then every export unsized); `DM_TEST_SDIS_OLD_END=1` fails 4
+- [ ] 200 `XLATE_DEBUG=0` refused or made safe: with it our translator gives Tears of the Kingdom 306 failures (call arguments) and 4,175 modules
+  whose else-if bodies are unreachable (the AST optimizer's ElseIf blocks, which the SPIR-V generator never branches to; nsCHaojIMaLiAo,
+  nxport's 0001 / 0002), manosaba 70 / 14; with the default (debug: no expression propagation) 0 / 0. `Program.cs` says the semantics are unchanged.
+  Any change there gives a new chain version (dmsh_chain.py hashes dmsh_build.py, Program.cs and the translator): done with the chain rebuild at
+  the end of this tier
+- [ ] 201 the rewriter's red zone: a save below sp kept inside Apple's 128 bytes for a post-index pop larger than 16 (`patch_nso.py` checks only
+  the offset's lower side; upstream 373b402 is the Android form, no save below sp at all), and `equiv.py` counting reads below the current sp
+  (4f0603f); today's outputs unchanged
+- [ ] 202 a guest thread stopped inside a rewrite block: there the guest values of the block's two scratch registers sit below the reported sp,
+  outside what manosaba's IL2CPP collector scans (`hle_thread.c` set_activity / get_context3); resume and stop again until pc is outside the
+  patch area (from reading the code; not observed)
+Correctness, Tears of the Kingdom:
+- [x] batch 70 · 203 GPU write-back decided by the texture's own bytes (MacNativeGames 8a29e0a, PR #188): ours skipped a write-back when any page
+  of the texture was written since (16 KiB pages hold neighbours); the iPhone's log of 2026-10-22 skipped 1 of the first 4 terrain normal maps
+  (260x260, format 0xd), the case MacNativeGames saw as tiles turning dark (12 of 240 skipped → 0 of 244). `wb_note` keeps a copy of a texture up
+  to 256 KiB (64 MiB of copies in all: the table holds up to 8192); pages written but its own bytes as they were: written back, a line the first
+  4 times. `DM_NVN_WB_EXACT=0` decides by pages. `t_wb` +2; `DM_TEST_WB_PAGE_ONLY` fails 2
+- [x] batch 70 · 204 border colours per axis (MacNativeGames PR #148 / be82504): `dm_border_sample` returned the border when any coordinate was
+  outside; now only on the axes whose wrap mode is a border (the variant's key names them). `t_border` +2 (border on s, repeat on t);
+  `DM_TEST_BORDER_ANY_AXIS` fails 1. Not taken: the filtered edge of PR #205 (open, not checked in a game; two more samplers per border sampler)
+Performance (measure first where marked):
+- [x] batch 70 · 205 pipeline prediction scans again after a scan that stopped at its budget, keys already pending skipped before they count
+  (MacNativeGames PR #166: pipeline time in long frames 35.8 / 7.1 / 2.3 s → 5.5 / 2.9 / 1.05 s, M4 Max, world entry); the pending table 768, 64
+  keys; `pp_scan_due` / `pp_pending`, `DM_NVN_PSO_RESCANS` (32; 0 as before). `t_ppred` +5; `DM_TEST_PP_ONE_SCAN` fails 1
+- [ ] 206 CPU Read / WriteTexels of a region copy only the region's block-linear bytes (MacNativeGames PR #185: frames over 40 ms 25.9 → 1.0 a
+  minute, M5 Max, 1.1.2); measure Tears of the Kingdom 1.4.3's calls first
+- [ ] 207 occlusion results' freshness (nxport `report_guard.rs`): measure when Tears of the Kingdom 1.4.3 reads its reports against our write
+- [ ] 208 the dirty tracker's fault-around and page-exact GPU pages (dodola 2e58d47 / 58d3aa2): measure `@faults` / `@mprotect_ms` on the iPhone first
+- [ ] 209 184's warm-up seed from the players' `pso_user.tsv` lists merged (upstream 08f51a8); archive notes: an archive serves a specialised
+  function only when it holds that specialisation, and a fail-on-miss request counts its hits (nxport 17d527f); no idle rule by draw counts
+  (MacNativeGames 30a1b93)
+- [ ] 210 single-draw passes as compute kernels (nxport `tiny_kernels.rs`; 61e): on the iPhone (batch 69) 100 single-draw passes took 3.6 of 12.4 ms GPU
+iOS:
+- [ ] 211 the unsigned IPA signed ad hoc with its entitlements (LNPANDY c3bccb5: AltStore keeps the ~3,375 MB default without them), and a
+  warning for a data IPA as large as iOS refused (13d9191: 16.6 GB)
+- [ ] 212 `-Werror=unguarded-availability-new` for the iOS 18 build (acnh-mobile a98d127)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

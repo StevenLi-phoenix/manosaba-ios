@@ -36,6 +36,7 @@ run: \
 	$(B)/t_freeze_none \
 	$(B)/t_fs \
 	$(B)/t_fs_nopin \
+	$(B)/t_fs_noreprep \
 	$(B)/t_fs_saveyes \
 	$(B)/t_fs_strict \
 	$(B)/t_fs_case \
@@ -118,6 +119,7 @@ run: \
 	$(B)/t_padmap \
 	$(B)/t_pchtxt \
 	$(B)/t_pchtxt_nocheck \
+	$(B)/t_pchtxt_oldflags \
 	$(B)/t_padmap_posall \
 	$(B)/t_quitwait \
 	$(B)/t_quitwait_old \
@@ -221,6 +223,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_nopin.log)" -ne 1 ] || ! grep -q "FAIL a pinned file wins" $(B)/t_fs_nopin.log; then \
 	   cat $(B)/t_fs_nopin.log; echo "t_fs_nopin: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_fs_nopin: with the pins ignored the overlay's file is served, as expected"
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_fs_noreprep > $(B)/t_fs_noreprep.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_noreprep.log)" -ne 1 ] || ! grep -q "FAIL ReadFile into pages protected again" $(B)/t_fs_noreprep.log; then \
+	   cat $(B)/t_fs_noreprep.log; echo "t_fs_noreprep: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_fs_noreprep: with one prepare the read into pages protected again fails, as expected"
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_fs_saveyes > $(B)/t_fs_saveyes.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '  FAIL ' $(B)/t_fs_saveyes.log)" -ne 1 ] || ! grep -q "FAIL IsSaveDataExisting" $(B)/t_fs_saveyes.log; then \
 	   cat $(B)/t_fs_saveyes.log; echo "t_fs_saveyes: unexpected negative-control result ($$status)"; exit 1; \
@@ -426,6 +432,10 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_pchtxt_nocheck.log)" -ne 5 ]; then \
 	   cat $(B)/t_pchtxt_nocheck.log; echo "t_pchtxt_nocheck: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_pchtxt_nocheck: patches over the rewritten code fail the five refusals, as expected"
+	@status=0; $(B)/t_pchtxt_oldflags > $(B)/t_pchtxt_oldflags.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_pchtxt_oldflags.log)" -ne 5 ]; then \
+	   cat $(B)/t_pchtxt_oldflags.log; echo "t_pchtxt_oldflags: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_pchtxt_oldflags: with every @flag skipped the five offset and flag checks fail, as expected"
 	@status=0; $(B)/t_padmap_posall > $(B)/t_padmap_posall.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_padmap_posall.log)" -ne 2 ]; then \
 	   cat $(B)/t_padmap_posall.log; echo "t_padmap_posall: unexpected negative-control result ($$status)"; exit 1; \
@@ -669,6 +679,8 @@ $(B)/t_pchtxt: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_pchtxt.c
 $(B)/t_pchtxt_nocheck: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_NO_CHECK -I.. -o $@ t_pchtxt.c
+$(B)/t_pchtxt_oldflags: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_OLD_FLAGS -I.. -o $@ t_pchtxt.c
 $(B)/t_cheat_vm: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_cheat_vm.c
 $(B)/t_cheat_vm_flat: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
@@ -729,6 +741,8 @@ $(B)/t_fs_saveyes: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(G
 	clang -O1 -Wno-unused-function -DDM_TEST_SAVE_ALWAYS=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_nopin: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_ROM_NO_PIN=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
+$(B)/t_fs_noreprep: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_FS_NO_REPREP=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_kill: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game.c $(GEN)
 $(B)/t_fs_kill_inplace: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)

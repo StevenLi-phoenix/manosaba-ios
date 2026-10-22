@@ -1,6 +1,7 @@
 // GPU results written back on nvnMemoryPoolInvalidateMappedRange (nvn_mtl.m wb_note / mtl_pool_invalidate; MacNativeGames): a CPU-filled texture in a
 // CPU-visible pool that the GPU then renders into keeps the result only in its MTLTexture; an invalidate over its storage writes it back in the NVN
-// layout, unless the CPU wrote the storage after the rendering (then the CPU's bytes stay).
+// layout, unless the CPU wrote the storage after the rendering (then the CPU's bytes stay); the CPU writing only other data on the texture's page
+// does not count (plan item 203: the texture's own bytes are compared).
 // --idle (with DM_NVN_WB_IDLE=1, the experiment of item 94): a texture the GPU rendered and then left alone for 30 submissions is written back to its
 // storage without an invalidate; when the CPU then writes the storage, the next submission hands the texture back (not GPU-owned, watched from
 // before the write), and its next fetch is an upload of the CPU's bytes.
@@ -57,5 +58,16 @@ int main(int argc, char **argv) { @autoreleasepool {
     for (int i = 0; i < 64; i++) lin[i] = 0x55667788; dm_guest_write_prepare(t.mem, t.size); nvn_swizzle(&t.d, 0, 0, lin, 32, t.mem);   // the CPU writes after the rendering
     mtl_pool_invalidate(&pl, 0, t.size);
     EXPECT("the CPU wrote after the GPU rendered blue: its bytes stay", 0x55667788, texel(&t, 3, 5));
+    // Plan item 203: the dirty tracking is per 16 KiB page; the CPU writing other data on the texture's page (here the bytes right after it) is not a
+    // write of the texture: the rendering is written back. The CPU writing one byte of the texture itself keeps the CPU's bytes.
+    // -DDM_TEST_WB_PAGE_ONLY (the pages decide, as before) fails both (nothing red is written back)
+    render_clear(&t, 1, 0, 0);
+    dm_guest_write_prepare(t.mem + t.size, 16); memset(t.mem + t.size, 0x5a, 16);
+    mtl_pool_invalidate(&pl, 0, t.size);
+    EXPECT("203: the CPU wrote next to the texture on its page: red written back", 0xff0000ff, texel(&t, 3, 5));
+    render_clear(&t, 0, 1, 0);
+    dm_guest_write_prepare(t.mem, 1); t.mem[0] ^= 1;
+    mtl_pool_invalidate(&pl, 0, t.size);
+    EXPECT("203: the CPU wrote one byte of the texture: its bytes stay (texel 7,7 still red)", 0xff0000ff, texel(&t, 7, 7));
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }

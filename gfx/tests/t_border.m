@@ -2,7 +2,8 @@
 // clamp to border (0.5, 0.5, 0.5, 0.5), the grass map's, through the production sampler path, and a kernel in the translator's style (the texture and
 // its sampler in spvDescriptorSet0) sampling a red 4x4 texture at u = -0.5, 0.5 and 1.5. Plain: outside the texture it reads the edge (red; it was
 // transparent black); rewritten by border_src (one call): 0.5 outside, red inside; a 2D array sample with its layer rewritten too compiles; samplers
-// with Metal's own border colours are not taken. The nearest of Metal's three (-DDM_TEST_BORDER_OFF): 1 fails
+// with Metal's own border colours are not taken; with border on s only and repeat on t (plan item 204), v outside repeats and u outside gives the
+// colour. The nearest of Metal's three (-DDM_TEST_BORDER_OFF): 1 fails; any axis outside (-DDM_TEST_BORDER_ANY_AXIS): 1 fails
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -15,6 +16,10 @@ static NSString *const KSRC = @"#include <metal_stdlib>\nusing namespace metal;\
     "struct spvDescriptorSetBuffer0 { texture2d<float> tex [[id(0)]]; sampler texSmplr [[id(1)]]; };\n"
     "kernel void k(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]], device float4 *out [[buffer(1)]], uint i [[thread_position_in_grid]])\n"
     "{ float2 uv = float2(-0.5 + float(i), 0.5); out[i] = spvDescriptorSet0.tex.sample(spvDescriptorSet0.texSmplr, uv, level(0.0)); }\n";
+static NSString *const VSRC = @"#include <metal_stdlib>\nusing namespace metal;\n"   // as KSRC along v
+    "struct spvDescriptorSetBuffer0 { texture2d<float> tex [[id(0)]]; sampler texSmplr [[id(1)]]; };\n"
+    "kernel void k(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]], device float4 *out [[buffer(1)]], uint i [[thread_position_in_grid]])\n"
+    "{ float2 uv = float2(0.5, -0.5 + float(i)); out[i] = spvDescriptorSet0.tex.sample(spvDescriptorSet0.texSmplr, uv, level(0.0)); }\n";
 static NSString *const ASRC = @"#include <metal_stdlib>\nusing namespace metal;\n"
     "struct spvDescriptorSetBuffer0 { texture2d_array<float> arr [[id(0)]]; sampler arrSmplr [[id(1)]]; };\n"
     "fragment float4 f(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]], float4 p [[position]])\n"
@@ -45,11 +50,21 @@ int main(void) { @autoreleasepool {
     float o[3][4]; run(KSRC, red, s, o);
     CHECK(o[0][0] == 1 && o[0][3] == 1 && o[1][0] == 1, "plain sample through it: the edge (red) outside the texture, not transparent black (%.2f %.2f)", o[0][0], o[0][3]);
     int cnt = 0; float col[1][4] = {{0.5f, 0.5f, 0.5f, 0.5f}};
-    NSString *rw = border_src(KSRC, @[@"texSmplr"], (const float (*)[4])col, &cnt);
+    unsigned all[1] = {7};
+    NSString *rw = border_src(KSRC, @[@"texSmplr"], (const float (*)[4])col, all, &cnt);
     run(rw, red, s, o);
     CHECK(cnt == 1 && fabsf(o[0][0] - 0.5f) < 1e-6 && fabsf(o[0][3] - 0.5f) < 1e-6 && o[1][0] == 1 && fabsf(o[2][1] - 0.5f) < 1e-6,
           "rewritten (%d call): 0.5 outside on both sides, red inside (%.2f / %.2f / %.2f)", cnt, o[0][0], o[1][0], o[2][1]);
-    int acnt = 0; NSString *arw = border_src(ASRC, @[@"arrSmplr"], (const float (*)[4])col, &acnt); NSError *e = nil;
+    int acnt = 0; NSString *arw = border_src(ASRC, @[@"arrSmplr"], (const float (*)[4])col, all, &acnt); NSError *e = nil;
     CHECK(acnt == 1 && [g_dev newLibraryWithSource:arw options:nil error:&e] != nil, "a 2D array sample with its layer argument rewritten compiles%s%s", e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+    // Plan item 204: a sampler with border on s only and repeat on t: v outside [0, 1] repeats (red), u outside gives the colour.
+    // -DDM_TEST_BORDER_ANY_AXIS (any coordinate outside, as before) fails the first
+    samp_par mix = sp; mix.wt = NVN_WRAP_MODE_REPEAT; mtl_reg_samp(9, &mix);
+    pthread_mutex_lock(&g_rmu); id<MTLSamplerState> sm = samp_by_id(9); pthread_mutex_unlock(&g_rmu);
+    unsigned sonly[1] = {1}; int vc = 0, uc = 0;
+    run(border_src(VSRC, @[@"texSmplr"], (const float (*)[4])col, sonly, &vc), red, sm, o);
+    CHECK(vc == 1 && o[0][0] == 1 && o[0][3] == 1 && o[2][0] == 1, "204: border on s only: v = -0.5 and 1.5 repeat (red: %.2f / %.2f), not the colour", o[0][0], o[2][0]);
+    run(border_src(KSRC, @[@"texSmplr"], (const float (*)[4])col, sonly, &uc), red, sm, o);
+    CHECK(uc == 1 && fabsf(o[0][0] - 0.5f) < 1e-6 && fabsf(o[2][1] - 0.5f) < 1e-6 && o[1][0] == 1, "204: ... u = -0.5 and 1.5 give the colour (%.2f / %.2f)", o[0][0], o[2][1]);
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }

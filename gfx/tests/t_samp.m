@@ -48,5 +48,16 @@ int main(void) { @autoreleasepool {
     EXPECT("reduction average: the mean (128 ± 1)", 1, abs(avg - 128) <= 1);
     EXPECT("reduction min: the smaller texel", 51, sample_red(two, reg(21, 5, 1, 0.f, NVN_SAMPLER_REDUCTION_MIN), .5f, .5f));
     EXPECT("reduction max: the larger texel", 204, sample_red(two, reg(22, 5, 1, 0.f, NVN_SAMPLER_REDUCTION_MAX), .5f, .5f));
+    // Plan item 195: a sampler registered again over a slot is kept until the submissions before that have run (argument blocks name it by its
+    // gpuResourceID only): it waits in the deferred releases, which let it go after them. (Its liveness cannot tell: the device keeps sampler
+    // states of its own, so a weak reference stays set even when the slot let go at once.) -DDM_TEST_SAMP_RELEASE_AT_ONCE fails the first check
+    id<MTLSamplerState> old;
+    reg(30, 3, 1, 0.f, 0); pthread_mutex_lock(&g_rmu); old = samp_by_id(30); pthread_mutex_unlock(&g_rmu);
+    reg(30, 5, 0, .5f, 0);
+    int held = 0; pthread_mutex_lock(&g_deferred_mu); for (NvDeferredRelease *d in g_deferred) held += d->object == old; pthread_mutex_unlock(&g_deferred_mu);
+    EXPECT("195: the replaced sampler waits in the deferred releases", 1, held);
+    for (int i = 0; i < 2; i++) @autoreleasepool { mtl_sub_begin(); mtl_wait(mtl_sub_commit(), 5000000000ull); }
+    held = 0; pthread_mutex_lock(&g_deferred_mu); for (NvDeferredRelease *d in g_deferred) held += d->object == old; pthread_mutex_unlock(&g_deferred_mu);
+    EXPECT("195: let go once the submissions before it have run", 0, held);
     printf("t_samp: %d checks, %d failed\n", n, fail); return fail != 0;
 } }

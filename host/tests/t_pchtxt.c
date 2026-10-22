@@ -5,7 +5,10 @@
 //   a patch touching the rewritten word, the window, a region piece, the cave or the option row, or reaching past the image: the whole file refused
 //   (-1), nothing of it written
 //   a file for another build, or with only 16 digits of build ID: not this module's (0); a malformed line: refused
-// Written over the rewritten code (-DDM_TEST_PCHTXT_NO_CHECK): 5 fail.
+//   offsets as IPSwitch defines them (plan item 197): without @flag offset_shift an offset counts the NSO header (image offset = offset - 0x100); a
+//   later offset_shift applies to the lines after it; "#" lines are information; print_values taken; another flag, or an offset before the image
+//   (offset + shift < 0x100), refuses the file
+// Written over the rewritten code (-DDM_TEST_PCHTXT_NO_CHECK): 5 fail. Every @flag skipped and "#" not special (-DDM_TEST_PCHTXT_OLD_FLAGS): 5 fail.
 #include "../pchtxt.c"
 #include <sys/stat.h>
 #include <unistd.h>
@@ -45,6 +48,18 @@ int main(void) {
     snprintf(t, sizeof t, "%s@enabled\n00000600 0102030\n", head); r = run(t);
     int bad_odd = r == -1; snprintf(t, sizeof t, "%s@enabled\n00000600 \"text\"\n", head); r = run(t);
     check("an odd number of digits, or a string: refused", bad_odd && r == -1 && untouched());
+    const char *bid = "@nsobid-0123456789ABCDEF0123456789ABCDEF00000000\n";
+    snprintf(t, sizeof t, "%s@enabled\n00000700 A1\n", bid); r = run(t);
+    check("197: no offset_shift: the offset counts the NSO header, 0x700 lands at image 0x600", r == 1 && img[0x600] == 0xa1 && img[0x700] == 0xee);
+    snprintf(t, sizeof t, "%s@flag offset_shift 0x100\n@enabled\n00000600 B1\n@flag offset_shift 0\n00000700 B2\n@flag offset_shift -0x10\n00000810 B3\n", bid); r = run(t);
+    check("197: a later offset_shift applies to the lines after it (0x100: 0x600; 0: 0x700 → 0x600 again; -0x10: 0x810 → 0x700)",
+          r == 1 && img[0x600] == 0xb2 && img[0x700] == 0xb3 && img[0x810] == 0xee);
+    snprintf(t, sizeof t, "%s#0100F2C0115B6000 a title, 1.4.3\n@flag offset_shift 0x100\n@flag print_values\n@enabled\n# a note inside a section\n00000600 C1\n", bid); r = run(t);
+    check("197: \"#\" lines are information and print_values is taken: applied", r == 1 && img[0x600] == 0xc1);
+    snprintf(t, sizeof t, "%s@flag offset_shift 0x100\n@flag something_else\n@enabled\n00000600 D1\n", bid); r = run(t);
+    check("197: a flag it cannot follow: the file refused, nothing written", r == -1 && untouched());
+    snprintf(t, sizeof t, "%s@enabled\n00000080 E1\n", bid); r = run(t);
+    check("197: an offset before the image (0x80 without a shift): refused", r == -1 && untouched());
     char cmd[300]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); if (system(cmd)) {}
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
