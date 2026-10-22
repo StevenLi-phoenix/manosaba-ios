@@ -1166,10 +1166,14 @@ the device the user's iPhone 17 Pro):
   no other thread waits for the processor and lowers the priority (for at most one 10 ms quantum, undone when the thread runs again) only when one
   does; so a spin or a block could win back at most those 0.2-2.8 ms. `thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0)` (libpthread's
   `sched_yield` with `PTHREAD_YIELD_TO_ZERO=0`) yields without lowering the priority, if it is ever needed
-- [ ] 184 pipelines compiled at first sight (up to 360 ms a frame on the iPhone): MacNativeGames' one binary archive per pipeline (iPhone 14: warm-up
+- [-] batch 77 · 184 pipelines compiled at first sight (up to 360 ms a frame on the iPhone): MacNativeGames' one binary archive per pipeline (iPhone 14: warm-up
   95-122 s → 5.9 s, pipeline time in long frames 1,452 → 102 ms; its pitfalls: many pipelines in one file, 142 files searched, `gpuarchiver-*`
   folders), Apple's offline `metal-tt` route from our metallibs or Metal 4's `MTL4Archive`; a seed `pso_manifest.tsv` from Mac runs (the slot of
-  78 no tool fills); MacNativeGames PR #166's prediction rescans
+  78 no tool fills); MacNativeGames PR #166's prediction rescans. Measured, not taken (iPhone 17 Pro, 2026-10-22): the seed (209) and the
+  phone's own `pso_user.tsv` warm 3,621 render and 63 compute pipelines in 3.8 s of background time (the system's Metal cache keeps them
+  between launches), and standing on Great Sky Island no long frame had a new pipeline; a walk, a game over and its reload had 10 such frames,
+  730 ms (the worst 260 ms, the reload), pipelines met there for the first time, which an archive made on the device would not hold either.
+  The rescans of 205 cover the rest
 - [x] batch 75 · 185 the replay's CPU per draw (22,000-34,000 instructions): `prog_get` returns an `__unsafe_unretained` pointer ARC ignores (a
   retain and autorelease per draw; DavidZande/MacNativeGames b484570), a vertex-binding cache (nxnative 697df75), a view cache by serial (nxnative
   9b7cb76), `g_rmu` as an `os_unfair_lock` (MacNativeGames 5f5de5e), MacNativeGames' replay caches (dfa7ec4, shrine submit 7.1 → 6.0 ms on a
@@ -1204,7 +1208,11 @@ the device the user's iPhone 17 Pro):
 - [-] batch 75 · 188 attachment copies: copy textures without `PixelFormatView` (lossless compression), only the drawn level and layer. Measured,
   not taken: since 181 the decals read the tile, and the copies left are 0 a frame in the prologue and the shrine on the Mac and 5 a frame on
   the iPhone's game over screen, the same 5 in its 20 ms and its 11.6 ms stretches (69), so they are not what costs there
-- [ ] 189 back up to 60 fps after a step down (nxnative 9409472 / b53bb89, tvc97 `nvn_cap_auto.h`: under 30 % on performance cores in two windows)
+- [-] batch 77 · 189 back up to 60 fps after a step down (nxnative 9409472 / b53bb89, tvc97 `nvn_cap_auto.h`: under 30 % on performance cores in two windows).
+  Measured, not taken (iPhone 17 Pro, product60, 2026-10-22): our only step down of our own is the 30 fps hold in Low Power Mode or from thermal
+  state serious, re-applied when either changes (`main.m`); the frame rate is otherwise the game's own controller, which went back to 60 by
+  itself (the walk test's game over menu: 33 → 16.7 ms frames, GPU 22-26 → 11.6 ms). The host's frame step (`DM_FRAME_STEP=vsync`, 133) on Great
+  Sky Island probed k = 1 ten times, two of them failed outright, and stayed at k = 2 with GPU p50 17.7-19.7 ms: that scene does not fit 60 there
 - [ ] 190 a scene size driven by dropped frames (upstream `hle_oe.c`: an iPhone 17 Pro Max's dropped frames 23 % → 10 %), when TotK's scene size
   can change while it runs
 - [x] batch 74 · 191 correctness from the review:
