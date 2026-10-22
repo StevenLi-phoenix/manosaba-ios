@@ -483,16 +483,23 @@ static int pool_range_ok(uintptr_t a, uintptr_t b, const void *mem, uint64_t siz
 // after the submissions using it complete (defer_obj_release), so an entry read just before a removal still names a live buffer
 static _Atomic uint64_t g_pool_gen = 1;
 typedef struct { uintptr_t lo, hi, base; __unsafe_unretained id<MTLBuffer> buf; uint64_t gpu; } pc_ent;
-static __thread struct { uint64_t gen; unsigned n, next; pc_ent e[8]; } t_pc;
-static _Atomic uint64_t g_pc_hits;   // cache hits (diagnostics, t_poolcache)
+// hits: this thread's cache hits (diagnostics, t_poolcache); last: the entry of the last hit, tried first. The translation thread looks up ~40,000
+// buffer addresses a frame in Tears of the Kingdom, most in one pool: the lookup (a thread-local access, an atomic count of the hits and the slow
+// path's register saves on every call) was 9 % of its time on the M5; with the hit counted per thread without an atomic, the slow path in a function
+// of its own and the vertex streams bound once per encoder (draw) it is 5 % (plan item 225)
+static __thread struct { uint64_t gen, hits; unsigned n, next, last; pc_ent e[8]; } t_pc;
+static inline uint64_t mtl_pc_hits(void) { return t_pc.hits; }
 static inline const pc_ent *pc_get(uint64_t addr, uint64_t len) {
-    if (t_pc.gen != atomic_load_explicit(&g_pool_gen, memory_order_acquire)) return NULL;
-    for (unsigned k = 0; k < t_pc.n; k++) { const pc_ent *c = &t_pc.e[k]; if (addr >= c->lo && addr + len <= c->hi) return c; }
+    __typeof__(t_pc) *t = &t_pc;
+    if (t->gen != atomic_load_explicit(&g_pool_gen, memory_order_acquire)) return NULL;
+    const pc_ent *c = &t->e[t->last];
+    if (t->last < t->n && addr >= c->lo && addr + len <= c->hi) { t->hits++; return c; }
+    for (unsigned k = 0; k < t->n; k++) { c = &t->e[k]; if (addr >= c->lo && addr + len <= c->hi) { t->last = k; t->hits++; return c; } }
     return NULL;
 }
 static void pc_put(int i) {   // caller holds g_mu; pool i is resident
     uint64_t gen = atomic_load_explicit(&g_pool_gen, memory_order_relaxed);
-    if (t_pc.gen != gen) { t_pc.gen = gen; t_pc.n = 0; t_pc.next = 0; }
+    if (t_pc.gen != gen) { t_pc.gen = gen; t_pc.n = 0; t_pc.next = 0; t_pc.last = 0; }
     pc_ent *c = &t_pc.e[t_pc.n < 8 ? t_pc.n++ : t_pc.next++ % 8];
     *c = (pc_ent){g_pools[i].lo, g_pools[i].hi, g_pools[i].base, g_pools[i].buf, g_pools[i].gpu};
 }
@@ -521,15 +528,18 @@ void mtl_pool_del(const void *mem) { @autoreleasepool {
     defer_obj_release(gone);   // retire: release after the submissions that used it complete, and remove from the residency set (it used to be only removed from g_keep - the residency set holds it strongly, so the zero-copy buffer object was never destroyed)
 } }
 
-int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
-    const pc_ent *c = pc_get(addr, len);
-    if (c) { atomic_fetch_add_explicit(&g_pc_hits, 1, memory_order_relaxed); *buf = (__bridge void *)c->buf; *off = addr - c->base; return 1; }
+__attribute__((noinline)) static int pool_lookup(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {   // through the lock, then cached
     int ok = 0;
     pthread_mutex_lock(&g_mu);
     int i = pool_find(&g_pfind, g_pools, sizeof *g_pools, g_npool, addr, len);
-    if (i >= 0) { pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; ok = 1; pc_put(i); }
+    if (i >= 0) { pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; if (gpu) *gpu = g_pools[i].gpu + *off; ok = 1; pc_put(i); }
     pthread_mutex_unlock(&g_mu);
     return ok;
+}
+int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
+    const pc_ent *c = pc_get(addr, len);
+    if (c) { *buf = (__bridge void *)c->buf; *off = addr - c->base; return 1; }
+    return pool_lookup(addr, len, buf, off, NULL);
 }
 int mtl_pool_has(uint64_t addr, uint64_t len) {
     pthread_mutex_lock(&g_mu); int i = pool_find(&g_pfind, g_pools, sizeof *g_pools, g_npool, addr, len); pthread_mutex_unlock(&g_mu);
@@ -537,13 +547,8 @@ int mtl_pool_has(uint64_t addr, uint64_t len) {
 }
 int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {
     const pc_ent *c = pc_get(addr, len);
-    if (c) { atomic_fetch_add_explicit(&g_pc_hits, 1, memory_order_relaxed); *buf = (__bridge void *)c->buf; *off = addr - c->base; *gpu = c->gpu + *off; return 1; }
-    int ok = 0;
-    pthread_mutex_lock(&g_mu);
-    int i = pool_find(&g_pfind, g_pools, sizeof *g_pools, g_npool, addr, len);
-    if (i >= 0) { pool_res(i); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; *gpu = g_pools[i].gpu + *off; ok = 1; pc_put(i); }
-    pthread_mutex_unlock(&g_mu);
-    return ok;
+    if (c) { *buf = (__bridge void *)c->buf; *off = addr - c->base; *gpu = c->gpu + *off; return 1; }
+    return pool_lookup(addr, len, buf, off, gpu);
 }
 
 // ---------- Submission ----------
@@ -727,18 +732,32 @@ static int g_us_par = -1; static uint64_t g_us_par_n;   // DM_NVN_UBO_SNAPSHOT_P
 // copy in parts): each copy runs under a per-thread fault guard and a faulting one is dropped, so its draws read memory as without snapshots
 // (MacNativeGames guards usnap_copy_one the same way after a helper thread died in about one session of twelve; MIT, written anew here)
 static __thread struct { sigjmp_buf jb; uint64_t lo, hi; int armed; } t_usg;
-static _Atomic uint64_t g_us_faults;
+static _Atomic uint64_t g_us_faults, g_us_jumps;   // g_us_jumps: sigsetjmp calls of the copies (t_usnap)
 static int us_fault(void *addr, int is_write, void *uc) {   // fault hook: only a fault inside the range this thread is copying
     (void)is_write; (void)uc; uint64_t a = (uint64_t)(uintptr_t)addr;
     if (!t_usg.armed || a < t_usg.lo || a >= t_usg.hi) return 0;
     t_usg.armed = 0; siglongjmp(t_usg.jb, 1);
 }
+// One sigsetjmp for the run of copies, not one a copy (plan item 225): saving the signal mask is two system calls on Darwin (sigprocmask and
+// sigaltstack), and the copies of a submission are hundreds; 38 % of the game thread's submit call on the M5. A fault drops its copy and the loop goes
+// on with the next behind a new sigsetjmp
 static void us_copy_range(int a, int b) {
     static dispatch_once_t hook; dispatch_once(&hook, ^{ dm_fault_hook_register(us_fault); });
-    for (volatile int i = a; i < b; i++) {
-        t_usg.lo = g_us[i].lo; t_usg.hi = g_us[i].hi;
-        if (!sigsetjmp(t_usg.jb, 1)) { t_usg.armed = 1; memcpy(g_us[i].cpu, (const void *)(uintptr_t)g_us[i].lo, (size_t)(g_us[i].hi - g_us[i].lo)); t_usg.armed = 0; }
-        else { g_us[i].dropped = 1; atomic_fetch_add(&g_us_faults, 1); }
+    volatile int i = a;
+    for (;;) {
+        atomic_fetch_add_explicit(&g_us_jumps, 1, memory_order_relaxed);
+        if (!sigsetjmp(t_usg.jb, 1)) {
+            for (; i < b; i++) {
+#ifdef DM_TEST_US_GUARD_EACH   // negative control of t_usnap only: a sigsetjmp for every copy, as before
+                atomic_fetch_add_explicit(&g_us_jumps, 1, memory_order_relaxed);
+                if (sigsetjmp(t_usg.jb, 1)) { g_us[i].dropped = 1; atomic_fetch_add(&g_us_faults, 1); continue; }
+#endif
+                t_usg.lo = g_us[i].lo; t_usg.hi = g_us[i].hi; t_usg.armed = 1;
+                memcpy(g_us[i].cpu, (const void *)(uintptr_t)g_us[i].lo, (size_t)(g_us[i].hi - g_us[i].lo)); t_usg.armed = 0;
+            }
+            return;
+        }
+        g_us[i].dropped = 1; atomic_fetch_add(&g_us_faults, 1); i++;   // (the fault hook disarmed the guard)
     }
 }
 static void us_copy_all(void) {
@@ -822,11 +841,18 @@ mtl_cap *mtl_sub_capture(const uint64_t *h, int n, uint64_t token) {   // the ga
                                        if (c->off[c->nr] != UINT64_MAX) total += u[i].hi - u[i].lo; c->nr++; }
         c->data = malloc(total ? total : 1); if (!c->data) MDIE("submission capture");
         static dispatch_once_t hook; dispatch_once(&hook, ^{ dm_fault_hook_register(us_fault); });
-        for (volatile int i = 0; i < c->nr; i++) {
-            if (c->off[i] == UINT64_MAX) continue;
-            t_usg.lo = c->r[i].lo; t_usg.hi = c->r[i].hi;
-            if (!sigsetjmp(t_usg.jb, 1)) { t_usg.armed = 1; memcpy(c->data + c->off[i], (const void *)(uintptr_t)c->r[i].lo, (size_t)(c->r[i].hi - c->r[i].lo)); t_usg.armed = 0; }
-            else { c->off[i] = UINT64_MAX; atomic_fetch_add(&g_us_faults, 1); }   // not readable: read live at the replay
+        volatile int i = 0;   // one guard for the run (us_copy_range)
+        for (;;) {
+            atomic_fetch_add_explicit(&g_us_jumps, 1, memory_order_relaxed);
+            if (!sigsetjmp(t_usg.jb, 1)) {
+                for (; i < c->nr; i++) {
+                    if (c->off[i] == UINT64_MAX) continue;
+                    t_usg.lo = c->r[i].lo; t_usg.hi = c->r[i].hi; t_usg.armed = 1;
+                    memcpy(c->data + c->off[i], (const void *)(uintptr_t)c->r[i].lo, (size_t)(c->r[i].hi - c->r[i].lo)); t_usg.armed = 0;
+                }
+                break;
+            }
+            c->off[i] = UINT64_MAX; atomic_fetch_add(&g_us_faults, 1); i++;   // not readable: read live at the replay
         }
     }
     pthread_mutex_unlock(&g_cap_mu);
@@ -925,12 +951,20 @@ void mtl_sub_snapshot(const uint64_t *h, int n) {   // hle_nvn.c nvnQueueSubmitC
     g_us_copies += (uint64_t)g_us_n;
     g_us_ns += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
 }
+static int g_us_last;   // the copy the last lookup found, tried first (plan item 225: consecutive draws bind the same blocks; ~13,000 lookups a frame)
 static const us_ent *us_find(uint64_t a, uint64_t n) {   // the live copy holding all of [a, a + n), or NULL
     if (!g_us_n || !a) return NULL;
     if (!n) n = 1;
+    if (g_us_last < g_us_n) { const us_ent *c = &g_us[g_us_last];   // the copies are disjoint: one holding the range is the only one
+#ifndef DM_TEST_US_LAST_UNCHECKED   // negative control of t_usnap only: the last copy found taken whatever the range
+        if (c->lo <= a && a + n <= c->hi) return c->dropped ? NULL : c;
+#else
+        return c->dropped ? NULL : c;
+#endif
+    }
     int lo = 0, hi = g_us_n;
     while (lo < hi) { int m = (lo + hi) / 2; if (g_us[m].hi <= a) lo = m + 1; else hi = m; }
-    if (lo < g_us_n && g_us[lo].lo <= a && a + n <= g_us[lo].hi && !g_us[lo].dropped) return &g_us[lo];
+    if (lo < g_us_n && g_us[lo].lo <= a && a + n <= g_us[lo].hi && !g_us[lo].dropped) { g_us_last = lo; return &g_us[lo]; }
     return NULL;
 }
 static void us_gw_note(uint64_t a, uint64_t n) {   // a GPU write of this submission reaches [a, a + n): the next submissions do not copy it until it completes
@@ -1104,11 +1138,15 @@ static inline void m4_end(id e) {
 // Render state already set on the current encoder (MacNativeGames' es_* filter, MIT; written anew here): the replay sets viewport, scissor, cull,
 // winding, fill, depth bias, depth clip, stencil reference and blend color for every draw, nearly always unchanged (about 30,000 encoder calls a
 // frame in Tears of the Kingdom). The cache belongs to one encoder: reset where a render encoder opens and where it ends (t_esfilter)
-static struct { __unsafe_unretained id en; MTLViewport vp; MTLScissorRect sc; int cull, wind, fill, clip; float bias[3], bc[4], db[2]; uint32_t sref; uint8_t has_vp, has_sc, has_bias, has_bc, has_sref, has_db; } g_es;
-static uint64_t g_es_sets, g_es_skips;
+// vb: the guest address of each vertex stream bound on the encoder (its buffer index 16 + stream), valid while the pool generation is vb_gen;
+// vb_zero: index 30 holds the zero buffer (stream 14 shares that index)
+static struct { __unsafe_unretained id en; MTLViewport vp; MTLScissorRect sc; int cull, wind, fill, clip; float bias[3], bc[4], db[2]; uint32_t sref; uint8_t has_vp, has_sc, has_bias, has_bc, has_sref, has_db;
+                uint64_t vb[16], vb_gen; uint8_t vb_zero; } g_es;
+static uint64_t g_es_sets, g_es_skips, g_vb_sets, g_vb_skips;
 static inline void es_reset(id e) { memset(&g_es, 0, sizeof g_es); g_es.cull = g_es.wind = g_es.fill = g_es.clip = -1; g_es.en = e; }
 static inline int es_mine(id e) { if (g_es.en != e) es_reset(e); return 1; }
 void mtl_es_stats(uint64_t *sets, uint64_t *skips) { *sets = g_es_sets; *skips = g_es_skips; }
+void mtl_vb_stats(uint64_t *sets, uint64_t *skips) { *sets = g_vb_sets; *skips = g_vb_skips; }
 #if DM_NVN_M3
 static inline RENC enc_r_begin(RPD *d) { RENC e = [g_cb renderCommandEncoderWithDescriptor:d]; es_reset(e); return e; }
 static inline void enc_r_end(id e) { m4_end(e); es_reset(nil); }
@@ -1275,6 +1313,10 @@ static uint64_t gpu_ticks(void) { return (guest_ns() + gpu_late_ns()) * 12 / 625
 // DM_NVN_TS_SCALE=<x>: report times spread x times further from their submission's GPU start (the game sees a GPU x times slower: does its dynamic
 // resolution react), 1 = off
 static double ts_scale(void) { static double v = -1; if (v < 0) { const char *e = getenv("DM_NVN_TS_SCALE"); v = e ? atof(e) : 1; if (v <= 0) v = 1; if (v != 1) MLOG("DM_NVN_TS_SCALE=%g: counter report times %g times further apart", v, v); } return v; }
+// Frame-rate trials (plan item 216, nvn_fptrial.h; hle_nvn.c sets it at every present): a factor on the report times of the submissions committed
+// from then on, as DM_NVN_TS_SCALE's; 1 = the real times
+static _Atomic uint32_t g_ts_factor = 1000;   // thousandths
+void mtl_ts_factor(double f) { atomic_store(&g_ts_factor, f > 0.001 && f < 1000 ? (uint32_t)(f * 1000 + 0.5) : 1000); }
 // DM_NVN_GPU_TS=completion: every report of a submission at its completion, as before plan item 131 (A/B)
 static int ts_inside(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_GPU_TS"); v = !(e && !strcmp(e, "completion")); if (!v) MLOG("DM_NVN_GPU_TS=completion: counter reports at their submission's completion"); } return v; }
 
@@ -1413,12 +1455,17 @@ int mtl_gpu_span(uint64_t f, uint64_t *t0, uint64_t *t1) {
 // DM_NVN_GPUWATCH=<first>-<last> (diagnostics): the uniform ranges a submission of those frames binds are copied at its commit and compared byte by
 // byte when it completes: data the CPU changed while the GPU still had to read it (how Tears of the Kingdom's dive flicker was found; with uniform
 // snapshots on, a changed range the GPU read from its copy is counted apart). Ranges written by the submission's own inline updates are left out,
-// and a range also bound as a storage buffer is counted apart (a shader may have written it)
+// and a range also bound as a storage buffer is counted apart (a shader may have written it). The vertex and index ranges its draws read in place
+// too (stage -1 / -2; after LASRecomp dc1d28f's LARECOMP_GPU_LAG_CHECK, MIT): what a GPU one frame behind would read changed (plan item 224)
 typedef struct { uint64_t addr, size; int stage, index, ssbo, copied; } gw_rng;   // copied: a uniform snapshot of this submission held it when it was bound
 static gw_rng *g_gw; static int g_gw_n, g_gw_cap; static uint64_t g_gw_hits, g_gw_checked;
-static int gw_on(void) { static long a = -2, b; if (a == -2) { const char *e = getenv("DM_NVN_GPUWATCH"); a = e ? atol(e) : -1; b = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : a; }
-    long f = (long)atomic_load(&g_cur_frame); return a >= 0 && f >= a && f <= b; }
-static void gw_note(const p_bind_buf *b, int ssbo) {
+static long g_gw_a = -2, g_gw_b;   // DM_NVN_GPUWATCH's frames (-1: off), read once
+static int gw_on(void) { if (g_gw_a == -2) { const char *e = getenv("DM_NVN_GPUWATCH"); g_gw_a = e ? atol(e) : -1; g_gw_b = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : g_gw_a; }
+    if (g_gw_a < 0) return 0;
+    long f = (long)atomic_load(&g_cur_frame); return f >= g_gw_a && f <= g_gw_b; }
+static void gw_note_(const p_bind_buf *b, int ssbo);
+static inline __attribute__((always_inline)) void gw_note(const p_bind_buf *b, int ssbo) { if (g_gw_a != -1) gw_note_(b, ssbo); }   // (off: one compare a binding)
+static void gw_note_(const p_bind_buf *b, int ssbo) {
     if (!b->addr || !b->size || !gw_on()) return;
     for (int i = g_gw_n - 1; i >= 0 && i >= g_gw_n - 64; i--) if (g_gw[i].addr == b->addr && g_gw[i].size == b->size) return;
     if (g_gw_n == g_gw_cap) { g_gw_cap = g_gw_cap ? g_gw_cap * 2 : 1024; g_gw = realloc(g_gw, (size_t)g_gw_cap * sizeof *g_gw); }
@@ -1437,18 +1484,20 @@ static void gw_commit(void) {   // before the commit blocks are copied: copy now
             snap[i] = malloc(l[i].size); memcpy(snap[i], (const void *)(uintptr_t)l[i].addr, l[i].size); nsnap++;
         }
         [g_commit_blocks addObject:^{
-            int hit = 0, gpu_hit = 0, copied_hit = 0;
+            int hit = 0, gpu_hit = 0, copied_hit = 0, vhit = 0, nv = 0;
+            for (int i = 0; i < n; i++) nv += snap[i] && l[i].stage < 0;
             for (int i = 0; i < n; i++) { if (!snap[i]) continue; g_gw_checked++;
                 if (memcmp(snap[i], (const void *)(uintptr_t)l[i].addr, l[i].size)) {
                     int gpu = 0; for (int j = 0; j < n && !gpu; j++) gpu = l[j].ssbo && l[i].addr < l[j].addr + l[j].size && l[i].addr + l[i].size > l[j].addr;
                     if (gpu) { gpu_hit++; continue; }   // also bound as a storage buffer in this submission: a shader may have written it
                     if (l[i].copied) { copied_hit++; continue; }   // the GPU read the snapshot taken at the submit call
-                    hit++;
+                    if (l[i].stage < 0) vhit++; else hit++;
                     size_t off = 0; while (off < l[i].size && snap[i][off] == ((const uint8_t *)(uintptr_t)l[i].addr)[off]) off++;
-                    if (g_gw_hits++ < 40) MLOG("[gpuwatch] frame %llu: UBO st%d r%d [%#llx, +%llu) changed while this submission was on the GPU (first byte +%zu)", (unsigned long long)frame,
-                                              l[i].stage, l[i].index, (unsigned long long)l[i].addr, (unsigned long long)l[i].size, off); }
+                    if (g_gw_hits++ < 40) MLOG("[gpuwatch] frame %llu: %s st%d r%d [%#llx, +%llu) changed while this submission was on the GPU (first byte +%zu)", (unsigned long long)frame,
+                                              l[i].stage == -1 ? "vertex" : l[i].stage == -2 ? "index" : "UBO", l[i].stage, l[i].index, (unsigned long long)l[i].addr, (unsigned long long)l[i].size, off); }
                 free(snap[i]); }
-            MLOG("[gpuwatch] frame %llu: %d of %d bound UBO ranges compared byte by byte, %d changed during the GPU work and were read from memory (+%d read from the submit-time copy, +%d also bound as storage buffers)", (unsigned long long)frame, nsnap, n, hit, copied_hit, gpu_hit);
+            MLOG("[gpuwatch] frame %llu: %d of %d bound UBO ranges compared byte by byte, %d changed during the GPU work and were read from memory (+%d read from the submit-time copy, +%d also bound as storage buffers); vertex and index ranges %d, %d changed",
+                 (unsigned long long)frame, nsnap - nv, n, hit, copied_hit, gpu_hit, nv, vhit);
             free(snap); free(l);
         }];
     }
@@ -1549,6 +1598,7 @@ uint64_t mtl_sub_commit(void) {
     uint64_t gpu_f = atomic_load(&g_cur_frame); gpu_tag_begin(gpu_f);
     NSString *cctx = @(cctx_snap());
     uint32_t work = g_sub_work; sub_clk *sclk = g_sclk; g_sclk = NULL;   // the parts committed before this one (mid-submission commits), or none
+    double tsf = atomic_load(&g_ts_factor) / 1000.0;   // the frame-rate trial's factor when this submission was committed (plan item 216)
     [FB_ON(o, g_cb) FB_SEL:^(FB_ARG cb) {
         gpu_tag_done(gpu_f, cb.GPUStartTime, cb.GPUEndTime); trace_at(TR_GPU, cb.GPUStartTime, cb.GPUEndTime, fence, tr_part);
         // each report's place among the parts' GPU start / end on the guest clock (nvn_ts.h ts_place): parts committed earlier, then this one
@@ -1557,7 +1607,7 @@ uint64_t mtl_sub_commit(void) {
             if (sclk) for (int k = 0; k < sclk->n; k++) { pw[k + 1] = sclk->w[k + 1]; ps[k] = atomic_load(&sclk->s[k]); pe[k] = atomic_load(&sclk->e[k]); parts++; }
             pw[parts] = work; ps[parts - 1] = ts_guest_ns(cb.GPUStartTime, hn, gn); pe[parts - 1] = ts_guest_ns(cb.GPUEndTime, hn, gn); }
         sclk_put(sclk);
-        double tsk = ts_scale();
+        double tsk = ts_scale() * tsf;
         #define REPORT_TICKS(o_) ({ uint64_t ns_ = inside ? ts_place(pw, ps, pe, parts, (o_).pos, (o_).type == NVN_COUNTER_TYPE_TIMESTAMP_TOP) : 0; \
             if (ns_ && tsk != 1 && ps[0] && ns_ > ps[0]) ns_ = ps[0] + (uint64_t)((ns_ - ps[0]) * tsk); ns_ ? (ns_ + late) * 12 / 625 : gpu_ticks(); })
         if (cb.error) { atomic_store(&g_last_commit_error, 1); static int n, nv; int victim = [cb.error.description containsString:@"InnocentVictim"]; if (victim ? nv++ < 1 : n++ < 8) MLOG("[red] command buffer error details fence=%llu: %s | GPU %.3f→%.3f", (unsigned long long)fence, cb.error.description.UTF8String, cb.GPUStartTime, cb.GPUEndTime); if (!victim) MLOG("[red] context of the failing submit fence=%llu: %s", (unsigned long long)fence, cctx.UTF8String); MLOG("[red] command buffer execution error: %s", cb.error.localizedDescription.UTF8String); }
@@ -5567,10 +5617,12 @@ typedef struct { uint64_t lo, hi, seq; const uint8_t *data; } upd_ent;
 // A log kept sorted by start, with the largest end up to each entry: overlaps are found by a binary search and a walk back over real overlaps (every
 // uniform binding of a draw is looked up, and most overlap nothing). g_upd: updates not in memory yet (written by upd_flush); g_uh: every update of
 // the submission, written or not (a private copy is the snapshot with all of them: the snapshot stays valid after a write, which only adds them)
-typedef struct { upd_ent *e; uint64_t *maxhi; int n, cap; uint64_t lo, hi; } upd_list;
+typedef struct { upd_ent *e; uint64_t *maxhi; int n, cap; uint64_t lo, hi, ver; } upd_list;   // ver: changed by every add and clear (ul_seq's cache)
 static upd_list g_upd = {.lo = UINT64_MAX}, g_uh = {.lo = UINT64_MAX};
 static int *g_upd_idx, g_upd_icap; static uint64_t g_upd_seq, g_ren_pass = UINT64_MAX;
 static uint64_t g_ren_updates, g_ren_shadows, g_ren_reuse, g_ren_flushes, g_ren_guard, g_ren_noshot, g_ren_unknown;
+static uint64_t g_ul_calls, g_ul_walk, g_ul_applied, g_ul_moves;   // ul_apply: calls past the range check, log entries walked, entries applied, sort moves
+static uint64_t g_ren_incr;   // private copies made from the range's previous copy of the submission and the updates after it (plan item 225)
 static int ub_rename_on(void) {
     static int v = -1;
     if (v < 0) { const char *e = getenv("DM_NVN_UB_RENAME"); v = !(e && !strcmp(e, "0")); if (!v) MLOG("DM_NVN_UB_RENAME=0: inline uniform updates copied on the GPU timeline (each ends the render pass)"); }
@@ -5586,25 +5638,43 @@ static void ul_add(upd_list *l, upd_ent v) {
     memmove(l->e + a + 1, l->e + a, (size_t)(l->n - a) * sizeof *l->e);
     l->e[a] = v; l->n++;
     for (int i = a; i < l->n; i++) { uint64_t pv = i ? l->maxhi[i - 1] : 0; l->maxhi[i] = MAX(l->e[i].hi, pv); }
-    l->lo = MIN(l->lo, v.lo); l->hi = MAX(l->hi, v.hi);
+    l->lo = MIN(l->lo, v.lo); l->hi = MAX(l->hi, v.hi); l->ver++;
 }
-static void ul_clear(upd_list *l) { l->n = 0; l->lo = UINT64_MAX; l->hi = 0; }
-static uint64_t ul_seq(const upd_list *l, uint64_t lo, uint64_t hi) {   // the newest entry overlapping [lo, hi), 0 if none
+static void ul_clear(upd_list *l) { l->n = 0; l->lo = UINT64_MAX; l->hi = 0; l->ver++; }
+// The newest entry overlapping [lo, hi), 0 if none. Every uniform binding of a draw asks, about 13,000 times a frame in Tears of the Kingdom with ~470
+// updates between: answers are kept per range until the list changes (plan item 225)
+static struct { const upd_list *l; uint64_t ver, lo, hi, seq; } g_ul_seqc[256];
+static uint64_t ul_seq(const upd_list *l, uint64_t lo, uint64_t hi) {
     if (!l->n || hi <= l->lo || lo >= l->hi) return 0;
+    unsigned k = (unsigned)(((lo >> 4) ^ (hi >> 9) ^ ((uintptr_t)l >> 5)) & 255);
+#ifndef DM_TEST_UL_SEQ_STALE   // negative control of t_ubren only: an answer kept after the list changed
+    if (g_ul_seqc[k].l == l && g_ul_seqc[k].ver == l->ver && g_ul_seqc[k].lo == lo && g_ul_seqc[k].hi == hi) return g_ul_seqc[k].seq;
+#else
+    if (g_ul_seqc[k].l == l && g_ul_seqc[k].lo == lo && g_ul_seqc[k].hi == hi) return g_ul_seqc[k].seq;
+#endif
     int a = 0, b = l->n; while (a < b) { int m = (a + b) / 2; if (l->e[m].lo < hi) a = m + 1; else b = m; }   // [0, a) start below hi
     uint64_t last = 0;
     for (int i = a - 1; i >= 0 && l->maxhi[i] > lo; i--) if (l->e[i].hi > lo && l->e[i].seq > last) last = l->e[i].seq;
+    g_ul_seqc[k].l = l; g_ul_seqc[k].ver = l->ver; g_ul_seqc[k].lo = lo; g_ul_seqc[k].hi = hi; g_ul_seqc[k].seq = last;
     return last;
 }
-static void ul_apply(const upd_list *l, uint64_t lo, uint8_t *out, uint64_t n) {   // the entries over out (= [lo, lo + n) before them), oldest first
+static void ul_apply(const upd_list *l, uint64_t lo, uint8_t *out, uint64_t n, uint64_t after) {   // the entries newer than after over out (= [lo, lo + n) before them), oldest first
     if (!l->n || lo + n <= l->lo || lo >= l->hi) return;
     uint64_t hi = lo + n; int a = 0, b = l->n, k = 0; while (a < b) { int m = (a + b) / 2; if (l->e[m].lo < hi) a = m + 1; else b = m; }
     if (g_upd_icap < l->n) { g_upd_icap = l->n * 2; g_upd_idx = realloc(g_upd_idx, (size_t)g_upd_icap * sizeof *g_upd_idx); if (!g_upd_idx) MDIE("uniform update log index"); }
-    for (int i = a - 1; i >= 0 && l->maxhi[i] > lo; i--) if (l->e[i].hi > lo) g_upd_idx[k++] = i;
+    int i0 = a - 1;
+    for (int i = a - 1; i >= 0 && l->maxhi[i] > lo; i--) { i0 = i; if (l->e[i].hi > lo && l->e[i].seq > after) g_upd_idx[k++] = i; }
+    g_ul_calls++; g_ul_walk += (uint64_t)(a - i0); g_ul_applied += (uint64_t)k;
+    // The walk went from the newest start down, and updates of one start sit in the log oldest first: reversed, the list is runs already in order,
+    // which the insertion sort below passes in about k steps. Tears of the Kingdom's frame applies ~90 updates of a few ranges per private copy, ~360
+    // copies a frame: sorted from the walk's order that was ~4,000 moves a copy, 18 % of the translation thread on the M5 (plan item 225)
+#ifndef DM_TEST_UL_NO_REVERSE   // negative control of t_nvn only: sorted from the walk's order (the result is the same, the time is not)
+    for (int i = 0, j = k - 1; i < j; i++, j--) { int t = g_upd_idx[i]; g_upd_idx[i] = g_upd_idx[j]; g_upd_idx[j] = t; }
+#endif
 #ifndef DM_TEST_UB_NEWEST_FIRST   // negative control of t_nvn 5a2 only: the newest applied first, an older one over it
-    for (int i = 1; i < k; i++) { int x = g_upd_idx[i], j = i - 1; while (j >= 0 && l->e[g_upd_idx[j]].seq > l->e[x].seq) { g_upd_idx[j + 1] = g_upd_idx[j]; j--; } g_upd_idx[j + 1] = x; }
+    for (int i = 1; i < k; i++) { int x = g_upd_idx[i], j = i - 1; while (j >= 0 && l->e[g_upd_idx[j]].seq > l->e[x].seq) { g_upd_idx[j + 1] = g_upd_idx[j]; j--; g_ul_moves++; } g_upd_idx[j + 1] = x; }
 #else
-    for (int i = 1; i < k; i++) { int x = g_upd_idx[i], j = i - 1; while (j >= 0 && l->e[g_upd_idx[j]].seq < l->e[x].seq) { g_upd_idx[j + 1] = g_upd_idx[j]; j--; } g_upd_idx[j + 1] = x; }
+    for (int i = 1; i < k; i++) { int x = g_upd_idx[i], j = i - 1; while (j >= 0 && l->e[g_upd_idx[j]].seq < l->e[x].seq) { g_upd_idx[j + 1] = g_upd_idx[j]; j--; g_ul_moves++; } g_upd_idx[j + 1] = x; }
 #endif
     for (int i = 0; i < k; i++) { const upd_ent *e = &l->e[g_upd_idx[i]]; uint64_t s0 = MAX(lo, e->lo), e0 = MIN(hi, e->hi); memcpy(out + (s0 - lo), e->data + (s0 - e->lo), e0 - s0); }
 }
@@ -5627,10 +5697,13 @@ static int upd_any(void) {
 #endif
 }
 static uint64_t upd_overlap_seq(uint64_t lo, uint64_t hi) { return ul_seq(&g_upd, lo, hi); }   // updates not in memory yet
-static void upd_apply(uint64_t lo, uint8_t *out, uint64_t n) { ul_apply(&g_uh, lo, out, n); }   // over a snapshot: every update of the submission
+static void upd_apply(uint64_t lo, uint8_t *out, uint64_t n) { ul_apply(&g_uh, lo, out, n, 0); }   // over a snapshot: every update of the submission
 // Private copies of updated uniform ranges, found through a direct-mapped index by (range, newest overlapping update): later draws binding the same
-// range with no update in between share one
-typedef struct { uint64_t lo, size, seq, gpu; void *buf; } ub_shadow;
+// range with no update in between share one. A range updated again in the same submission gets its new copy from its previous one with only the
+// updates after it (plan item 225): Tears of the Kingdom updates a few ranges ~470 times a frame and makes ~360 copies, each of which applied ~90
+// updates from the snapshot (the previous copy is the snapshot with every update up to its own, and the snapshot and the log of the submission
+// only grow). An entry of an earlier submission is never the base: its snapshot is another
+typedef struct { uint64_t lo, size, seq, gpu, sub; void *buf; uint8_t *cpu; } ub_shadow;   // cpu: the copy's bytes when it was made over the snapshot, else NULL
 enum { UB_SHADOW_N = 1024 };
 static ub_shadow g_shadow[UB_SHADOW_N];
 static uint64_t upd_shadow(uint64_t lo, uint64_t size, void **buf) {   // GPU address of [lo, lo + size) with the submission's updates, 0 to read as before (none overlaps, or memory holds them)
@@ -5643,12 +5716,19 @@ static uint64_t upd_shadow(uint64_t lo, uint64_t size, void **buf) {   // GPU ad
     if (e->lo == lo && e->size == size && e->seq == seq && e->gpu) { *buf = e->buf; g_ren_reuse++; return e->gpu; }   // seq only grows: an entry of an earlier submission never matches
     ARENA_OUT id<MTLBuffer> ab; uint64_t pad = lo & 255; size_t off = arena_alloc((size_t)(size + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original (as the snapshots)
     uint8_t *cpu = (uint8_t *)ab.contents + off;
-    if (sc) { memcpy(cpu, sc->cpu + (lo - sc->lo), (size_t)size); upd_apply(lo, cpu, size); }
-    else {   // no snapshot and updates not written (upd_guard_draw could not write them first): memory with the pending writes, the updates among them
+    if (sc) {
+#ifndef DM_TEST_UBSH_ANY_SUB   // negative control of t_ubren only: a copy of an earlier submission taken as the base
+        int same = e->sub == g_sub_serial;
+#else
+        int same = 1;
+#endif
+        if (e->lo == lo && e->size == size && same && e->cpu && e->seq < seq) { memcpy(cpu, e->cpu, (size_t)size); ul_apply(&g_uh, lo, cpu, size, e->seq); g_ren_incr++; }
+        else { memcpy(cpu, sc->cpu + (lo - sc->lo), (size_t)size); upd_apply(lo, cpu, size); }
+    } else {   // no snapshot and updates not written (upd_guard_draw could not write them first): memory with the pending writes, the updates among them
         g_ren_noshot++;
         if (!pend_read_x(lo, cpu, size, g_npend, 0)) { g_ren_unknown++; RED_ONCE(90, "renamed uniform update: range %#llx+%llu has no snapshot and a GPU write of unknown content (first case): its copy may be stale", (unsigned long long)lo, (unsigned long long)size); }
     }
-    *e = (ub_shadow){lo, size, seq, ab.gpuAddress + off, (__bridge void *)ab}; *buf = e->buf; g_ren_shadows++;
+    *e = (ub_shadow){lo, size, seq, ab.gpuAddress + off, g_sub_serial, (__bridge void *)ab, sc ? cpu : NULL}; *buf = e->buf; g_ren_shadows++;
     return e->gpu;
 }
 static void upd_flush(void) {   // the updates not in memory yet into memory on the GPU timeline (merged; ends a render pass if one is open)
@@ -5661,7 +5741,7 @@ static void upd_flush(void) {   // the updates not in memory yet into memory on 
         void *db; uint64_t dof;
         if (mtl_addr(lo, hi - lo, &db, &dof)) {
             ARENA_OUT id<MTLBuffer> sb; size_t so = arena_alloc((size_t)(hi - lo), &sb);
-            ul_apply(l, lo, (uint8_t *)sb.contents + so, hi - lo);
+            ul_apply(l, lo, (uint8_t *)sb.contents + so, hi - lo, 0);
             enc_b_copy_buffer(blit(), sb, so, (__bridge id<MTLBuffer>)db, dof, hi - lo);
         } else {   // touching updates in two pools: each on its own, oldest first (blit() orders them)
             int k0 = 0; if (g_upd_icap < j - i) { g_upd_icap = (j - i) * 2; g_upd_idx = realloc(g_upd_idx, (size_t)g_upd_icap * sizeof *g_upd_idx); }
@@ -5679,12 +5759,15 @@ static void upd_flush(void) {   // the updates not in memory yet into memory on 
 }
 static uint64_t g_ren_g[5];   // what made upd_guard_draw write the updates: index, vertex, storage buffer, buffer texture, uniform range without a snapshot
 static void ren_report(uint64_t f) {   // every 300 frames
-    static uint64_t p[12]; uint64_t c[12] = {g_ren_updates, g_ren_shadows, g_ren_reuse, g_ren_flushes, g_ren_guard, g_ren_noshot, g_ren_unknown, g_ren_g[0], g_ren_g[1], g_ren_g[2], g_ren_g[3], g_ren_g[4]};
+    static uint64_t p[16]; uint64_t c[16] = {g_ren_updates, g_ren_shadows, g_ren_reuse, g_ren_flushes, g_ren_guard, g_ren_noshot, g_ren_unknown, g_ren_g[0], g_ren_g[1], g_ren_g[2], g_ren_g[3], g_ren_g[4],
+                                             g_ul_calls, g_ul_walk, g_ul_applied, g_ren_incr};
     if (f % 300 || c[0] == p[0]) return;
-    MLOG("renamed uniform updates up to frame %llu: %llu updates, %llu private copies (%llu shared), written to memory %llu times (%llu before a draw reading them otherwise: index %llu, vertex %llu, storage %llu, buffer texture %llu, no snapshot %llu); %llu copies without a snapshot, %llu of unknown content",
+    double uc = c[12] > p[12] ? (double)(c[12] - p[12]) : 1;
+    MLOG("renamed uniform updates up to frame %llu: %llu updates, %llu private copies (%llu shared), written to memory %llu times (%llu before a draw reading them otherwise: index %llu, vertex %llu, storage %llu, buffer texture %llu, no snapshot %llu); %llu copies without a snapshot, %llu of unknown content; "
+         "%llu applications of the log, %.1f entries walked and %.1f applied each; %llu copies from the range's previous copy (plan item 225)",
          (unsigned long long)f, (unsigned long long)(c[0] - p[0]), (unsigned long long)(c[1] - p[1]), (unsigned long long)(c[2] - p[2]), (unsigned long long)(c[3] - p[3]), (unsigned long long)(c[4] - p[4]),
          (unsigned long long)(c[7] - p[7]), (unsigned long long)(c[8] - p[8]), (unsigned long long)(c[9] - p[9]), (unsigned long long)(c[10] - p[10]), (unsigned long long)(c[11] - p[11]),
-         (unsigned long long)(c[5] - p[5]), (unsigned long long)(c[6] - p[6]));
+         (unsigned long long)(c[5] - p[5]), (unsigned long long)(c[6] - p[6]), (unsigned long long)(c[12] - p[12]), (c[13] - p[13]) / uc, (c[14] - p[14]) / uc, (unsigned long long)(c[15] - p[15]));
     memcpy(p, c, sizeof p);
 }
 // ---------- Draws that sample what their own pass draws (plan item 42; after tomodachi-native's attachment copies 4dbd30f / da08d11, MIT) ----------
@@ -7804,15 +7887,27 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (S.db_en) enc_r_depth_bounds(en, S.db_lo > 0 ? S.db_lo : 0, S.db_hi < 1 ? S.db_hi : 1); else enc_r_depth_bounds(en, 0, 1);   // (bounds that admit nothing: draw() returned)
     enc_r_depth_clip(en, !S.depth_clamp);
     enc_r_blend_color(en, S.blend_color[0], S.blend_color[1], S.blend_color[2], S.blend_color[3]);
+    // A stream bound to the same address on this encoder is not looked up and set again (plan item 225): every draw set every stream, ~2 a draw
+    // and half the translation thread's address lookups in Tears of the Kingdom. Pool changes move addresses: a new generation binds all again
+    { uint64_t pg = atomic_load_explicit(&g_pool_gen, memory_order_acquire); es_mine(en); if (g_es.vb_gen != pg) { memset(g_es.vb, 0, sizeof g_es.vb); g_es.vb_gen = pg; } }
     for (int s_ = 0; s_ < 16; s_++) {
         if (!S.vbuf[s_].address) continue;
         void *mb; uint64_t mo;
         uint64_t gpu;
-        if (mtl_gpu_addr(S.vbuf[s_].address, 1, &mb, &mo, &gpu)) { enc_r_vbuf(en, 16 + s_, gpu); use_rec("buf", S.vbuf[s_].address, S.vbuf[s_].size, 0, NULL); }
+#ifndef DM_TEST_VB_ELIDE_ANY   // negative control of t_vbelide only: a stream bound on this encoder is not set again whatever its address
+        int same = g_es.vb[s_] == S.vbuf[s_].address;
+#else
+        int same = g_es.vb[s_] != 0;
+#endif
+        if (same) { g_vb_skips++; use_rec("buf", S.vbuf[s_].address, S.vbuf[s_].size, 0, NULL); gw_note(&(p_bind_buf){-1, s_, S.vbuf[s_].address, S.vbuf[s_].size}, 0); continue; }
+        if (mtl_gpu_addr(S.vbuf[s_].address, 1, &mb, &mo, &gpu)) { enc_r_vbuf(en, 16 + s_, gpu); g_vb_sets++; use_rec("buf", S.vbuf[s_].address, S.vbuf[s_].size, 0, NULL);
+            g_es.vb[s_] = s_ == 14 ? 0 : S.vbuf[s_].address; if (s_ == 14) g_es.vb_zero = 0;   // (index 30: set again for every draw, then the zero buffer over it)
+            gw_note(&(p_bind_buf){-1, s_, S.vbuf[s_].address, S.vbuf[s_].size}, 0); }
     }
+    if (di) gw_note(&(p_bind_buf){-2, 0, di->ibuf, (uint64_t)di->count * (di->itype == 0 ? 1 : di->itype == 1 ? 2 : 4)}, 0);
     static id<MTLBuffer> zero; if (!zero) { zero = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared]; res_add(zero); }
     static uint64_t zero_gpu; if (!zero_gpu) zero_gpu = zero.gpuAddress;
-    enc_r_vbuf(en, 30, zero_gpu);
+    if (!g_es.vb_zero) { enc_r_vbuf(en, 30, zero_gpu); g_es.vb_zero = 1; }
     if (pr->sh[0]) encode_args(en, pr->sh[0], 0, 1);
     if (pr->sh[1]) encode_args(en, pr->sh[1], 1, 0);
     // Parameter binding captures the actual resources under the registry lock; if the version changed between the eligibility check and the binding, split and retry before any GPU draw.

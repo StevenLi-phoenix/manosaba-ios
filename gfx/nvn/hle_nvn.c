@@ -16,6 +16,7 @@
 #include "nvn_mtl.h"
 #include "nvn_pace.h"
 #include "nvn_fstep.h"
+#include "nvn_fptrial.h"
 #include "../../host/front.h"
 #include "../../host/game.h"
 #include "nvn_dirty.h"
@@ -31,6 +32,7 @@
 #define DM_MEM_CAP_DEFAULT_GB 0
 #endif
 #include <pthread/qos.h>
+#include <sys/sysctl.h>
 #include <sys/resource.h>
 #include <mach/thread_policy.h>
 #include <assert.h>
@@ -1413,6 +1415,14 @@ static uint64_t thr_instr(void) { uint64_t c[2] = {0, 0}; thread_selfcounts(1, c
 // Supplementary readings for the submit path (on a real device Metal 4 instruction count is -18% while submit CPU time is +49%; need to tell apart kernel mode, execution efficiency, or frequency throttling):
 // this thread's cycle count (the second item of the same interface), kernel-mode CPU time (THREAD_BASIC_INFO), wall clock
 static void thr_counts(uint64_t *instr, uint64_t *cyc) { uint64_t c[2] = {0, 0}; thread_selfcounts(1, c, sizeof c); *instr = c[0]; *cyc = c[1]; }
+// The same per CPU kind (plan item 225): THSC_TIME_CPI_PER_PERF_LEVEL = 4 fills one {instructions, cycles, user time, system time} (mach units) per
+// perf level, hw.nperflevels of them, 0 the fastest (XNU bsd/sys/resource_private.h, struct thsc_time_cpi). Whether the translation thread, the
+// frame's critical path on the iPhone, runs on the performance cores, and at what clock there
+typedef struct { uint64_t instr, cyc, user, sys; } thr_lvl;
+enum { THR_LVL_MAX = 4 };
+static int thr_nlvl(void) { static int n = -1; if (n < 0) { int v = 0; size_t sz = sizeof v; if (sysctlbyname("hw.nperflevels", &v, &sz, NULL, 0) || v < 1) v = 1; n = v > THR_LVL_MAX ? THR_LVL_MAX : v; } return n; }
+static int thr_levels(thr_lvl *o) { memset(o, 0, sizeof *o * THR_LVL_MAX); return thread_selfcounts(4, o, sizeof *o * (size_t)thr_nlvl()) == 0; }
+static _Atomic uint64_t g_cum_lvl_cyc[THR_LVL_MAX], g_cum_lvl_mach[THR_LVL_MAX];   // the submit path's cycles and CPU time (mach units) per perf level
 static uint64_t thr_sys_ns(void) {
     thread_basic_info_data_t bi; mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT; mach_port_t me = mach_thread_self(); uint64_t r = 0;
     if (thread_info(me, THREAD_BASIC_INFO, (thread_info_t)&bi, &n) == KERN_SUCCESS) r = (uint64_t)bi.system_time.seconds * 1000000000ull + (uint64_t)bi.system_time.microseconds * 1000ull;
@@ -1446,6 +1456,7 @@ static int test_work_ms(void) { static int ms = -1; if (ms < 0) { const char *e 
 static uint64_t sub_exec(int n, const uint64_t *h, mtl_cap *cap) {
     gfx_mt_enter("SubmitCommands");
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
+    thr_lvl l0[THR_LVL_MAX]; int lv = thr_levels(l0);
     mtl_sub_begin();
     mtl_sub_install(cap);
     mtl_sub_index(h, n);
@@ -1459,6 +1470,8 @@ static uint64_t sub_exec(int n, const uint64_t *h, mtl_cap *cap) {
     atomic_fetch_add(&g_cum_sub_cyc, y1 - y0); atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0); atomic_fetch_add(&g_cum_sub_wall_ns, dw);
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
+    { thr_lvl l1[THR_LVL_MAX]; if (lv && thr_levels(l1)) for (int k = 0; k < thr_nlvl(); k++) {
+          atomic_fetch_add(&g_cum_lvl_cyc[k], l1[k].cyc - l0[k].cyc); atomic_fetch_add(&g_cum_lvl_mach[k], (l1[k].user + l1[k].sys) - (l0[k].user + l0[k].sys)); } }
     gfx_mt_leave();
     return f;
 }
@@ -1737,7 +1750,9 @@ static nvn_fstep g_fs; static int g_fs_step; static uint64_t g_fs_start, g_fs_pr
 int dm_game_realtime_step(void);   // (its weak default is below)
 static int fstep_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_FRAME_STEP"); v = e && !strcmp(e, "vsync") && dm_game_realtime_step();
     if (e && !strcmp(e, "vsync") && !v) LOG("[nvn] [red] DM_FRAME_STEP=vsync needs a game whose step the host sets (Tears of the Kingdom's option realtime)");
-    if (v) LOG("[nvn] frame step in whole vsyncs: each frame shown k vsyncs of 60 Hz, the game steps k (DM_FRAME_STEP=vsync)"); } return v; }
+    const char *o = getenv("DM_FSTEP_OPT"); g_fs.opt = !(o && !strcmp(o, "0"));   // trials whatever the cost, with a grace period (plan item 222)
+    if (v) LOG("[nvn] frame step in whole vsyncs: each frame shown k vsyncs of 60 Hz, the game steps k (DM_FRAME_STEP=vsync)%s",
+               g_fs.opt ? "; a trial of k - 1 every 5 s or more whatever the cost, its first second not counted late (DM_FSTEP_OPT=0 turns that off)" : ""); } return v; }
 int nvn_fstep_step(void) { return fstep_on() ? g_fs_step : 0; }   // the step for the frame the game is about to make, in vsyncs (0 = not in this mode)
 int mtl_fps_target(void);   // nvn_mtl.m: the player's frame rate target (DM_FPS, the iOS setting, 135's thermal hold)
 static int win_interval(const win_t *o) {
@@ -1966,8 +1981,15 @@ static void tsummary(uint64_t frame) {
           qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0; pthread_get_qos_class_np(pthread_self(), &qc, &rp);
           uint64_t aw = 0, ag = 0; int an = 0; void mtl_alloc_stats(uint64_t *, uint64_t *, int *); mtl_alloc_stats(&aw, &ag, &an);
           static uint64_t pyn, pyns; uint64_t yn = 0, yns = 0; dm_main_yield_stats(&yn, &yns);
-          LOG("[nvn] translation detail up to frame %llu: per-frame submit cycles %.2f M (%.2f cycles per instruction), CPU %.3f ms of which kernel %.3f ms, wall %.3f ms; avg clock %.2f GHz (cycles / CPU time); this thread QoS %#x; allocator pools %d, cumulative GPU waits %llu; real-time declared computation %.2f ms; main thread yields per frame %.0f / %.3f ms", frame,
-              cyc / 1e6 / nf, cyc / (double)(ci - pi), cpu / 1e6 / nf, (double)(ck - pk) / 1e6 / nf, (double)(cw - pw) / 1e6 / nf, cpu > 0 ? cyc / cpu : 0, (unsigned)qc, an, (unsigned long long)aw, g_rt_comp_ms, (double)(yn - pyn) / nf, (double)(yns - pyns) / 1e6 / nf); pyn = yn; pyns = yns; }
+          char lvl[160] = ""; { static uint64_t plc[THR_LVL_MAX], plm[THR_LVL_MAX]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+            double tot = 0, ms[THR_LVL_MAX], gc[THR_LVL_MAX]; size_t o = 0;
+            for (int k = 0; k < thr_nlvl(); k++) { uint64_t c_ = atomic_load(&g_cum_lvl_cyc[k]), m_ = atomic_load(&g_cum_lvl_mach[k]);
+                ms[k] = (double)(m_ - plm[k]) * tb.numer / tb.denom / 1e6; gc[k] = (double)(c_ - plc[k]); tot += ms[k]; plc[k] = c_; plm[k] = m_; }
+            for (int k = 0; k < thr_nlvl() && tot > 0 && o < sizeof lvl; k++) {
+                char nm[32] = "", key[32]; size_t nz = sizeof nm; snprintf(key, sizeof key, "hw.perflevel%d.name", k); if (sysctlbyname(key, nm, &nz, NULL, 0)) snprintf(nm, sizeof nm, "level %d", k);
+                o += (size_t)snprintf(lvl + o, sizeof lvl - o, "%s%s %.0f%% at %.2f GHz", k ? ", " : "; the translating thread on ", nm, 100 * ms[k] / tot, ms[k] > 0 ? gc[k] / (ms[k] * 1e6) : 0); } }
+          LOG("[nvn] translation detail up to frame %llu: per-frame submit cycles %.2f M (%.2f cycles per instruction), CPU %.3f ms of which kernel %.3f ms, wall %.3f ms; avg clock %.2f GHz (cycles / CPU time); this thread QoS %#x; allocator pools %d, cumulative GPU waits %llu; real-time declared computation %.2f ms; main thread yields per frame %.0f / %.3f ms%s", frame,
+              cyc / 1e6 / nf, cyc / (double)(ci - pi), cpu / 1e6 / nf, (double)(ck - pk) / 1e6 / nf, (double)(cw - pw) / 1e6 / nf, cpu > 0 ? cyc / cpu : 0, (unsigned)qc, an, (unsigned long long)aw, g_rt_comp_ms, (double)(yn - pyn) / nf, (double)(yns - pyns) / 1e6 / nf, lvl); pyn = yn; pyns = yns; }
         if (frame % 300 == 0) { unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; int okx = thread_info(pthread_mach_thread_np(pthread_self()), THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;
             thread_time_constraint_policy_data_t tp; mach_msg_type_number_t tc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = 0; int rt_live = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tp, &tc, &def) == KERN_SUCCESS && !def;   // def = 1: the real-time policy is not in effect (never set / revoked)
             LOG("[nvn] thread policy: main thread real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, sched policy %d); worker threads %u, QoS %#x; present QoS %#x", g_rt_comp_ms, g_rt_period_ms, rt_live ? "active" : "inactive", okx ? xi.pth_curpri : -1, okx ? xi.pth_priority : -1, okx ? xi.pth_policy : -1, wn, wq, mtl_present_qos()); }
@@ -2102,6 +2124,47 @@ __attribute__((weak)) void dm_movie_tick(void) {}   // host hle_movie.c: hands p
 __attribute__((weak)) void dm_game_present(void) {}   // game hook (host/game.h): every present, on the game's thread; none in the graphics unit tests
 __attribute__((weak)) void dm_sdk_test_present(uint64_t frame) { (void)frame; }   // host/sdktest.c (DM_SDK_TEST); none in the graphics unit tests
 __attribute__((weak)) int dm_game_realtime_step(void) { return 0; }   // game hook (host/game.h): the game's step follows the measured frame time
+// Frame-rate trials (plan item 216, nvn_fptrial.h): with the player's target at 60 and nothing holding the rate, a game that picks its own interval
+// from the GPU time it reads (Tears of the Kingdom's controller, rules.py fps60) and sits at interval 2 or 3 reads shorter GPU times for a while,
+// so it tries 60 and the GPU's clock can come up. Only for a game whose step the host sets (its speed then holds at any interval), at a present rate
+// of 60 Hz in game interval mode (not the host's frame step, not uncapped). DM_FPS_TRIAL=1 turns them on: on the iPhone 17 Pro at 60 Hz none of 22
+// trials on Great Sky Island held (its sustained rate is under 60 there) and each failed one is seconds of uneven frames, so they stay off until a
+// scene where they hold is measured
+static nvn_fptrial g_fpt;
+void mtl_ts_factor(double f);   // nvn_mtl.m: the factor on the report times of the next submissions
+static int fpt_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_FPS_TRIAL"); v = e && !strcmp(e, "1") && dm_game_realtime_step();
+    if (v) LOG("[fps trial] on: a game held at interval 2 or 3 for %.0f s with the target at 60 reads its GPU times x%.2f until it picks 60, then %.0f s more (DM_FPS_TRIAL=1)",
+               FPT_WAIT0, FPT_FACTOR, FPT_GRACE_S); } return v; }
+// DM_NVN_TS_DVFS=<x> (a diagnostic, for a Mac): report times x times further apart once frames have been paced at interval 2 or 3 (the game's own
+// or a hold's) for 1 s, the real times 0.5 s after interval 1, as an iPhone's GPU clock follows the frame rate (what the trials are for)
+static double dvfs_emu(int itv, double now) {
+    static double x = -1, since, cur = 1; static int last = -1;
+    if (x < 0) { const char *e = getenv("DM_NVN_TS_DVFS"); x = e ? atof(e) : 0; if (x > 1) LOG("[nvn] DM_NVN_TS_DVFS=%g: report times %g times apart after 1 s at interval 2 or 3 (a diagnostic)", x, x); else x = 0; }
+    if (!x) return 1;
+    if (itv != last) { last = itv; since = now; }
+    if (itv >= 2 && now - since >= 1.0) cur = x; else if (itv < 2 && now - since >= 0.5) cur = 1;
+    return cur;
+}
+static void fpt_present(const win_t *o) {
+    double now = now_ns() / 1e9, f = 1;
+    if (fpt_on()) {
+        int want = g_hz == 60 && !g_display_mode && !g_uncapped && !fstep_on() && mtl_fps_target() >= 60 && !atomic_load(&g_fps_hold);
+        nvn_fptrial was = g_fpt;
+        f = nvn_fptrial_step(&g_fpt, now, o->interval, want);
+        static unsigned logs;
+        if (g_fpt.st != was.st && (logs++ < 64 || logs % 32 == 0)) {
+            if (g_fpt.st == FPT_PUSH) LOG("[fps trial] %llu: interval %d for %.0f s with the target at 60: GPU times x%.2f until the game picks 60", (unsigned long long)g_fpt.trials, o->interval, now - was.since, FPT_FACTOR);
+            else if (g_fpt.st == FPT_GRACE) LOG("[fps trial] interval 1 after %.1f s: x%.2f for %.0f s more while the GPU clock comes up", now - was.since, FPT_FACTOR, FPT_GRACE_S);
+            else if (g_fpt.st == FPT_WATCH) LOG("[fps trial] the real GPU times again: held if the game stays at 60 for %.0f s", FPT_WATCH_S);
+            else if (g_fpt.held != was.held) LOG("[fps trial] held: 60 fps on the real times (%llu held, %llu failed of %llu trials)", (unsigned long long)g_fpt.held, (unsigned long long)g_fpt.failed, (unsigned long long)g_fpt.trials);
+            else if (g_fpt.failed != was.failed) LOG("[fps trial] failed (%s): next trial after %.0f s at interval 2 or 3 (%llu held, %llu failed of %llu trials)",
+                g_fpt.unlowered != was.unlowered ? "the game did not pick interval 1" : was.st == FPT_GRACE ? "back up on the shorter times: its CPU time" : "back up on the real times", g_fpt.wait,
+                (unsigned long long)g_fpt.held, (unsigned long long)g_fpt.failed, (unsigned long long)g_fpt.trials);
+            else LOG("[fps trial] stopped: the target or a hold changed");
+        }
+    }
+    mtl_ts_factor(f * dvfs_emu(win_interval(o), now));
+}
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     uint64_t tr = trace_now();
     if (fstep_on()) {   // the step for the next frame from this one's time on screen and cost (nvn_fstep.h), before the game's hook stores it
@@ -2124,6 +2187,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     { static int gate;
       if (!gate && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { gate = 1; int ms = mtl_warm_wait(15000); if (ms) LOG("[nvn] run-entry loading screen waited %d ms for pipeline warm-up", ms); } }
     present_cfg(o);
+    fpt_present(o);   // frame-rate trials (plan item 216): the report times' factor for the submissions from here on
     { static long sf = -1; static double ss; if (sf < 0) { const char *e = getenv("DM_TEST_PRESENT_STALL"); sf = 0; if (e) { sf = atol(e); const char *c = strchr(e, ':'); ss = c ? atof(c + 1) : 8; } }
       if (sf > 0 && g_frame == (uint64_t)sf) { LOG("DM_TEST_PRESENT_STALL: present held for %.1f s at frame %llu", ss, (unsigned long long)g_frame); usleep((useconds_t)(ss * 1e6)); } }
     { static long ha = -1, hb; static int hf;   // DM_TEST_FPS_HOLD=<from>:<to>:<fps>: the frame-rate hold of plan item 130 between two frames, without a movie

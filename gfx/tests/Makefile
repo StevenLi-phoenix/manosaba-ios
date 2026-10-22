@@ -31,6 +31,8 @@ t_ts: t_ts.c ../nvn/nvn_ts.h
 	clang -O1 -Wall -o $@ t_ts.c
 t_fstep: t_fstep.c ../nvn/nvn_fstep.h
 	clang -O1 -Wall -o $@ t_fstep.c
+t_fptrial: t_fptrial.c ../nvn/nvn_fptrial.h
+	clang -O1 -Wall -o $@ t_fptrial.c
 t_copy_pitch: t_copy_pitch.c ../nvn/nvn_copy_pitch.h
 	clang -O1 -Wall -Werror -o $@ t_copy_pitch.c
 t_pool_find: t_pool_find.c ../nvn/nvn_pool_find.h
@@ -89,6 +91,8 @@ t_chunk: t_chunk.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_chunk.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_esfilter: t_esfilter.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_esfilter.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_vbelide: t_vbelide.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vbelide.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_uppool: t_uppool.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_retire: t_retire.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -240,6 +244,7 @@ run: \
 	t_dirty_race \
 	t_dirty_slots \
 	t_esfilter \
+	t_vbelide \
 	t_extent \
 	t_findrain \
 	t_fmt_swz \
@@ -285,6 +290,7 @@ run: \
 	t_passgpu \
 	t_ts \
 	t_fstep \
+	t_fptrial \
 	t_pend \
 	t_perfline \
 	t_pfv \
@@ -337,6 +343,7 @@ run: \
 	./t_pace
 	./t_ts
 	./t_fstep
+	./t_fptrial
 	./t_hmap
 	./t_cover
 	./t_copy_pitch
@@ -430,6 +437,7 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_chunk
 	./t_chunk --no-chunks
 	MTL_DEBUG_LAYER=1 ./t_esfilter
+	MTL_DEBUG_LAYER=1 ./t_vbelide
 	./t_uppool
 	./t_upwait
 	MTL_DEBUG_LAYER=1 ./t_restart

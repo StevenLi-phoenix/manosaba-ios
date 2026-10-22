@@ -5,6 +5,10 @@
 // Negative control: DM_NVN_UB_RENAME=0 fails the "one render pass" checks (each update ended the pass); with --expect-split it checks the old path.
 // 2c, 5b, 6 (plan item 62k): once the updates are written (a copy or a dispatch in the submission), a draw, a replay-time read and a compute uniform
 // pointer still see them over the snapshot; -DDM_TEST_UB_FLUSHED_SNAPSHOT (private copies only while updates are unwritten, as before) fails them.
+// 7-9 (plan item 225): a copy made from the range's previous copy and the update after it; the next submission's copy made from its own snapshot,
+// not from the copy an earlier submission left in the index (-DDM_TEST_UBSH_ANY_SUB fails 2); 200 updates of one range written at the end sorted in
+// about 200 steps (-DDM_TEST_UL_NO_REVERSE, the walk's order sorted as it came: 19,900 moves, fails 1). The newest-update answers are cached until
+// the log changes (-DDM_TEST_UL_SEQ_STALE, an answer kept after an update: 6 fail).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -184,5 +188,35 @@ int main(int argc, char **argv) { @autoreleasepool {
       int done = mtl_wait(mtl_sub_commit(), 5000000000ull);
       EXPECT("compute: submission completed", 1, done);
       EXPECT("compute: the kernel reads the inline update (green) [-DDM_TEST_UB_FLUSHED_SNAPSHOT: the snapshot, red]", 1, !memcmp(o, GREEN, 16)); }
+    // 7. a copy from the range's previous copy: draw (red), update to green, draw the middle (a copy: green), update b, a to 1, 1, draw the right half
+    //    (a copy made from the green one with only that update over it: 0, 1, 1, 1)
+    if (rename) { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
+      uint64_t i0 = g_ren_incr;
+      begin(&c, &t, NULL); scissor(&c, 0, 2); draw3(&c); update(&c, g_ubo, GREEN); scissor(&c, 2, 2); draw3(&c);
+      float half[4] = {0, 0, 1, 1}; uint8_t up[16 + 8]; uint64_t dst = g_ubo + 8, len = 8; memcpy(up, &dst, 8); memcpy(up + 8, &len, 8); memcpy(up + 16, half + 2, 8); emit(&c, OP_UPDATE_UB, up, sizeof up);
+      scissor(&c, 4, 4); draw3(&c);
+      uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
+      EXPECT("7. from the previous copy: left red", R_, lp);
+      EXPECT("... right: green's r, g with b, a of the update after it (0, 1, 1, 1)", 0xffffff00, rp);
+      EXPECT("... that copy made from the previous one", 1, g_ren_incr - i0); }
+    // 8. the next submission: memory blue (its snapshot), b, a updated: the copy is blue with them (0, 0, 1, 1), not case 7's copy (green) left in the index
+    if (rename) { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, BLUE, 16);
+      begin(&c, &t, NULL); scissor(&c, 0, 4); draw3(&c);
+      float half[4] = {0, 0, 1, 1}; uint8_t up[16 + 8]; uint64_t dst = g_ubo + 8, len = 8; memcpy(up, &dst, 8); memcpy(up + 8, &len, 8); memcpy(up + 16, half + 2, 8); emit(&c, OP_UPDATE_UB, up, sizeof up);
+      scissor(&c, 4, 4); draw3(&c);
+      uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
+      EXPECT("8. next submission: left blue", B_, lp);
+      EXPECT("... right blue with the update (its own snapshot) [-DDM_TEST_UBSH_ANY_SUB: from case 7's copy]", B_, rp); }
+    // 9. 200 updates of the same 16 bytes and no draw after them: written at the end in one copy, the newest last; the sort of the 200 takes few moves
+    if (rename) { memcpy((void *)(uintptr_t)g_ubo, RED, 16); chain c = chain_new();
+      uint64_t m0 = g_ul_moves;
+      for (int k = 0; k < 200; k++) { float v[4] = {(float)k, 0, 0, 1}; update(&c, g_ubo, v); }
+      emit(&c, OP_END, NULL, 0);
+      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+      mtl_wait(mtl_sub_commit(), 5000000000ull);
+      float m[4]; memcpy(m, (const void *)(uintptr_t)g_ubo, 16);
+      EXPECT("9. 200 updates of one range: memory holds the newest (r = 199)", 1, m[0] == 199.0f);
+      EXPECT("... sorted in under 1,000 moves [-DDM_TEST_UL_NO_REVERSE: 19,900]", 1, g_ul_moves - m0 < 1000);
+      if (g_ul_moves - m0 >= 1000) printf("    %llu moves\n", (unsigned long long)(g_ul_moves - m0)); }
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }

@@ -84,7 +84,7 @@ Binding conventions used by the translation:
 | `nvn/nvn_tex.c`, `nvn/nvn_tex.h` | Block-linear texture storage size, alignment and per-level offsets (ported from deko3d) |
 | `nvn/nvn_dirty.c`, `nvn/nvn_dirty.h` | Write-protection dirty page tracking of game memory (which textures must be re-uploaded) |
 | `nvn/nvn_refl.m`, `nvn/nvn_refl.h` | Shader reflection JSON → fixed-size C arrays walked at draw time |
-| `nvn/nvn_hmap.h`, `nvn_cover.h`, `nvn_pace.h`, `nvn_pso_skey.h`, `nvn_count.h` | Hash table, full-coverage proof for draws, presentation pacer, pipeline manifest key, call counters |
+| `nvn/nvn_hmap.h`, `nvn_cover.h`, `nvn_pace.h`, `nvn_pso_skey.h`, `nvn_count.h`, `nvn_fptrial.h` | Hash table, full-coverage proof for draws, presentation pacer, pipeline manifest key, call counters, frame-rate trials |
 | `nvn/nvn_copy_pitch.h`, `nvn_pool_find.h`, `nvn_tex_fit.h` | Buffer ↔ texture copy strides, address → memory pool lookup, compatible views for a shader's declared texture type |
 | `nvn/include/nvn.h` | NVN declarations (third party; license in the file header) |
 | `nvn/names.txt`, `nvn/nvn_protos.h`, `nvn/dmsh_chain.h` | Known NVN names, generated signatures, translation chain version |
@@ -141,6 +141,10 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_DEPTH_PLAIN=1` | Depth / stencil textures without the GPU's lossless compression (an A/B; the same picture in Tears of the Kingdom's prologue) |
 | `DM_NVN_COUNTS=1` | Counters in the power summary: draws sampling their own attachment, timestamp reports, ClearTexture, passes without a draw, passes drawing only a top-left part, counter reads and svcs a second |
 | `DM_NVN_TS_LATE_US=<µs>` | Report counter timestamps that much later (the game sees a slower GPU) |
+| `DM_FPS_TRIAL=1` | Frame-rate trials (plan item 216, `nvn/nvn_fptrial.h`; off by default: on the iPhone 17 Pro at 60 Hz none of 22 held on Great Sky Island). A game whose step the host sets (Tears of the Kingdom with the option realtime), held at interval 2 or 3 for 5 s while the player's target is 60, reads its counter times drawn nearer their submission's GPU start (× 0.35) until it picks interval 1 and for 1 s after, so the GPU's clock can come up; a game that steps back up within 4 s on the real times has failed, and the wait doubles (up to 32 s). Only at a 60 Hz present rate in game interval mode |
+| `DM_NVN_TS_DVFS=<x>` | A diagnostic for a Mac: report times x times further apart once the game has held interval 2 or 3 for 1 s, the real times 0.5 s after it picks interval 1, as an iPhone's GPU clock follows the frame rate |
+| `DM_FRAME_STEP=vsync` | The host paces the frames (plan items 133, 222, `nvn/nvn_fstep.h`) for a game whose step the host sets: each frame stays k vsyncs of 60 Hz, three late frames step up, frames that fit k − 1 try it, and the game steps the time shown; its own present interval is not used for pacing |
+| `DM_FSTEP_OPT=0` | With `DM_FRAME_STEP=vsync`: no trial of k − 1 whatever the cost (plan item 222). By default one starts after 5 s at k above its minimum, its first second not counted late while the GPU clock comes up; a failed one doubles the wait (up to 32 s) |
 | `DM_NVN_FBX=all` or `0` | Copy the attachment for every draw that samples it (default: only after a texture barrier), or never |
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |
 | `DM_NVN_TBDR=0` | Turn off all pass optimizations (attach, load and store everything), for equivalence comparisons |

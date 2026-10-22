@@ -2,7 +2,9 @@
 // the submission started, although the CPU rewrites it during the replay (negative control: g_us_on = 0, the draw reads the rewritten bytes); an
 // inline update within the submission is seen by the draws after it and not by those before; nearby ranges are merged, each copy keeps its offset
 // modulo 256; a range that a GPU write of a submission still running reaches is not copied; a range made unreadable after its pool was registered
-// drops that copy and the process goes on (on this thread and on the workers that copy in parts; without the fault guard it ends with SIGBUS).
+// drops that copy and the process goes on (on this thread and on the workers that copy in parts; without the fault guard it ends with SIGBUS);
+// lookups alternating between two copies each find their own (6, plan item 225); the copies of a run share one fault guard, and a copy after a fault
+// is made too (5; -DDM_TEST_US_GUARD_EACH, a guard for every copy: 1 fails), also in the submit call's capture (7).
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -114,10 +116,10 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
         uint64_t b=(uint64_t)(uintptr_t)bm;
         for (int par=0; par<2; par++) {
             chain c=chain_new(); uint64_t f0=g_us_faults, n0=g_us_par_n;
-            if (!par) { bind_ubo(&c,b,256); bind_ubo(&c,b+0x10000,256); }
+            if (!par) { bind_ubo(&c,b,256); bind_ubo(&c,b+0x10000,256); bind_ubo(&c,b+0x20000,256); }
             else for (int i=0;i<5;i++) bind_ubo(&c,b+(uint64_t)i*0x20000,0x10000);
             emit(&c,OP_END,NULL,0);
-            uint64_t bad=par?b+2*0x20000:b+0x10000;
+            uint64_t bad=par?b+2*0x20000:b+0x10000, j0=g_us_jumps;
             mprotect((void *)(uintptr_t)(bad&~(uint64_t)(pg-1)),pg,PROT_NONE);
             begin(&c);
             mprotect((void *)(uintptr_t)(bad&~(uint64_t)(pg-1)),pg,PROT_READ|PROT_WRITE);
@@ -125,7 +127,40 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
             EXPECT(par?"5. workers: the copies were made in parts":"5. this thread: copied here, not in parts",par?1:0,g_us_par_n-n0);
             EXPECT("5. the unreadable range's copy is dropped (its draws read memory)",0,us_find(bad,256)!=NULL);
             EXPECT("5. the readable range's copy is kept",1,us_find(b,256)!=NULL);
+            if (!par) { EXPECT("5. this thread: the copy after the fault is made too",1,us_find(b+0x20000,256)!=NULL);
+                        EXPECT("5. ... with one guard for the run and one after the fault [-DDM_TEST_US_GUARD_EACH: 4]",2,g_us_jumps-j0); }
             mtl_sub_commit(); mtl_finish();
         }
+    }
+    // 6. Lookups alternating between two copies (the last one found is tried first, plan item 225): each finds its own; a range past a copy's end and
+    //    one between the copies find none. The last copy taken unchecked (-DDM_TEST_US_LAST_UNCHECKED): 9 fail, cases 3-6
+    {
+        chain c=chain_new(); bind_ubo(&c,u+0x1000,256); bind_ubo(&c,u+0x8000,256); emit(&c,OP_END,NULL,0);
+        begin(&c);
+        const us_ent *x=us_find(u+0x1000,256), *y=us_find(u+0x8000,256);
+        EXPECT("6. two blocks far apart: two copies",1,x&&y&&x!=y);
+        EXPECT("6. the first again after the second: its own copy",1,us_find(u+0x1000+16,16)==x);
+        EXPECT("6. the second again: its own copy",1,us_find(u+0x8000,16)==y);
+        EXPECT("6. a range past the second copy's end: none",0,us_find(u+0x8000+200,256)!=NULL);
+        EXPECT("6. a range between the copies: none",0,us_find(u+0x4000,16)!=NULL);
+        mtl_sub_commit(); mtl_finish();
+    }
+    // 7. The submit call's capture (the game's thread, DM_NVN_XLAT): three blocks, the middle one unreadable: it is left to be read live, the
+    //    others are taken, the one after the fault too, under one guard and one after the fault
+    {
+        g_us_on=1; size_t pg=(size_t)getpagesize(), big=1u<<20; uint8_t *bm; if (posix_memalign((void **)&bm,pg,big)) abort(); memset(bm,0x3c,big); mtl_pool_add(bm,big);
+        uint64_t b=(uint64_t)(uintptr_t)bm; chain c=chain_new(); bind_ubo(&c,b,256); bind_ubo(&c,b+0x10000,256); bind_ubo(&c,b+0x20000,256); emit(&c,OP_END,NULL,0);
+        uint64_t f0=g_us_faults, j0=g_us_jumps, hh=(uint64_t)c.p;
+        mprotect((void *)(uintptr_t)(b+0x10000),pg,PROT_NONE);
+        mtl_cap *cp=mtl_sub_capture(&hh,1,1);
+        mprotect((void *)(uintptr_t)(b+0x10000),pg,PROT_READ|PROT_WRITE);
+        int ok0=0, ok2=0, live1=0;
+        for (int i=0;i<cp->nr;i++) { if (cp->r[i].lo==b) ok0=cp->off[i]!=UINT64_MAX&&cp->data[cp->off[i]]==0x3c; if (cp->r[i].lo==b+0x10000) live1=cp->off[i]==UINT64_MAX;
+                                     if (cp->r[i].lo==b+0x20000) ok2=cp->off[i]!=UINT64_MAX&&cp->data[cp->off[i]+255]==0x3c; }
+        EXPECT("7. capture: one fault caught",1,g_us_faults-f0);
+        EXPECT("7. capture: the unreadable block is read live at the replay",1,live1);
+        EXPECT("7. capture: the blocks before and after it are taken",1,ok0&&ok2);
+        EXPECT("7. capture: one guard for the run and one after the fault",2,g_us_jumps-j0);
+        mtl_cap_free(cp);
     }
     printf("== %d checks, %d failed ==\n",count,fail); return fail!=0;}}

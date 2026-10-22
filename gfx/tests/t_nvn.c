@@ -270,9 +270,11 @@ int main(void) {
         // its frame's start tick from the last report's timestamp. On CLOCK_MONOTONIC they were ahead by the Mac's total sleep time (25 hours here)
         uint64_t tns = P(nvnDeviceGetTimestampInNanoseconds)(&dev, (const NVNcounterData *)cnt), now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         uint64_t cur = P(nvnDeviceGetCurrentTimestampInNanoseconds)(&dev);
+        // (cur may read a few ns below now: the two clocks round differently; cur - now unsigned wrapped then, a flaky failure seen 2026-10-22)
+        int cur_ok = cur + 1000 >= now && (cur >= now ? cur - now : 0) < 1000000000ull;
         EXPECT("TIMESTAMP report on the guest clock: written in the last 5 s, current timestamp on the same clock", 1,
-               tns <= now + 1000 && now - tns < 5000000000ull && cur + 1000 >= now && cur - now < 1000000000ull);
-        if (!(tns <= now + 1000 && now - tns < 5000000000ull && cur + 1000 >= now && cur - now < 1000000000ull))
+               tns <= now + 1000 && now - tns < 5000000000ull && cur_ok);
+        if (!(tns <= now + 1000 && now - tns < 5000000000ull && cur_ok))
             printf("    report %llu ns, now %llu, current %llu (report - now %lld ns)\n", (unsigned long long)tns, (unsigned long long)now, (unsigned long long)cur, (long long)(tns - now));
     }
 

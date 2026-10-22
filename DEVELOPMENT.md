@@ -1212,7 +1212,8 @@ the device the user's iPhone 17 Pro):
   Measured, not taken (iPhone 17 Pro, product60, 2026-10-22): our only step down of our own is the 30 fps hold in Low Power Mode or from thermal
   state serious, re-applied when either changes (`main.m`); the frame rate is otherwise the game's own controller, which went back to 60 by
   itself (the walk test's game over menu: 33 → 16.7 ms frames, GPU 22-26 → 11.6 ms). The host's frame step (`DM_FRAME_STEP=vsync`, 133) on Great
-  Sky Island probed k = 1 ten times, two of them failed outright, and stayed at k = 2 with GPU p50 17.7-19.7 ms: that scene does not fit 60 there
+  Sky Island probed k = 1 ten times, two of them failed outright, and stayed at k = 2 with GPU p50 17.7-19.7 ms: that scene does not fit 60 there.
+  Wrong (216): those were the GPU's times at the clock it keeps for 30 fps; the same scene takes about 12 ms at 60, once the clock comes up
 - [ ] 190 a scene size driven by dropped frames (upstream `hle_oe.c`: an iPhone 17 Pro Max's dropped frames 23 % → 10 %), when TotK's scene size
   can change while it runs
 - [x] batch 74 · 191 correctness from the review:
@@ -1346,6 +1347,96 @@ iOS:
 - [x] batch 73 · 215 the fps line kept its last "on screen" rate when no frame came with a screen time: while an iPhone is mirrored (locked) every frame's
   presentedTime is 0 (the walk: "[perf] ... intervals 0/0/0, dropped 600" in every 10 s), so a session mirrored after play showed "on screen 98"
   for good. Now "on screen –" after 1.5 s of presents without one. `t_perfline` +3 (`DM_TEST_PERFLINE_STALE_SCREEN` fails 1)
+
+Tier 9, a bottom-up look at the iPhone's frame (2026-10-22 evening and night; the user: big wins thought through from the bottom, the best value for
+the effort first, and the 120 Hz mode's fall from 100 fps to 40-60 solved before that). Great Sky Island standing (the `go_save0` copy of the user's
+save), the iPhone 17 Pro with product60 and the Mac M5 in handheld mode; per-pass times from `DM_NVN_PASSGPU`, the draws from `DM_NVN_PASSDUMP_ALL`,
+the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal benches of the M5 written for this:
+- Where a frame's GPU time goes (the phone's pass time): G-buffer and decals 34.5 %, full-screen passes of a few draws 20 %, about 104 single-draw
+  passes of up to 256x256 16 %, other passes of many draws (a 64x64 probe, a 192x192 depth pass) 13 %, the four 720x720 shadow cascades 13 % (2.74 M
+  indices a frame), compute 2.4 %. The Mac's shares are the same.
+- Not where it goes: the resolution (the Mac at 960x540 and 640x360: the work, normalized by the passes whose size does not change, 12 % and 22 %
+  less; the GPU milliseconds rose 6.2 → 7.8 because the GPU clocks down at the 60 fps cap); a draw's own cost (bench: 0.05 µs; an argument buffer per
+  draw costs nothing measurable); pipeline changes (418 a frame); vertex outputs no fragment shader reads (none); caching the shadow cascades (their
+  constants change every frame, the first 64 bytes too). Geometry: the game's shadow pass takes 0.29 ns an index on the M5, as a bench of depth-only
+  grids does (0.28-0.65). A single-draw render pass costs 16-23 µs on the M5 against 1.4-2.0 µs for the same step as a compute dispatch.
+- The clocks follow the frame rate: one phone run held 30 fps at 20.65 ms of pass time a frame, then picked 60 by itself and took 11.09 ms for the
+  same standing scene, every kind of pass about 1.9 times faster; four other runs stayed at 30 fps with GPU 25-28 ms. With every small pass dropped
+  (`DM_NVN_SKIP_SMALL=256`) the 30 fps GPU time stayed 24.7 ms: at a held rate, saved work becomes a lower clock, not a shorter frame. 189's "does not
+  fit 60" was this.
+- The game's controller (probes on the Mac, main 0x2db174 / 0x2b3d07c / 0x2db1ac; main 0x2dab98 and 0x2b3cff8 write its numbers): CPU time = the
+  tick after the frame's update / draw / submit calls less the frame's start tick (taken after the previous present), GPU time = the frame's last
+  report less that start tick; biases 0.05 (CPU) and 0.02 (GPU) of a 60 Hz frame, so 60 needs CPU under 15.83 ms and GPU under 16.33 ms; two
+  frames over raise the interval, cooldown 6.
+- iPhone Mirroring runs the phone's screen at 60 Hz with every presentedTime 0; on its own screen the phone runs 120 Hz, where the game's intervals
+  1 / 2 / 3 are up to 120 / 60 / 40 fps. A 60 Hz present rate holds Great Sky Island at 30 fps without mirroring too (`DM_PROMOTION=0`, 10 minutes).
+- The 120 Hz fall (six runs, ~5-8 minutes each): 64-81 fps on the island until 59-79 s after the app starts (loading included), then 44-54 fps
+  for good, the CPU's power 2.2-2.9 → 1.2-1.5 W, the translation thread's clock 2.3-3.7 → 1.9-2.2 GHz; iOS's thermal state stayed nominal for 7
+  minutes and more (with the user's clip-on cooler). The translation thread runs on the performance cores 100 % of the time there
+  (`thread_selfcounts` per perf level, 225), at that clock. The frame is one chain: the game's main thread waits every frame for the GPU to finish the
+  frame it just handed over (main 0x2db99c, the sync fenced right after the frame's one submission; the acquire's sync at 0x2db958 returns at once)
+  before the render thread submits the next; the submit call (the capture) took 1.14 ms of it, the translation 9-13 ms with the GPU following its
+  parts, starved 3.2-3.8 ms a frame (median) and 1.9-2.1 ms before its first part. So each thread is moderately busy, and iOS's controller, which
+  sees busy time and not the frame's deadline, keeps the clocks where the chain makes ~50 fps. Interval workgroups, the API for telling it about a
+  deadline, are audio-only (the SDK's os/workgroup_interval.h); Game Mode's keys were set already (21). Shorter work on the chain is the lever
+- [x] batch 77 · 216 frame-rate trials (`gfx/nvn/nvn_fptrial.h`, `DM_FPS_TRIAL=1`): a game whose step the host sets, held at interval 2 or 3 for
+  5 s with the target at 60, reads its report times drawn toward their submission's GPU start (× 0.35) until it picks interval 1 and 1 s after,
+  so the clock can come up; a trial that steps back within 4 s on the real times has failed and the wait doubles (up to 32 s). Only at a 60 Hz
+  present rate in game interval mode. On the Mac with a stand-in for the phone's clock (`DM_NVN_TS_DVFS`) held at 60; on the phone at 60 Hz none of
+  22 trials on the island held (its sustained rate is under 60), each a few seconds of uneven frames: off by default. `gfx/tests/t_fptrial.c` (a
+  clock that heads for 3/4 busy, 12 checks; `DM_TEST_FPT_NO_GRACE` fails 5, `DM_TEST_FPT_NO_BACKOFF` fails 1). Report times scaled per submission
+  (`mtl_ts_factor`)
+- [ ] 217 single-draw passes up to 256x256 as compute kernels (210 reopened): the phone's 104 a frame took 3.7 of 23 ms of pass time at the 30 fps
+  clock. A fragment → kernel rewrite per vertex / fragment pair (the vertex shader run for the frame's 3-6 vertices inside the kernel, varyings
+  interpolated, implicit-LOD samples given gradients, blending and write masks in the kernel); 46 pairs in the island's frame (no discard, no
+  derivative instructions, 15 with several targets, 5 with a depth test). Its own artifacts beside b-<V>, so no chain rebuild
+- [ ] 218 the G-buffer split by compute: two depth-probe dispatches (3c8e9ba061067c07_b, bc58d5dec860c367_b) sample the G-buffer's depth in the middle
+  of it into a 23,232-byte buffer later passes bind, and 11 dispatches come before the decals; each split stores and reloads four colour targets and
+  the depth (about 24 MB at 1024x576). Deferring the probes changes what they sample
+- [ ] 219 the TBDR rewrites with mid-submission commits: on the phone GPU 24.3 → 22.8 ms and 15 % less traffic, but 66.6 ms frames without the
+  commits (62j's runs)
+- [ ] 220 MetalFX frame interpolation (iOS 26): it takes motion and depth textures, and the G-buffer has no motion target (three RGBA8 and an
+  RG11B10F beside the depth), so the camera's motion would come from the depth and two frames' matrices; moving things would ghost
+- [ ] 221 fewer triangles through the game's own settings (LOD, draw distance; the community's Tears of the Kingdom mods have such options): the
+  user's call on picture against frame rate
+- [x] batch 77 · 222 the host frame step's trials (`nvn_fstep.h`, with `DM_FRAME_STEP=vsync`): after 5 s at k above its minimum a trial of k - 1
+  whatever the cost, its first second not counted late while the clock comes up; a failed one doubles the wait (up to 32 s). `DM_FSTEP_OPT=0`
+  turns them off. `t_fstep` +5 (a light scene held at 30 with the clock low reaches 60; a heavy one stays at 30 with under a tenth of its time in
+  trials); `DM_TEST_FSTEP_NO_GRACE` fails 2
+- [-] 223 the frame step in ticks of 120 Hz (k = 1 / 2 / 3 / 4 for 120 / 60 / 40 / 30 fps on a ProMotion screen): tried and dropped. On the phone
+  it settled at ~24 fps: its lateness reads the GPU's busy time, which at a lowered clock fills about 3/4 of any interval, so each step up lowered
+  the clock and the next looked late too; and the game ran 7.8 % fast (game time / real time 1.078). Pacing at 120 Hz would have to judge frames
+  by when they reach the screen alone
+- [-] 224 the GPU one frame behind the game (LASRecomp dc1d28f, MIT: a wait for the newest fence waits for the one before it; their M3 Max 27.6 →
+  60 fps): measured, not taken. On the phone at 120 Hz it ran 44 fps against 47.5: with the previous frame still on the GPU, the submission's
+  uniform snapshot cannot take the ranges that frame's inline updates write (2.8 a frame), their updates go to memory before the draws (231 a
+  frame), and the passes split (183 → 357 a frame; loads 0.32 → 1.81 GB, stores 0.36 → 1.85 GB a frame). And it is not safe for Tears of the
+  Kingdom: the previous frame's updates would reach memory after the CPU wrote the next frame's. `DM_NVN_GPUWATCH` now compares the vertex and
+  index ranges draws read in place as well (none changed in flight on the Mac at 60 fps)
+- [x] batch 77 · 225 the translation thread, the frame's critical path, made cheaper (Time Profiler on the M5, island standing; its cycles a frame
+  23.75 → 18.1 M, CPU 6.02 → 4.84 ms, instructions a draw 23.3k → 15.3k):
+  - private copies of updated uniform ranges: ~360 a frame applied ~90 updates each, sorted from the log's walk order (newest first for one start:
+    ~4,000 moves a copy), 18 % of the thread. The walk is reversed before the sort, and a range updated again in the submission gets its copy from
+    its previous one with only the updates after it (2.6 applied a copy). `t_ubren` +7 (7-9); `DM_TEST_UL_NO_REVERSE` fails 1 (19,900 moves),
+    `DM_TEST_UBSH_ANY_SUB` (an earlier submission's copy taken as the base) fails 2
+  - the newest-update answers cached per range until the log changes (`DM_TEST_UL_SEQ_STALE` fails 6 of t_ubren); the snapshot lookup tries the
+    copy it found last (`t_usnap` +5; `DM_TEST_US_LAST_UNCHECKED` fails 9)
+  - the pool lookup: the hit counted per thread without an atomic, the slow path in a function of its own, the last hit tried first (9 → 5 % of the
+    thread with the next); `t_poolcache` counts per thread
+  - vertex streams bound once per encoder: every draw looked up and set every stream again, half the address lookups (`gfx/tests/t_vbelide.m`,
+    7 checks: four draws reading their colour from stream 0 bound to X, Y, X, X and a second pass; `DM_TEST_VB_ELIDE_ANY` fails 3)
+  - the uniform copies (the submit call's capture on the game's thread, the snapshot on the translation thread) under one fault guard a run: a
+    `sigsetjmp` saving the signal mask is two system calls on Darwin, and it was 38 % of the game thread's submit call (`t_usnap` +6, a fault
+    leaves the copies after it made; `DM_TEST_US_GUARD_EACH` fails 1)
+  - `DM_NVN_GPUWATCH`'s check off the per-binding path when off; the translation thread's time and clock per CPU kind in the translation detail
+    line (`thread_selfcounts` THSC_TIME_CPI_PER_PERF_LEVEL)
+  On the phone (120 Hz, island standing, three runs from cool): sustained 50.6 → 52.9 → 54.3 fps, the CPU's power 1.45 → 1.28 W, on-screen 16.7 ms
+  intervals 71 → 79 %; iOS took about half the saving as a lower clock
+- [ ] 226 next on the chain, measured: the submit call's capture walks every command of the frame on the game's thread (52 % of the call; the
+  records it wants could be noted when they are recorded) and copies 1.5 MB of uniform data that the snapshot then copies again; the snapshot
+  lookup and the newest-update cache still miss between draws binding several blocks (4 % and 2.6 % of the thread); texture views are checked or
+  made again in 6 % of it (textures initialized over live storage ~2,000 a second bump the generations); the render pass begins are 18 %
+  (Metal's own), which fewer passes (217, 218) cut
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the
