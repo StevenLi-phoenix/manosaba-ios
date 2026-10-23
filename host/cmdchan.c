@@ -18,6 +18,7 @@
 //   heap <addr>          the sead heaps holding addr (0x...) and the block it is in
 //   quit                 the orderly exit of SIGTERM (hle_lifecycle.c)
 //   anything else the game takes (dm_game_command, host/game.h): Tears of the Kingdom's survey pos / survey move (games/totk/survey.c, DM_SURVEY=1)
+//                        and scene <w>x<h> (the scene render size while it runs, games/totk/frame_step.c)
 // Blank lines and lines starting with # are skipped; an unknown or malformed line is logged in red and skipped. Each line run is logged
 // ("[cmd] ..."). A file replaced by another (a copy pushed to a device is a new inode: T5eng's TOTK_INPUT_REOPEN) or cut shorter than what was read
 // is followed again from its start. Checked by host/tests/t_cmdchan.c.

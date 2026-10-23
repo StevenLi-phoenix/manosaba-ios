@@ -6,11 +6,12 @@
 #   mrs tpidrro_el0     → read thread slot KTLR (Horizon ThreadLocalRegion pointer)
 #   svc #n, mrs cntpct_el0 → host gate (gate address taken from thread slot KGATE; once in C, gates.tsv is looked up by return point)
 #   mrs xN, ctr_el0     → movz xN, #4, lsl #16 in place (cache type; Apple does not let user mode read it: SIGILL)
+#   ldxr / ldxp / ldxrb / ldxrh → ldaxr / ldaxp / ldaxrb / ldaxrh in place (Apple's cores reorder the loads after a plain one; listed in <name>.acq.tsv)
 #   The game's rules (rules.py, by NSO build ID) — cuts (CUTS): before rewriting, the original bytes are asserted one by one and any mismatch aborts; results are listed in <name>.cuts.tsv
 #   observation gates (OBS): one instruction at the entry is replaced with "enter the host observation callback → execute the original instruction → jump back", so diagnostics modify zero code at runtime; listed in <name>.obs.tsv
 #   parameter slots (PARAMS): a constant built by two instructions is read from a host thread slot instead
 # The key page only stores "actual key number × 8" at the end of the data segment, and patch code fetches thread slots indirectly through the key page: the loader may use any key number.
-# Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.options.tsv, <name>.obs.tsv, <name>.params.tsv
+# Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.acq.tsv, <name>.cuts.tsv, <name>.options.tsv, <name>.obs.tsv, <name>.params.tsv
 import struct, re, sys, os
 from itertools import combinations
 import lz4.block
@@ -556,8 +557,20 @@ starts = sorted(x for x in starts if x < TEXT_END)
 # ---- Linear scan to find all rewrite points (not relying on register read/write reports) ----
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import sysreg
 kinds = {}
+# Load-exclusives as acquire loads (plan item 232, after nxport ce8f1c3, MIT): Apple cores reorder the loads after a plain ldxr that the console's
+# cores keep in order, so a spinlock built on ldxr / stxr could read the data it protects early (nxport: Breath of the Wild's jobs ran twice and
+# crashed until this; Tears of the Kingdom's walking speed the same). Every LDXR / LDXP / LDXRB / LDXRH (o2 = 0, L = 1, o0 = 0) the disassembler
+# confirms gets bit 15 (o0): LDAXR / LDAXP / LDAXRB / LDAXRH, in place, before the sites are found (an exclusive section copied to the patch area
+# copies the acquire form). The addresses go to <name>.acq.tsv (verify/structck.py ⑭ checks them against llvm-objdump's reading; equiv.py's deexcl
+# and fnfuzz.py's single-threaded runs read both forms alike). The words of cuts and options stay as the rules give them (their original bytes are
+# checked again later, and by the host for options)
+ACQ_MASK, ACQ_VAL, ACQ_PLAIN = 0x3FC08000, 0x08400000, ('ldxr', 'ldxp', 'ldxrb', 'ldxrh')
+acq_keep = {(c[0] + k) & ~3 for c in cuts for k in range(len(bytes.fromhex(c[1])))} | {(o[1] + k) & ~3 for o in opts for k in range(len(bytes.fromhex(o[2])))}
+acq = []
 for o in range(0, TEXT_END, 4):
     w = struct.unpack_from('<I', IMG, o)[0]
+    if w & ACQ_MASK == ACQ_VAL and o not in acq_keep and not os.environ.get('DM_TEST_ACQ_OFF'):   # (the env: negative control of t_rewriter_synth only)
+        if any(x.mnemonic in ACQ_PLAIN for x in md.disasm(IMG[o:o + 4], o)): w |= 0x8000; struct.pack_into('<I', IMG, o, w); acq.append(o)
     if w & 0xFFE0001F == 0xD4000001: kinds[o] = ('svc', (w >> 5) & 0xFFFF); continue
     if w & 0xFFFFFFE0 == 0xD53BD040: kinds[o] = ('tpidr_r', None); continue
     if w & 0xFFFFFFE0 == 0xD51BD040: kinds[o] = ('tpidr_w', None); continue
@@ -901,6 +914,9 @@ with open(P('sites.tsv'), 'w') as f:
     for a, (b, c) in jumps.items(): f.write(f'{a:#x}\tJ\t{b:#x}\t{c}\n')
     for a, tg in sorted(tabjumps.items()): f.write(f'{a:#x}\tJT\t' + ' '.join(f'{t:#x}' for t in tg) + '\n')   # jump table with explicit targets, one per entry (site_br_tab)
     for a, link in sorted(xbranch.items()): f.write(f'{a:#x}\tT\t{link}\n')   # br / blr x18 through a function pointer: 1 = blr
+with open(P('acq.tsv'), 'w') as f:   # load-exclusives turned into acquire loads in place (plan item 232): offset, original word
+    f.write(f'# BUILD_ID\t{BUILD_ID}\n')
+    for a in acq: f.write(f'{a:#x}\t{struct.unpack_from("<I", IMG0, a)[0] & ~0x8000:08x}\n')
 with open(P('cuts.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, ob, nb, why in cuts: f.write(f'{off:#x}\t{ob}\t{nb}\t{why}\n')   # columns: offset, original bytes, new bytes, reason
@@ -917,4 +933,4 @@ with open(P('caves.tsv'), 'w') as f:   # columns: offset, original word, routine
 with open(P('obs.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, oid, ow, why in obs: f.write(f'{off:#x}\t{oid}\t{ow}\t{why}\n')
-print(NAME, stats, 'cuts', len(cuts), 'options', len(opts), 'caves', len(cave_rows), 'obs', len(obs), 'patch', len(patch), 'PATCH_OFF', hex(PATCH_OFF), 'slot_refs', len(fix), 'gates', len(gates))
+print(NAME, stats, 'acquire', len(acq), 'cuts', len(cuts), 'options', len(opts), 'caves', len(cave_rows), 'obs', len(obs), 'patch', len(patch), 'PATCH_OFF', hex(PATCH_OFF), 'slot_refs', len(fix), 'gates', len(gates))

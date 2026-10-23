@@ -29,6 +29,10 @@
 #     replaced by the prologue's scratch register, branches retargeted to the copy of their target inside the section or to an exit that writes the
 #     slot back, restores the scratch registers and jumps to the original target; JT blocks match the compare-chain template for exactly the listed
 #     targets, the original instruction is br x18 and every target lies inside its function
+#  ⑭ Acquire loads (acq.tsv, plan item 232): the rows are the plain load-exclusives (ldxr / ldxrb / ldxrh / ldxp) the independent disassembler reads in
+#     the original text outside cuts and options, every one of them; the checks above compare against an original image with those words given bit 15
+#     (ldaxr ...), so ② finds any listed word the image does not have in its acquire form and ⑪ wants the acquire form in the copies; the patch area has
+#     no plain load-exclusive left (④)
 import sys, os, re, struct, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 import nsoimg
@@ -80,7 +84,8 @@ def llvm_dis(blob, base):
     return out
 
 RX18 = re.compile(r'\b[xw]18\b')
-DIS_FILTER = r'[xw]18|tpidr|svc|cnt[pv]ct|ctr_el0'
+DIS_FILTER = r'[xw]18|tpidr|svc|cnt[pv]ct|ctr_el0|ldx[rp]'
+RXPLAIN = re.compile(r'ldx[rp][bh]?\s')   # a plain load-exclusive (⑭)
 def sysk(t):
     if re.match(r'svc\s', t): return 'svc'
     if re.match(r'mrs\s', t) and 'tpidr_el0' in t: return 'tpidr_r'
@@ -182,6 +187,23 @@ if os.path.exists(opt_p):
         name, off, ob, nb = l.rstrip('\n').split('\t')[:4]
         opt_rows.setdefault(int(off, 16), []).append((name, bytes.fromhex(ob), bytes.fromhex(nb)))
 
+# ⑭ (first half) acq.tsv: each row is a plain load-exclusive in the original text; the original image the checks below use gets its acquire form
+ACQ_MASK, ACQ_VAL = 0x3FC08000, 0x08400000
+orig0 = orig; acq = {}
+acq_p = f'{out_dir}/{mod}.acq.tsv'
+if not os.path.exists(acq_p): bad('no acq.tsv (a product from before plan item 232: rebuild it)')
+else:
+    for l in open(acq_p):
+        if l.startswith('# BUILD_ID'):
+            if l.split()[-1] != open(nso, 'rb').read(0x50)[0x40:0x50].hex(): bad('acq.tsv build ID does not match the NSO')
+            continue
+        off, ow = l.split(); acq[int(off, 16)] = int(ow, 16)
+    _o = bytearray(orig)
+    for a, ow in acq.items():
+        if not (a < TE and a % 4 == 0 and W(orig, a) == ow and ow & ACQ_MASK == ACQ_VAL): bad(f'acquire load {a:#x}: the original word is not the listed plain load-exclusive'); continue
+        struct.pack_into('<I', _o, a, ow | 0x8000)
+    orig = bytes(_o)
+
 # ① Non-text segments: compare whole blocks first, then byte by byte where blocks differ; differences may only fall inside cuts (cut bytes were already checked against their expected values in ⓪)
 nd = []
 for blk in range(TE, len(orig), 4096):
@@ -223,7 +245,7 @@ def cached_dis(blob):
     d = llvm_dis(blob, 0)
     os.makedirs(cd, exist_ok=True); tmp = f'{p}.new.{os.getpid()}'; json.dump(d, open(tmp, 'w')); os.replace(tmp, p)
     return d
-D = cached_dis(orig[:TE])
+D = cached_dis(orig0[:TE])   # the original text as the game has it (⑭ reads its plain load-exclusives)
 ind = {}
 for o, t in D.items():
     if RX18.search(t): ind[o] = 'x18'
@@ -241,6 +263,16 @@ nwin_ref = sum(1 for o in ind if o in inwin)
 P = llvm_dis(pat[PO:], PO)
 left = sorted(o for o, t in P.items() if RX18.search(t) or sysk(t) not in (None, 'tpidrro_r'))
 if left: bad(f'patch area still contains x18/system registers/svc: {len(left)}, e.g. {[(hex(x), P[x]) for x in left[:5]]}')
+pleft = sorted(o for o, t in P.items() if RXPLAIN.match(t))
+if pleft: bad(f'patch area has plain load-exclusives (⑭): {len(pleft)}, e.g. {[(hex(x), P[x]) for x in pleft[:5]]}')
+
+# ⑭ (second half) the rows against the independent reading: every plain load-exclusive outside cuts and options listed, nothing else
+plain = {o for o, t in D.items() if RXPLAIN.match(t)}
+keepw = cutw | {(o + k) & ~3 for o, rs in opt_rows.items() for _, ob, _ in rs for k in range(len(ob))}
+_m, _x, _k = sorted(plain - keepw - set(acq)), sorted(set(acq) - plain), sorted(set(acq) & keepw)
+if _m: bad(f'plain load-exclusives not made acquire loads: {len(_m)}, e.g. {[(hex(x), D[x]) for x in _m[:5]]}')
+if _x: bad(f'acq.tsv rows the independent disassembler does not read as a plain load-exclusive: {len(_x)}, e.g. {[hex(x) for x in _x[:5]]}')
+if _k: bad(f'acq.tsv rows inside a cut or an option: {len(_k)}, e.g. {[hex(x) for x in _k[:5]]}')
 
 # ⑤ Host gates
 KEY = {k[4:-4]: v for k, v in h.items() if k.startswith('KEY_') and k.endswith('_IDX')}
@@ -657,6 +689,6 @@ cnt = {}
 if _hostcall: print(f'cuts introduce {len(_hostcall)} host-call gates: ' + ', '.join(f"{a:#x}=svc#{n:#x}" for a, n in _hostcall.items()))
 for k in sites.values(): cnt[k] = cnt.get(k, 0) + 1
 print(f'STRUCT {mod} {"OK" if not fails else "FAIL"} sites={len(sites)} {cnt} jump_tables={jumps} fnptr_jumps={fnptr} x18_in_windows={nwin_ref} '
-      f'cuts={len(cuts)}(code{ncut_code}/data{ncut_data}) obs_gates={len(obs)} param_gates={len(params)} '
+      f'acquire={len(acq)} cuts={len(cuts)}(code{ncut_code}/data{ncut_data}) obs_gates={len(obs)} param_gates={len(params)} '
       f'indep_denom={len(ind)} text_words_changed={len(diff)} gates={len(gsites)} slot_accesses={nk} failures={len(fails)}')
 sys.exit(1 if fails else 0)

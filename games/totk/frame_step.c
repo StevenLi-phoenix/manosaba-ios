@@ -19,6 +19,7 @@
 // swapchain's, the code cave at 0x3dcb28 the canvas's, which the game composes its UI and the scene's final upscale in). DM_OUTPUT_RES=<w>x<h>
 // (640x360 up to 1920x1080, or up to the size the heap overlay notes, .dm_output: games/totk/heapdef.py --output) makes both that size; else the
 // swapchain 1920x1080 (the game's constant) and the canvas 0, which the cave leaves as the game laid it out, so the game looks as before.
+// +48 / +56: a live scene size (plan item 240, scene_latch_step below): the renderer the game picked a size for, and the flags asking for a pick.
 // +40: the factor on the cameras' aspect ratio (rules.py option aspect, plan item 154: four code caves multiply by it, by 1 while it is 0):
 // the wide picture's ratio (host/aspect.c: DM_ASPECT, the Mac's View → Wide Picture) over the game's 16:9 while it is on, 0 off; written at
 // every present, so a switch reaches the next frame's cameras.
@@ -86,6 +87,53 @@ static int output_size(const char *env, const char *max, uint64_t out[2]) {
 #endif
     return 1;
 }
+// Live scene size (plan item 240, after NativeTOTK 1723fed, BennettStaley/NativeTOTK-Apple-Silicon, MIT, written anew). The game reads the size on
+// the page only when it picks one (main 0x585da0), which it does when its operation mode changes, so a size written while it runs waits for the next
+// mode change. It is sent down the game's own mode-change path once instead: the per-frame graphics update takes it (main 0x580b28, 0x585bd0 with
+// force 1: the pick, and the scene's render targets made again at the new size) when the flags at its display state +8 have 0x280, and the code cave
+// at main 0x580920 (rules.py, option scene) ORs the page +56 into the flags it loads; the cave at 0x585e48 keeps the renderer (x19 of the pick) at
+// +48. At a present with a new size asked: the size to +16 / +20, the renderer's cached mode index (+0xcd0, a signed byte the pick stores; only
+// compared, never an index) to -1 and +56 to 0x80. Once the index is no longer -1 the pick has run and +56 goes back to 0; after 600 presents
+// without a pick (a pause, a load) +56 is cleared all the same and the size waits for the game's next pick. NativeTOTK found the page alone, the
+// cached index alone and nn::oe's display-config message all leaving the scene as it was. A live size above what the heap was shown to hold (the
+// game's 1600x900 beside its 1080p canvas, or the size it booted with, or the heap overlay's note) is refused: the targets come from a heap sized
+// once at boot (main+0x1c2f20 ran out at 2560x1440).
+typedef struct { uint64_t latched; uintptr_t forced, picked; unsigned waited; } scene_latch;
+enum { SCENE_PICKED = 1, SCENE_GAVE_UP = 2, SCENE_WROTE = 4, SCENE_NO_RENDERER = 8 };
+// One present; want = w | h << 32, the size the page is to carry. Returns what it did (SCENE_* bits); s->picked = the renderer that picked
+static int scene_latch_step(scene_latch *s, uint8_t *page, uint64_t want) {
+    int r = 0;
+    if (s->forced) {
+        if (atomic_load_explicit((_Atomic int8_t *)(s->forced + 0xcd0), memory_order_relaxed) != -1) { r = SCENE_PICKED; s->picked = s->forced; }
+        else if (++s->waited >= 600) r = SCENE_GAVE_UP;
+#ifndef DM_TEST_SCENE_LATCH_NO_CLEAR   // negative control of t_frame_step only: +56 left set after the pick
+        if (r) { atomic_store_explicit((_Atomic uint32_t *)(void *)(page + 56), 0, memory_order_relaxed); s->forced = 0; }
+#else
+        if (r) s->forced = 0;
+#endif
+    }
+    if (want == s->latched) return r;
+    float sz[2] = {(float)(uint32_t)want, (float)(uint32_t)(want >> 32)}; uint64_t bits; memcpy(&bits, sz, sizeof bits);
+    atomic_store_explicit((_Atomic uint64_t *)(void *)(page + 16), bits, memory_order_relaxed);   // one store: the game's ldp reads both
+    s->latched = want;
+    uintptr_t rend = (uintptr_t)atomic_load_explicit((_Atomic uint64_t *)(void *)(page + 48), memory_order_relaxed);
+    if (!rend) return r | SCENE_NO_RENDERER;   // the game has not picked a size yet: its first pick takes the page's
+    atomic_store_explicit((_Atomic int8_t *)(rend + 0xcd0), -1, memory_order_relaxed);
+    s->forced = rend; s->waited = 0;
+#ifndef DM_TEST_SCENE_LATCH_NO_KICK   // negative control of t_frame_step only: the page and the index written, the mode-change path not asked for
+    atomic_store_explicit((_Atomic uint32_t *)(void *)(page + 56), 0x80, memory_order_release);
+#endif
+    return r | SCENE_WROTE;
+}
+// A live size w x h: as scene_size takes it (64x64 up to 1920x1080 or the overlay's note max), and at most the pixels of the larger of 1600x900 and
+// boot (the size the page got at boot, w | h << 32). Returns w | h << 32, or 0 when refused
+static uint64_t scene_live_size(unsigned w, unsigned h, const char *max, uint64_t boot) {
+    char b[32]; float sz[2]; snprintf(b, sizeof b, "%ux%u", w, h);
+    if (scene_size(b, 1, max, sz) != 1) return 0;
+    uint64_t cap = (uint64_t)(uint32_t)boot * (boot >> 32); if (cap < 1600 * 900) cap = 1600 * 900;
+    if (max && *max) { unsigned mw, mh; char extra; if (sscanf(max, "%ux%u%c", &mw, &mh, &extra) == 2 && (uint64_t)mw * mh > cap) cap = (uint64_t)mw * mh; }
+    return (uint64_t)w * h <= cap ? (uint64_t)h << 32 | w : 0;
+}
 static void frame_step_store(_Atomic uint64_t *page, double seconds) {   // page: at least 16 bytes
     float v[2] = {(float)(seconds * 30), (float)(seconds * 60)}, sec = (float)seconds; uint64_t bits; memcpy(&bits, v, sizeof bits); uint32_t sb; memcpy(&sb, &sec, sizeof sb);
 #ifndef DM_TEST_CLOTH_NO_SECONDS   // negative control of t_frame_step only: +8 left as it was
@@ -100,6 +148,8 @@ static frame_mean g_mean;
 static double g_pin;
 static int g_realtime;   // the option realtime is on: the step is the measured frame time
 static int g_aspect;     // the option aspect is on: +40 follows the wide picture
+static int g_scene;      // the option scene is on: a size asked while the game runs is latched at the presents (scene_latch_step)
+static _Atomic uint64_t g_scene_want; static scene_latch g_latch; static char g_scene_max[32]; static uint64_t g_scene_boot;
 void dm_game_boot(void) {
     g_page = dm_host_page("main");
     if (!g_page) { LOG("[red] frame step: main has no host page (product built without rules.py HOSTREFS): the game's step stays at its chosen interval"); return; }
@@ -114,6 +164,8 @@ void dm_game_boot(void) {
                           max[0] ? max : "1920x1080 (more needs the heap overlay of games/totk/heapdef.py)");
         else if (max[0]) LOG("[scene size] the RomFS overlay's heap allows up to %s", max);
         LOG("[scene size] %.0fx%.0f (%s)", sz[0], sz[1], from > 0 ? src : dm_opmode() ? "the game's own, docked" : "the game's own, handheld");
+        g_scene_boot = g_latch.latched = (uint64_t)(uint32_t)sz[1] << 32 | (uint32_t)sz[0]; atomic_store(&g_scene_want, g_scene_boot);
+        strlcpy(g_scene_max, max, sizeof g_scene_max); g_scene = 1;
     } else if (getenv("DM_RENDER_RES")) LOG("[red] DM_RENDER_RES needs the option scene (DM_OPTIONS)");
     if (dm_option_on("output")) {
         char note[1024], max[32] = ""; FILE *f = dm_overlay_file("System/HeapSize/Product.Nin_NX_NVN.HeapDef.dm_output", note, sizeof note) ? fopen(note, "r") : NULL;
@@ -131,9 +183,23 @@ void dm_game_boot(void) {
     if (g_pin > 0) LOG("[frame step] pinned at %.3f ms (DM_FRAME_STEP_MS, diagnostics)", g_pin * 1000);
     else LOG("[frame step] real time: the mean of the last five present intervals (kept between 1/120 and 1/15 s)");
 }
+// A scene size while the game runs (the command channel's "scene <w>x<h>", games/totk/survey.c); 0 when taken (it applies at the next present),
+// -1 refused (logged)
+int totk_scene_request(unsigned w, unsigned h) {
+    if (!g_scene) { LOG("[red] scene %ux%u: needs the option scene (DM_OPTIONS)", w, h); return -1; }
+    uint64_t v = scene_live_size(w, h, g_scene_max, g_scene_boot);
+    if (!v) { uint64_t b = g_scene_boot; LOG("[red] scene %ux%u refused: 64x64 up to %s, and no more pixels than %ux%u or 1600x900 (the heap is sized at boot)", w, h,
+                                             g_scene_max[0] ? g_scene_max : "1920x1080", (unsigned)(uint32_t)b, (unsigned)(b >> 32)); return -1; }
+    atomic_store(&g_scene_want, v); LOG("[scene size] %ux%u asked: taken at the next present", w, h); return 0;
+}
 int dm_game_realtime_step(void) { return g_realtime && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
 int nvn_fstep_step(void);   // gfx/nvn/hle_nvn.c: DM_FRAME_STEP=vsync, the host's step in vsyncs of 60 Hz (plan item 133), 0 otherwise
 void dm_game_present(void) {
+    if (g_scene) { int r = scene_latch_step(&g_latch, (uint8_t *)g_page, atomic_load(&g_scene_want)); uint64_t l = g_latch.latched;
+        if (r & SCENE_WROTE) LOG("[scene size] %ux%u on the page; the game's mode-change path asked for one pick", (unsigned)(uint32_t)l, (unsigned)(l >> 32));
+        if (r & SCENE_NO_RENDERER) LOG("[scene size] %ux%u on the page; the game has not picked a size yet and takes it at its first", (unsigned)(uint32_t)l, (unsigned)(l >> 32));
+        if (r & SCENE_PICKED) { float v[2]; memcpy(v, (void *)(g_latch.picked + 0xcc4), sizeof v); LOG("[scene size] the game picked again: renderer %.0fx%.0f", v[0], v[1]); }
+        if (r & SCENE_GAVE_UP) LOG("[red] scene size: no pick after 600 presents; the size waits for the game's next pick of its own"); }
     if (g_aspect) { float f = dm_aspect_factor(dm_aspect_now(), 16.0 / 9); uint32_t b; memcpy(&b, &f, sizeof b);
                     atomic_store_explicit((_Atomic uint32_t *)(void *)((uint8_t *)g_page + 40), b, memory_order_relaxed); }
     if (!g_realtime || g_pin > 0) return;

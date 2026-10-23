@@ -120,8 +120,15 @@ static void survey_tick(uint64_t frame) {
 
 #ifndef SURVEY_TEST
 uint64_t dm_nvn_frame_count(void);
+int totk_scene_request(unsigned w, unsigned h);   // frame_step.c (plan item 240)
 int dm_game_command(const char *line, int run) {
     static int init; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    if (!strncmp(line, "scene ", 6)) {   // scene <w>x<h>: the scene render size while the game runs (frame_step.c)
+        unsigned w, h; char extra;
+        if (sscanf(line + 6, "%ux%u%c", &w, &h, &extra) != 2) return 0;
+        if (run) totk_scene_request(w, h);
+        return 1;
+    }
     if (!strncmp(line, "survey ", 7) && run) {
         pthread_mutex_lock(&mu);
         if (!init) { init = 1; const char *e = getenv("DM_SURVEY");

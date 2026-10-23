@@ -5,7 +5,7 @@
 # options.default names them; with none the code is the game's as shipped (the 30 fps product):
 #   fps60     the frame-rate controller's minimum interval 1, also in shrines and after a fixed interval
 #   realtime  the real-time frame step (host page +0 / +4, games/totk/frame_step.c), and the cloth and hair clock from it (CAVES, host page +8)
-#   scene     the scene render size from the host page +16 (DM_RENDER_RES)
+#   scene     the scene render size from the host page +16 (DM_RENDER_RES), also while the game runs (+48 / +56, CAVES)
 #   output    the swapchain and canvas size from the host page +24 / +32 (DM_OUTPUT_RES)
 #   aspect    the cameras' aspect ratio × the host page +40, for a wide picture (DM_ASPECT, the Mac's View → Wide Picture; CAVES)
 CUTS = {}
@@ -64,6 +64,16 @@ CAVES = {
         (0x3dcb28, 'd360fc64', [('adrp_host', 9), 0xf940112a, 0xf9400a6b, 0xf100015f, 0x9a831143, 0x9a8b114b, 0xf9000a6b, ('orig',)],
          'canvas: lsr x4, x3, #32 → x10 = page+32; if x10: x3 = x10, canvas +0x10 = x10 (ldr x10, [x9, #32]; ldr x11, [x19, #0x10]; cmp x10, #0; '
          'csel x3, x10, x3, ne; csel x11, x10, x11, ne; str x11, [x19, #0x10]); then lsr x4, x3, #32', 'output'),
+        # A live scene size (plan item 240, after NativeTOTK 1723fed, BennettStaley/NativeTOTK-Apple-Silicon, MIT, written anew; the host's half
+        # and why in games/totk/frame_step.c, scene_latch_step). 0x585e48 (the option scene's first word, OPTIONS) also keeps the renderer, x19 of
+        # the pick, at the host page +48. 0x580920 is in the per-frame graphics update, which takes the mode-change path (0x580b28: 0x585bd0 with
+        # force 1, the pick that makes the scene targets again) when the display state's flags at +8 have 0x280 (0x580924 tst w8, w9 = 0x280):
+        # the flags it loads get the page +56 ORed in. Scratch x10: from 0x580924 every path calls (0x58093c, 0x580b30, 0x580b64) before reading
+        # it, and orr / ldr leave the flags to the tst.
+        (0x585e48, '1e220160', [('adrp_host', 17), 0xf9001a33],
+         'scene size: scvtf s0, w11 → x17 = host page; str x19, [x17, #48] (the renderer, for a live size)', 'scene'),
+        (0x580920, '794012e8', [('orig',), ('adrp_host', 10), 0xb940394a, 0x2a0a0108],
+         'display state flags: ldrh w8, [x23, #8]; x10 = host page; ldr w10, [x10, #56]; orr w8, w8, w10 (0x80 from the host: one pick)', 'scene'),
         # The wide picture (plan item 154, see _aspect above)
         (0x628c74, 'bd414260', _aspect(0), 'camera update: ldr s0, [x19, #0x140]' + _ASPECT_WHY, 'aspect'),
         (0xb43460, 'bd406ac0', _aspect(0), 'camera setup: ldr s0, [x22, #0x68]' + _ASPECT_WHY, 'aspect'),
@@ -123,11 +133,10 @@ OPTIONS = {
         # Scene render size (plan item 52, after MacNativeGames PR #19, merged 2026-10-19, MIT): 0x585da0 reads the scene size {w11, w10} from the
         # graphics parameter (ldp at 0x585e38: docked 1600x900, handheld 1280x720 per the PR) and stores it as floats at renderer +0xcc4 / +0xcc8, from
         # which every scene render target is sized; 0x585e64 converts w9 (the output size) to +0xcc0, so w9 / x9 stay. Every path reaches 0x585e48.
-        # Now x17 = host page (0x585e48), s0 / s1 = page +16 / +20 (0x585e50), stored at 0x585e54 / 0x585e60. x17 instead of the PR's x3: the
-        # function (0x585da0-0x586000, 152 instructions) uses neither, and x17 is no argument register for the calls after it. The host writes the
-        # page (games/totk/frame_step.c).
+        # Now x17 = host page (0x585e48, a code cave of this option: CAVES), s0 / s1 = page +16 / +20 (0x585e50), stored at 0x585e54 / 0x585e60.
+        # x17 instead of the PR's x3: the function (0x585da0-0x586000, 152 instructions) uses neither, and x17 is no argument register for the calls
+        # after it. The host writes the page (games/totk/frame_step.c).
         'scene': [
-            (0x585e48, '1e220160', ('adrp', 17), 'scene size: scvtf s0, w11 → adrp x17, host page'),
             (0x585e50, '60c60cbd', '2006422d', 'scene size: str s0, [x19, #0xcc4] → ldp s0, s1, [x17, #16] (host page +16: width, height)'),
             (0x585e54, '4001221e', '60c60cbd', 'scene size: scvtf s0, w10 → str s0, [x19, #0xcc4] (width)'),
             (0x585e60, '60ca0cbd', '61ca0cbd', 'scene size: str s0, [x19, #0xcc8] → str s1, [x19, #0xcc8] (height)'),

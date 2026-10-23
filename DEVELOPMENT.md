@@ -1508,9 +1508,15 @@ iPhone without asking; F, the features, later). All sources MIT unless said. Cor
   496-byte list has no JUMP and reports 496, (5) eight lists in slots of 496 bytes with 512-byte windows replay whole, (6) a recording whose BEGIN
   does not fit leaves the next slot's list alone (the record walker checks JUMP targets and stops at 4,096 records); `DM_TEST_CMD_KEEP24` fails 4,
   `DM_TEST_CMD_LINK_EMPTY` fails 1
-- [ ] 232 load-exclusives as acquire loads (nxport ce8f1c3: Apple cores reorder the reads after a plain `ldxr` that a spinlock protects; Breath of
-  the Wild's double-run jobs and crashes gone, Tears of the Kingdom's walking speed the same): 17,079 plain load-exclusives in our main, 234 in sdk.
-  A rewriter change (every product rebuilt)
+- [x] batch 83 · 232 load-exclusives as acquire loads (nxport ce8f1c3, MIT: Apple cores reorder the reads after a plain `ldxr` that a spinlock
+  protects; Breath of the Wild's double-run jobs and crashes gone, Tears of the Kingdom's walking speed the same): `tools/patch_nso.py` sets bit 15
+  of every LDXR / LDXP / LDXRB / LDXRH the disassembler confirms (o2 = 0, L = 1, o0 = 0; a caspa has those bits too and is left), in place and
+  before the sites are found, so the exclusive sections copied to the patch area copy the acquire form; the words of cuts and options stay as the
+  rules give them. `<module>.acq.tsv` lists them. structck ⑭: the list is exactly the plain load-exclusives llvm-objdump reads outside cuts and
+  options, the image is compared against an original with the same words (② and ⑪), and none is left in the patch area (④); equiv's deexcl and
+  fnfuzz's single-threaded runs read both forms alike. Tears of the Kingdom main 17,079, sdk 234; manosaba main 2,310, sdk 233; the sites the
+  same. t_rewriter_synth +5 (0x900: a spinlock's ldxr / stxr, ldxrb, ldxrh, ldxp and a caspa; 0xa00: an x18 section that loads with ldxr: the
+  list, the words, the window's copy, structck refusing 0x900 put back); `DM_TEST_ACQ_OFF=1` fails 7
 - [x] batch 80 · 233 a storage binding that runs past its pool binds from the pool it starts in (nxport 79b736d; `sbuf_gpu_addr`), and one in no
   pool still gets the dummy buffer; both are counted and given a red line the first time (before, silent: the GPU's writes lost).
   `gfx/tests/t_sbufpast.m` (a kernel writes two words through a binding 64 bytes before its pool's end with 4096 bytes; 6 checks);
@@ -1545,10 +1551,21 @@ GPU work a frame (230: less of it gives the CPU its clock back):
   CPU (230). The pictures the same (the prologue's cave and torch, the island; nxport's unlit tile classification on 1.1.2 not seen). The Mac's
   island: GPU 6.93 → 6.80 ms at 60 Hz. `gfx/tests/t_early_z.py` (the translator with and without the field; the library: every pixel shader has
   the attribute exactly when its control section asks); `DM_TEST_EARLY_Z_OFF=1` fails 1
-- [ ] 240 the scene size changed while the game runs (NativeTOTK 1723fed, a5bbceb: a veneer at main+0x580920 sends the frame through the game's own
-  mode-change path, renderer+0xcd0 = -1, a latch at the present; sizes up to the boot reserve; measured on the Mac only), with render targets of a
-  size the game left released (9a92046: GPU +640 → +295 MB after size switches). What it would allow: 190 (960x540 holds 59.6 fps on the island
-  against 56.0). A rewriter change
+- [x] batch 83 · 240 the scene size changed while the game runs (NativeTOTK 1723fed, BennettStaley/NativeTOTK-Apple-Silicon, MIT, written anew):
+  the game reads the page's size only when it picks one (0x585da0, on a mode change), so `games/totk/frame_step.c` (`scene_latch_step`) sends a
+  size asked while it runs down the game's own mode-change path once. Two code caves of the option scene (rules.py): 0x585e48 also keeps the
+  renderer (x19) at the host page +48, and 0x580920 ORs the page +56 into the display state's flags, which the per-frame update tests for 0x280
+  before its forced pick (0x580b28 → 0x585bd0; x10 dead there: every path calls first). At a present the size goes to +16 / +20, the renderer's
+  cached mode index (+0xcd0, only compared) to -1 and +56 to 0x80, cleared once the index shows the pick (or after 600 presents). The command
+  channel's `scene <w>x<h>` (`totk_scene_request`), up to the larger of 1600x900, the boot size and the heap overlay's note. The Mac's island,
+  handheld: the scene's depth targets 1280x720 → 960x536 → 1600x896 → 1280x720 in pass dumps, each the next frame, and four switches moved the
+  footprint by under 64 MB, so 9a92046 (targets of a size the game left released) is not needed here. The iPhone 17 Pro's island: each size
+  picked the next frame, the footprint 3,574 MB before and after; the dumps' depth targets 1024x576 (before any request, 1280x720 on the page),
+  960x536, 1280x720 (1600x900 asked) and 1280x720: two of the four at 0.8 of the page's size, the sign 131a set for looking at the game's own
+  dynamic resolution again (on the Mac every dump had the page's size). `check_render_size.py` +5 (the renderer
+  at +48, the flags with and without 0x80; the original ignores both); t_frame_step +14 (the latch, a live size's bounds);
+  `DM_TEST_SCENE_LATCH_NO_KICK` fails 2, `DM_TEST_SCENE_LATCH_NO_CLEAR` fails 3. What it allows: 190 (960x540 holds 59.6 fps on the island
+  against 56.0)
 - [-] 241 multiplies and adds fused in vertex stages, relaxed instead of safe math (nxport: ~12 % less GPU in Hateno; fusing fragment stages gave white
   specks): nothing to fuse here. nxport fuses the FMUL / FADD pairs Ryujinx marks NoContraction, written through spirv-cross's helpers; in chain
   f9e7d3ecf49e none of the 16,099 vertex shaders has one (all 3,103 files with a helper are fragment shaders, 5,568 calls), and the offline compile
@@ -1563,8 +1580,12 @@ CPU energy a frame:
   PR #257: Breath of the Wild on a Mac, render thread 88 → 65 % busy; on 1.4.3 most bindings read under 2.4 KB): our bindings are about that
   short already (the snapshot line: 802 bindings, 1,414.8 KB a submission, 1.8 KB each), and the private copies take 4.4 % of the translation
   thread on the Mac's island (Time Profiler, 2026-10-23); the extents would need a new reflection field from the chain. Not now
-- [ ] 243 guest loops that spin on memory without a system call allowed to sleep (nxnative 99c3f91: Paper Mario on a Mac, CPU energy a frame about
-  halved; 843 such loops in Tears of the Kingdom's main). Measure the phone's workers first; a rewriter change
+- [-] 243 guest loops that spin on memory without a system call allowed to sleep (nxnative 99c3f91: Paper Mario on a Mac, CPU energy a frame about
+  halved; 843 such loops in Tears of the Kingdom's main). Measured first: on the phone's island (batch 82's runs) the two ModuleSystemWorker
+  threads take 330-345 ms/s each and yield 150,000-200,000 times a second each (the power line's `most yields`), the main thread 383-394 ms/s.
+  Time Profiler on the Mac's island (10 s, 2026-10-23): no guest loop gathers samples (the busiest 256 bytes of guest code, main+0x148600, hold
+  1.1 % of the guest-code samples of all threads), and the workers wait with yields (svc 0xB), not in loops without a system call. nxnative's own
+  count: 701 of the 843 are one inlined atomic decrement retried after another thread changed the count. Nothing here for the rule to take
 - [-] 244 the border-colour pipeline variant's key cached (MacNativeGames PR #286: `pso_get` 11.7 → 3.4 % of replay on an M4 Air): on the Mac's
   island `border_variant` is 0.4 % of the translation thread (`pso_get` 4.8 %). Not worth a cache here
 - [x] batch 82 · 245 the Metal calls on a worker thread of their own (nxnative PR #62, `nvn_rec.h`: Breath of the Wild on an iPhone 17 Pro Max, submit

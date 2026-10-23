@@ -13,17 +13,22 @@ files, so CI runs tools/patch_nso.py, verify/structck.py and verify/equiv.py on 
   0x800  `mov w0, #7; ret`, which a second run turns into a code cave (CAVES, plan item 139): x16 borrowed through the red zone, w0 loaded from
          the host page; run in Unicorn it must give the page's value with x16 and the flags kept, and structck must pass it. A third run puts
          the cave behind an option (plan item 163): 7 without it, the page's value with the option applied as the loader does
+  0x900  plain load-exclusives (plan item 232): a spinlock's ldxr / stxr, then ldxrb, ldxrh, ldxp and a caspa (the same class bits, not a
+         load-exclusive); 0xa00 an exclusive section on x18 that takes its value with a plain ldxr
   and a module with `mrs x0, cntfrq_el0`, which the rewriter must refuse.
 Checked: the exact sites, both jump tables with their targets, the sections (0x300, 0x408 and 0x604 windows, 0x500 one piece [0x504, 0x520)
 entered at 0x50c), the svc gate; STRUCT OK; EQUIV OK (with its own mutation
 self-check); structck refuses the product with one site put back to the original word; equiv flags the 0x300 window when its success exit lands one
-instruction late, and the w18 block when it also stores into a slot three past x18's.
+instruction late, and the w18 block when it also stores into a slot three past x18's. Plan item 232: acq.tsv lists the four plain load-exclusives
+of 0x900 and 0xa00's ldxr (not the caspa), the image has their acquire forms, 0xa00's window copy has ldaxr, and structck refuses the product with
+0x900 back to its plain ldxr.
 Broken variants: DM_TEST_JT_NO_SWAP=1 (only the anchor first) stops the rewriter at 0x128: 1 fail, nothing else runs; DM_TEST_DISASM_STREAM=1
 (stream decoding stops at the data word) leaves 0x400's section as plain sites: 2 fail (structck and equiv still pass then: each plain site is
 right taken alone, only the exclusive monitor breaks); DM_TEST_EQUIV_CBZ_NOP=1 (cbz status as nop): 2 fail (the 0x300 exit is missed, and the clean run differs: 0x500's forced compare-equal path
 loops back to its load until the step limit, which each side reaches at another instruction);
 DM_TEST_EQUIV_TSD_WIDE=1 (every write into the slot area dropped): 1 fail; DM_TEST_CAVE_NO_BACK=1 (a routine without its branch back): 4 fail (both caves);
-DM_TEST_CAVE_GATE_WRITTEN=1 (a cave behind an option written into the image as well): 3 fail.
+DM_TEST_CAVE_GATE_WRITTEN=1 (a cave behind an option written into the image as well): 3 fail; DM_TEST_ACQ_OFF=1 (the load-exclusives left plain):
+7 fail (acq.tsv, the words, the copy, refusing the plain 0x900, and structck on each of the three products).
 Plan item 201: a third module pops sp by 0x40 at an x18 site (the save past the red zone after the pop) and by 0x10; equiv must flag the first.
 DM_TEST_EQUIV_RZ_START=1 (only the start sp's 128 bytes watched): 1 fail.
 Needs capstone, lz4, unicorn (the venv: work/build/cache/dm/venv/bin/python) and llvm-objdump (Xcode)."""
@@ -50,6 +55,8 @@ def LDRSW_IDX(t, n, m): return 0xB8A07800 | (m << 16) | (n << 5) | t   # ldrsw x
 def ADDR(d, n, m): return 0x8B000000 | (m << 16) | (n << 5) | d
 def LDAXR(t, n): return 0xC85FFC00 | (n << 5) | t
 def STLXR(s, t, n): return 0xC800FC00 | (s << 16) | (n << 5) | t
+def LDXR(t, n, sf=1): return 0x885F7C00 | (sf << 30) | (n << 5) | t
+def STXR(s, t, n, sf=1): return 0x88007C00 | (sf << 30) | (s << 16) | (n << 5) | t
 RET, NOP, HI = 0xD65F03C0, 0xD503201F, 8
 
 TEXT, RO, DATA = 0x0, 0x1000, 0x2000
@@ -74,6 +81,11 @@ def text_words():
     at(0x600, 0xC831B5D0, 0xC87FC9D1, 0xCA0F0252, 0xAA120231, 0xC831B5D0, 0x35FFFF91, RET)
     at(0x700, 0x910003E9, 0xCB010132, 0x9100025F, 0x9100013F, RET)
     at(0x800, 0x528000E0, RET)   # mov w0, #7: the code cave's site
+    # 0x900, plain load-exclusives: a spinlock (ldxr; cbnz; stxr; cbnz; the protected read), ldxrb, ldxrh, ldxp, and caspa (o2 = 0, L = 1, o0 = 0 as well)
+    at(0x900, LDXR(8, 0, 0), CB(0x904, 0x900, 8, 1), STXR(9, 1, 0, 0), CB(0x90C, 0x900, 9, 1), 0xB9400400, 0x085F7C02, 0x485F7C03, 0xC87F1404,
+       0x48667C02, 0xD503305F, RET)
+    # 0xa00, an exclusive section on x18 that loads with a plain ldxr
+    at(0xA00, LDXR(18, 0), ADDI(18, 18, 1), STXR(3, 18, 0), CB(0xA0C, 0xA00, 3, 1), MOVX(0, 1), RET)
     return W
 WANT = {0x100: 'svc #0x40', 0x104: 'mrs x0, tpidr_el0', 0x108: 'mov w18, #5', 0x10c: 'adrp x16, #0x1000', 0x110: 'add x16, x16, #0x80',
         0x114: 'sub w18, w1, #1', 0x118: 'cmp w18, #3', 0x11c: 'b.hi #0x150', 0x120: 'ldrsw x18, [x16, x18, lsl #2]', 0x124: 'add x18, x18, x16',
@@ -84,8 +96,11 @@ WANT = {0x100: 'svc #0x40', 0x104: 'mrs x0, tpidr_el0', 0x108: 'mov w18, #5', 0x
         0x50c: 'ldaxp x17, x18, [x14]', 0x510: 'eor x18, x18, x15', 0x514: 'eor x17, x17, x16', 0x518: 'orr x17, x17, x18', 0x51c: 'cbz x17, #0x504',
         0x520: 'clrex', 0x600: 'stlxp w17, x16, x13, [x14]', 0x604: 'ldaxp x17, x18, [x14]', 0x608: 'eor x18, x18, x15', 0x60c: 'orr x17, x17, x18',
         0x610: 'stlxp w17, x16, x13, [x14]', 0x614: 'cbnz w17, #0x604', 0x700: 'mov x9, sp', 0x704: 'sub x18, x9, x1', 0x708: 'mov sp, x18',
-        0x70c: 'mov sp, x9', 0x800: 'mov w0, #7'}
-FUNCS = (0x100, 0x200, 0x300, 0x400, 0x500, 0x600, 0x700, 0x800)
+        0x70c: 'mov sp, x9', 0x800: 'mov w0, #7', 0x900: 'ldxr w8, [x0]', 0x904: 'cbnz w8, #0x900', 0x908: 'stxr w9, w1, [x0]',
+        0x90c: 'cbnz w9, #0x900', 0x910: 'ldr w0, [x0, #4]', 0x914: 'ldxrb w2, [x0]', 0x918: 'ldxrh w3, [x0]', 0x91c: 'ldxp x4, x5, [x0]',
+        0x920: 'caspa x6, x7, x2, x3, [x0]', 0xa00: 'ldxr x18, [x0]', 0xa08: 'stxr w3, x18, [x0]', 0xa0c: 'cbnz w3, #0xa00'}
+FUNCS = (0x100, 0x200, 0x300, 0x400, 0x500, 0x600, 0x700, 0x800, 0x900, 0xA00)
+ACQ = {0x900: 'ldaxr w8, [x0]', 0x914: 'ldaxrb w2, [x0]', 0x918: 'ldaxrh w3, [x0]', 0x91c: 'ldaxp x4, x5, [x0]', 0xa00: None}   # (0xa00: in a window)
 T0, T1 = [0x12C, 0x134, 0x13C, 0x144], [0x220, 0x228, 0x230]
 
 def build(words):
@@ -143,6 +158,7 @@ with tempfile.TemporaryDirectory() as td:
     check('0x408: the section after the undecodable word is a window [0x408, 0x418)', wins.get(0x408) == 0x418, str({hex(k): hex(v) for k, v in wins.items()}))
     check('0x604: the section is a window [0x604, 0x618), without the earlier store at 0x600', wins.get(0x604) == 0x618,
           str({hex(k): hex(v) for k, v in wins.items()}))
+    check('0xa00: the section with a plain ldxr is a window [0xa00, 0xa10)', wins.get(0xa00) == 0xa10, str({hex(k): hex(v) for k, v in wins.items()}))
     secs = {int(r[0], 16): [tuple(int(v, 16) for v in p.replace('@', '-').split('-')[:2]) for p in r[2:]] for r in R if r[1] == 'R'}
     check('0x500: the store-first compare-and-swap is one piece [0x504, 0x520) entered at its load 0x50c', secs == {0x50c: [(0x504, 0x520)]},
           str({hex(k): v for k, v in secs.items()}))
@@ -156,6 +172,17 @@ with tempfile.TemporaryDirectory() as td:
           eo.strip().splitlines()[-1])
 
     pat = bytearray(open(os.path.join(out, 'm.patched.bin'), 'rb').read())
+    # Plan item 232: the plain load-exclusives became acquire loads in place, the caspa did not, and the window's copy took the acquire form
+    arows = {int(l.split()[0], 16): int(l.split()[1], 16) for l in open(os.path.join(out, 'm.acq.tsv')) if not l.startswith('#')}
+    check('232: acq.tsv lists 0x900, 0x914, 0x918, 0x91c and 0xa00 with their original words (not the caspa at 0x920)',
+          arows == {a: words[a] for a in ACQ}, str({hex(a): hex(w) for a, w in arows.items()}))
+    dis = lambda b, a: (lambda l: f'{l[0].mnemonic} {l[0].op_str}' if l else None)(list(md.disasm(bytes(b[a:a + 4]), a)))
+    gotw = {a: dis(pat, a) for a in ACQ if ACQ[a]}
+    check('... the image has ldaxr, ldaxrb, ldaxrh and ldaxp there, and the caspa as it was', gotw == {a: t for a, t in ACQ.items() if t}
+          and dis(pat, 0x920) == WANT[0x920], f'{gotw} {dis(pat, 0x920)}')
+    cw = [dis(pat, o) or '' for o in range(btarget(pat, 0xa00), btarget(pat, 0xa00) + 4 * 40, 4)]
+    check('... 0xa00\'s window copy loads with ldaxr, no plain ldxr', any(t.startswith('ldaxr ') for t in cw) and not any(t.startswith('ldxr ') for t in cw),
+          ' / '.join(t for t in cw if 'ld' in t and 'x' in t)[:200])
     def fixture(name, change):
         d = os.path.join(td, name); os.makedirs(d)
         for f in os.listdir(out):
@@ -165,6 +192,10 @@ with tempfile.TemporaryDirectory() as td:
     d = fixture('orig_word', lambda p: struct.pack_into('<I', p, 0x108, words[0x108]))
     code, so = run(STRUCTCK, d, 'm', nso, env=env)
     check('structck refuses a product with one site left as the original word', code == 1 and re.search(r'^STRUCT m FAIL', so, re.M) is not None,
+          so.strip().splitlines()[-1])
+    d = fixture('plain_ldxr', lambda p: struct.pack_into('<I', p, 0x900, words[0x900]))
+    code, so = run(STRUCTCK, d, 'm', nso, env=env)
+    check('232: structck refuses a product with 0x900 back to its plain ldxr', code == 1 and re.search(r'^FAIL text changes do not match', so, re.M) is not None,
           so.strip().splitlines()[-1])
     # the success exit of a cbz status (the stub that goes back to 0x314 / 0x528) lands one instruction late
     def late_exit(p):

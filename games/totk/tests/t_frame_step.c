@@ -4,6 +4,8 @@
 // written (-DDM_TEST_CLOTH_NO_SECONDS) fails 1. The output size at +24 / +32 (DM_OUTPUT_RES, plan item 63); the canvas left to the game
 // (-DDM_TEST_OUTPUT_NO_CANVAS) fails 3. DM_RENDER_HEIGHT at 16:9 when DM_RENDER_RES is unset (plan item 62l); ignored (-DDM_TEST_SCENE_NO_HEIGHT)
 // fails 3. The mean of the intervals before the 1/120 floor (plan item 250); each interval clamped first (-DDM_TEST_FSTEP_CLAMP_EACH) fails 3.
+// A live scene size (plan item 240, scene_latch_step / scene_live_size): the mode-change path not asked for (-DDM_TEST_SCENE_LATCH_NO_KICK) fails
+// 2; +56 left set after the pick (-DDM_TEST_SCENE_LATCH_NO_CLEAR) fails 3.
 #include <stdio.h>
 #include <math.h>
 #define FRAME_STEP_TEST 1
@@ -74,6 +76,31 @@ int main(void) {
         expect(what, 1, o[0] == hd && !o[1] && r == -1, 0); }
     r = output_size("2560x1440", "1920x1080", o); expect("2560x1440 with an overlay for 1920x1080: refused (-1)", 1, o[0] == hd && !o[1] && r == -1, 0);
     r = output_size("3840x2160", "9999x9999", o); expect("a note above 3840x2160 is ignored: 3840x2160 refused (-1)", 1, !o[1] && r == -1, 0);
+    // A live scene size (plan item 240): the page, the renderer's cached mode index (+0xcd0) and the flags the cave ORs in (+56)
+    {   _Alignas(16) static uint8_t pg[64]; _Alignas(16) static uint8_t rend[0x1000]; float f[2]; uint32_t k; int st;
+        const uint64_t s720 = (uint64_t)720 << 32 | 1280, s540 = (uint64_t)540 << 32 | 960;
+        scene_latch sl = {.latched = s720}; rend[0xcd0] = 1;
+        st = scene_latch_step(&sl, pg, s720); expect("latch: the boot size again: nothing done (0)", 0, st, 0);
+        st = scene_latch_step(&sl, pg, s540); memcpy(f, pg + 16, 8); memcpy(&k, pg + 56, 4);
+        expect("latch, no renderer yet (+48 = 0): 960x540 on the page, the first pick takes it (SCENE_NO_RENDERER)", 1, st == SCENE_NO_RENDERER && f[0] == 960 && f[1] == 540 && !k, 0);
+        uint64_t rp = (uint64_t)(uintptr_t)rend; memcpy(pg + 48, &rp, 8);
+        st = scene_latch_step(&sl, pg, s720); memcpy(f, pg + 16, 8); memcpy(&k, pg + 56, 4);
+        expect("latch, 1280x720 asked with the renderer at +48: on the page, written (SCENE_WROTE)", 1, st == SCENE_WROTE && f[0] == 1280 && f[1] == 720, 0);
+        expect("... the cached mode index -1 and +56 = 0x80 (the mode-change path) [-DDM_TEST_SCENE_LATCH_NO_KICK: +56 0]", 1, (int8_t)rend[0xcd0] == -1 && k == 0x80, 0);
+        st = scene_latch_step(&sl, pg, s720); memcpy(&k, pg + 56, 4); expect("... the next present, no pick yet: nothing done, +56 kept", 1, !st && k == 0x80, 0);
+        rend[0xcd0] = 1; st = scene_latch_step(&sl, pg, s720); memcpy(&k, pg + 56, 4);
+        expect("... the game picked (index 1): SCENE_PICKED, the renderer noted [-DDM_TEST_SCENE_LATCH_NO_CLEAR: +56 still set]", 1, st == SCENE_PICKED && sl.picked == (uintptr_t)rend && !k, 0);
+        st = scene_latch_step(&sl, pg, s720); memcpy(&k, pg + 56, 4); expect("... after it: nothing done, +56 stays 0 [-DDM_TEST_SCENE_LATCH_NO_CLEAR: set]", 1, !st && !k, 0);
+        st = scene_latch_step(&sl, pg, s540); int gave = -1;
+        for (int i = 1; i <= 600 && gave < 0; i++) if (scene_latch_step(&sl, pg, s540) & SCENE_GAVE_UP) gave = i;
+        memcpy(&k, pg + 56, 4); expect("latch: no pick at all: given up at the 600th present after the request, +56 cleared", 1, st == SCENE_WROTE && gave == 600 && !k, 0); }
+    {   const uint64_t b720 = (uint64_t)720 << 32 | 1280, b1080 = (uint64_t)1080 << 32 | 1920;
+        expect("live size 960x540 (boot 1280x720): taken", 1, scene_live_size(960, 540, "", b720) == ((uint64_t)540 << 32 | 960), 0);
+        expect("live size 1600x900 (boot 1280x720): taken (the game's own docked size)", 1, scene_live_size(1600, 900, "", b720) != 0, 0);
+        expect("live size 1920x1080 (boot 1280x720): refused, more pixels than 1600x900", 1, scene_live_size(1920, 1080, "", b720) == 0, 0);
+        expect("live size 1920x1080 (booted at 1920x1080): taken", 1, scene_live_size(1920, 1080, "", b1080) != 0, 0);
+        expect("live size 2560x1440 with the overlay's note 2560x1440: taken", 1, scene_live_size(2560, 1440, "2560x1440", b720) != 0, 0);
+        expect("live size 32x32: refused", 1, scene_live_size(32, 32, "", b720) == 0, 0); }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

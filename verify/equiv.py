@@ -42,7 +42,8 @@ def deexcl(b):
     # Test only: all exclusive loads/stores (every width, single / pair) → plain ldr/str/ldp/stp; the status test right after a store takes the path of
     # a store that succeeded (status 0): cbnz → nop, cbz → b to its target. Both images are processed the same way. (cbz became a nop as well until plan
     # item 129, so a section that tests the status with cbz never left by its success exit: 5 of the 134 x18 sections of Tears of the Kingdom's main;
-    # bayonetta3-mobile's copy of blade2-mobile's dm/verify/equiv.py, MIT, does the same)
+    # bayonetta3-mobile's copy of blade2-mobile's dm/verify/equiv.py, MIT, does the same). Plain and acquire forms alike, so the rewriter's acquire loads
+    # (plan item 232, acq.tsv, checked by structck ⑭) compare equal here
     LD = {0: 0x39400000, 1: 0x79400000, 2: 0xB9400000, 3: 0xF9400000}
     ST = {0: 0x39000000, 1: 0x79000000, 2: 0xB9000000, 3: 0xF9000000}
     b = bytearray(b); n = 0

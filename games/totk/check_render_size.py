@@ -3,7 +3,8 @@
 # original main (rules.py CUTS + HOSTREFS, plan item 52): with the graphics parameter's size in w11 / w10 (1600x900) and the output size in w9 (1920),
 # and 960x540 on the host page +16 / +20. The product stores the page's size at renderer +0xcc4 / +0xcc8; the original stores the parameter's
 # (negative control) and ignores the page; both store the output size at +0xcc0 (w9 is left alone) and leave x3 and the argument registers as they
-# were. Needs the venv's unicorn and lz4.
+# were. Plan item 240: the product also keeps the renderer (x19) at the host page +48, and 0x580920 (the display state's flags, ldrh w8, [x23, #8])
+# gets the page +56 ORed in: 0x80 there makes w8 0x81 from 0x1, 0 leaves it 0x1, and the original ignores the page. Needs the venv's unicorn and lz4.
 # Usage: check_render_size.py <product dir> <original main NSO>
 import struct, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'verify'))
@@ -11,7 +12,7 @@ import nsoimg
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3, UC_ARM64_REG_X4, UC_ARM64_REG_X5,
                                  UC_ARM64_REG_X6, UC_ARM64_REG_X7, UC_ARM64_REG_X8, UC_ARM64_REG_X9, UC_ARM64_REG_X10, UC_ARM64_REG_X11,
-                                 UC_ARM64_REG_X19, UC_ARM64_REG_SP)
+                                 UC_ARM64_REG_X19, UC_ARM64_REG_X23, UC_ARM64_REG_SP)
 
 BASE, REND, OBJ, STACK = 0x10000000, 0x80000000, 0x80100000, 0x81000000
 START, END = 0x585e48, 0x585e6c   # (0x585e6c: ldr x8, [x8, #0x150], the first instruction after the stores)
@@ -32,7 +33,14 @@ def run(img, page_off, page_size):
     uc.emu_start(BASE + START, BASE + END)
     f = lambda o: struct.unpack('<f', uc.mem_read(REND + o, 4))[0]
     regs = [uc.reg_read(r) for r in ARGS]
+    run.kept = struct.unpack('<Q', uc.mem_read(BASE + page_off + 48, 8))[0] if page_off else None
     return (f(0xcc4), f(0xcc8), f(0xcc0)), regs, uc.reg_read(UC_ARM64_REG_X9)
+def flags(img, page_off, kick):   # 0x580920 → 0x580924 with the display state's flags 0x1 at x23 +8 and kick at the page +56: w8
+    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    uc.mem_map(BASE, (max(len(img), page_off + 0x4000) + 0xFFFF) & ~0xFFFF); uc.mem_write(BASE, bytes(img)); uc.mem_map(OBJ, 0x10000)
+    uc.mem_write(BASE + page_off + 56, struct.pack('<I', kick)); uc.mem_write(OBJ + 8, struct.pack('<H', 1))
+    uc.reg_write(UC_ARM64_REG_X23, OBJ); uc.emu_start(BASE + 0x580920, BASE + 0x580924)
+    return uc.reg_read(UC_ARM64_REG_X8) & 0xFFFFFFFF
 
 n = fail = 0
 def expect(what, want, got):
@@ -55,4 +63,10 @@ expect('product: x3 and the other argument registers but x0 / x2 as the original
        [r for i, r in enumerate(orr) if i not in (0, 2)], [r for i, r in enumerate(pr) if i not in (0, 2)])
 p2, _, _ = run(prod, fx['HOST_PAGE_OFF'], (1280.0, 720.0))
 expect('product: another size on the page is the size stored', (1280.0, 720.0), p2[:2])
+expect('240 product: the renderer (x19) kept at the host page +48', hex(REND), hex(run.kept or 0))
+run(orig, fx['HOST_PAGE_OFF'], (960.0, 540.0))
+expect('240 original (negative control): nothing at +48', '0x0', hex(run.kept or 0))
+expect('240 product: 0x580920 with 0x80 at the page +56: flags 0x1 | 0x80', hex(0x81), hex(flags(prod, fx['HOST_PAGE_OFF'], 0x80)))
+expect('240 product: with 0 there the flags as loaded', hex(0x1), hex(flags(prod, fx['HOST_PAGE_OFF'], 0)))
+expect('240 original (negative control): the page ignored', hex(0x1), hex(flags(orig, fx['HOST_PAGE_OFF'], 0x80)))
 print(f'== {n} checks, {fail} failed =='); sys.exit(fail != 0)
