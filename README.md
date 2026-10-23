@@ -145,7 +145,8 @@ endorsed by Nintendo or any game publisher. Nintendo Switch is a trademark of Ni
   vertex output defaults, invariance and the Metal compile cache; then precise SleepThread, env.txt switches, compressed files stored in the IPA,
   yield back-off (opt-in), targeted wakes, waits on upload completion and buffer releases, a per-thread pool cache, the dirty range kept per
   texture, residency no-op skips, page runs, a spare texture for re-uploads and VP9 row multithreading; then the host race fixes, the c1 guard
-  by interval arithmetic, the yield back-off start, the guest CPU power line and the BAHS shader entries, credited in the code.
+  by interval arithmetic, the yield back-off start, the guest CPU power line and the BAHS shader entries; later Maxwell's min / max / clamp results for a NaN operand on
+  every GPU (`precise::`), credited in the code.
 - **[tomodachi-native](https://github.com/kuosuko/tomodachi-native)** ([kuosuko](https://github.com/kuosuko), MIT), a fork of nxnative: the
   variant of the duplicated colour slot handling that keeps the slot the pass writes, the memory snapshots (`DM_MEMSNAP`), the FMZ multiply in
   the shader translator, the attachment copies for draws that sample what their pass draws and code options applied at load.

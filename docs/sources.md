@@ -18,7 +18,7 @@ d2r-mobile and its derivatives (MIT, keeping jhaizhou's LICENSE; the derivatives
 | Project | Last read | Notes |
 |---|---|---|
 | [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) (upstream, fetch only) | main eb3fe37 (10-23 evening) | v2.0 b811b90 (Android and HarmonyOS on a Vulkan engine, Korean, Xbox layout, iPhone Duo) and PRs #119-#121, #126; open #104, #111, #127. d2r-mobile/d2r-mobile is a rewritten copy of its history up to 21cf97b |
-| [seedds/nxnative](https://github.com/seedds/nxnative) | main e454ac9 (10-23) | PRs to #64, #62 open; branch `launcher` 47fc7f9. Its history was rewritten on 10-22 (b932024's tree is 5dae4db). seedds/smbw-mobile is the same repository renamed |
+| [seedds/nxnative](https://github.com/seedds/nxnative) | main e454ac9 (10-23); 56704a0 read on its own (10-23 night, main then 4c7adf4) | PRs to #64, #62 open; branches `main`, `chain-refresh`. Its history was rewritten on 10-22 (b932024's tree is 5dae4db). No Android port; its "Vulkan layer" runs Switch games that use Vulkan on Metal. seedds/smbw-mobile is the same repository renamed |
 | [ly05010419/MacNativeGames](https://github.com/ly05010419/MacNativeGames) | main a988b5e (10-23) | Tears of the Kingdom 1.0.0 / 1.1.2 / 1.4.3 on the Mac; PRs to #287, #222 / #257 / #286 open |
 | MacNativeGames forks | 10-23 | tvc97 e8bd37d; DavidZande/MacNativeGames `performance` a60cdb3; BennettStaley/NativeTOTK-Apple-Silicon 47c261f (base e55ad1c); dnlflores/MacNativeGames c098279 (base 4fdda41); NicholasDominici/totk-ios (1.0.0 on iPad and iPhone; its aspect data is GPL-3.0); colonnellotong/MacNativePorts |
 | [T5eng/nxnative_totk](https://github.com/T5eng/nxnative_totk) (MIT with a note) | 057575d | Tears of the Kingdom 1.4.3 on an iPhone Air (iOS 27.0.1) as patches on MacNativeGames |
@@ -57,6 +57,12 @@ Independent projects:
 | masagrator's FPSLocker-Warehouse, alanyangcn/smbwonder-ios | | no licence: facts only |
 | vecStardo/VA-11_ns2ios | | GameMaker through GLES, no NVN: little to take |
 
+Android and HarmonyOS (10-23 night): upstream v2.0 runs D2R on both through its NVN → Vulkan engine (`dm/gfx/vulkan`, from biglawine's
+HarmonyOS port); nxnative has no Android port. The radar (c7002ad) lists about 30 Android or HarmonyOS ports, nearly all of D2R
+(wdjwxh/D2R-Mobile-Android, Timqt/d2r-android, akari-sora/d2r-native AGPL-3.0, …); of other games wdjwxh/Taikou5-mobile, todwang96/rhythm-heaven-android,
+akari-sora/taiko-android (MIT) and rootrd/dontstarve-harmony; none of Tears of the Kingdom. For ours: the host calls 89 backend functions, 41 of
+which upstream's Vulkan engine lacks, and 26 of the 60 host sources use Apple-only APIs.
+
 Seen, not reviewed: CODPHISH/ns2app (Silksong on iOS), WangTingYeYe/rtg-mobile, rootrd/dontstarve-harmony (NVN → Vulkan), hitsmaxft/nsp-dawrin
 (GPL-3.0: a synthetic NSP that CI could use).
 
@@ -72,7 +78,7 @@ Seen, not reviewed: CODPHISH/ns2app (Silksong on iOS), WangTingYeYe/rtg-mobile, 
   181-193. Afternoon refresh: 194-215.
 - 2026-10-23, seventh review (five reviewers) and a deep review of the new Tears of the Kingdom projects (five reviewers, layer by layer
   against ours): 231-259. Below the shaders none of the new projects does more than ours.
-- 2026-10-23 evening, upstream v2.0: nothing to port (see Not taken).
+- 2026-10-23 evening, upstream v2.0: nothing to port then (see Not taken); its NaN rule became 260 that night, after nxnative 56704a0.
 
 The items: [plan-archive.md](plan-archive.md); the open ones: [DEVELOPMENT.md](../DEVELOPMENT.md#open-work).
 
@@ -86,9 +92,9 @@ The items: [plan-archive.md](plan-archive.md); the open ones: [DEVELOPMENT.md](.
   (2022-06-08) made it −1, as ours.
 - nx-port's clamp of fragment outputs to ±65504 (breaks R32F); GirlNet's per-draw conditional render (a CPU stall).
 - nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK runtimes (dodola, imink/hades-ios), upstream's D2R-only parts.
-- Upstream v2.0 (10-23): the arena out-parameter of PR #126 is our plan item 185; the Vulkan engine's NaN-ignoring min / max / clamp is not
-  needed (on the M5 `fast::min` / `fast::max` return the other operand and `fast::clamp(NaN, 0, 1)` gives 0, as Maxwell, with safe and fast math
-  alike; the iPhone not measured); the adaptive present tier does not apply (Tears of the Kingdom picks its present interval itself); the main
+- Upstream v2.0 (10-23): the arena out-parameter of PR #126 is our plan item 185; the Vulkan engine's NaN-ignoring min / max / clamp was first
+  judged not needed (on the M5 `fast::min` / `fast::max` return the other operand and `fast::clamp(NaN, 0, 1)` gives 0, as Maxwell), then taken
+  as plan item 260 when nxnative 56704a0 found an A20 Pro's `fast::max(0, NaN)` not 0 (one GPU agreeing says nothing of the next); the adaptive present tier does not apply (Tears of the Kingdom picks its present interval itself); the main
   thread's spin before short waits, event-read hooks, pool flags, the rewriter without a red zone, `DM_SECT` and the ucontext macros are for
   Android and HarmonyOS; separate base and update packages with title keys from tickets are in `tools/game_extract`; VP9 on iOS is ours since
   batch 54. For 190: its dropped-frame rule (a run counts only its first 3 frames unless it lasts 1 s) fits; its GPU-time controller skips

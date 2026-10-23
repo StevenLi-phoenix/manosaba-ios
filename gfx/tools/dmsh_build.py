@@ -542,6 +542,8 @@ def finish(key, w, j, c1):
     if iq: res['notes'].append('image size queries moved to the image argument: ' + ' '.join(iq))
     inl = msl_helpers.inline_helpers(src)   # the NoContraction helpers inlined, not called (msl_helpers.py)
     if inl != src: res['notes'].append('NoContraction helpers inlined')
+    inl, nprec = msl_helpers.precise_minmax(inl)   # min / max / clamp with Maxwell's results for a NaN operand (msl_helpers.py, plan item 260)
+    if nprec: res['notes'].append(f'fast:: min / max / clamp as precise:: ({nprec})')
     if iq or inl != src: src = inl; open(msl, 'w').write(src)
     pad = []
     if j['stage'] == 'vs' and j.get('pad_want'):   # outputs the paired pixel shaders read but this one does not write get (0, 0, 0, 1) (see vs_pad)

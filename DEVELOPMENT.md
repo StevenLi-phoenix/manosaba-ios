@@ -149,7 +149,8 @@ snapshots and steady / network clocks (from Ryujinx), NVN functions (13 names in
   `DOTNET_ROOT` with Homebrew's .NET (`/opt/homebrew/opt/dotnet/libexec`).
 - `QueryHostSupportsShaderFloat64` false: Ryujinx's `DoubleToFloat` runs DMUL / DFMA in float. Integer pixel outputs: a failed pipeline writes
   `<DM_SHDUMP>/fout.tsv`, which `dmsh_build.py` passes to the translator. Vertex shaders padded for their pixel shaders (`vs_pad`). Early fragment
-  tests where the control section asks for them (239). The chain in use: f9e7d3ecf49e.
+  tests where the control section asks for them (239). min / max / clamp with Maxwell's results for a NaN operand (`precise::`, 260). The chain in
+  use: ae6a8bd1acdd.
 - `engines/bnsh/shader_extract.py` reads the shipped BNSH (`Pack/Bootup`, `Lib/**`, `Shader/**`, as MacNativeGames' prepare_shader_seed.py),
   plus `Effect/**.esetb.byml.zs`, 0x88c-byte control sections and the sharcb archives, into `work/build/totk/shader_capture` (with the
   run-time captures 28,652 shaders; every one has a Mac and an iOS library, checked 2026-10-22). Shaders in main stay run-time captures.
@@ -247,3 +248,18 @@ With the next game (64): 64a2 ClearBuffer, the indirect and IndirectCount draws 
 64f tessellation; 64g HSETP2 `.H_AND` and translator call arguments (with the next change of the translation chain); 64h2 a SystemEvent kept while
 its detached read end waits (UE4); 64j2 AVC / AAC decoded from the game's bytes; 64n2 LDN. Also [docs/sources.md § Port when a game needs
 it](docs/sources.md#port-when-a-game-needs-it).
+
+## Plan items from 260
+
+Finished items from 260 on, in the archive's form (`[x] batch N` is the commit whose subject starts with "Plan batch N").
+
+- [x] batch 85 · 260 min / max / clamp with Maxwell's results for a NaN operand on every GPU (seedds/nxnative 56704a0, MIT, written anew):
+  spirv-cross writes the translator's FMin / FMax / FClamp as `fast::min` / `max` / `clamp`, which compile to `air.fast_fmin` / `fast_fmax` /
+  `fast_clamp` in every Metal math mode, safe included, and leave a NaN operand's result to the GPU. The M5 happens to agree with Maxwell (the
+  check of 2026-10-23 evening), an A20 Pro does not (nxnative: Super Mario Galaxy 2's `max(0, NaN)` lighting turned half of Mario white).
+  `gfx/tools/msl_helpers.py` `precise_minmax` writes them as `precise::` (IEEE `fmin` / `fmax`), applied by `dmsh_build.py` after spirv-cross;
+  every plain min / max / clamp left is an integer one (no fast intrinsic call in a 300-shader sample). Chain f9e7d3ecf49e → ae6a8bd1acdd
+  (Tears of the Kingdom 28,675 shaders, 25,081 rewritten; its c1 list 5 as before), 217's 48 kernels made again. `tools/tests/t_msl_helpers.py`
+  +7 (the rewrite, and a library compiled with iOS's flags calling `air.fmin` / `fmax` / `clamp` and no fast one); `T_MSL_PRECISE_OFF=1` fails 3.
+  Smoke: Tears of the Kingdom's two red lines as before and its prologue frames the same by eye, manosaba's shots identical. The iPhone 17 Pro's
+  (A19 Pro) own `fast::` results were not measured.
