@@ -207,7 +207,7 @@ decide):
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
   In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90; then occlusion, frame timing, the live
+  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91; then the live
   texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
   is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
   covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
@@ -330,3 +330,13 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   submission; a full clear of another level counting, `-DDM_TEST_XV_ANY_LEVEL`, fails 1); `t_xv.m` reads `g_xv.*`. The pass dump of
   `t_rt_continue` and `t_defer_chain` (`DM_NVN_PASSDUMP=0-1000000`) is batch 89's line for line but for two command buffer addresses. Batch
   tests as in batch 88; smoke: the same red lines and frames.
+- [x] batch 91 · 264, pending writes and frame measurements: `gfx/nvn/core/pend.c` takes from `mtl/occlusion.inc` the buffer writes encoded
+  but not executed yet (`pend_add`, `pend_begin`, `pend_hits` inline, state `g_pend.*`) and from `mtl/capture.inc` `pend_read_x`; the
+  backend's `pend_note` adds its submission's fence. `gfx/nvn/core/frame.c` takes from `mtl/frame_timing.inc` the boot instrumentation
+  (`bp_now` inline, `g_bp.*`, `g_up_total_ns`), each frame's GPU time as the union of its command buffers' spans (`gpu_tag_begin` /
+  `gpu_tag_done`, `mtl_gpu_ms`, `mtl_gpu_sum_ms`, `mtl_gpu_span`; `GIVR` in the header) and DM_NVN_UB (`g_ub.*`, `ub_frame`, `ub_skip`,
+  `mtl_ub_present`); the command buffers' completion handlers and DM_NVN_GPUWATCH stay. `core.h` gains `core_lock` (`os_unfair_lock` on
+  Apple's systems as before, a yielding spin lock elsewhere; `frame.c` compiles without `__APPLE__` too). `gfx/tests/t_core_pend.c` (15;
+  a copy reading its source as it is now, `-DDM_TEST_PEND_COPY_NOW`, fails 2), `t_core_frame.c` (15; the plain sum, `-DDM_TEST_GIV_SUM`,
+  fails 3); `t_ub.m` / `t_pend.m` read `g_pend.*` / `g_ub.*`. Batch tests as in batch 88; smoke: the same red lines, Tears of the Kingdom's
+  frames the same scenes a little further on (looked at), its long frames' GPU times of the same shape (0.2 ms, one of 68 ms, 5-17 ms).

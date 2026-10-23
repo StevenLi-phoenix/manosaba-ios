@@ -287,7 +287,7 @@ static NvShader *shader_get(NSString *pc, int stage) {
     g_shcache[pc] = o;
     pso_record("S\t%s\t%d\n", pc.UTF8String, stage);
     pso_user_record("S\t%s\t%d\n", pc.UTF8String, stage);
-    g_bp_lib_n++; g_bp_lib_ns += bp_now() - bt;
+    g_bp.lib_n++; g_bp.lib_ns += bp_now() - bt;
     return o;
 }
 static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only on the submit thread

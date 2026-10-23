@@ -1,4 +1,4 @@
-// gfx/nvn/mtl/occlusion.inc, part of nvn_mtl.m (included there in order, one translation unit): Occlusion queries (samples passed) and the report writes still pending
+// gfx/nvn/mtl/occlusion.inc, part of nvn_mtl.m (included there in order, one translation unit): Occlusion queries (samples passed); the pending writes are gfx/nvn/core/pend.c (plan item 264)
 // ---------- Occlusion queries (NVN_COUNTER_TYPE_SAMPLES_PASSED) ----------
 // NVN semantics: samples passed is a cumulative counter on the queue - ResetCounter zeroes it, every draw afterwards adds to it, and ReportCounter writes out the cumulative value at that moment (+ timestamp) when the GPU completes.
 // Metal: every render pass attaches a visibility result buffer; draws during counting use counting mode, with a new slot per pass (no reliance on accumulation across passes); a reset empties the 'slot table since the reset',
@@ -55,22 +55,4 @@ static vis_list *vis_snapshot(void) {
     for (int i = 0; i < g_nvs; i++) { l->s[i] = g_vs[i]; CFRetain(g_vs[i].buf); }
     return l;
 }
-// Target ranges of buffer writes (copies / inline uniform updates) encoded but not yet executed on the GPU, in this submission and in earlier ones
-// still running: reading these addresses on the CPU side at encode time yields old values. Entries stay until their submission completes (pend_begin):
-// the acquire sync no longer holds the CPU until the previous frame has run, and Tears of the Kingdom updates ring-buffer uniform blocks inline one
-// submission before the draws that read storage buffer pointers out of them (MacNativeGames' pend_begin, 16384 entries; MIT)
-// g_pend_data: an inline update's bytes (its copy in the update ring, alive until its submission completes); NULL for a GPU copy, whose source is
-// g_pend_src (0: not known); g_pend_fence: the fence of the entry's submission; g_pend_over_fence: a submission whose writes did not fit
-#define PEND_MAX 16384
-static uint64_t g_pend_lo[PEND_MAX], g_pend_hi[PEND_MAX], g_pend_src[PEND_MAX], g_pend_fence[PEND_MAX], g_pend_over_fence; static const uint8_t *g_pend_data[PEND_MAX]; static int g_npend, g_pend_over;
-static int pend_hits(uint64_t a, uint64_t n) { if (g_pend_over) return 1; for (int i = 0; i < g_npend; i++) if (a < g_pend_hi[i] && a + n > g_pend_lo[i]) return 1; return 0; }
-static void pend_note(uint64_t dst, uint64_t n, const uint8_t *data, uint64_t src) {
-    if (g_npend < PEND_MAX) { g_pend_lo[g_npend] = dst; g_pend_hi[g_npend] = dst + n; g_pend_data[g_npend] = data; g_pend_src[g_npend] = src; g_pend_fence[g_npend] = g_fence + 1; g_npend++; }
-    else { g_pend_over = 1; g_pend_over_fence = g_fence + 1; }
-}
-static void pend_begin(uint64_t done) {   // submission start: the writes of submissions that have completed are in memory now
-    int n = 0;
-    for (int i = 0; i < g_npend; i++) if (g_pend_fence[i] > done) {
-        g_pend_lo[n] = g_pend_lo[i]; g_pend_hi[n] = g_pend_hi[i]; g_pend_data[n] = g_pend_data[i]; g_pend_src[n] = g_pend_src[i]; g_pend_fence[n] = g_pend_fence[i]; n++; }
-    g_npend = n; g_pend_over = g_pend_over_fence > done;
-}
+static void pend_note(uint64_t dst, uint64_t n, const uint8_t *data, uint64_t src) { pend_add(dst, n, data, src, g_fence + 1); }   // pending writes: gfx/nvn/core/pend.c

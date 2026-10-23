@@ -280,12 +280,12 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     g_present_n++;
     if (g_use != USE_OFF && g_use != USE_DONE) use_tick();
     if (bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
-        if (g_present_n == 1) g_bp_first_present = bp_now() - g_bp_t0;
+        if (g_present_n == 1) g_bp.first_present = bp_now() - g_bp.t0;
         MLOG("[bootprof] t=%.3f s present #%llu: metallib loads %llu / %.1f ms; pipeline creations %llu / %.1f ms (all synchronous on the submit thread); warm-up claimed shaders %llu / render pipelines %llu / compute pipelines %llu; "
-             "texture uploads %.1f MB / %llu first uploads + %llu re-uploads / %.1f ms; first frame presented t=%.3f s", (bp_now() - g_bp_t0) / 1e9, g_present_n,
-             g_bp_lib_n, g_bp_lib_ns / 1e6, g_bp_pso_n, g_bp_pso_ns / 1e6, g_warm_claim_shaders, g_warm_claim_rps, g_warm_claim_cps,
-             g_bp_up_bytes / 1048576.0, g_pkg_uploads, g_pkg_reuploads,
-             g_up_total_ns / 1e6, g_bp_first_present / 1e9);
+             "texture uploads %.1f MB / %llu first uploads + %llu re-uploads / %.1f ms; first frame presented t=%.3f s", (bp_now() - g_bp.t0) / 1e9, g_present_n,
+             g_bp.lib_n, g_bp.lib_ns / 1e6, g_bp.pso_n, g_bp.pso_ns / 1e6, g_warm_claim_shaders, g_warm_claim_rps, g_warm_claim_cps,
+             g_bp.up_bytes / 1048576.0, g_pkg_uploads, g_pkg_reuploads,
+             g_up_total_ns / 1e6, g_bp.first_present / 1e9);
     }
     PD("X ser=%llu", t->serial);
     id<MTLTexture> src = tex_mtl(t);

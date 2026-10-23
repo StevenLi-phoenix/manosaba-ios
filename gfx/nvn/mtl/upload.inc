@@ -373,9 +373,9 @@ static id<MTLTexture> pkg_upload(const tex_t *t, uint64_t *stamp, id<MTLTexture>
 }
 uint64_t mtl_upload_ns_take(void) { return atomic_exchange(&g_upload_ns, 0); }
 uint64_t mtl_upload_gpu_ns_take(void) { return atomic_exchange(&g_upload_gpu_ns, 0); }
-void mtl_create_stats(uint64_t *lib, uint64_t *pso) { *lib = g_bp_lib_n; *pso = g_bp_pso_n; }
-void mtl_create_ns(uint64_t *lib_ns, uint64_t *pso_ns) { *lib_ns = g_bp_lib_ns; *pso_ns = g_bp_pso_ns; }   // Cumulative time spent synchronously creating shader libraries / pipelines on the spot (the long-frame log takes the per-frame difference)
-uint64_t mtl_upload_bytes(void) { return g_bp_up_bytes; }   // Cumulative texture upload bytes
+void mtl_create_stats(uint64_t *lib, uint64_t *pso) { *lib = g_bp.lib_n; *pso = g_bp.pso_n; }
+void mtl_create_ns(uint64_t *lib_ns, uint64_t *pso_ns) { *lib_ns = g_bp.lib_ns; *pso_ns = g_bp.pso_ns; }   // Cumulative time spent synchronously creating shader libraries / pipelines on the spot (the long-frame log takes the per-frame difference)
+uint64_t mtl_upload_bytes(void) { return g_bp.up_bytes; }   // Cumulative texture upload bytes
 static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture> reuse) {
     MTLTextureDescriptor *d = tex_desc(t, t->has_layout);   // a CPU-filled texture without a packaged layout may become a render target later (see tex_gpu_write)
     if (!d) return nil;
@@ -395,7 +395,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
         total += unp ? (size_t)w * ubpp * h * z * layers : (size_t)((w + bw - 1) / bw) * (a1 ? 16 : bpb) * ((h + bh - 1) / bh) * z * layers;
     }
-    g_bp_up_bytes += total;
+    g_bp.up_bytes += total;
     void *mb; uint64_t mo;
     int gdec = unp && t->d.target != 2 && bcd_fmt(t->d.format) && bcd_pso();   // BC1–5 without BC: GPU deswizzle + GPU decompression
     int ga1 = a1 && t->d.target != 2 && b1a_pso();   // BC1 without BC: GPU deswizzle, then b1a into ASTC blocks behind the BC1 ones (3D: the CPU)

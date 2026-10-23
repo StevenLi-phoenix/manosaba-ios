@@ -82,11 +82,11 @@ Binding conventions used by the translation:
 | `nvn/hle_nvn.c` | Interface layer: NVN takeover, objects, command recording, presentation pacing, `DM_SHDUMP` capture |
 | `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: the Metal device, queues, residency and deferred releases, then the parts below, included in this order (one translation unit, plan item 261) |
 | `nvn/mtl/pools.inc` | Memory pools: the pool table, GPU addresses of guest memory and the buffers behind them |
-| `nvn/mtl/occlusion.inc` | Occlusion queries (samples passed) and the report writes still pending |
+| `nvn/mtl/occlusion.inc` | Occlusion queries (samples passed) |
 | `nvn/mtl/usnap.inc` | Uniform snapshots' backend side: the pools, arena, worker threads and fences they use |
 | `nvn/mtl/capture.inc` | The submit call's view for the translation thread (plan item 61) and the snapshot lookups on it |
 | `nvn/mtl/encoders.inc` | The encoder layer: Metal 4 / Metal 3 encoder wrappers, blits, inline updates, events, counters, timestamps |
-| `nvn/mtl/frame_timing.inc` | Boot instrumentation, per-frame GPU time, same-process alternating measurement (DM_NVN_UB), GPU time tags, DM_NVN_GPUWATCH |
+| `nvn/mtl/frame_timing.inc` | The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH |
 | `nvn/mtl/keepalive.inc` | GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE) |
 | `nvn/mtl/commit.inc` | The GPU memory budget, submission commits, fences, waits and drains |
 | `nvn/mtl/textures.inc` | Textures as Metal textures, and GPU textures sharing one storage |
@@ -122,6 +122,8 @@ Binding conventions used by the translation:
 | `nvn/core/tbdr.c`, `nvn/core/tbdr.h` | The TBDR rewrites' switches (`DM_NVN_TBDR`, `DM_NVN_TBDR_OFF`, the ruler, `DM_NVN_UNWRITTEN_DC`) and the cross-submission attachment validity ledger (`xv_*`) |
 | `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
+| `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |
+| `nvn/core/frame.c`, `nvn/core/frame.h` | Measurements by frame: boot instrumentation (DM_BOOTPROF), the GPU time as the union of command buffer spans, DM_NVN_UB |
 | `nvn/core/usnap.c`, `nvn/core/usnap.h` | Uniform snapshots: each submission's copies of the uniform ranges it binds; deferred binding handles read once a submission |
 | `nvn/core/store_index.c`, `nvn/core/store_index.h` | The store lookahead index: one scan per submission, the first valid event after a pass end decides each attachment's write-back |
 | `nvn/nvn_obj.h` | Host object layouts and the command record format, shared by both layers |

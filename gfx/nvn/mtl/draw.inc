@@ -35,7 +35,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     { static char sk[16][20]; static int nsk = -1;
       if (nsk < 0) { nsk = 0; for (const char *q = getenv("DM_NVN_SKIP_FS"); q && *q && nsk < 16; q = strchr(q, ',') ? strchr(q, ',') + 1 : q + strlen(q)) { size_t n = strcspn(q, ","); if (n > 16) n = 16; memcpy(sk[nsk], q, n); sk[nsk++][n] = 0; }
                      if (nsk) MLOG("DM_NVN_SKIP_FS: dropping the draws of %d fragment shaders (diagnostic, rendering is wrong)", nsk); }
-      if (g_ub_n > 0 && pr->sh[1] && !g_defer_replaying && ub_skip(pr->sh[1]->key)) return;   // In-process alternating measurement: this phase drops this class
+      if (g_ub.n > 0 && pr->sh[1] && !g_defer_replaying && ub_skip(pr->sh[1]->key)) return;   // In-process alternating measurement: this phase drops this class
       if (nsk && pr->sh[1] && !g_defer_replaying) for (int i = 0; i < nsk; i++) if (!strncmp(pr->sh[1]->key, sk[i], strlen(sk[i]))) return; }
     // Similar diagnostic DM_NVN_SKIP_SMALL=<width>: drop all draws whose target width (by the attached level) is <= this value -- measures how much "dropping tiny render passes in bulk" is worth under the parallel pipeline (fixed per-pass overhead)
     { static int small = -1; if (small < 0) { const char *e = getenv("DM_NVN_SKIP_SMALL"); small = e ? atoi(e) : 0; if (small) MLOG("DM_NVN_SKIP_SMALL: dropping draws whose target width is ≤ %d (diagnostic, rendering is wrong)", small); }
@@ -300,7 +300,7 @@ static void dispatch(const p_dispatch *dp) {
     if (!ps) {
         NSError *e = nil; uint64_t bt = bp_now(); int gave_up; id<MTLFunction> fn = cs->fn;
         ps = mtl_retry(^id(NSError **er) { return [g_dev newComputePipelineStateWithFunction:fn error:er]; }, &e, &gave_up);
-        g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
+        g_bp.pso_n++; g_bp.pso_ns += bp_now() - bt;
         if (!ps) { MLOG("[red] failed to create compute pipeline: %s", e.localizedDescription.UTF8String); return; }
         pso_record("C\t%s\n", cs->key);
         if (cs->key[0]) pso_user_record("C\t%s\n", cs->key);

@@ -32,26 +32,26 @@ int main(void) {
     EXPECT("checkpoints walked through", n, ti);
     // On-screen present intervals are tallied per phase: counted only from frame 45 of the phase on; boundaries of the three bands are 20.8 / 29.2 ms; −1 is recorded as discarded
     for (int f = 480; f < 480 + 45; f++) { mtl_set_frame((uint64_t)f); mtl_ub_present(16.7); }   // transition segment: not counted
-    EXPECT("transition segment not counted", 0, atomic_load(&g_ubp_c[0]));
+    EXPECT("transition segment not counted", 0, atomic_load(&g_ub.p_c[0]));
     mtl_set_frame(480 + 45); mtl_ub_present(16.7); mtl_ub_present(25.0); mtl_ub_present(25.0); mtl_ub_present(33.3); mtl_ub_present(-1); mtl_ub_present(0);
-    EXPECT("16.7 ms band", 1, atomic_load(&g_ubp_c[0])); EXPECT("25 ms band", 2, atomic_load(&g_ubp_c[1])); EXPECT("≥33 ms band", 1, atomic_load(&g_ubp_c[2])); EXPECT("discarded", 1, atomic_load(&g_ubp_c[3]));
-    EXPECT("interval sum (microseconds)", 16700 + 25000 + 25000 + 33300, (long long)atomic_load(&g_ubp_sum_us));
+    EXPECT("16.7 ms band", 1, atomic_load(&g_ub.p_c[0])); EXPECT("25 ms band", 2, atomic_load(&g_ub.p_c[1])); EXPECT("≥33 ms band", 1, atomic_load(&g_ub.p_c[2])); EXPECT("discarded", 1, atomic_load(&g_ub.p_c[3]));
+    EXPECT("interval sum (microseconds)", 16700 + 25000 + 25000 + 33300, (long long)atomic_load(&g_ub.p_sum_us));
     {   // pend_read (the storage buffer address read from a uniform buffer, NVN_RB_SBUFU): guest memory with the inline updates recorded so far in the
         // submission applied in order; a GPU copy into the range makes it unknown
         static uint8_t mem[32], up1[8] = {1, 1, 1, 1, 1, 1, 1, 1}, up2[4] = {2, 2, 2, 2}; for (int i = 0; i < 32; i++) mem[i] = (uint8_t)(0x80 + i);
         uint64_t base = (uint64_t)(uintptr_t)mem; uint8_t out[12];
-        g_npend = 0; g_pend_over = 0;
+        g_pend.n = 0; g_pend.over = 0;
         EXPECT("pend_read with nothing pending: guest memory", 1, pend_read(base + 4, out, 12) && out[0] == 0x84 && out[11] == 0x8f);
-        g_pend_lo[0] = base + 8; g_pend_hi[0] = base + 16; g_pend_data[0] = up1;      // update 8..16 → 1
-        g_pend_lo[1] = base + 10; g_pend_hi[1] = base + 14; g_pend_data[1] = up2;     // later update 10..14 → 2
-        g_npend = 2;
+        g_pend.lo[0] = base + 8; g_pend.hi[0] = base + 16; g_pend.data[0] = up1;      // update 8..16 → 1
+        g_pend.lo[1] = base + 10; g_pend.hi[1] = base + 14; g_pend.data[1] = up2;     // later update 10..14 → 2
+        g_pend.n = 2;
         int ok = pend_read(base + 4, out, 12);   // bytes 4..16: 84 85 86 87 | 1 1 | 2 2 2 2 | 1 1
         static const uint8_t want[12] = {0x84, 0x85, 0x86, 0x87, 1, 1, 2, 2, 2, 2, 1, 1};
         EXPECT("pend_read applies both updates in order", 1, ok && !memcmp(out, want, 12));
-        g_pend_lo[2] = base + 2; g_pend_hi[2] = base + 6; g_pend_data[2] = NULL; g_npend = 3;   // a GPU copy into 2..6
+        g_pend.lo[2] = base + 2; g_pend.hi[2] = base + 6; g_pend.data[2] = NULL; g_pend.n = 3;   // a GPU copy into 2..6
         EXPECT("pend_read refuses a range a GPU copy writes", 0, pend_read(base + 4, out, 12));
         EXPECT("pend_read outside the copy still fine", 1, pend_read(base + 16, out, 8) && out[0] == 0x90);
-        g_npend = 0;
+        g_pend.n = 0;
     }
     printf("t_ub: %d checks, %d failed\n", count, fail); return fail != 0;
 }

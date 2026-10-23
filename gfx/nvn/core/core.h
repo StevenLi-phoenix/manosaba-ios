@@ -11,6 +11,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#ifdef __APPLE__
+#include <os/lock.h>
+#else
+#include <sched.h>
+#endif
 
 #define MLOG(...) do { fprintf(stderr, "[dm] [nvn-mtl] " __VA_ARGS__); fputc('\n', stderr); } while (0)
 #define MDIE(...) do { MLOG("FATAL " __VA_ARGS__); abort(); } while (0)
@@ -41,3 +46,13 @@ static inline int passdump(void) {
 }
 void mtl_passdump_next(long n);
 #define PD(...) do { if (passdump()) { fprintf(stderr, "[pass] F%llu ", (unsigned long long)atomic_load(&g_cur_frame)); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
+// A short lock, free when zeroed: os_unfair_lock on Apple's systems (as the backend used), a spin lock that yields elsewhere
+#ifdef __APPLE__
+typedef os_unfair_lock core_lock;
+static inline void core_lock_take(core_lock *l) { os_unfair_lock_lock(l); }
+static inline void core_lock_give(core_lock *l) { os_unfair_lock_unlock(l); }
+#else
+typedef _Atomic int core_lock;
+static inline void core_lock_take(core_lock *l) { int z; while (z = 0, !atomic_compare_exchange_weak_explicit(l, &z, 1, memory_order_acquire, memory_order_relaxed)) sched_yield(); }
+static inline void core_lock_give(core_lock *l) { atomic_store_explicit(l, 0, memory_order_release); }
+#endif

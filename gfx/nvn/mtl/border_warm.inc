@@ -121,9 +121,9 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get(NvProg *pr, MTLRen
         if (pp_scan_due(g_sub_serial)) pso_predict_rest();   // a miss: first kick the later ones out to compile in parallel, then synchronously compile the one at hand
         MTLRenderPipelineDescriptor *d = pso_desc(&k, vs, fs, g_pso_fsfn, g_pso_lmap != NULL);
         int gave_up; ps = mtl_retry(^id(NSError **er) { return [g_dev newRenderPipelineStateWithDescriptor:d error:er]; }, &e, &gave_up);
-        if (!ps && gave_up) { g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt; MLOG("[red] render pipeline not made, the compiler service kept failing (vertex %s, fragment %s): tried again at its next use", vs->key, fs ? fs->key : "-"); return nil; }
+        if (!ps && gave_up) { g_bp.pso_n++; g_bp.pso_ns += bp_now() - bt; MLOG("[red] render pipeline not made, the compiler service kept failing (vertex %s, fragment %s): tried again at its next use", vs->key, fs ? fs->key : "-"); return nil; }
     }
-    g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
+    g_bp.pso_n++; g_bp.pso_ns += bp_now() - bt;
     if (!ps) { MLOG("[red] failed to create render pipeline (vertex %s, fragment %s): %s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String);
         if (fs) fout_note(fs, g_pass.cfmt);
         hm_put_id(&g_pso_fail, &k, (id)kCFBooleanTrue); return nil; }

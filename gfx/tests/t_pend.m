@@ -26,15 +26,15 @@ int main(void) {
     EXPECT("a copy of a copy follows both", x, rd(C));
     EXPECT("A reads as the later update", y, rd(A));
     pend_begin(10);                                                  // 11 and 12 still on the GPU: everything stays
-    EXPECT("submission 11 not complete: its writes stay (pending entries)", 4, g_npend);
+    EXPECT("submission 11 not complete: its writes stay (pending entries)", 4, g_pend.n);
     EXPECT("... and still read", x, rd(B));
     pend_begin(11);                                                  // 11 complete: its writes are in memory (simulated below), 12's stay
     mem[0] = x; mem[16] = x;
-    EXPECT("submission 11 complete: only 12's two entries stay", 2, g_npend);
+    EXPECT("submission 11 complete: only 12's two entries stay", 2, g_pend.n);
     EXPECT("A reads as 12's update", y, rd(A));
     EXPECT("C reads B from memory now", x, rd(C));
     pend_begin(12);
-    EXPECT("everything complete: no entries", 0, g_npend);
+    EXPECT("everything complete: no entries", 0, g_pend.n);
     pend_note(B, 4, NULL, 0);                                        // a copy whose source is not known
     EXPECT("a copy without a source reads as unknown", 0xdeadbeef, rd(B));
     EXPECT("an address no write reaches reads memory", 0x1001, rd(A + 4));

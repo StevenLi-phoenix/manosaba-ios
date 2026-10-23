@@ -27,6 +27,10 @@ t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/p
 	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
 t_core_tbdr: t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
 	clang $(CFLAGS) -Werror -o $@ t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
+t_core_pend: t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c $(CORE_H)
+	clang $(CFLAGS) -Werror -o $@ t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c
+t_core_frame: t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c $(CORE_H)
+	clang $(CFLAGS) -Werror -o $@ t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c
 t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
 	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
@@ -246,6 +250,8 @@ run: \
 	t_border \
 	t_chunk \
 	t_copy_pitch \
+	t_core_frame \
+	t_core_pend \
 	t_core_prog \
 	t_core_store_index \
 	t_core_tbdr \
@@ -365,6 +371,8 @@ run: \
 	./t_fstep
 	./t_fptrial
 	./t_hmap
+	./t_core_frame
+	./t_core_pend
 	./t_core_prog
 	./t_core_store_index
 	./t_core_tbdr

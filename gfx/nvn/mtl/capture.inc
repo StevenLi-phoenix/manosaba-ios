@@ -110,26 +110,12 @@ void mtl_sub_snapshot(const uint64_t *h, int n) {   // hle_nvn.c nvnQueueSubmitC
     us_snapshot(h, n);
 }
 static void us_drop(uint64_t a, uint64_t n) { if (us_drop_range(a, n, g_fence + 1)) args_dirty_all(); }   // a GPU write of this submission reaches [a, a + n): bindings encoded from here on read memory
-// Bytes [a, a + n) as the GPU will see them at this point of the replay: guest memory with the pending writes recorded before entry `upto` applied in
-// order: an inline update's bytes, or what a GPU copy reads from its source as of that copy (MacNativeGames' pend_read, MIT). 0 when that is not known
-// (a copy without a source, the table overflowed, copies nested too deep)
-static int pend_read_x(uint64_t a, void *out, uint64_t n, int upto, int depth) {
-    memcpy(out, (const void *)(uintptr_t)a, n);
-    if (g_pend_over) return 0;
-    for (int i = 0; i < upto; i++) {
-        if (a >= g_pend_hi[i] || a + n <= g_pend_lo[i]) continue;
-        uint64_t lo = MAX(a, g_pend_lo[i]), hi = MIN(a + n, g_pend_hi[i]);
-        if (g_pend_data[i]) memcpy((uint8_t *)out + (lo - a), g_pend_data[i] + (lo - g_pend_lo[i]), hi - lo);
-        else if (!g_pend_src[i] || depth >= 4 || !pend_read_x(g_pend_src[i] + (lo - g_pend_lo[i]), (uint8_t *)out + (lo - a), hi - lo, i, depth + 1)) return 0;
-    }
-    return 1;
-}
 static int g_nupd, g_upd_flushing;   // renamed inline uniform updates not yet in memory (see upd_log)
 static void upd_apply(uint64_t lo, uint8_t *out, uint64_t n);
 static int upd_any(void);   // the submission logged inline uniform updates (written to memory or not): a snapshot alone predates them
 static int pend_read(uint64_t a, void *out, uint64_t n) {
     { const us_ent *u = us_find(a, n); if (u) { memcpy(out, u->cpu + (a - u->lo), n); if (upd_any()) upd_apply(a, out, n); return 1; } }   // not dropped: no GPU write of this submission reached it but renamed updates
-    return pend_read_x(a, out, n, g_npend, 0);
+    return pend_read_x(a, out, n, g_pend.n, 0);
 }
 typedef struct { uint64_t ser; uint16_t level, slice; } zskip_zero;
 static zskip_zero g_zskip_zero[4096]; static int g_zskip_n, g_zskip_count;

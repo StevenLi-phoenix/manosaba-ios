@@ -120,7 +120,7 @@ static uint64_t upd_shadow(uint64_t lo, uint64_t size, void **buf) {   // GPU ad
         else { memcpy(cpu, sc->cpu + (lo - sc->lo), (size_t)size); upd_apply(lo, cpu, size); }
     } else {   // no snapshot and updates not written (upd_guard_draw could not write them first): memory with the pending writes, the updates among them
         g_ren_noshot++;
-        if (!pend_read_x(lo, cpu, size, g_npend, 0)) { g_ren_unknown++; RED_ONCE(90, "renamed uniform update: range %#llx+%llu has no snapshot and a GPU write of unknown content (first case): its copy may be stale", (unsigned long long)lo, (unsigned long long)size); }
+        if (!pend_read_x(lo, cpu, size, g_pend.n, 0)) { g_ren_unknown++; RED_ONCE(90, "renamed uniform update: range %#llx+%llu has no snapshot and a GPU write of unknown content (first case): its copy may be stale", (unsigned long long)lo, (unsigned long long)size); }
     }
     *e = (ub_shadow){lo, size, seq, ab.gpuAddress + off, g_sub_serial, (__bridge void *)ab, sc ? cpu : NULL}; *buf = e->buf; g_ren_shadows++;
     return e->gpu;
