@@ -37,8 +37,9 @@ Not verified or known open: compute shader dispatch at run time (the game's comp
 texturing and probe debug kernels; no dispatch happens in the story or in a trial); 13 NVN functions the game looks up that the layer does not
 know (returned as NULL: this build stores the pointers but never calls them); an intermittent texture crash seen early on the iPhone, likely
 fixed by an NVN struct size correction (not seen since, unconfirmed); keyboard, mouse and game controller input not tested with this game.
-Memory on 8 GB iPads: without a paid account's increased memory limit the app may use about 3.4 GB on an iPad mini (A17 Pro). A trial's loading
-adds about 1.4 GB for a moment (the character render targets), and the game's own memory grows by some 30 MB per scene load over a long session,
+Memory on 8 GB iPads: without the increased memory limit the app may use about 3.4 GB on an iPad mini (A17 Pro); a free account can sign that
+limit now (6.1 GB on the iPhone 17 Pro), not yet tried on the iPad mini. A trial's loading adds about 1.4 GB for a moment (the character
+render targets), and the game's own memory grows by some 30 MB per scene load over a long session,
 so after about two hours of play a trial's loading went past the limit and the system ended the app; restarting the app before then avoids it.
 The growth is the game's own: every save load builds a new set of Naninovel's script and resource managers and the old ones stay referenced,
 with their parsed scripts and UI objects (a census of the managed heap after 9 reloads of one save held up to 12 copies of the same scripts).
@@ -62,7 +63,7 @@ Not verified or known open: other iPhones and iPads (iPhones with an A14, A15 or
 other BC formats are decompressed, so the game needs more memory there); the iOS 18 (Metal 3) build with this game; stencil views are not
 modelled; motion controls and a controller's rumble are implemented but not yet checked with a controller. A crash after skipping the blood
 moon movie (Mac, 2026-10-19) did not come back when the movie was skipped on the iPhone with the 60 fps product (2026-10-22); with the 30 fps
-product it has not been tried again. Details: [DEVELOPMENT.md](DEVELOPMENT.md#next-game-tears-of-the-kingdom-started-2026-10-17).
+product it has not been tried again. Details: [DEVELOPMENT.md](DEVELOPMENT.md#tears-of-the-kingdom).
 
 ## How it works
 
@@ -110,7 +111,8 @@ Do not attach game files, keys, dumps, rewritten modules or IPAs.
 | Document | Covers |
 |---|---|
 | [PORTING.md](PORTING.md) | The workflow for a new game, from the dump to the device |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Restoring a working copy, test procedures, where the work stands, community ports to draw from |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Restoring a working copy, test procedures, where the work stands, open work |
+| [docs/sources.md](docs/sources.md), [docs/plan-archive.md](docs/plan-archive.md) | Community ports drawn from and how far each was read; the finished plan items cited in the code |
 | [games/README.md](games/README.md) | Game directory: `game.json`, `rules.py`, C hooks |
 | [host/README.md](host/README.md) | Loader, services, files, environment variables |
 | [gfx/README.md](gfx/README.md), [gfx/nvn_metal_mapping.md](gfx/nvn_metal_mapping.md), [gfx/tex/README.md](gfx/tex/README.md) | Graphics layer, shader chain, NVN → Metal mapping, textures |
