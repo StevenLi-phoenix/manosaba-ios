@@ -1,10 +1,11 @@
-// gfx/nvn/mtl/present_pipe.inc, part of nvn_mtl.m (included there in order, one translation unit): The present pipeline and its encoding
-static _Atomic uint64_t g_present_stall_ns;   // For unit tests: an extra pause before each present on the present thread (simulating a drawable that stays unavailable)
+// gfx/nvn/mtl/present_pipe.m: The present pipeline and its encoding, a translation unit of the Metal backend of its own (plan item 264; what others use of it: mtl/mtl.h)
+#include "mtl.h"
+_Atomic uint64_t g_present_stall_ns;   // For unit tests: an extra pause before each present on the present thread (simulating a drawable that stays unavailable)
 #if !DM_NVN_M3
-static CAMetalLayer *g_present_layer_resident;
+CAMetalLayer *g_present_layer_resident;
 #endif
 void mtl_present_test_stall(uint64_t ns) { g_present_stall_ns = ns; }
-static void present_pipeline(MTLPixelFormat format) {
+void present_pipeline(MTLPixelFormat format) {
     if (!g_blit_pso || g_blit_fmt != format) {
         static const char *src_msl =
             "#include <metal_stdlib>\nusing namespace metal;\n"
@@ -28,7 +29,7 @@ static void present_pipeline(MTLPixelFormat format) {
 // Source for presentation sampling: when the swapchain texture has an sRGB format (the game created the swapchain as RGBA8_SRGB), sample through its non-sRGB view so the screen shows the stored bytes, as the Switch's scan-out does;
 // sampling it directly decodes to linear first, and the present layer (BGRA8Unorm) does not encode again, so the whole picture is too dark (public repository #36). Screenshots read the raw bytes and cannot see this.
 // Views are cached per source texture, 4 of them, replacing the least recently used: presentation runs on its own queue and cannot use the deferred release of the main submission; at most 3 presents are in flight, so the replaced one is already done
-static id<MTLTexture> present_src(id<MTLTexture> src) {
+id<MTLTexture> present_src(id<MTLTexture> src) {
     MTLPixelFormat raw = MTLPixelFormatInvalid;
     for (size_t i = 0; i < sizeof g_pfv_srgb / sizeof *g_pfv_srgb; i++) if (src.pixelFormat == g_pfv_srgb[i].b) raw = g_pfv_srgb[i].a;
     if (raw == MTLPixelFormatInvalid) return src;
@@ -44,8 +45,7 @@ static id<MTLTexture> present_src(id<MTLTexture> src) {
     return v;
 }
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
-static MTLViewport present_vp(double dw, double dh, double cw, double ch);
-static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTexture> dst, const int crop[4]) {
+int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTexture> dst, const int crop[4]) {
     id<MTLTexture> src = present_src(src0);
     NSUInteger cx = 0, cy = 0, cw = src.width, ch = src.height;
     if (crop && (crop[2] || crop[3])) {
@@ -93,7 +93,7 @@ void mtl_present_stretch(int on) {
 // The size is rounded (and held to the target) before it is centred (plan item 155, after Touchable 5cab3ac, MIT): floor((dh - ch * s) / 2) with
 // ch * s a hair over dh (contracted to a fused multiply-add, or rounded so) gave an origin of -1 and a picture one pixel off the target. Unit test
 // gfx/tests/t_present_vp.m
-static MTLViewport present_vp(double dw, double dh, double cw, double ch) {
+MTLViewport present_vp(double dw, double dh, double cw, double ch) {
 #ifndef DM_TEST_STRETCH_IGNORED   // negative control of t_present_vp only: the aspect ratio kept with the wide picture on
     if (atomic_load(&g_present_stretch)) return (MTLViewport){0, 0, dw, dh, 0, 1};
 #endif
@@ -106,3 +106,4 @@ static MTLViewport present_vp(double dw, double dh, double cw, double ch) {
     return (MTLViewport){floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
 #endif
 }
+#pragma clang attribute pop

@@ -207,7 +207,6 @@ void bf_want_note(const char *shader_key) {
 #include "mtl/occlusion.inc"
 #include "mtl/usnap.inc"
 #include "mtl/encoders.inc"
-#include "mtl/frame_timing.inc"
 static void rp_flush(void);
 static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_exec)
 #include "mtl/commit.inc"
@@ -219,7 +218,6 @@ static const char *cctx_snap(void);   // What is in this submission (printed int
 #include "mtl/passes.inc"
 #include "mtl/tbdr_xv.inc"
 #include "mtl/chunks.inc"
-#include "mtl/passgpu.inc"
 #include "mtl/renderpass.inc"
 #include "mtl/shaders.inc"
 #include "mtl/descriptors.inc"
@@ -238,6 +236,5 @@ static const char *cctx_snap(void);   // What is in this submission (printed int
 #include "mtl/exec.inc"
 #include "mtl/shot.inc"
 #include "mtl/texdump.inc"
-#include "mtl/present_pipe.inc"
 #include "mtl/present.inc"
 #include "mtl/present_thread.inc"

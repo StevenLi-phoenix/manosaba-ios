@@ -6,7 +6,7 @@ static zskip_zero g_zskip_cand[8]; static uint8_t g_zskip_cand_ok[8];
 static void zskip_clear(void);
 static id g_cb;
 static BENC g_blit;
-static NSMutableArray<dispatch_block_t> *g_commit_blocks;
+NSMutableArray<dispatch_block_t> *g_commit_blocks;
 static uint64_t g_alloc_fence[ALLOC_MAX]; static uint64_t g_alloc_waits, g_alloc_grown;
 int mtl_wait(uint64_t fence, uint64_t timeout_ns);
 static void up_flush(void);
@@ -44,7 +44,7 @@ static void *g_sub_pool;
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
 static void fin_drain(void);
 static void chunk_reset(void);   // mid-submission commits (defined with the render pass state)
-static void pg_sub_begin(uint64_t fence); static void pg_commit(id fb);   // DM_NVN_PASSGPU
+// DM_NVN_PASSGPU's pg_sub_begin / pg_commit: mtl/passgpu.m (declared in mtl/mtl.h)
 static void pkg_census(void);   // DM_NVN_COUNTS: uploaded textures by last use
 static unsigned g_tr_parts;   // parts of this submission committed so far (nvn_trace.h commit / gpu)
 void mtl_sub_begin(void) {

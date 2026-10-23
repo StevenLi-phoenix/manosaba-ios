@@ -1,4 +1,5 @@
-// gfx/nvn/mtl/passgpu.inc, part of nvn_mtl.m (included there in order, one translation unit): GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49)
+// gfx/nvn/mtl/passgpu.m: GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49), a translation unit of the Metal backend of its own (plan item 264; what others use of it: mtl/mtl.h)
+#include "mtl.h"
 // ---------- DM_NVN_PASSGPU=<file>: GPU time of each render pass and dispatch (plan item 49) ----------
 // After upstream 44a6770 (jhaizhou-ops/d2r-mobile, MIT), written for this replay. Metal 4 writes timestamps into an MTL4CounterHeap: after the
 // render encoder opens (before the vertex stage of its first draw) and before it ends (after the fragment stage of its draws), and around each
@@ -17,7 +18,7 @@ static int g_pgt = -1; static FILE *g_pgt_f;
 // Which submissions are timed (plan item 256): DM_NVN_PASSGPU_EVERY=<n> every nth only (shh632058099 9ecf169, MIT; the timestamps' own cost
 // spread thinner), DM_NVN_PASSGPU_FROM=<frame> none before that frame and DM_NVN_PASSGPU_FRAMES=<n> none from n frames after it (GirlNet 9dc64f9,
 // MIT: on the iPhone the first minute runs on burst power, 230). A submission left out takes no heap and writes no row
-static uint64_t g_pgt_every = 1, g_pgt_from, g_pgt_frames;
+static uint64_t g_pgt_every = 1, g_pgt_frames; uint64_t g_pgt_from;
 static inline int pg_sampled(uint64_t sub, uint64_t frame, uint64_t every, uint64_t from, uint64_t frames) {
 #ifdef DM_TEST_PG_SAMPLE_ALL   // negative control of t_passgpu only: every submission timed, as before
     (void)sub; (void)frame; (void)every; (void)from; (void)frames; return 1;
@@ -79,7 +80,7 @@ static int pg_on(void) {
     MLOG("DM_NVN_PASSGPU: the GPU time of each render pass and dispatch → %s", e);
     return g_pgt = 1;
 }
-static void pg_sub_begin(uint64_t fence) {   // this submission takes heap fence % PG_RING, once the one that used it last has completed
+void pg_sub_begin(uint64_t fence) {   // this submission takes heap fence % PG_RING, once the one that used it last has completed
     if (!pg_on()) return;
     if (!pg_sampled(fence, atomic_load(&g_cur_frame), g_pgt_every, g_pgt_from, g_pgt_frames)) { g_pgt_np = 0; g_pgt_open = -1; g_pgt_used = PG_SLOTS; return; }   // (pg_new: no slot left)
     if (fence > PG_RING) mtl_wait(fence - PG_RING, UINT64_MAX);
@@ -97,7 +98,7 @@ static pg_pass *pg_new(int kind, int nslot) {
     g_pgt_used += (uint32_t)nslot;
     return p;
 }
-static void pg_render(RPD *pd, NSUInteger nc) {   // before the render encoder opens: the pass's row (and on Metal 3 its sample points)
+void pg_render(RPD *pd, NSUInteger nc) {   // before the render encoder opens: the pass's row (and on Metal 3 its sample points)
     if (!g_pgt) return;
     pg_pass *p = pg_new(0, PG_RSLOTS); if (!p) return;
     p->pass = g_stat_pass + 1;
@@ -119,7 +120,7 @@ static void pg_render(RPD *pd, NSUInteger nc) {   // before the render encoder o
     p->w = (int)pw; p->h = (int)ph; p->cfmt0 = t0 ? (uint32_t)t0.pixelFormat : 0;
     g_pgt_open = g_pgt_np - 1;
 }
-static void pg_render_begin(id e) {   // the encoder just opened: the pass's start
+void pg_render_begin(id e) {   // the encoder just opened: the pass's start
 #if !DM_NVN_M3
     if (g_pgt_open >= 0 && [e conformsToProtocol:@protocol(MTL4RenderCommandEncoder)])
         [(id<MTL4RenderCommandEncoder>)e writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed afterStage:MTLRenderStageVertex intoHeap:g_pgt_buf[g_pgt_b] atIndex:(NSUInteger)g_pgt_pass[g_pgt_open].slot];
@@ -127,7 +128,7 @@ static void pg_render_begin(id e) {   // the encoder just opened: the pass's sta
     (void)e;
 #endif
 }
-static void pg_render_end(id e) {   // before the encoder ends: the pass's end and its draws
+void pg_render_end(id e) {   // before the encoder ends: the pass's end and its draws
     if (g_pgt_open < 0) return;
 #if !DM_NVN_M3 && !defined(DM_TEST_PG_NO_END)   // (negative control of t_passgpu: no end written)
     if ([e conformsToProtocol:@protocol(MTL4RenderCommandEncoder)])
@@ -138,7 +139,7 @@ static void pg_render_end(id e) {   // before the encoder ends: the pass's end a
     g_pgt_pass[g_pgt_open].draws += (int)g_stat_draw; g_pgt_open = -1;
 }
 #if DM_NVN_M3
-static MTLComputePassDescriptor *pg_compute_desc(void) {   // a dispatch's own encoder, sampled at its start and end
+MTLComputePassDescriptor *pg_compute_desc(void) {   // a dispatch's own encoder, sampled at its start and end
     pg_pass *p = g_pgt ? pg_new(1, 2) : NULL; if (!p) return nil;
     p->draws = 0;
     MTLComputePassDescriptor *cd = [MTLComputePassDescriptor computePassDescriptor];
@@ -152,13 +153,13 @@ static MTLComputePassDescriptor *pg_compute_desc(void) {   // a dispatch's own e
     return cd;
 }
 #else
-static int pg_dispatch_begin(CENC ce) {   // a dispatch in the shared encoder: precise timestamps around it
+int pg_dispatch_begin(CENC ce) {   // a dispatch in the shared encoder: precise timestamps around it
     pg_pass *p = g_pgt ? pg_new(1, 2) : NULL; if (!p) return -1;
     p->draws = 0;
     [ce writeTimestampWithGranularity:MTL4TimestampGranularityPrecise intoHeap:g_pgt_buf[g_pgt_b] atIndex:(NSUInteger)p->slot];
     return p->slot + 1;
 }
-static void pg_dispatch_end(CENC ce, int slot) {
+void pg_dispatch_end(CENC ce, int slot) {
 #ifndef DM_TEST_PG_NO_END
     if (slot >= 0) [ce writeTimestampWithGranularity:MTL4TimestampGranularityPrecise intoHeap:g_pgt_buf[g_pgt_b] atIndex:(NSUInteger)slot];
 #else
@@ -166,7 +167,7 @@ static void pg_dispatch_end(CENC ce, int slot) {
 #endif
 }
 #endif
-static void pg_commit(id fb) {   // the submission's rows go to its feedback (fb = FB_ON(o, g_cb)), which resolves the heap
+void pg_commit(id fb) {   // the submission's rows go to its feedback (fb = FB_ON(o, g_cb)), which resolves the heap
     if (g_pgt <= 0 || !g_pgt_np) return;
     int n = g_pgt_np; pg_pass *ps = malloc((size_t)n * sizeof *ps); memcpy(ps, g_pgt_pass, (size_t)n * sizeof *ps);
     __typeof__(g_pgt_buf[0]) buf = g_pgt_buf[g_pgt_b]; uint32_t used = g_pgt_used; g_pgt_ring_used[g_pgt_b] = used;
@@ -206,3 +207,4 @@ static void pg_commit(id fb) {   // the submission's rows go to its feedback (fb
         free(t); free(ps);
     }];
 }
+#pragma clang attribute pop

@@ -87,7 +87,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/occlusion.inc` | Occlusion queries (samples passed) |
 | `nvn/mtl/usnap.inc` | Uniform snapshots' backend side: the pools, arena, worker threads and fences they use; dropping copies a GPU write reaches; what a range reads as at this point of the replay |
 | `nvn/mtl/encoders.inc` | The encoder layer: Metal 4 / Metal 3 encoder wrappers, blits, inline updates, events, counters, timestamps |
-| `nvn/mtl/frame_timing.inc` | The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH |
+| `nvn/mtl/frame_timing.m` | The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH: a translation unit of its own |
 | `nvn/mtl/keepalive.m` | GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE): a translation unit of its own |
 | `nvn/mtl/commit.inc` | The GPU memory budget, submission commits, fences, waits and drains |
 | `nvn/mtl/textures.inc` | Textures as Metal textures, and GPU textures sharing one storage |
@@ -98,7 +98,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/passes.inc` | Render pass bookkeeping: zero-source skip, the pass dump (PD), attachment use |
 | `nvn/mtl/tbdr_xv.inc` | Load elision, same-target continuation, layered passes (their state and declarations) |
 | `nvn/mtl/chunks.inc` | Mid-submission commits (MacNativeGames' TOTK_CHUNK_DRAWS) |
-| `nvn/mtl/passgpu.inc` | GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49) |
+| `nvn/mtl/passgpu.m` | GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49): a translation unit of its own |
 | `nvn/mtl/renderpass.inc` | Render passes: encoder labels, block-compressed targets, attachments, pass begin / end, clears |
 | `nvn/mtl/shaders.inc` | The shader mapping table, programs, pipeline lists |
 | `nvn/mtl/descriptors.inc` | Texture and sampler descriptor pools, argument arenas |
@@ -117,7 +117,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/exec.inc` | A submission's context for the failure line; the power-saving mode; the execution interface's commands (`nvn_be_*`, `nvn/nvn_backend.h`) |
 | `nvn/mtl/shot.inc` | Present screenshots |
 | `nvn/mtl/texdump.inc` | Texture dumps and snapshots (DM_NVN_TEXDUMP, DM_NVN_TEXSNAP), presented times |
-| `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |
+| `nvn/mtl/present_pipe.m` | The present pipeline and its encoding: a translation unit of its own |
 | `nvn/mtl/present.inc` | MetalFX upscaling of the presented picture, live shots, the perf line, present_now |
 | `nvn/mtl/present_thread.inc` | The present thread and the display link, statistics getters |
 | `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend; the pass dump (`PD`, `DM_NVN_PASSDUMP`) with the frame number and the pass and draw counts; a clock for statistics |

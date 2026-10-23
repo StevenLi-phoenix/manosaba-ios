@@ -1,5 +1,5 @@
-// gfx/nvn/mtl/frame_timing.inc, part of nvn_mtl.m (included there in order, one translation unit): The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH; boot instrumentation, per-frame GPU time and DM_NVN_UB are gfx/nvn/core/frame.c (plan item 264)
-static void lay_report(uint64_t f);   // (rc_report: gfx/nvn/core/cond.h)
+// gfx/nvn/mtl/frame_timing.m: The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH, a translation unit of the Metal backend of its own (plan item 264; what others use of it: mtl/mtl.h)
+#include "mtl.h"
 void mtl_set_frame(uint64_t f) { atomic_store(&g_cur_frame, f); if (g_ub.n) ub_frame(f); us_report(f); ren_report(f); lay_report(f); rc_report(f); }
 static void gpu_tag_f(id<MTLCommandBuffer> cb, uint64_t f) { gpu_tag_begin(f); [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { gpu_tag_done(f, c.GPUStartTime, c.GPUEndTime); }]; }
 void gpu_tag(id<MTLCommandBuffer> cb) { gpu_tag_f(cb, atomic_load(&g_cur_frame)); }
@@ -10,19 +10,17 @@ void gpu_tag(id<MTLCommandBuffer> cb) { gpu_tag_f(cb, atomic_load(&g_cur_frame))
 // too (stage -1 / -2; after LASRecomp dc1d28f's LARECOMP_GPU_LAG_CHECK, MIT): what a GPU one frame behind would read changed (plan item 224)
 typedef struct { uint64_t addr, size; int stage, index, ssbo, copied; } gw_rng;   // copied: a uniform snapshot of this submission held it when it was bound
 static gw_rng *g_gw; static int g_gw_n, g_gw_cap; static uint64_t g_gw_hits, g_gw_checked;
-static long g_gw_a = -2, g_gw_b;   // DM_NVN_GPUWATCH's frames (-1: off), read once
+long g_gw_a = -2; static long g_gw_b;   // DM_NVN_GPUWATCH's frames (-1: off), read once
 static int gw_on(void) { if (g_gw_a == -2) { const char *e = getenv("DM_NVN_GPUWATCH"); g_gw_a = e ? atol(e) : -1; g_gw_b = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : g_gw_a; }
     if (g_gw_a < 0) return 0;
     long f = (long)atomic_load(&g_cur_frame); return f >= g_gw_a && f <= g_gw_b; }
-static void gw_note_(const p_bind_buf *b, int ssbo);
-static inline __attribute__((always_inline)) void gw_note(const p_bind_buf *b, int ssbo) { if (g_gw_a != -1) gw_note_(b, ssbo); }   // (off: one compare a binding)
-static void gw_note_(const p_bind_buf *b, int ssbo) {
+void gw_note_(const p_bind_buf *b, int ssbo) {
     if (!b->addr || !b->size || !gw_on()) return;
     for (int i = g_gw_n - 1; i >= 0 && i >= g_gw_n - 64; i--) if (g_gw[i].addr == b->addr && g_gw[i].size == b->size) return;
     if (g_gw_n == g_gw_cap) { g_gw_cap = g_gw_cap ? g_gw_cap * 2 : 1024; g_gw = realloc(g_gw, (size_t)g_gw_cap * sizeof *g_gw); }
     g_gw[g_gw_n++] = (gw_rng){b->addr, b->size, b->stage, b->index, ssbo, !ssbo && us_find(b->addr, b->size)};
 }
-static void gw_commit(void) {   // before the commit blocks are copied: copy now, compare on completion
+void gw_commit(void) {   // before the commit blocks are copied: copy now, compare on completion
     if (!g_gw_n) return;
     int n = g_gw_n; gw_rng *l = malloc((size_t)n * sizeof *l); memcpy(l, g_gw, (size_t)n * sizeof *l); g_gw_n = 0;
     uint64_t frame = atomic_load(&g_cur_frame);
@@ -53,3 +51,4 @@ static void gw_commit(void) {   // before the commit blocks are copied: copy now
         }];
     }
 }
+#pragma clang attribute pop

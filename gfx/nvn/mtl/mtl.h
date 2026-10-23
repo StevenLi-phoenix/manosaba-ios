@@ -118,3 +118,33 @@ extern _Atomic int g_inflight;                       // the game's command buffe
 extern dispatch_semaphore_t g_ka_idle;               // signalled when g_inflight drops to 0
 extern _Atomic uint64_t g_last_sub_ns, g_ka_n, g_ka_us;   // the last submission's time; spin kernels run and their GPU microseconds
 void keepalive_start(void);                          // on the first submission (when on): the spinning thread
+// Textures (mtl/textures.inc): base and sRGB formats a view may switch between (present_pipe.m reads it too)
+typedef struct { MTLPixelFormat a, b; } pfv_pair;
+static const pfv_pair g_pfv_srgb[] = {
+    {MTLPixelFormatRGBA8Unorm, MTLPixelFormatRGBA8Unorm_sRGB},
+    {MTLPixelFormatBGRA8Unorm, MTLPixelFormatBGRA8Unorm_sRGB},
+    {MTLPixelFormatBC1_RGBA, MTLPixelFormatBC1_RGBA_sRGB},
+    {MTLPixelFormatBC2_RGBA, MTLPixelFormatBC2_RGBA_sRGB},
+    {MTLPixelFormatBC3_RGBA, MTLPixelFormatBC3_RGBA_sRGB},
+    {MTLPixelFormatBC7_RGBAUnorm, MTLPixelFormatBC7_RGBAUnorm_sRGB},
+};
+// Commits (mtl/encoders.inc): blocks run at the submission's commit
+extern NSMutableArray<dispatch_block_t> *g_commit_blocks;
+void lay_report(uint64_t f);                         // layered passes, every 300 frames (mtl/u8_layers.inc)
+void pass_dims(RPD *pd, NSUInteger nc, NSUInteger *w, NSUInteger *h);   // a pass descriptor's target size (mtl/passes.inc)
+extern id<MTLRenderPipelineState> g_blit_pso; extern MTLPixelFormat g_blit_fmt; extern id<MTLSamplerState> g_blit_samp;   // the present blit (mtl/shot.inc)
+// Frame timing and DM_NVN_GPUWATCH (mtl/frame_timing.m)
+extern long g_gw_a;                                  // DM_NVN_GPUWATCH's first frame (-1: off, -2: not read yet)
+void gw_note_(const p_bind_buf *b, int ssbo);
+static inline __attribute__((always_inline)) void gw_note(const p_bind_buf *b, int ssbo) { if (g_gw_a != -1) gw_note_(b, ssbo); }   // a binding the GPU reads (off: one compare a binding)
+void gw_commit(void);                                // at the commit: the watched ranges copied, compared once the GPU completes
+// Pass GPU times, DM_NVN_PASSGPU (mtl/passgpu.m)
+void pg_render(RPD *pd, NSUInteger nc); void pg_render_begin(id e); void pg_render_end(id e); int pg_dispatch_begin(CENC ce); void pg_dispatch_end(CENC ce, int slot);
+void pg_sub_begin(uint64_t fence); void pg_commit(id fb); MTLComputePassDescriptor *pg_compute_desc(void);   // a submission's start, its commit; a dispatch's own encoder (Metal 3)
+extern uint64_t g_pgt_from;                          // DM_NVN_PASSGPU_FROM (t_passgpu sets it)
+// The present pipeline (mtl/present_pipe.m)
+extern _Atomic uint64_t g_present_stall_ns;          // unit tests: an extra pause before each present
+extern CAMetalLayer *g_present_layer_resident;
+void present_pipeline(MTLPixelFormat format); id<MTLTexture> present_src(id<MTLTexture> src); MTLViewport present_vp(double dw, double dh, double cw, double ch);
+int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]);
+void mtl_present_stretch(int on);                    // the wide picture (plan item 154)

@@ -2,15 +2,6 @@
 // ---------- Texture → MTLTexture ----------
 static int fmt_compressed(int f) { return (f >= 0x41 && f <= 0x50) || (f >= 0x79 && f <= 0x94); }
 static int fmt_depth(int f) { return f >= 0x31 && f <= 0x36; }
-typedef struct { MTLPixelFormat a, b; } pfv_pair;
-static const pfv_pair g_pfv_srgb[] = {
-    {MTLPixelFormatRGBA8Unorm, MTLPixelFormatRGBA8Unorm_sRGB},
-    {MTLPixelFormatBGRA8Unorm, MTLPixelFormatBGRA8Unorm_sRGB},
-    {MTLPixelFormatBC1_RGBA, MTLPixelFormatBC1_RGBA_sRGB},
-    {MTLPixelFormatBC2_RGBA, MTLPixelFormatBC2_RGBA_sRGB},
-    {MTLPixelFormatBC3_RGBA, MTLPixelFormatBC3_RGBA_sRGB},
-    {MTLPixelFormatBC7_RGBAUnorm, MTLPixelFormatBC7_RGBAUnorm_sRGB},
-};
 static int tex_need_pfv(MTLPixelFormat base, MTLPixelFormat view) {
     if (base == view) return 0;
     for (size_t i = 0; i < sizeof g_pfv_srgb / sizeof *g_pfv_srgb; i++)

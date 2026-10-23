@@ -211,8 +211,8 @@ decide):
   decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
   hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99), the execution interface (`nvn_backend.h`) with the
   replay loop in `core/exec.c` (batch 100), SetRenderTargets, the clears and conditional rendering (batch 101), `mtl/draw.inc` split (batch
-  102), the backend's private header with the first part a translation unit of its own (batch 103); next the other parts outside the draw's
-  path as translation units of their own (the draw's path stays one for inlining); then `hle_nvn.c` by its sections,
+  102), the backend's private header with the first part a translation unit of its own (batch 103), three more (batch 104); next the other
+  parts outside the draw's path as translation units of their own (the draw's path stays one for inlining); then `hle_nvn.c` by its sections,
   `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
@@ -462,3 +462,12 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   rebuild on `mtl/*.h`. `t_keepalive` (3) as before. The backend's warnings as before, keepalive.m none on Metal 4 or Metal 3. Smoke: the
   same red lines and frames; the submit path's instructions per frame within the spread (per draw they moved with the draws a frame: 502 at
   frame 600 against 521-522).
+- [x] batch 104 · 264, three more translation units of the backend: `mtl/frame_timing.m` (the frame number, GPU time tags, DM_NVN_GPUWATCH),
+  `mtl/passgpu.m` (DM_NVN_PASSGPU) and `mtl/present_pipe.m` (the present pipeline and its encoding). What crosses is declared in `mtl/mtl.h`:
+  `gw_note` (inline, as before, over `g_gw_a`), `gw_commit`, the `pg_*` calls, the present pipeline's calls and its test switches; from the
+  main unit `g_commit_blocks`, `lay_report`, `pass_dims`, the present blit's state, and the sRGB view table (`g_pfv_srgb`, a small constant
+  table now in the header). The parts were chosen by compiling each alone with the header: these three use one to four names from the
+  others. Their tests as before (`t_passgpu`, `t_present_*`, `t_gputime`, `t_linkfifo`); no basename clashes with the host's sources (the
+  iOS build puts them in one directory). The backend's warnings as before, the three new units none; the pass dumps of 15 gfx tests line for
+  line as before but `t_rstream`'s `bind_ub` lines, whose count varies from run to run (4719-4753 on the previous commit, 4707-4734 now; its
+  other lines the same). Smoke: the same red lines and frames; the submit path's instructions per frame within the spread.

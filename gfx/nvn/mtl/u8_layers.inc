@@ -102,7 +102,7 @@ static int lay_decide(int clear_only, int *first) {
     if (lay_reads_target(S.prog ? prog_get(S.prog) : nil)) return 0;   // the draw opening the pass is checked as the later ones are (draw)
     *first = lo; return hi - lo + 1;
 }
-static void lay_report(uint64_t f) {   // every 300 frames, when layered passes happened
+void lay_report(uint64_t f) {   // every 300 frames, when layered passes happened
     static uint64_t p[3]; uint64_t c[3] = {g_lay.passes, g_lay.merges, g_lay.splits};
     if (f % 300 || c[0] == p[0]) return;
     MLOG("layered passes up to frame %llu: %llu passes holding %llu more SetRenderTargets; %llu ended early by a draw they could not hold", (unsigned long long)f,

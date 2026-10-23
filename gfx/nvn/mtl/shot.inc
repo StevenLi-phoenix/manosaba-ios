@@ -1,7 +1,7 @@
 // gfx/nvn/mtl/shot.inc, part of nvn_mtl.m (included there in order, one translation unit): Present screenshots
 // ---------- Present: draw the swapchain texture to the CAMetalLayer; optional screenshot ----------
-static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
-static id<MTLSamplerState> g_blit_samp;
+id<MTLRenderPipelineState> g_blit_pso; MTLPixelFormat g_blit_fmt;
+id<MTLSamplerState> g_blit_samp;
 static uint64_t g_present_n;
 void mtl_res_snapshot(mtl_res_count *out) {
     memset(out, 0, sizeof *out);
@@ -29,7 +29,6 @@ void mtl_res_snapshot(mtl_res_count *out) {
 #define SHOTQ_MAX 8
 static struct { uint64_t frame; char path[1024]; } g_shotq[SHOTQ_MAX]; static int g_nshotq;
 static pthread_mutex_t g_shotq_mu = PTHREAD_MUTEX_INITIALIZER;
-static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]);
 static int present_encode_m4(CBUF cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], int uv_i, id<MTLFence> wait);
 // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
 // with the same encoding as the present (present_encode) into an offscreen texture of the same size as the swapchain, and after the GPU finishes hands out a CGImage in the completion callback (the callback does not block the present). Guarded by g_shotq_mu
