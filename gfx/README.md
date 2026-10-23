@@ -107,7 +107,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/encode_args.inc` | Draws that sample what their own pass draws (plan item 42), argument encoding |
 | `nvn/mtl/lookahead.inc` | Pass lookahead: the hoisted clears run (hoist_try), store actions, first-draw coverage, feedback copies |
 | `nvn/mtl/store_index.inc` | The store lookahead index's backend side: what the index needs of the backend, its build at the start of a submit, the ledger's check against it |
-| `nvn/mtl/tile_merge.inc` | Readable tile render pass merge; the deferred merged pass's Q opened and its kept draws drawn |
+| `nvn/mtl/tile_merge.inc` | Readable tile render pass merge: the later pass's draws proven and specialized, the in-run check; the deferred merged pass's Q opened and its kept draws drawn |
 | `nvn/mtl/u8_layers.inc` | 8-bit indices the GPU wrote, and layered passes |
 | `nvn/mtl/metalfx_scene.inc` | MetalFX for the game's own upscale of its scene (plan item 63) |
 | `nvn/mtl/draw.inc` | Draws, dispatches, copies, texel reads and writes, clears |
@@ -122,6 +122,7 @@ Binding conventions used by the translation:
 | `nvn/core/rt.c`, `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target; whether two target sets are the same (`rt_same`) or two attachments one subresource (`rt_sub_eq`), a colour slot left out because another attaches the same subresource (`rt_dup_slot`) |
 | `nvn/core/pass.c`, `nvn/core/pass.h` | Pass planning: where the replay is and a cursor in replay order, the ops run before their place, the clear-only pass hoist's groups (`hoist_plan`), what a pass needs of depth and stencil (`pass_ds_need`), whether each attachment is stored at a pass end (`sd_decide`), the bandwidth ledger |
 | `nvn/core/defer.c`, `nvn/core/defer.h` | The deferred merged pass's decisions: whether a pass's draws wait for a later pass that attaches its colour targets (`defer_try`), the groups, Q's targets and load actions (`defer_q_enter`) |
+| `nvn/core/fuse.c`, `nvn/core/fuse.h` | The readable-tile pass merge's plan (`fuse_try`): whether the next pass merges into this one, the union of attachments, its clears and skipped ops |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
 | `nvn/core/live.c`, `nvn/core/live.h` | The texture living at a storage address (a finalized registration follows it), and the texture objects' host copies that recorded commands use |
 | `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |

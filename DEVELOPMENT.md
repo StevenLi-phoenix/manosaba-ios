@@ -209,7 +209,7 @@ decide):
   texture, the submit call's capture, inline uniform updates). Next the mixed parts (the replay loop, lookahead, tile merge, draw) split into
   what is decided and what is executed: the replay state (`S`, `R`) and the commands that only set it (batch 96), pass planning's own
   decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
-  hoist's plan and the deferral's decisions (batch 98); next the tile merge's decisions, then the execution interface (`nvn_backend.h`) and
+  hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99); next the execution interface (`nvn_backend.h`) and
   the replay loop; then the file-scope variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
@@ -408,3 +408,13 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   texture on a slot hoisted all the same, `-DDM_TEST_HOIST_BOUND_OK`, fails 1). The backend's warnings as before; the pass dumps of 11 gfx
   tests (9 deferral groups made, 16 refused) line for line as before. Smoke: the same red lines and frames (Tears of the Kingdom's cutscene
   a moment further on, looked at; its Mac default keeps these rewrites off).
+- [x] batch 99 · 264, the readable-tile pass merge's plan: `gfx/nvn/core/fuse.c` takes its state (`fuse_t`, `g_fz` and its counters) from
+  `mtl/lookahead.inc` and from `mtl/tile_merge.inc` the index's screen (`fz_prefilter`), whether a program samples a texture
+  (`prog_samples_ser`) and the plan (`fuse_try`; whether the last pass opened was a clear-only one is now its argument). What the backend
+  still does at a merge: the coverage of the later pass's first draw, asked through `nvn_be_fuse_cover` (was `fz_probe_cov2`), the same-pixel
+  proof and specialization at each later-pass draw, the in-run check. `gfx/tests/t_core_fuse.c` (11; attachments of another size taken into
+  the union, `-DDM_TEST_FUSE_ANY_SIZE`, fails 1). No gfx test plans a merge and the smoke runs keep these rewrites off or never reach them, so
+  Tears of the Kingdom's prologue ran with `DM_NVN_TBDR=1` and the pass dump on, this build against batch 98's (75 s each): neither merges
+  nor hoists there; both refuse deferrals for the same reasons in 1815 of the 1934 frames both reached (the others around scene changes,
+  reached at other moments), with the same red lines. The backend's warnings as before; the pass dumps of 11 gfx tests line for line as
+  before. Smoke: the same red lines and frames.

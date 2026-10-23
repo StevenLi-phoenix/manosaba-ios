@@ -1,18 +1,6 @@
 // gfx/nvn/mtl/lookahead.inc, part of nvn_mtl.m (included there in order, one translation unit): Pass lookahead: the hoisted clears run, store actions, first-draw coverage, feedback copies
 // Where the replay is, the ops run early and the clear-only hoist's plan, depth / stencil use and the store decisions: gfx/nvn/core/pass.c (plan item 264)
-// State of the readable-tile pass merge (merge B step 2): the earlier pass (phase 1) and the later pass (phase 2) share one render pass, and the attachments are the union
-typedef struct {
-    int active, phase, n1, nskip;
-    int nreuse;
-    const uint8_t *rt2_op, *reuse[8], *skip[12];
-    p_set_rt rt1, rt2;                 // Logical targets of each of the two passes (R.rt is the union during the merge)
-    int8_t p2map[8];                   // Logical color number of the later pass → physical attachment
-    uint8_t lmap1[8], lmap2[8];        // Physical attachment → logical color number of this phase's draws (0xff = not written)
-    uint8_t clr2[8], cd2f, cs2f; nvn_rgba cc2[8]; double cd2; uint32_t cs2;   // Clears at the start of the later pass (used as-is when the in-run dual render redraws)
-    uint8_t wrote[8];                   // Physical attachments written by the later pass
-    uint8_t cov2[8];                     // Physical attachments covered by the first draw of the later pass
-} fuse_t;
-static fuse_t g_fz; static uint64_t g_fz_n, g_fz_draws, g_fz_fallback;
+// The readable-tile pass merge's plan (fuse_t, g_fz, fuse_try): gfx/nvn/core/fuse.c (plan item 264)
 // The deferred merged pass's decisions (defer_t, the groups, defer_try): gfx/nvn/core/defer.c (plan item 264)
 static void draw(const p_draw *dw, const p_draw_idx *di);
 static void sd_finish(void) {   // the store lookahead's decision (gfx/nvn/core/pass.c sd_decide) as each attachment's store action
@@ -132,7 +120,7 @@ static void pso_predict_rest(void) {
     static int logged; if (g_pp_kicked > (uint64_t)kicked0 && logged++ < 20) MLOG("parallel precompile: %d draws left in this submit, %d pipelines handed to the background", draws, (int)g_pp_kicked - kicked0);
 }
 
-static void fz_probe_cov2(const p_set_rt *r2, const uint8_t *first, const int8_t *p2map, const uint8_t *clr, int n1, int n) {
+void nvn_be_fuse_cover(const p_set_rt *r2, const uint8_t *first, const int8_t *p2map, const uint8_t *clr, int n1, int n) {   // (gfx/nvn/core/fuse.h)
     static typeof(S) Ssave; memcpy(&Ssave, &S, sizeof S); typeof(R) Rsave = R;
     const p_draw *fdw = g_fd_dw; const p_draw_idx *fdi = g_fd_di; int fdwhy = g_fd_why;
     int pso_dirty = g_pso_dirty, dss_dirty = g_dss_dirty;

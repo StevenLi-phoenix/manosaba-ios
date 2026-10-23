@@ -31,6 +31,8 @@ t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/p
 	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
 t_core_tbdr: t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
 	clang $(CFLAGS) -Werror -o $@ t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
+t_core_fuse: t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
 t_core_live: t_core_live.c ../nvn/core/live.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
 	clang $(CFLAGS) -Werror -o $@ t_core_live.c ../nvn/core/live.c ../nvn/core/core.c
 t_core_pend: t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c $(CORE_H)
@@ -261,6 +263,7 @@ run: \
 	t_core_capture \
 	t_core_defer \
 	t_core_frame \
+	t_core_fuse \
 	t_core_live \
 	t_core_pend \
 	t_core_pass \
@@ -386,6 +389,7 @@ run: \
 	./t_core_capture
 	./t_core_defer
 	./t_core_frame
+	./t_core_fuse
 	./t_core_live
 	./t_core_pend
 	./t_core_pass
