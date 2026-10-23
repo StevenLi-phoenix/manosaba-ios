@@ -82,6 +82,7 @@
 #include "core/frame.h"
 #include "core/live.h"
 #include "core/capture.h"
+#include "core/upd.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>

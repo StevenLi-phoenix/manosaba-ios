@@ -113,7 +113,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     // 2b. updates written to memory in the middle (a buffer copy elsewhere ends the pass and writes them), then the range updated again: the snapshot is
     //     still there, so the next draw gets a private copy with both updates and nothing is written before it
     { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
-      uint64_t g0 = g_ren_guard, f0 = g_ren_flushes;
+      uint64_t g0 = g_ren.guard, f0 = g_ren.flushes;
       begin(&c, &t, NULL); scissor(&c, 0, 4); draw3(&c); update(&c, g_ubo, GREEN);
       uint64_t cp[3] = {(uint64_t)(uintptr_t)(g_mem + 0x3000), (uint64_t)(uintptr_t)(g_mem + 0x3100), 64}; emit(&c, OP_COPY_B2B, cp, sizeof cp);
       float half[4] = {0, 0, 1, 1}; uint8_t up[16 + 8]; uint64_t dst = g_ubo + 8, len = 8; memcpy(up, &dst, 8); memcpy(up + 8, &len, 8); memcpy(up + 16, half + 2, 8); emit(&c, OP_UPDATE_UB, up, sizeof up);   // b, a = 1, 1
@@ -121,23 +121,23 @@ int main(int argc, char **argv) { @autoreleasepool {
       uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
       EXPECT("written in the middle, updated again: left red", R_, lp);
       EXPECT("... right: green's r, g with the second update's b, a (0, 1, 1, 1)", 0xffffff00, rp);
-      if (rename) { EXPECT("... nothing written before that draw (the snapshot stayed)", 0, g_ren_guard - g0);
-                    EXPECT("... written twice: by the copy and at the end", 2, g_ren_flushes - f0); } }
+      if (rename) { EXPECT("... nothing written before that draw (the snapshot stayed)", 0, g_ren.guard - g0);
+                    EXPECT("... written twice: by the copy and at the end", 2, g_ren.flushes - f0); } }
     // 2c. updates written to memory in the middle (a buffer copy elsewhere) and no update after: the next draw binds the range again (its stage was
     //     marked for encoding by the update) and must get the snapshot with the update over it, not the snapshot alone (red). Tears of the Kingdom's
     //     cave meshes read their vertex decoding constants this way and were drawn where another mesh is (plan item 62k)
     { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
-      uint64_t f0 = g_ren_flushes;
+      uint64_t f0 = g_ren.flushes;
       begin(&c, &t, NULL); scissor(&c, 0, 4); draw3(&c); update(&c, g_ubo, GREEN);
       uint64_t cp[3] = {(uint64_t)(uintptr_t)(g_mem + 0x3000), (uint64_t)(uintptr_t)(g_mem + 0x3100), 64}; emit(&c, OP_COPY_B2B, cp, sizeof cp);
       scissor(&c, 4, 4); draw3(&c);
       uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
       EXPECT("written in the middle, no update after: left red", R_, lp);
       EXPECT("... right reads the update (green) [-DDM_TEST_UB_FLUSHED_SNAPSHOT: the snapshot, red]", G_, rp);
-      if (rename) EXPECT("... written by the copy, before that draw", 1, g_ren_flushes - f0 >= 1); }
+      if (rename) EXPECT("... written by the copy, before that draw", 1, g_ren.flushes - f0 >= 1); }
     // 3. a storage buffer over the updated range: the updates are written before that draw, which reads them from memory (green)
     { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
-      uint64_t g0 = g_ren_guard;
+      uint64_t g0 = g_ren.guard;
       begin(&c, &t, NULL); scissor(&c, 0, 4); draw3(&c); update(&c, g_ubo, GREEN);
       emit(&c, OP_BIND_PROGRAM, &(p_bind_program){&g_pg3, 3}, sizeof(p_bind_program));
       p_bind_buf sb = {NVN_SHADER_STAGE_FRAGMENT, 0, g_ubo, 256}; emit(&c, OP_BIND_SSBO, &sb, sizeof sb);
@@ -145,7 +145,7 @@ int main(int argc, char **argv) { @autoreleasepool {
       uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
       EXPECT("storage buffer over an updated range: left red", R_, lp);
       EXPECT("... the storage read sees the update (green)", G_, rp);
-      if (rename) EXPECT("... the updates were written before that draw", 1, g_ren_guard - g0); }
+      if (rename) EXPECT("... the updates were written before that draw", 1, g_ren.guard - g0); }
     // 4. depth: a submission clears the depth target to 0; the next one (no depth clear: depth comes only from the lookahead) draws the left half testing
     //    nothing, updates, then draws the right half testing LESS: rejected only if the pass kept its depth attachment past the update (ds_scan)
     { tex_t t = tex(8, NVN_FORMAT_RGBA8), d = tex(8, NVN_FORMAT_DEPTH32F); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
@@ -191,14 +191,14 @@ int main(int argc, char **argv) { @autoreleasepool {
     // 7. a copy from the range's previous copy: draw (red), update to green, draw the middle (a copy: green), update b, a to 1, 1, draw the right half
     //    (a copy made from the green one with only that update over it: 0, 1, 1, 1)
     if (rename) { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, RED, 16);
-      uint64_t i0 = g_ren_incr;
+      uint64_t i0 = g_ren.incr;
       begin(&c, &t, NULL); scissor(&c, 0, 2); draw3(&c); update(&c, g_ubo, GREEN); scissor(&c, 2, 2); draw3(&c);
       float half[4] = {0, 0, 1, 1}; uint8_t up[16 + 8]; uint64_t dst = g_ubo + 8, len = 8; memcpy(up, &dst, 8); memcpy(up + 8, &len, 8); memcpy(up + 16, half + 2, 8); emit(&c, OP_UPDATE_UB, up, sizeof up);
       scissor(&c, 4, 4); draw3(&c);
       uint32_t lp, rp; uint64_t np; run(&c, &t, &lp, &rp, &np);
       EXPECT("7. from the previous copy: left red", R_, lp);
       EXPECT("... right: green's r, g with b, a of the update after it (0, 1, 1, 1)", 0xffffff00, rp);
-      EXPECT("... that copy made from the previous one", 1, g_ren_incr - i0); }
+      EXPECT("... that copy made from the previous one", 1, g_ren.incr - i0); }
     // 8. the next submission: memory blue (its snapshot), b, a updated: the copy is blue with them (0, 0, 1, 1), not case 7's copy (green) left in the index
     if (rename) { tex_t t = tex(8, NVN_FORMAT_RGBA8); chain c = chain_new(); memcpy((void *)(uintptr_t)g_ubo, BLUE, 16);
       begin(&c, &t, NULL); scissor(&c, 0, 4); draw3(&c);
@@ -209,14 +209,14 @@ int main(int argc, char **argv) { @autoreleasepool {
       EXPECT("... right blue with the update (its own snapshot) [-DDM_TEST_UBSH_ANY_SUB: from case 7's copy]", B_, rp); }
     // 9. 200 updates of the same 16 bytes and no draw after them: written at the end in one copy, the newest last; the sort of the 200 takes few moves
     if (rename) { memcpy((void *)(uintptr_t)g_ubo, RED, 16); chain c = chain_new();
-      uint64_t m0 = g_ul_moves;
+      uint64_t m0 = g_ren.ul_moves;
       for (int k = 0; k < 200; k++) { float v[4] = {(float)k, 0, 0, 1}; update(&c, g_ubo, v); }
       emit(&c, OP_END, NULL, 0);
       state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
       mtl_wait(mtl_sub_commit(), 5000000000ull);
       float m[4]; memcpy(m, (const void *)(uintptr_t)g_ubo, 16);
       EXPECT("9. 200 updates of one range: memory holds the newest (r = 199)", 1, m[0] == 199.0f);
-      EXPECT("... sorted in under 1,000 moves [-DDM_TEST_UL_NO_REVERSE: 19,900]", 1, g_ul_moves - m0 < 1000);
-      if (g_ul_moves - m0 >= 1000) printf("    %llu moves\n", (unsigned long long)(g_ul_moves - m0)); }
+      EXPECT("... sorted in under 1,000 moves [-DDM_TEST_UL_NO_REVERSE: 19,900]", 1, g_ren.ul_moves - m0 < 1000);
+      if (g_ren.ul_moves - m0 >= 1000) printf("    %llu moves\n", (unsigned long long)(g_ren.ul_moves - m0)); }
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }

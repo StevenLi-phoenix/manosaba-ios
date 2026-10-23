@@ -48,7 +48,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (g_fxp.sub) fxp_sub_end();
     if (g_up_fs[1][0] && !g_defer_replaying) fxp_scene(pr);   // MetalFX upscaled the scene this draw samples (plan item 63)
     // The continued render pass may have been opened with fewer depth / stencil attachments (open modes 2 / 3 / 4): if the plane this draw needs is not attached, split before it (on reopen, attach per the new lookahead)
-    if ((g_rt_merged || (g_enc && g_ren_pass == g_pass.serial)) && g_enc_mode != 0 && (((S.ds.dt || S.ds.dw) && !g_pass.hd) || (S.ds.st && !g_pass.hs))) {   // (a pass that went on past a renamed update: its lookahead did too, this is a safety net)
+    if ((g_rt_merged || (g_enc && g_ren.pass == g_pass.serial)) && g_enc_mode != 0 && (((S.ds.dt || S.ds.dw) && !g_pass.hd) || (S.ds.st && !g_pass.hs))) {   // (a pass that went on past a renamed update: its lookahead did too, this is a safety net)
         static int once2; if (!once2++) MLOG("same-target continuation: a draw in the continued pass needs a depth / stencil plane that is not attached, splitting here (first case pass %llu)", g_stat_pass);
         PD("M %llu a draw in the continued pass needs an unattached depth / stencil plane, splitting here", g_stat_pass); rp_end(); }
     if (g_rt_range_active && (!rt_range_pr_ro(pr) || !S.ds.dt || S.ds.dw || S.ds.st)) rp_end();   // The external write visibility at the original encoder boundary is not removed

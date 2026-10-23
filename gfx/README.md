@@ -103,7 +103,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/pipeline.inc` | Draw state, vertex formats, blending, pipeline states, the pipeline prediction |
 | `nvn/mtl/border_warm.inc` | Sampler border colours in the shader (plan item 161), the pipeline warm-up, depth-stencil states |
 | `nvn/mtl/args.inc` | Argument buffers: dummy resources, bindings, the driver segment fill |
-| `nvn/mtl/uniform_rename.inc` | Inline uniform updates without ending the render pass |
+| `nvn/mtl/uniform_rename.inc` | Inline uniform updates' backend side: the argument blocks they make stale, writing them to memory |
 | `nvn/mtl/encode_args.inc` | Draws that sample what their own pass draws (plan item 42), argument encoding |
 | `nvn/mtl/lookahead.inc` | Pass lookahead: deferral, hoisting (hoist_try), depth / stencil use, store decisions, first-draw coverage, feedback copies |
 | `nvn/mtl/store_index.inc` | The store lookahead index's backend side: what the index needs of the backend, its build at the start of a submit, the ledger's check against it |
@@ -125,6 +125,7 @@ Binding conventions used by the translation:
 | `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |
 | `nvn/core/capture.c`, `nvn/core/capture.h` | The submit call's view for the translation thread (plan item 61): deferred handles, FenceSync tokens, the uniform bytes; the submission's uniform snapshot |
 | `nvn/core/frame.c`, `nvn/core/frame.h` | Measurements by frame: boot instrumentation (DM_BOOTPROF), the GPU time as the union of command buffer spans, DM_NVN_UB |
+| `nvn/core/upd.c`, `nvn/core/upd.h` | Inline uniform updates without ending the render pass: the update log, private copies of the ranges they reach |
 | `nvn/core/usnap.c`, `nvn/core/usnap.h` | Uniform snapshots: each submission's copies of the uniform ranges it binds; deferred binding handles read once a submission |
 | `nvn/core/store_index.c`, `nvn/core/store_index.h` | The store lookahead index: one scan per submission, the first valid event after a pass end decides each attachment's write-back |
 | `nvn/nvn_obj.h` | Host object layouts and the command record format, shared by both layers |

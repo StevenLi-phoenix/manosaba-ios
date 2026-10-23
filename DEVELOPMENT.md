@@ -207,7 +207,7 @@ decide):
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
   In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91, the live texture in 92, the submit call's capture in 93; then the live
+  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91, the live texture in 92, the submit call's capture in 93, inline uniform updates in 94; then the live
   texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
   is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
   covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
@@ -352,3 +352,12 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   `mtl/encoders.inc`) and the part is gone: 36 parts. `gfx/tests/t_core_capture.c` (10; only the writes still running at the replay
   counting, `-DDM_TEST_XLAT_CAP_STALE`, fails 1); `t_xlat`'s broken variants now in core fail as written (`NO_TOKEN` 2, `NO_CAPTURE` 2,
   `CAP_STALE` 1). Batch tests as in batch 88; smoke (Tears of the Kingdom replays on the translation thread): the same red lines and frames.
+- [x] batch 94 · 264, inline uniform updates: `gfx/nvn/core/upd.c` takes from `mtl/uniform_rename.inc` the update log (`upd_list`, `ul_add`,
+  `ul_clear`, `ul_seq`, `ul_apply`, and `ul_by_seq` for the writes across two pools), the submission's updates (`g_upd`, `g_uh`, `g_nupd`,
+  `upd_add`, `upd_any`, `upd_apply`, `upd_overlap_seq`, `upd_sub_end`), the private copies (`upd_shadow_at`, through the arena hook) and the
+  statistics (`g_ren.*`, `ren_report`); the part keeps the argument blocks an update makes stale, `upd_log`, `upd_shadow` (with the
+  submission's serial) and the write to memory (`upd_flush`). `gfx/tests/t_core_upd.c` (18; an answer kept after the log changed,
+  `-DDM_TEST_UL_SEQ_STALE`, fails 3); `t_ubren.m` reads `g_ren.*`; the broken variants now in core fail as written (`t_ubren`: `UBSH_ANY_SUB`
+  2, `UL_NO_REVERSE` 1, `UL_SEQ_STALE` 6, `UB_FLUSHED_SNAPSHOT` 4 as at batch 93; `t_nvn`: `UB_NEWEST_FIRST` 1); `t_core_usnap`'s fake arena
+  aligned as the backend's. Batch tests as in batch 88; smoke: the same red lines and frames; Tears of the Kingdom's rename statistics at frame
+  300 are one of the two counts the batches since 88 alternate between (14,012 as in batch 91).

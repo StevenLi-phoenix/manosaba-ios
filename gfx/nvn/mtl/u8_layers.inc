@@ -52,7 +52,7 @@ static void upd_guard_draw(NvProg *pr, const p_draw_idx *di) {   // only what th
             else if (b->kind == NVN_RB_CBUF && b->reg < 16) { const p_bind_buf *u = &S.ubo[sh->stage][b->reg]; if (u->addr && u->size && upd_overlap_seq(u->addr, u->addr + u->size) && !us_find(u->addr, u->size)) why = 4; } } }
     if (why < 0) return;
     if (g_defer_nact || g_fz.active || g_fz_checking) { RED_ONCE(91, "renamed uniform update: a draw reads an updated range while a deferred or merged pass is built (first case): not written first"); return; }
-    g_ren_guard++; g_ren_g[why]++; upd_flush();
+    g_ren.guard++; g_ren.g[why]++; upd_flush();
 }
 static int lay_reads_target(NvProg *pr);
 // Layered passes (see g_lay). Off with the TBDR rewrites (they own pass boundaries), on GPUs without two-view amplification, by DM_NVN_LAYER_MERGE=0

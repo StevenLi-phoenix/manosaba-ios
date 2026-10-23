@@ -17,9 +17,7 @@ void nvn_be_arena(size_t n, uint8_t **cpu, uint64_t *gpu, void **buf) {
 void nvn_be_parallel(int n, void (*fn)(void *ctx, size_t i), void *ctx) { dispatch_apply_f((size_t)n, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ctx, fn); }
 uint64_t nvn_be_done_fence(void) { return mtl_done_fence(); }
 static void us_drop(uint64_t a, uint64_t n) { if (us_drop_range(a, n, g_fence + 1)) args_dirty_all(); }   // a GPU write of this submission reaches [a, a + n): bindings encoded from here on read memory
-static int g_nupd, g_upd_flushing;   // renamed inline uniform updates not yet in memory (see upd_log)
-static void upd_apply(uint64_t lo, uint8_t *out, uint64_t n);
-static int upd_any(void);   // the submission logged inline uniform updates (written to memory or not): a snapshot alone predates them
+static int g_upd_flushing;   // upd_flush is writing the renamed inline uniform updates (g_nupd, upd_any, upd_apply: gfx/nvn/core/upd.h)
 static int pend_read(uint64_t a, void *out, uint64_t n) {
     { const us_ent *u = us_find(a, n); if (u) { memcpy(out, u->cpu + (a - u->lo), n); if (upd_any()) upd_apply(a, out, n); return 1; } }   // not dropped: no GPU write of this submission reached it but renamed updates
     return pend_read_x(a, out, n, g_pend.n, 0);

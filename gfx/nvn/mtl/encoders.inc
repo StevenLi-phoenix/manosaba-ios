@@ -213,7 +213,7 @@ static inline void enc_b_copy_buffer_texture(id e, id<MTLBuffer> s, NSUInteger s
 static inline void enc_b_copy_texture_buffer(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin o, MTLSize z, id<MTLBuffer> d, NSUInteger doff, NSUInteger row, NSUInteger img) { [e copyFromTexture:s sourceSlice:sl sourceLevel:lv sourceOrigin:o sourceSize:z toBuffer:d destinationOffset:doff destinationBytesPerRow:row destinationBytesPerImage:img]; }
 static inline void enc_b_copy_texture(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin so, MTLSize z, id<MTLTexture> d, NSUInteger dl, NSUInteger dv, MTLOrigin doo) { [e copyFromTexture:s sourceSlice:sl sourceLevel:lv sourceOrigin:so sourceSize:z toTexture:d destinationSlice:dl destinationLevel:dv destinationOrigin:doo]; }
 static void blit_note(void);   // Per-pass dump: a copy / buffer update ended the render pass (defined after PD)
-static void upd_flush(void); static void upd_sub_end(void);
+static void upd_flush(void);
 static void chunk_maybe_split(void);   // mid-submission commits (defined with the render pass state)
 #if DM_NVN_M3
 static BENC blit(void) { if (g_nupd && !g_upd_flushing) upd_flush(); blit_note(); rp_end(); if (!g_blit) { chunk_maybe_split(); g_blit = enc_b_begin(g_cb); } return g_blit; }
@@ -259,7 +259,7 @@ static void ring_put(const void *data, uint64_t n, __unsafe_unretained id<MTLBuf
     *rb = g_ubs_buf; *ro = g_ubs_off;
     g_ubs_off += need;
 }
-static int ub_rename_on(void); static void upd_log(uint64_t lo, uint64_t hi, const uint8_t *data);
+static void upd_log(uint64_t lo, uint64_t hi, const uint8_t *data);
 void mtl_sub_update(const void *data, uint64_t dst, uint64_t n) {
     if (!n) return;
     void *db; uint64_t dof;

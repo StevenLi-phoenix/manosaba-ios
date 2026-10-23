@@ -35,6 +35,8 @@ t_core_capture: t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nv
 	clang $(CFLAGS) -Werror -o $@ t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_frame: t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c
+t_core_upd: t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
 t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
 	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
@@ -261,6 +263,7 @@ run: \
 	t_core_prog \
 	t_core_store_index \
 	t_core_tbdr \
+	t_core_upd \
 	t_core_usnap \
 	t_cover \
 	t_cull_prim \
@@ -384,6 +387,7 @@ run: \
 	./t_core_prog
 	./t_core_store_index
 	./t_core_tbdr
+	./t_core_upd
 	./t_core_usnap
 	./t_cover
 	./t_copy_pitch

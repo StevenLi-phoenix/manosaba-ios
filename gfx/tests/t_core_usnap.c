@@ -57,7 +57,7 @@ static void submit(void) {   // a new submission: its generation, no copies, the
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); crash_install();
     for (int i = 0; i < 2; i++) if (posix_memalign((void **)&g_pool[i], 4096, POOL)) abort();
-    g_arena = malloc(8u << 20);
+    if (posix_memalign((void **)&g_arena, 256, 8u << 20)) abort();   // 256-aligned blocks, as the backend's arena
     for (int i = 0; i < POOL; i++) { g_pool[0][i] = (uint8_t)i; g_pool[1][i] = (uint8_t)(i * 7); }
     g_us.on = 1;
 
