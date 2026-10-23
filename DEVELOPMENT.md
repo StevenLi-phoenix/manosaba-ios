@@ -202,8 +202,6 @@ The open plan items, shortened (their history: the archive under the same number
 
 The codebase (2026-10-24, the user: the Metal backend in one 10,000-line file is the first thing to fix, before Android; what stays is mine to
 decide):
-- 262 the single-draw kernel passes of 217 removed: off by default and no GPU time saved on the iPhone (the code, `nvn_kpass.h`,
-  `gfx/tools/dmsh_kernel.py`, `t_kpass`, `t_kpnvn`, `t_dmsh_kernel.py`, `games/totk/kernel_shaders.txt`); git history keeps them.
 - 263 the other switches off by default traced to their origin and measurement (`DM_NVN_RT_RANGE`, spread over ten parts with no recorded
   result, first), each kept as a diagnostic, kept as an option with its numbers written down, or removed.
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
@@ -282,3 +280,9 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   with its name, closing every conditional, brace and `@implementation` it opens, its includes resolving, both Makefiles rebuilding on a
   change); a part with an `#if` left open (`T_MTL_PARTS_BROKEN=1`) fails 1. Batch tests as in batch 85; smoke: the same red lines, the
   frames as batch 85's but for the animation's timing (looked at).
+- [x] batch 87 · 262 the single-draw kernel passes of 217 removed: off by default, and on the iPhone they saved no GPU time. Out: the part
+  `mtl/kpass.inc`, its hooks in `tex_desc` (shader-write usage on small targets), `rp_end`, `NvShader`, `bind_args`, `draw` and the
+  `hle_nvn.c` statistics line, `nvn_kpass.h`, `gfx/tools/dmsh_kernel.py`, `t_kpass`, `t_kpnvn` with `gfx/tests/kpass/`, `t_dmsh_kernel.py`,
+  `games/totk/kernel_shaders.txt` and the switches' rows in `gfx/README.md`; the kernels left in the workspace's chain folders went too. The
+  backend is the one before 217 again: preprocessed for the four configurations (Metal 4 and Metal 3 on the Mac and iOS), it is the same text
+  as 55de9bf's `nvn_mtl.m` with today's headers but for blank lines, and `hle_nvn.c` the same file. Git history keeps all of it (b921a1e).

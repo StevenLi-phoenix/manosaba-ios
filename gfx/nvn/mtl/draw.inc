@@ -59,7 +59,6 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (g_fz.active && g_enc && g_fz.phase == 2 && !fz_p2_draw(pr, dw, di, g_fz.lmap2, &fz_fn)) {   // Cannot be proven: end the merged render pass (the earlier pass's result is stored as usual) and reopen with the later pass's original targets
         static int once3; if (!once3++) MLOG("readable tile pass merge: a draw in the later pass is not provable, falling back to separate passes (first case pass %llu)", g_stat_pass);
         g_fz_fallback++; rp_end(); }
-    if (!g_enc && kp_draw(pr, dw, di)) return;   // a single-draw pass as two dispatches (plan item 217, DM_NVN_KPASS)
     if (!g_defer_replaying) fbx_prepare(pr, dw, di); else { g_fbx_self = 0; if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); } }   // a replayed deferred draw: not copied for, and it keeps the draw that replays it's picks
     if (R.has_sc && !g_enc) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);

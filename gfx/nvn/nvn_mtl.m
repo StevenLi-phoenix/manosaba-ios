@@ -66,7 +66,6 @@
 #include "nvn_ts.h"
 #include <mach/mach_time.h>
 #include "nvn_copy_pitch.h"
-#include "nvn_kpass.h"
 #include "nvn_pool_find.h"
 #include "nvn_tex_fit.h"
 #include "nvn_depth_clear.h"
@@ -326,7 +325,6 @@ void bf_want_note(const char *shader_key) {
 #include "mtl/tile_merge.inc"
 #include "mtl/u8_layers.inc"
 #include "mtl/metalfx_scene.inc"
-#include "mtl/kpass.inc"
 #include "mtl/draw.inc"
 #include "mtl/exec.inc"
 #include "mtl/shot.inc"

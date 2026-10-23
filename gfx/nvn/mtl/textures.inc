@@ -126,7 +126,6 @@ static int bc1_astc(uint32_t f, int *rgba, int *srgb) {
 }
 static int bc_unpack(uint32_t nvn_fmt, uint32_t *pf, int *bpp) { int r, sr; return no_bc() && !bc1_astc(nvn_fmt, &r, &sr) && nvn_bc_unpacked(nvn_fmt, pf, bpp); }
 static int pf_is_depth_stencil(MTLPixelFormat f);
-static int kp_on(void);   // single-draw passes as kernels (plan item 217, kp_draw)
 static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "texture format %#x has no Metal equivalent (first case)", t->d.format); return nil; }
@@ -171,14 +170,7 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     d.storageMode = MTLStorageModePrivate;   // Render targets and assets both go in GPU private storage (lossless compression available)
     d.usage = MTLTextureUsageShaderRead | (fmt_compressed(t->d.format) || packaged ? 0 : MTLTextureUsageRenderTarget)
             | (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE ? MTLTextureUsageShaderWrite : 0)   // Image usage: shader-writable (compute kernels generating the 3D color lookup table, etc.)
-            | (unp ? MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView : 0)   // No BC: textures in the decompressed format are written by the GPU decompression kernel (up_dec) / receive whole-block copies from ASTC sources (copy_t2t_astc)
-            // a colour target a single-draw pass may write from a kernel (plan item 217, kp_draw): up to 256x256, or with levels from 512x512 (a
-            // downsample chain's small levels), 2D, cube or arrays of them, one sample, a format the kernels write. Not larger ones: shader-write usage
-            // keeps Metal from compressing the texture losslessly (Apple's MTLTextureUsage.shaderWrite), which their big levels' passes would pay for
-            | (kp_on() && !fmt_compressed(t->d.format) && !packaged && d.sampleCount <= 1 && kp_fmt_kind(d.pixelFormat) >= 0
-               && ((d.width <= KP_MAX_SIZE && d.height <= KP_MAX_SIZE) || (d.mipmapLevelCount > 1 && d.width <= 2 * KP_MAX_SIZE && d.height <= 2 * KP_MAX_SIZE))
-               && (d.textureType == MTLTextureType2D || d.textureType == MTLTextureType2DArray || d.textureType == MTLTextureTypeCube || d.textureType == MTLTextureTypeCubeArray)
-               ? MTLTextureUsageShaderWrite : 0);
+            | (unp ? MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView : 0);   // No BC: textures in the decompressed format are written by the GPU decompression kernel (up_dec) / receive whole-block copies from ASTC sources (copy_t2t_astc)
     // DM_NVN_DEPTH_PLAIN=1 (plan item 99, an A/B): depth / stencil textures without the GPU's lossless compression (allowGPUOptimizedContents NO;
     // LASRecomp PR #204 lost its ambient occlusion with it on, cause unknown). Tears of the Kingdom's shots and brightness: the same either way
     static int plain = -1; if (plain < 0) { const char *e = getenv("DM_NVN_DEPTH_PLAIN"); plain = e && atoi(e); if (plain) MLOG("DM_NVN_DEPTH_PLAIN=1: depth / stencil textures uncompressed"); }

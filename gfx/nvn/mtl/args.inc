@@ -98,14 +98,7 @@ static inline void args_sync_dirty(void) {
         g_args_reg_seen = reg; g_args_dirty_seen = dirty; args_dirty_all();
     }
 }
-#if !DM_NVN_M3
-static __unsafe_unretained id<MTL4ArgumentTable> g_kp_bind;   // set while a single-draw pass makes a stage's arguments for its kernel (kp_draw): the address
-static uint64_t g_kp_va;                                       // of the block goes to g_kp_va instead of an encoder
-#endif
 static void bind_args(id<MTLCommandEncoder> en, int nvn_stage, int metal_vertex, id<MTLBuffer> ab, uint64_t gpu, size_t off, NSUInteger ai) {
-#if !DM_NVN_M3
-    if (g_kp_bind) { g_kp_va = gpu; return; }
-#endif
     if (nvn_stage == 5) enc_c_args((id<MTLComputeCommandEncoder>)en, gpu, ai);
     else enc_r_args((id<MTLRenderCommandEncoder>)en, metal_vertex ? MTLRenderStageVertex : MTLRenderStageFragment, gpu, ai);
 }

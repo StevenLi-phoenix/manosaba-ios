@@ -57,14 +57,6 @@ t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
 	clang -O1 -Wall -Werror -I../nvn/include -o $@ t_sync_order.c
 t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_tex_fit.m -framework Metal -framework Foundation
-# the kernels of kpass/'s stages from gfx/tools/dmsh_kernel.py (plan item 217), made with the test
-t_kpnvn: t_kpnvn.m ../../host/crash.c $(GFX) $(GFX_H) ../tools/dmsh_kernel.py kpass/nvs.metal kpass/nfs.metal
-	mkdir -p t_kpnvn_lib && for s in nvs:kpnvs_b nfs:kpnfs_b; do python3 -I ../tools/dmsh_kernel.py --msl kpass/$${s%%:*}.metal t_kpnvn_lib/$${s##*:}k.metal \
-	  && xcrun -sdk macosx metal -c t_kpnvn_lib/$${s##*:}k.metal -o t_kpnvn_lib/$${s##*:}k.air && xcrun -sdk macosx metallib t_kpnvn_lib/$${s##*:}k.air -o t_kpnvn_lib/$${s##*:}k.metallib || exit 1; done
-	clang $(CFLAGS) -fobjc-arc -o $@ t_kpnvn.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_kpass: t_kpass.m ../nvn/nvn_kpass.h ../tools/dmsh_kernel.py kpass/vs.metal kpass/fs_i.metal kpass/fs_t.metal kpass/fs_c.metal
-	for s in vs fs_i fs_t fs_c; do python3 -I ../tools/dmsh_kernel.py --msl kpass/$$s.metal t_kpass_$${s}_k.metal || exit 1; done
-	clang $(CFLAGS) -fobjc-arc -o $@ t_kpass.m -framework Metal -framework Foundation
 t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_rt_srgb_view: t_rt_srgb_view.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -333,8 +325,6 @@ run: \
 	t_sync_order \
 	t_tex_auto \
 	t_tex_fit \
-	t_kpass \
-	t_kpnvn \
 	t_texcheck \
 	t_ub \
 	t_ubren \
@@ -492,10 +482,8 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_rt_srgb_view
 	MTL_DEBUG_LAYER=1 ./t_tex_fit
-	MTL_DEBUG_LAYER=1 ./t_kpass
-	./t_kpnvn
 .PHONY: run
 # The older-API build (DM_NVN_M3=1, macOS 15.0): the same tests built and run in a sibling tests_m3 directory
 run-m3:
-	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py t_fpcontract.metal ../tests_m3/ && cp -R kpass ../tests_m3/
+	rm -rf ../tests_m3 && mkdir ../tests_m3 && cp Makefile *.c *.m *.py t_fpcontract.metal ../tests_m3/
 	$(MAKE) -C ../tests_m3 run CFLAGS="$(CFLAGS) -DDM_NVN_M3=1 -mmacosx-version-min=15.0"

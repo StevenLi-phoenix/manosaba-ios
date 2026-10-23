@@ -6,7 +6,6 @@ static int g_nblk_wb; static void blk_writeback(void);
 static int enc_label_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_ENC_LABEL"); v = e && atoi(e); } return v; }
 static inline id<MTLTexture> fxp_sub(int stage, int tid, id<MTLTexture> t, uint64_t *rid);   // (plan item 63, with fxp_scene)
 static int g_fbx_nact, g_fbx_self; static inline void args_dirty_all(void);   // g_fbx_self: this draw samples what its pass draws (fbx_prepare)
-static void kp_check_snap(void);   // DM_NVN_KPASS_CHECK (kp_draw)
 static void rp_end(void) { if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }   // the attachment copies of a draw stand in only for it (fbx_prepare)
     if (g_enc) {
     if (g_cnt_on > 0 && g_stat_draw == g_cnt_pass_d0) g_cnt_nodraw++;
@@ -19,7 +18,6 @@ static void rp_end(void) { if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
     sd_finish(); pg_render_end(g_enc); enc_r_end(g_enc); zskip_commit_clears(); g_enc = nil; g_rt_merged = 0; g_lay.active = 0; g_rt_range_active = g_rt_range_pending = 0; ts_after(); if (g_lp.count) lp_finish(); fz_end();
     if (g_nblk_wb) blk_writeback();   // blocks rendered into auxiliary textures → the compressed textures
-    kp_check_snap();   // (DM_NVN_KPASS_CHECK only)
 } }
 // A compressed texture as a render target (Tears of the Kingdom, as nxnative found in Breath of the Wild: a BC4 texture written through an RGBA16UI
 // view, one texel = one 8-byte block, i.e. BC4 encoded on the GPU): Metal can neither attach a compressed format as a colour attachment nor make

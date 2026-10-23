@@ -45,8 +45,7 @@ static void shmap_load(void) {
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
     id<MTLLibrary> alib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *afn;
     NSMutableDictionary<NSString *, NvShader *> *bdv;
-    id<MTLFunction> ifn; int ifn_tried;
-    id<MTLComputePipelineState> kps[2]; int k_tried; } @end   // kps: the stage's kernels <key>k (plan item 217, kp_shader): tk_vert, or tk_frag_w / tk_frag_rw   // ifn: the integer-output variant <key>_i_b (fout_fn, plan item 162)   // bdv: variants that return a sampler's border colour Metal lacks (border_variant, plan item 161)   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
+    id<MTLFunction> ifn; int ifn_tried; } @end   // ifn: the integer-output variant <key>_i_b (fout_fn, plan item 162)   // bdv: variants that return a sampler's border colour Metal lacks (border_variant, plan item 161)   // alib: a fragment shader with the alpha test epilogue (dmsh_build.py alpha_test); afn: its specializations
 @implementation NvShader @end
 #include "../nvn_pso_skey.h"
 #include "../nvn_warm_list.h"
