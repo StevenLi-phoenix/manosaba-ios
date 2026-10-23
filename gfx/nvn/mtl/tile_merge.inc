@@ -4,7 +4,6 @@
 // and the later pass reads it directly with the readable tile version (<key>_bf, function-constant specialization), instead of first landing in main memory and being read back just to be sampled.
 // Planning (fuse_try, gfx/nvn/core/fuse.c, at the start of the earlier pass) does only structural checks; the closed-form proof of same-pixel addressing is done at every draw of the later pass (fz_p2_draw), and if it cannot be proven the merged render pass is ended and
 // a normal render pass is reopened with the later pass's original targets (the earlier pass's result is stored as usual, equivalent to not merging).
-static int fz_reuse_op(const uint8_t *p) { for (int i = 0; i < g_fz.nreuse; i++) if (g_fz.reuse[i] == p) return 1; return 0; }
 // Diagnostic DM_NVN_FUSE_CHECK=1: in-run double rendering. For the later pass's draws that can be proven, keep a state snapshot per draw; after the merged render pass ends, make a copy of the attachments the later pass wrote (the merge path's result),
 // then turn off all lookahead and redraw one by one through the normal path with the later pass's original targets and original clears, and compare the two byte by byte (same frame, same input, no dependence on cross-run determinism). The redraw result is left on the attachment (no effect if identical)
 static int fz_check_on(void) { static int v = -1; if (v < 0) v = getenv("DM_NVN_FUSE_CHECK") != NULL; return v; }
@@ -66,10 +65,6 @@ static void fz_end(void) {   // End of a merged render pass (called by rp_end): 
 int nvn_be_handle_view(uint64_t h, uint64_t *ser, view_t *v, int *has_v) {   // (gfx/nvn/core/defer.h) read without g_rmu, as the deferral's scan always has
     int tid = h_tid(h); if (!tid || tid >= g_ntreg || !g_treg[tid].ok) return 0;
     *ser = g_treg[tid].t.serial; *has_v = g_treg[tid].has_v; *v = g_treg[tid].v; return 1;
-}
-static int defer_begin_q(const uint8_t *op) {   // op opens a waiting group's Q (gfx/nvn/core/defer.c): the pass before it ends first
-    int first = defer_q_first(op); if (first < 0) return 0;
-    rp_flush(); defer_q_enter(op, first); return 1;
 }
 static void defer_replay(void) {
     if (g_defer_replaying) return;

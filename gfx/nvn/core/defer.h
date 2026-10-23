@@ -3,8 +3,9 @@
 // between neither sample P's colour targets, nor write what P samples, nor write P's depth / stencil, P is not opened there: its draws are kept
 // with their draw state (defer_take) and drawn when Q's pass opens, P's clears made Q's load actions, so P's attachments are not stored and loaded
 // again in between. The store lookahead index screens first (defer_pre), then one scan in replay order decides (defer_try). Up to 4 groups at
-// once; a pass that is the Q of waiting groups and is itself deferred takes them into its group. The backend opens Q's pass (defer_begin_q),
-// draws the kept draws (defer_replay) and, for groups still waiting at a submission's end, draws them on their own targets (defer_fallback).
+// once; a pass that is the Q of waiting groups and is itself deferred takes them into its group. At Q's SetRenderTargets the replay ends the pass
+// before it and sets Q's targets (core/exec.c); the backend draws the kept draws when Q's pass opens (defer_replay) and, for groups still waiting
+// at a submission's end, draws them on their own targets (defer_fallback).
 // DM_NVN_DEFER=0 turns it off; DM_NVN_DEFER_AB=1 keeps it off until the second screenshot. Checked without a GPU by gfx/tests/t_core_defer.c
 #pragma once
 #include <stdint.h>

@@ -29,6 +29,7 @@ extern fuse_t g_fz; extern uint64_t g_fz_n, g_fz_draws, g_fz_fallback;   // The 
 // attachments (the earlier pass's at their indices, the later pass's own appended) with the later pass's clears pending on them, and its
 // SetRenderTargets and clears are in the skip set
 void fuse_try(int enc_clear_only);
+int fz_reuse_op(const uint8_t *p);   // p is one of the earlier pass's SetRenderTargets set again before the later pass (taken into the merge)
 void fz_unskip(void);   // A merge ended before its later pass: the later pass's SetRenderTargets and clears taken out of the skip set
 
 // The backend provides:

@@ -88,6 +88,7 @@
 #include "core/defer.h"
 #include "core/fuse.h"
 #include "core/exec.h"
+#include "core/cond.h"
 #include "nvn_backend.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>

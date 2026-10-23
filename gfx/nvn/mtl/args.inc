@@ -44,52 +44,7 @@ static id<MTLBuffer> dummy_buf(void) { static id<MTLBuffer> b; if (!b) { b = [g_
 static uint64_t dummy_buf_gpu(void) { static uint64_t gpu; if (!gpu) gpu = dummy_buf().gpuAddress; return gpu; }
 // useResource is idempotent for the same (resource, usage, stage) within one encoder: remember what this render encoder has already declared and skip repeats (a compute encoder is created anew for each dispatch, no dedup)
 static uint8_t g_args_dirty[6] = {1, 1, 1, 1, 1, 1};
-static int g_render_off;   // SetRenderEnable(false) is in effect (NVN reference: clears and draws are dropped while it is)
-// Conditional rendering counted (plan item 112's measure): conditionals, those on a result still on the GPU (rendering kept on), and the draws and
-// clears replayed while one of those was in effect; a line every 300 frames when there were any
-static uint64_t g_rc_n, g_rc_pending, g_rc_pend_draws;
-static void rc_report(uint64_t f) {
-    static uint64_t p[3]; uint64_t c[3] = {g_rc_n, g_rc_pending, g_rc_pend_draws};
-    if (f % 300 || c[0] == p[0]) return;
-    MLOG("conditional rendering up to frame %llu: %llu conditionals, %llu of them on a samples-passed result still on the GPU (rendering kept on), %llu draws and clears under those",
-         (unsigned long long)f, (unsigned long long)(c[0] - p[0]), (unsigned long long)(c[1] - p[1]), (unsigned long long)(c[2] - p[2]));
-    memcpy(p, c, sizeof p);
-}
-static int g_rc_on_pending;   // the conditional in effect was on a pending result
-// SetRenderEnableConditional compares the 64-bit values at counters and counters + 16 (the NVN reference: two counter reports, one after the other) and
-// renders if they are equal (mode 2) or not equal (mode 3). The host decides when it replays the command, from guest memory: counter reports other
-// than samples passed are written in command order at replay (OP_REPORT_COUNTER), so a report earlier in the same submission is seen. A samples-passed
-// result exists only after the GPU completes its submission: while one is pending on either value, rendering stays enabled (drawing too much is safe).
-// Tears of the Kingdom clears each of its lighting buffers once per frame this way: conditional (not equal) clear, then a TIMESTAMP_TOP report into
-// the same counters, whose counter half is 0 (the NVN reference: timestamp reports write 0 there), so the next conditional clear of the frame is
-// skipped and the second lighting pass adds to the first. Clearing every time had wiped the first pass's light: the title mural stayed black.
-// Samples-passed report destinations: address → fence of the latest submission that writes it (open addressing, one entry per distinct address,
-// grown at half load; replay thread only). This was a ring of the last 256 reports: with more reports in flight a destination still pending had
-// left the ring and its previous result was read (t_nvn 6c2b). Tears of the Kingdom makes about one report a frame (3 destinations), so it never
-// hit that.
-typedef struct { uint64_t addr, fence; } occ_ent;
-static occ_ent *g_occ; static unsigned g_occ_cap, g_occ_n;
-static occ_ent *occ_slot(uint64_t addr) {   // the entry of addr, or the empty slot where it goes
-    unsigned m = g_occ_cap - 1, h = (unsigned)((addr >> 3) * 0x9E3779B97F4A7C15ull >> 40) & m;
-    while (g_occ[h].addr && g_occ[h].addr != addr) h = (h + 1) & m;
-    return &g_occ[h];
-}
-static void occ_note(uint64_t addr, uint64_t fence) {
-    if (!addr) return;
-    if (2 * (g_occ_n + 1) > g_occ_cap) {
-        occ_ent *old = g_occ; unsigned oc = g_occ_cap; g_occ_cap = oc ? oc * 2 : 1024; g_occ = calloc(g_occ_cap, sizeof *g_occ); if (!g_occ) MDIE("occlusion table");
-        for (unsigned i = 0; i < oc; i++) if (old[i].addr) *occ_slot(old[i].addr) = old[i];
-        free(old);
-    }
-    occ_ent *e = occ_slot(addr); if (!e->addr) { e->addr = addr; g_occ_n++; }
-    e->fence = fence;
-}
-static int occ_pending(uint64_t addr) {
-    if (!g_occ_cap) return 0;
-    pthread_mutex_lock(&g_mu); uint64_t done = g_done; pthread_mutex_unlock(&g_mu);
-    const occ_ent *e = occ_slot(addr);
-    return e->addr && e->fence > done;
-}
+// Conditional rendering (g_render_off, the counts, the samples-passed destinations: occ_note / occ_pending): gfx/nvn/core/cond.c (plan item 264)
 static uint64_t g_args_reg_seen, g_args_dirty_seen;
 static inline void args_dirty_all(void) { memset(g_args_dirty, 1, sizeof g_args_dirty); }
 static inline void args_sync_dirty(void) {

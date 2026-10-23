@@ -19,6 +19,13 @@ void nvn_be_copy_t2b(const p_copy_b2t *c) { copy_t2b(c); }
 void nvn_be_copy_t2t(const p_copy_t2t *c) { copy_t2t(c); }
 void nvn_be_clear_tex(const p_clear_tex *c) { clear_tex(c); }
 uint64_t nvn_be_sub_fence(void) { return g_fence + 1; }   // this submission commits with fence g_fence + 1
+int nvn_be_pass_mode(void) { return g_enc ? g_enc_mode : -1; }
+void nvn_be_pass_flush(void) { rp_flush(); }
+void nvn_be_pass_end(void) { rp_end(); }
+int nvn_be_layered(void) { return g_lay.active; }
+int nvn_be_layer_continue(const p_set_rt *r) { return lay_continue(r); }
+void nvn_be_clear_quad(const p_clear_color *c) { clear_quad(c); }
+void nvn_be_clear_ds_quad(const p_clear_ds *c) { clear_ds_quad(c); }
 void nvn_be_report_counter(const uint8_t *p, const void *a) { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, (const uint8_t *)a + 8, 8); g_cnt_report[t & 31]++;
     PD("Q report type=%llu cmd=%p dst=%#llx", (unsigned long long)t, p, (unsigned long long)ad);
     if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot(), g_sub_work}); g_vis_cur = -1;
@@ -49,49 +56,6 @@ void nvn_be_reset_counter(const uint8_t *p, const void *a) { uint64_t t; memcpy(
         if (g_enc && !g_enc_has_vis) rp_end();
         g_vis_on = 1; g_vis_counting = 1; vis_clear(); }
     return; }
-void nvn_be_set_rt(const uint8_t *p, const void *a) {
-    const p_set_rt *r = a;
-    if (defer_begin_q(p)) return;
-    int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
-    if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_part(TBP_FUSE) && rt_same(&g_fz.rt1, r)) {
-        g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); return; }
-    // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)
-    if (g_enc && g_lay.active && !pend && lay_continue(r)) return;   // another layer of the layered pass
-    if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && tbdr_part(TBP_CONT) && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); R.rt = *r; return; }
-    rp_flush(); R.rt = *r; R.has_rt = 1; return;
-}
-void nvn_be_render_enable(const uint8_t *p, const void *a) { const p_render_enable *r = a;   // SetRenderEnable: off discards clears and draws until it is on again (queue state, kept across command buffers)
-    g_render_off = r->mode == 0; g_rc_on_pending = 0;
-    if (r->mode >= 2) {   // see occ_pending
-        g_rc_n++;
-        if (!r->counters || occ_pending(r->counters) || occ_pending(r->counters + 16)) { g_render_off = 0; g_rc_pending++; g_rc_on_pending = 1; RED_ONCE(74, "SetRenderEnableConditional on a samples-passed result still on the GPU: rendering stays enabled (first case)"); }
-        else { uint64_t v0, v1; memcpy(&v0, (const void *)(uintptr_t)r->counters, 8); memcpy(&v1, (const void *)(uintptr_t)(r->counters + 16), 8);
-            g_render_off = r->mode == 2 ? v0 != v1 : v0 == v1; } }
-    if (r->mode >= 2 && r->counters && passdump()) { const uint64_t *cv = (const uint64_t *)(uintptr_t)r->counters;
-        PD("e render_enable mode=%d counters=%#llx values %#llx %#llx | %#llx %#llx", r->mode, (unsigned long long)r->counters, (unsigned long long)cv[0], (unsigned long long)cv[1], (unsigned long long)cv[2], (unsigned long long)cv[3]); }
-    else PD("e render_enable mode=%d counters=%#llx", r->mode, (unsigned long long)r->counters); return; }
-void nvn_be_clear_color(const uint8_t *p, const void *a) {
-    const p_clear_color *c = a;
-    if (g_render_off) return;   // SetRenderEnable(false) discards clears too
-    if (g_rc_on_pending) g_rc_pend_draws++;
-    if (g_rt_merged || g_lay.active) rp_end();   // A clear arrived in a continued (or layered) render pass: end it here, and the clear is attached to the start of the next render pass as usual
-    if (c->index < 0 || c->index >= R.rt.n || !R.rt.color[c->index]) { RED_ONCE(5, "color clear target %d invalid", c->index); return; }
-    if (g_enc || c->mask != 0xf || !scissor_full(R.rt.color[c->index], &R.rt.cview[c->index], R.rt.has_cview[c->index])) { clear_quad(c); return; }
-    R.clear_c[c->index] = 1; R.cc[c->index] = nvn_rgba_make(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]);
-    return;
-}
-void nvn_be_clear_ds(const uint8_t *p, const void *a) {
-    const p_clear_ds *c = a;
-    if (g_render_off) return;
-    if (g_rt_merged || g_lay.active) rp_end();
-    if (!R.rt.depth || (!c->depth_mask && !(c->stencil_mask & 255))) return;
-    // A load action clears the whole plane: inside a pass, under a partial scissor or with a partial stencil mask it is a triangle instead
-    // (a scissored depth clear and a partial stencil mask used to clear the whole plane)
-    if (g_enc || ((c->stencil_mask & 255) && (c->stencil_mask & 255) != 255) || !scissor_full(R.rt.depth, &R.rt.dview, R.rt.has_dview)) { clear_ds_quad(c); return; }
-    if (c->depth_mask) { R.clear_d = 1; R.cd = c->depth; }
-    if (c->stencil_mask) { R.clear_s = 1; R.cs = (uint32_t)c->stencil; }
-    return;
-}
 void nvn_be_barrier(const uint8_t *p, const void *a) { int32_t bits; memcpy(&bits, a, 4); if (g_cnt_on > 0) g_cnt_bar_at = g_stat_draw; if (bits & NVN_BARRIER_INVALIDATE_TEXTURE_BIT) g_fbx_bar_at = g_stat_draw; return; }
 void nvn_be_set_pool(const uint8_t *p, const void *a) {   // SetTexturePool / SetSamplerPool
     op_hdr h; memcpy(&h, p, sizeof h);

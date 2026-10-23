@@ -4,11 +4,16 @@
 // state command applied to R, the backend told what changed (only that it is a state command when nothing did); the work counted. FenceSync:
 // the submission's fence, or for a sync the submit call fenced to its token that fence, while another token stays. An op run early is not handed
 // over and leaves the skip set; the replay passing a deferred group's P end clears its mark; hoisted ops never reached are dropped at the end of
-// the submission. A list that calls itself stops 64 lists deep.
-// The call itself pushed for the caller instead of the op after it (-DDM_TEST_EXEC_RET_AT_CALL, the broken variant): 1 fails.
+// the submission. A list that calls itself stops 64 lists deep. SetRenderTargets: new targets end the open pass; the same targets continue it,
+// not a pass opened for clears only nor with clears pending; another layer goes on in a layered pass; a waiting deferred group's Q ends the pass
+// and takes Q's targets. Clears: the next pass's load action with no pass open, drawn inside one or under a partial mask; a continued pass ended
+// first; none while rendering is off; a depth clear with a partial stencil mask drawn. SetRenderEnable decides whether clears are dropped.
+// The call itself pushed for the caller instead of the op after it (-DDM_TEST_EXEC_RET_AT_CALL, a broken variant): 1 fails. A clear inside an
+// open pass taken as the next pass's load action (-DDM_TEST_EXEC_CLEAR_IN_PASS, the other): 1 fails.
 #include "../nvn/core/exec.h"
 #include "../nvn/nvn_backend.h"
 #include "../nvn/core/capture.h"
+#include "../nvn/core/cond.h"
 #include "../nvn/core/defer.h"
 #include "../nvn/core/pass.h"
 #include "../nvn/core/state.h"
@@ -47,10 +52,14 @@ void nvn_be_copy_t2t(const p_copy_t2t *c) { (void)c; lg("copy_t2t"); }
 void nvn_be_clear_tex(const p_clear_tex *c) { (void)c; lg("clear_tex"); }
 void nvn_be_signal_event(volatile uint32_t *val, uint32_t mode, uint32_t v) { (void)val; (void)mode; (void)v; lg("event"); }
 uint64_t nvn_be_sub_fence(void) { return 42; }
-void nvn_be_set_rt(const uint8_t *p, const void *a) { (void)p; (void)a; lg("set_rt"); }
-void nvn_be_clear_color(const uint8_t *p, const void *a) { (void)p; (void)a; lg("clear_color"); }
-void nvn_be_clear_ds(const uint8_t *p, const void *a) { (void)p; (void)a; lg("clear_ds"); }
-void nvn_be_render_enable(const uint8_t *p, const void *a) { (void)p; (void)a; lg("render_enable"); }
+static int g_mode = -1, g_layered, g_layer_cont;   // the backend's pass: its mode (-1 none), layered, another layer goes on in it
+int nvn_be_pass_mode(void) { return g_mode; }
+void nvn_be_pass_flush(void) { g_mode = -1; lg("flush"); }
+void nvn_be_pass_end(void) { g_mode = -1; lg("end"); }
+int nvn_be_layered(void) { return g_layered; }
+int nvn_be_layer_continue(const p_set_rt *r) { (void)r; return g_layer_cont; }
+void nvn_be_clear_quad(const p_clear_color *c) { (void)c; lg("clear_quad"); }
+void nvn_be_clear_ds_quad(const p_clear_ds *c) { (void)c; lg("clear_ds_quad"); }
 void nvn_be_report_counter(const uint8_t *p, const void *a) { (void)p; (void)a; lg("report"); }
 void nvn_be_reset_counter(const uint8_t *p, const void *a) { (void)p; (void)a; lg("reset"); }
 void nvn_be_barrier(const uint8_t *p, const void *a) { (void)p; (void)a; lg("barrier"); }
@@ -70,32 +79,32 @@ static const uint8_t *ptr_op(uint32_t op, const void *t) { uint64_t a = (uint64_
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    // list 1: clear, indexed draw; list 2 (jumped to): dispatch; list 0: scissor, draw, call 1, copy, jump 2
-    g_cur = 1; p_clear_color cc = {0, 0xf, {0, 0, 0, 1}}; rec(OP_CLEAR_COLOR, &cc, sizeof cc); p_draw_idx di = {0}; rec(OP_DRAW_IDX, &di, sizeof di); rec(OP_END, NULL, 0);
+    // list 1: texture clear, indexed draw; list 2 (jumped to): dispatch; list 0: scissor, draw, call 1, copy, jump 2
+    g_cur = 1; p_clear_tex ct = {0}; rec(OP_CLEAR_TEX, &ct, sizeof ct); p_draw_idx di = {0}; rec(OP_DRAW_IDX, &di, sizeof di); rec(OP_END, NULL, 0);
     g_cur = 2; p_dispatch dp = {1, 1, 1, 0}; rec(OP_DISPATCH, &dp, sizeof dp); rec(OP_END, NULL, 0);
     g_cur = 0; p_scissor sc = {1, 2, 3, 4}; rec(OP_SCISSOR, &sc, sizeof sc); p_draw dw = {.count = 3}; const uint8_t *d0 = rec(OP_DRAW, &dw, sizeof dw);
     ptr_op(OP_CALL, g_mem[1]); uint64_t cp[3] = {0x1000, 0x2000, 16}; const uint8_t *after_call = rec(OP_COPY_B2B, cp, sizeof cp); ptr_op(OP_JUMP, g_mem[2]);
     reset_log(); nvn_exec(g_mem[0]);
     check("the first replay resets the backend's state once", 1, g_resets);
     printf("  handed over: %s\n", joined());
-    check("handed over in command order: state, draw, the called list's clear and draw, the copy, the jumped-to dispatch", 0,
-          strcmp(joined(), "state draw clear_color draw_idx copy_b2b dispatch"));
+    check("handed over in command order: state, draw, the called list's texture clear and draw, the copy, the jumped-to dispatch", 0,
+          strcmp(joined(), "state draw clear_tex draw_idx copy_b2b dispatch"));
     op_hdr h0; memcpy(&h0, d0, 8);
     check("a draw sees the op after it as the lookahead's start; NULL after it", 1, g_draw_next[0] == d0 + h0.size && g_exec_next == NULL);
     check("inside the called list the caller's next op is on the return stack [-DDM_TEST_EXEC_RET_AT_CALL]", 1, g_draw_retn[1] == 1 && g_draw_ret0[1] == after_call);
     check("... and off it after the call", 0, g_ret_n);
     check("the scissor applied to R, the backend told it is a state command", 1, R.has_sc && R.sc.w == 3 && (g_last_c & ST_STATE));
-    check("the work counted: two draws, a clear, a copy, a dispatch", 5, g_sub_work);
+    check("the work counted: two draws, a texture clear, a copy, a dispatch", 5, g_sub_work);
 
     // FenceSync, the ops run early, the deferred group's P end
     static sync_t sa, sb, sc_; memset(g_len, 0, sizeof g_len); g_cur = 0;
     sync_t *pa = &sa, *pb = &sb, *pc = &sc_;
-    rec(OP_FENCE_SYNC, &pa, 8); const uint8_t *cl = rec(OP_CLEAR_COLOR, &cc, sizeof cc); const uint8_t *pe = rec(OP_SET_RT, &(p_set_rt){0}, sizeof(p_set_rt)); rec(OP_END, NULL, 0);
+    rec(OP_FENCE_SYNC, &pa, 8); const uint8_t *cl = rec(OP_CLEAR_TEX, &ct, sizeof ct); const uint8_t *pe = rec(OP_SET_RT, &(p_set_rt){0}, sizeof(p_set_rt)); rec(OP_END, NULL, 0);
     g_hoist_skip[0] = cl; g_hoist_n = 1;
     g_defer_slots[1].active = 1; g_defer_slots[1].in_p = 1; g_defer_slots[1].p_end_op = pe; g_defer_pend = pe;
     reset_log(); nvn_exec(g_mem[0]);
     uint64_t fv = 0; check("a FenceSync record: the submission's fence", 1, sync_fence_load(&sa, &fv) && fv == 42);
-    check("an op run early: not handed over, out of the skip set", 1, !strcmp(joined(), "set_rt") && g_hoist_n == 0);
+    check("an op run early: not handed over, out of the skip set", 1, !strcmp(joined(), "flush") && g_hoist_n == 0);
     check("passing a deferred group's P end: its mark cleared", 1, !g_defer_slots[1].in_p && !g_defer_pend);
     memset(&g_defer_slots[1], 0, sizeof g_defer_slots[1]);
     static mtl_cap cap; cap.token = 7; g_cap_cur = &cap;
@@ -111,6 +120,34 @@ int main(void) {
     reset_log(); nvn_exec(g_mem[0]);
     check("a list that calls itself: followed 64 lists deep (65 draws), then not", 65, g_ndraw);
     check("... the return stack empty again", 0, g_ret_n);
+
+    // SetRenderTargets, the clears, render enable
+    static tex_t A, B; A.serial = 501; B.serial = 502; A.d.width = A.d.height = B.d.width = B.d.height = 64; A.d.levels = B.d.levels = 1; A.d.target = B.d.target = 1;
+    p_set_rt ra = {0}, rb = {0}; ra.n = rb.n = 1; ra.color[0] = &A; rb.color[0] = &B;
+    #define ONE(op, pl) do { memset(g_len, 0, sizeof g_len); rec(op, &(pl), sizeof(pl)); rec(OP_END, NULL, 0); reset_log(); nvn_exec(g_mem[0]); } while (0)
+    R = (nvn_rt_state){0}; g_mode = -1;
+    ONE(OP_SET_RT, ra); check("new targets, no pass open: the pass flushed, R takes them", 1, !strcmp(joined(), "flush") && R.has_rt && R.rt.color[0] == &A);
+    g_mode = 0; g_rt_merged = 0; ONE(OP_SET_RT, ra); check("the same targets with the pass open: continued", 1, g_nlog == 0 && g_rt_merged == 1 && g_mode == 0);
+    g_mode = 1; g_rt_merged = 0; ONE(OP_SET_RT, ra); check("... not a pass opened for clears only", 1, !strcmp(joined(), "flush") && !g_rt_merged);
+    g_mode = 0; R.clear_c[0] = 1; ONE(OP_SET_RT, ra); check("... nor with a clear pending", 0, strcmp(joined(), "flush")); R.clear_c[0] = 0;
+    g_mode = 0; g_layered = 1; g_layer_cont = 1; ONE(OP_SET_RT, rb); check("another layer of a layered pass: goes on in it", 1, g_nlog == 0 && R.rt.color[0] == &A); g_layered = g_layer_cont = 0;
+    g_mode = 0; ONE(OP_SET_RT, rb); check("other targets with the pass open: it ends, R takes them", 1, !strcmp(joined(), "flush") && R.rt.color[0] == &B);
+    memset(g_len, 0, sizeof g_len); const uint8_t *qop = rec(OP_SET_RT, &ra, sizeof ra); rec(OP_END, NULL, 0);
+    defer_t *d = &g_defer_slots[2]; memset(d, 0, sizeof *d); d->active = 1; d->q_op = qop; d->q_rt = ra; d->q_rt.n = 1; d->lmap[0] = 0; d->clear_c[0] = 1; d->cc[0] = nvn_rgba_make(0, 1, 0, 1); g_defer_nact = 1;
+    g_mode = 0; reset_log(); nvn_exec(g_mem[0]);
+    check("a waiting deferred group's Q: the pass ends, Q's targets with the group's clear", 1, !strcmp(joined(), "flush") && R.rt.color[0] == &A && R.clear_c[0] && d->at_q);
+    defer_release_one(d); memset(&R.clear_c, 0, sizeof R.clear_c);
+    p_clear_color cfull = {0, 0xf, {1, 0, 0, 1}}, cpart = {0, 0x7, {1, 0, 0, 1}};
+    g_mode = -1; ONE(OP_CLEAR_COLOR, cfull); check("a full colour clear, no pass open: the next pass's load action", 1, g_nlog == 0 && R.clear_c[0] && R.cc[0].red == 1);
+    R.clear_c[0] = 0; g_mode = 0; ONE(OP_CLEAR_COLOR, cfull); check("... inside an open pass: drawn [-DDM_TEST_EXEC_CLEAR_IN_PASS]", 1, !strcmp(joined(), "clear_quad") && !R.clear_c[0]);
+    g_mode = -1; ONE(OP_CLEAR_COLOR, cpart); check("three channels: drawn", 0, strcmp(joined(), "clear_quad"));
+    g_mode = 0; g_rt_merged = 1; ONE(OP_CLEAR_COLOR, cfull); check("a clear in a continued pass: it ends first, the clear is the next pass's", 1, !strcmp(joined(), "end") && R.clear_c[0]); g_rt_merged = 0; R.clear_c[0] = 0;
+    p_render_enable roff = {0, 0}, ron = {1, 0};
+    ONE(OP_RENDER_ENABLE, roff); g_mode = -1; ONE(OP_CLEAR_COLOR, cfull); check("rendering off: the clear dropped", 1, g_nlog == 0 && !R.clear_c[0] && g_render_off);
+    ONE(OP_RENDER_ENABLE, ron);
+    R.rt.depth = &B; p_clear_ds dpart = {1.0f, 1, 0, 0x0f}, dfull = {0.5f, 1, 0, 0};
+    ONE(OP_CLEAR_DS, dpart); check("a depth clear with a partial stencil mask: drawn", 0, strcmp(joined(), "clear_ds_quad"));
+    ONE(OP_CLEAR_DS, dfull); check("a depth clear alone: the load action", 1, g_nlog == 0 && R.clear_d && R.cd == 0.5);
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

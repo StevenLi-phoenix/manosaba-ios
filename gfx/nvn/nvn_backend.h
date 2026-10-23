@@ -19,11 +19,15 @@ void nvn_be_copy_t2t(const p_copy_t2t *c);
 void nvn_be_clear_tex(const p_clear_tex *c);
 void nvn_be_signal_event(volatile uint32_t *val, uint32_t mode, uint32_t v);   // The event's value written once the GPU has completed this submission (mode 0 write, 1 add)
 uint64_t nvn_be_sub_fence(void);                             // The fence this submission commits with (FenceSync records take it)
-// The records whose handling still mixes decisions with the backend's own pass state (p: the record, a: its payload)
-void nvn_be_set_rt(const uint8_t *p, const void *a);         // SetRenderTargets: a deferred group's Q, the same targets continued, or R's new targets
-void nvn_be_clear_color(const uint8_t *p, const void *a);    // ClearColor: a load action of the next pass, or drawn
-void nvn_be_clear_ds(const uint8_t *p, const void *a);       // ClearDepthStencil: the same
-void nvn_be_render_enable(const uint8_t *p, const void *a);  // SetRenderEnable(Conditional)
+// The render pass (SetRenderTargets and the clears decide with these: core/exec.c)
+int nvn_be_pass_mode(void);                                  // The open pass's mode: -1 none, 0 all attachments, 1 opened only for clears, 2-4 depth / stencil left out
+void nvn_be_pass_flush(void);                                // End the open pass; with clears pending and none open, a pass that lands them
+void nvn_be_pass_end(void);                                  // End the open pass (its pending clears stay for the next one)
+int nvn_be_layered(void);                                    // The open pass draws several layers (layered pass)
+int nvn_be_layer_continue(const p_set_rt *r);                // In a layered pass: r is another layer of its range, which goes on in it
+void nvn_be_clear_quad(const p_clear_color *c);              // A colour clear drawn (inside a pass, a partial channel mask or a partial scissor)
+void nvn_be_clear_ds_quad(const p_clear_ds *c);              // A depth / stencil clear drawn
+// The records whose handling stays with the backend (p: the record, a: its payload)
 void nvn_be_report_counter(const uint8_t *p, const void *a);
 void nvn_be_reset_counter(const uint8_t *p, const void *a);
 void nvn_be_barrier(const uint8_t *p, const void *a);

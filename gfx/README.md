@@ -124,8 +124,9 @@ Binding conventions used by the translation:
 | `nvn/core/pass.c`, `nvn/core/pass.h` | Pass planning: where the replay is and a cursor in replay order, the ops run before their place, the clear-only pass hoist's groups (`hoist_plan`), what a pass needs of depth and stencil (`pass_ds_need`), whether each attachment is stored at a pass end (`sd_decide`), the bandwidth ledger |
 | `nvn/core/defer.c`, `nvn/core/defer.h` | The deferred merged pass's decisions: whether a pass's draws wait for a later pass that attaches its colour targets (`defer_try`), the groups, Q's targets and load actions (`defer_q_enter`) |
 | `nvn/core/fuse.c`, `nvn/core/fuse.h` | The readable-tile pass merge's plan (`fuse_try`): whether the next pass merges into this one, the union of attachments, its clears and skipped ops |
-| `nvn/core/exec.c`, `nvn/core/exec.h` | The replay loop (`nvn_exec`): the command walk in replay order, the commands that only set state, FenceSync; every other command handed to the backend |
-| `nvn/nvn_backend.h` | The execution interface: what the replay hands a backend, command by command (`nvn_be_*`); each core module declares what else it asks of the backend |
+| `nvn/core/exec.c`, `nvn/core/exec.h` | The replay loop (`nvn_exec`): the command walk in replay order, the commands that only set state, FenceSync, SetRenderTargets (continued, a deferred group's Q, new targets) and the clears (load actions or drawn); every other command handed to the backend |
+| `nvn/core/cond.c`, `nvn/core/cond.h` | Conditional rendering: SetRenderEnable(Conditional) and the samples-passed results it reads (`occ_note`, `occ_pending`) |
+| `nvn/nvn_backend.h` | The execution interface: what the replay hands a backend, command by command, and the render pass state it asks of it (`nvn_be_*`); each core module declares what else it asks of the backend |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
 | `nvn/core/live.c`, `nvn/core/live.h` | The texture living at a storage address (a finalized registration follows it), and the texture objects' host copies that recorded commands use |
 | `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |

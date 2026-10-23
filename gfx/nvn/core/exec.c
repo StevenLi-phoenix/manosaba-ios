@@ -2,6 +2,9 @@
 #include "exec.h"
 #include "../nvn_backend.h"
 #include "capture.h"
+#include "cond.h"
+#include "rt.h"
+#include "tbdr.h"
 #include "defer.h"
 #include "fuse.h"
 #include "pass.h"
@@ -12,6 +15,43 @@
 #include <string.h>
 
 uint32_t g_sub_work;
+
+// SetRenderTargets: a waiting deferred group's Q, another layer of a layered pass, the same targets continued (a merge's earlier pass set again,
+// or the open pass's own: not a pass opened only for clears, nor with clears pending), or new targets (the pass before them ends first)
+static void exec_set_rt(const uint8_t *p, const p_set_rt *r) {
+    { int first = defer_q_first(p); if (first >= 0) { nvn_be_pass_flush(); defer_q_enter(p, first); return; } }
+    int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
+    int mode = nvn_be_pass_mode();   // -1: no pass open
+    if (mode >= 0 && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && mode != 1 && R.has_rt && tbdr_part(TBP_FUSE) && rt_same(&g_fz.rt1, r)) {
+        g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); return; }
+    // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)
+    if (mode >= 0 && nvn_be_layered() && !pend && nvn_be_layer_continue(r)) return;   // another layer of the layered pass
+    if (mode >= 0 && mode != 1 && !pend && R.has_rt && tbdr_part(TBP_CONT) && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); R.rt = *r; return; }
+    nvn_be_pass_flush(); R.rt = *r; R.has_rt = 1;
+}
+// ClearColor: the load action of the next pass when it can be (no pass open, all four channels, a scissor covering the target), else drawn
+static void exec_clear_color(const p_clear_color *c) {
+    if (g_render_off) return;   // SetRenderEnable(false) discards clears too
+    if (g_rc_on_pending) g_rc_pend_draws++;
+    if (g_rt_merged || nvn_be_layered()) nvn_be_pass_end();   // A clear arrived in a continued (or layered) render pass: end it here, and the clear is attached to the start of the next render pass as usual
+    if (c->index < 0 || c->index >= R.rt.n || !R.rt.color[c->index]) { RED_ONCE(5, "color clear target %d invalid", c->index); return; }
+#ifndef DM_TEST_EXEC_CLEAR_IN_PASS   // negative control of t_core_exec only: a clear inside an open pass taken as the next pass's load action
+    if (nvn_be_pass_mode() >= 0 || c->mask != 0xf || !scissor_full_of(&R.sc, R.has_sc, R.rt.color[c->index], &R.rt.cview[c->index], R.rt.has_cview[c->index])) { nvn_be_clear_quad(c); return; }
+#else
+    if (c->mask != 0xf || !scissor_full_of(&R.sc, R.has_sc, R.rt.color[c->index], &R.rt.cview[c->index], R.rt.has_cview[c->index])) { nvn_be_clear_quad(c); return; }
+#endif
+    R.clear_c[c->index] = 1; R.cc[c->index] = nvn_rgba_make(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]);
+}
+// ClearDepthStencil: the same. A load action clears the whole plane: inside a pass, under a partial scissor or with a partial stencil mask it is a
+// triangle instead (a scissored depth clear and a partial stencil mask used to clear the whole plane)
+static void exec_clear_ds(const p_clear_ds *c) {
+    if (g_render_off) return;
+    if (g_rt_merged || nvn_be_layered()) nvn_be_pass_end();
+    if (!R.rt.depth || (!c->depth_mask && !(c->stencil_mask & 255))) return;
+    if (nvn_be_pass_mode() >= 0 || ((c->stencil_mask & 255) && (c->stencil_mask & 255) != 255) || !scissor_full_of(&R.sc, R.has_sc, R.rt.depth, &R.rt.dview, R.rt.has_dview)) { nvn_be_clear_ds_quad(c); return; }
+    if (c->depth_mask) { R.clear_d = 1; R.cd = c->depth; }
+    if (c->stencil_mask) { R.clear_s = 1; R.cs = (uint32_t)c->stencil; }
+}
 
 void nvn_exec(const uint8_t *p) {
     static int inited; if (!inited) { inited = 1; st_reset(); nvn_be_reset(); }
@@ -70,10 +110,10 @@ void nvn_exec(const uint8_t *p) {
                     PD("Y update_ub cmd=%p dst=%#llx bytes=%llu data%s", p, (unsigned long long)d, (unsigned long long)n, fv); }
                 nvn_be_update_ub(data, d, n);
                 break; }
-            case OP_SET_RT: nvn_be_set_rt(p, a); break;
-            case OP_RENDER_ENABLE: nvn_be_render_enable(p, a); break;   // SetRenderEnable: off discards clears and draws until it is on again (queue state, kept across command buffers)
-            case OP_CLEAR_COLOR: nvn_be_clear_color(p, a); break;
-            case OP_CLEAR_DS: nvn_be_clear_ds(p, a); break;
+            case OP_SET_RT: exec_set_rt(p, a); break;
+            case OP_RENDER_ENABLE: cond_render_enable(a); break;
+            case OP_CLEAR_COLOR: exec_clear_color(a); break;
+            case OP_CLEAR_DS: exec_clear_ds(a); break;
             case OP_DRAW: g_exec_next = p + h.size; nvn_be_draw(a, NULL); g_exec_next = NULL; break;   // Lookahead start point
             case OP_DRAW_IDX: g_exec_next = p + h.size; nvn_be_draw(NULL, a); g_exec_next = NULL; break;
             // Do not mark dirty if the state did not change (the game often re-sends the same program / state block / vertex format before each draw; the dirty flag only decides whether to re-fetch the pipeline / depth-stencil object, and equal values mean the same object)

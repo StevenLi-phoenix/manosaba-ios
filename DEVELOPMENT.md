@@ -210,9 +210,10 @@ decide):
   what is decided and what is executed: the replay state (`S`, `R`) and the commands that only set it (batch 96), pass planning's own
   decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
   hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99), the execution interface (`nvn_backend.h`) with the
-  replay loop in `core/exec.c` (batch 100); next the decisions still inside the interface's record handlers (SetRenderTargets' continuation,
-  clears made load actions, render enable), then the file-scope variables grouped by module; the Vulkan backend once the interface covers what
-  manosaba needs.
+  replay loop in `core/exec.c` (batch 100), SetRenderTargets, the clears and conditional rendering (batch 101); next `mtl/draw.inc` split
+  (the draw's decisions from its encoding, the copies apart), then the file-scope variables grouped by module and the parts as their own
+  translation units; then `hle_nvn.c` by its sections, `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user,
+  2026-10-24: no Android for now, a clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -432,3 +433,15 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   `-DDM_TEST_FENCE_SYNC_LAST` still fails 5. The backend's warnings as before; the pass dumps of 13 gfx tests (16,455 lines of
   `t_visibility` among them) line for line as before. The submit path's instructions per draw in Tears of the Kingdom's smoke run within
   the spread of batches 96-99 at every checkpoint (frame 600: 28,061 against 28,045-28,105). Smoke: the same red lines and frames.
+- [x] batch 101 · 264, SetRenderTargets, the clears and conditional rendering: `gfx/nvn/core/exec.c` decides SetRenderTargets (a waiting
+  deferred group's Q, the same targets continued, another layer of a layered pass, new targets; `defer_begin_q` is gone) and the two clears
+  (the next pass's load action, or drawn), asking the backend for its pass through the interface (`nvn_be_pass_mode`, `nvn_be_pass_flush`,
+  `nvn_be_pass_end`, `nvn_be_layered`, `nvn_be_layer_continue`, `nvn_be_clear_quad`, `nvn_be_clear_ds_quad`); `fz_reuse_op` goes to
+  `core/fuse.c`. `gfx/nvn/core/cond.c` takes conditional rendering from `mtl/args.inc` and `mtl/exec.inc`: render enable (`g_render_off`,
+  `cond_render_enable`), its counts and the samples-passed destinations (`occ_note`, `occ_pending`, which reads the completed fence through
+  `nvn_be_done_fence`, the same locked read). `gfx/tests/t_core_cond.c` (10; a result still on the GPU taken as complete,
+  `-DDM_TEST_COND_PENDING_DONE`, fails 4); `t_core_exec` +14 (28; a clear inside an open pass taken as a load action,
+  `-DDM_TEST_EXEC_CLEAR_IN_PASS`, fails 1). The batch procedure runs in about 7 minutes instead of 12, with the same tests (work/scripts:
+  builds at once, each test recipe's commands several at once with a failure run again alone and still counted, the smoke runs on an idle
+  machine); `make run-m3` copies the tests with their times, so make rebuilds only what changed. The backend's warnings as before; the pass
+  dumps of 15 gfx tests line for line as before. Smoke: the same red lines and frames.

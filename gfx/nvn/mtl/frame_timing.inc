@@ -1,5 +1,5 @@
 // gfx/nvn/mtl/frame_timing.inc, part of nvn_mtl.m (included there in order, one translation unit): The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH; boot instrumentation, per-frame GPU time and DM_NVN_UB are gfx/nvn/core/frame.c (plan item 264)
-static void lay_report(uint64_t f); static void rc_report(uint64_t f);
+static void lay_report(uint64_t f);   // (rc_report: gfx/nvn/core/cond.h)
 void mtl_set_frame(uint64_t f) { atomic_store(&g_cur_frame, f); if (g_ub.n) ub_frame(f); us_report(f); ren_report(f); lay_report(f); rc_report(f); }
 static void gpu_tag_f(id<MTLCommandBuffer> cb, uint64_t f) { gpu_tag_begin(f); [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { gpu_tag_done(f, c.GPUStartTime, c.GPUEndTime); }]; }
 void gpu_tag(id<MTLCommandBuffer> cb) { gpu_tag_f(cb, atomic_load(&g_cur_frame)); }
