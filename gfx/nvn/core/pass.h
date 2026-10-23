@@ -7,12 +7,16 @@
 #include <string.h>
 #include "../nvn_obj.h"
 #include "core.h"
+#include "state.h"
 
 // ---- Where the replay is ----
 extern const uint8_t *g_exec_cur;                      // The op being replayed (inclusive): the store decision of a pass ending there starts there
 extern const uint8_t *g_exec_next;                     // The op following the current draw in the replay (NULL outside a draw): the lookaheads start there
 extern const uint8_t *g_ret[16]; extern int g_ret_n;   // Call return stack of the replay (at OP_CALL the caller's next op is pushed; g_ret_n counts past 16)
 extern const uint64_t *g_rest; extern int g_nrest;     // Handles in this submission still to be replayed after the current handle (mtl_exec_rest)
+// The next segment after a list ends (within the same submit): first the caller return stack, then the remaining handles of this submit; returns
+// NULL when there are none left (or the return stack is deeper than it keeps). *ci counts the segments taken, from 0
+const uint8_t *exec_cont(int *ci);
 
 // ---- Ops run before their place ----
 // Clear-only pass hoist (hoist_try) and the readable-tile pass merge: ops that were already executed early and must be skipped when replay reaches
@@ -23,6 +27,18 @@ extern const uint64_t *g_rest; extern int g_nrest;     // Handles in this submis
 extern const uint8_t *g_hoist_skip[HOIST_MAX]; extern int g_hoist_n; extern uint64_t g_hoist_groups;
 static inline int hoist_skipped(const uint8_t *p) { for (int i = 0; i < g_hoist_n; i++) if (g_hoist_skip[i] == p) return 1; return 0; }
 int hoist_take(const uint8_t *p);   // The replay reached p: 1 when it ran early (it leaves the set)
+
+// Pure-clear render pass hoisting: when a render pass is opened, scan forward, and if the shape is "several draws of this render pass -> several groups (SetRenderTargets + only clears) -> back to the same targets as this render pass",
+// then hoist those groups of clears to execute before this render pass and skip them at their original positions, and on returning to the same targets the same-target continuation picks up -- this render pass's attachments are no longer stored whole and loaded again for the clears sandwiched in between
+// (character select page: grunge and particles both draw 28 / 27 level 0 + depth, with only levels 1 and 2 cleared in between).
+// Equivalence conditions (hoist only if all hold, otherwise leave as-is): the scan range has only draws, state and these clears, no copies / dispatches / texture clears / sub-lists; the cleared subresources (texture + level + layer)
+// are disjoint from this render pass's attachments; the cleared textures are neither on any current texture / image slot nor bound within the scan range (conservative: regardless of whether the program samples them); the scissor at the time of the clear covers the whole block (same requirement as executing at the original position)
+// A group: its SetRenderTargets op and targets, the clears it makes (as the load actions of a clear-only pass) under its scissor, the ops to skip
+typedef struct { const uint8_t *rt_op; const p_set_rt *rt; uint8_t clear_c[8]; nvn_rgba cc[8]; uint8_t clear_d, clear_s; double cd; uint32_t cs;
+                 p_scissor sc; int has_sc; const uint8_t *ops[8]; int nops; } hoist_grp;
+// At the draw opening a pass (g_exec_next set, nothing run early pending): the groups to run before it (0 none), their ops already in g_hoist_skip.
+// The backend runs each as a clear-only pass and counts them in g_hoist_groups
+int hoist_plan(hoist_grp G[4]);
 
 // A cursor in real replay order from an op: jumps and calls followed (8 deep, deeper sets bad), a list's end back to its caller, then the
 // remaining handles of this submit; ops run early are skipped. Returns 0 at the submission's end
@@ -86,3 +102,6 @@ void sd_decide(uint8_t store[9]);
 
 // ---- The bandwidth ledger ----
 extern uint64_t g_bw_load, g_bw_store, g_pass_full_rw, g_udc_saved_bytes;   // Attachment load / store bytes, number of full load-store passes, store bytes saved on attachments loaded and not written (udc_on)
+
+// The backend provides:
+uint64_t nvn_be_handle_ser(uint64_t h);   // The texture serial of a texture / image handle (0: none)

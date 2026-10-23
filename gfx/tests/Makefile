@@ -37,6 +37,8 @@ t_core_pend: t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c
 t_core_capture: t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
 	clang $(CFLAGS) -Werror -o $@ t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
+t_core_defer: t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
 t_core_frame: t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c
 t_core_upd: t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../../host/dm.h
@@ -257,6 +259,7 @@ run: \
 	t_chunk \
 	t_copy_pitch \
 	t_core_capture \
+	t_core_defer \
 	t_core_frame \
 	t_core_live \
 	t_core_pend \
@@ -381,6 +384,7 @@ run: \
 	./t_fptrial
 	./t_hmap
 	./t_core_capture
+	./t_core_defer
 	./t_core_frame
 	./t_core_live
 	./t_core_pend

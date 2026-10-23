@@ -85,6 +85,7 @@
 #include "core/upd.h"
 #include "core/state.h"
 #include "core/pass.h"
+#include "core/defer.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>

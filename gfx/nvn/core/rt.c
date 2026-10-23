@@ -1,5 +1,5 @@
-// gfx/nvn/core/rt.c: comparing render target sets and colour slots (see rt.h; plan item 264 moved them here from the Metal backend's
-// mtl/lookahead.inc and mtl/renderpass.inc)
+// gfx/nvn/core/rt.c: comparing render target sets, attachments and colour slots (see rt.h; plan item 264 moved them here from the Metal
+// backend's mtl/lookahead.inc, mtl/renderpass.inc and mtl/tile_merge.inc)
 #include "rt.h"
 #include "state.h"
 #include <string.h>
@@ -17,6 +17,7 @@ int rt_same(const p_set_rt *a, const p_set_rt *b) {
     }
     return 1;
 }
+int rt_sub_eq(const p_set_rt *a, int ka, const p_set_rt *b, int kb) { uint64_t s1, s2; int l1, l2, x1, x2; rt_sub(a, ka, &s1, &l1, &x1); rt_sub(b, kb, &s2, &l2, &x2); return s1 && s1 == s2 && l1 == l2 && x1 == x2; }
 int rt_same_sub(const p_set_rt *r, int i, int j) {
     if (!r->color[i] || !r->color[j] || r->color[j]->serial != r->color[i]->serial) return 0;
     uint8_t lv = r->has_cview[i] && r->cview[i].set_levels ? r->cview[i].base_level : 0; uint16_t ly = r->has_cview[i] && r->cview[i].set_layers ? r->cview[i].min_layer : 0;

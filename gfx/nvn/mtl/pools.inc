@@ -259,5 +259,5 @@ int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_
 }
 
 // ---------- Submission ----------
-static void defer_reset(void); static void defer_fallback(void);
+static void defer_fallback(void);
 typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; void *vis; uint32_t pos; } post_op;   // vis: the visibility slot table for kind 3; pos: work before a report (nvn_ts.h)

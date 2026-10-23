@@ -208,9 +208,9 @@ decide):
   index, uniform snapshots, the TBDR switches and validity ledger with the pass dump, pending writes and frame measurements, the live
   texture, the submit call's capture, inline uniform updates). Next the mixed parts (the replay loop, lookahead, tile merge, draw) split into
   what is decided and what is executed: the replay state (`S`, `R`) and the commands that only set it (batch 96), pass planning's own
-  decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons); next the clear-only
-  hoist's, the deferral's and the tile merge's decisions, then the execution interface (`nvn_backend.h`) and the replay loop; then the
-  file-scope variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
+  decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
+  hoist's plan and the deferral's decisions (batch 98); next the tile merge's decisions, then the execution interface (`nvn_backend.h`) and
+  the replay loop; then the file-scope variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -393,3 +393,18 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   pass dumps of 12 gfx tests through these paths (257 store decisions, 174 depth / stencil lookaheads) line for line as before.
   `gfx/README.md` no longer lists `range` among the `DM_NVN_TBDR_OFF` parts (gone in batch 95). Smoke: the same red lines and frames (Tears of
   the Kingdom's torch flame and manosaba's title fade at another moment, looked at).
+- [x] batch 98 · 264, the clear-only hoist's plan and the deferral's decisions: `gfx/nvn/core/pass.c` takes the hoist's scan (`hoist_plan`:
+  the groups, their ops put in the skip set; the backend's `hoist_try` runs each as a clear-only pass) and the next segment after a list's
+  end (`exec_cont`, was `defer_cont`; the zero-source skip's occlusion check uses it too). `gfx/nvn/core/defer.c` takes the deferred merged
+  pass's groups (`defer_t`, the slots, `defer_next`, `defer_release_one`, `g_defer_replaying`) from `mtl/lookahead.inc` and
+  `mtl/chunks.inc`, and from `mtl/tile_merge.inc` its switches, the index's screen (`defer_pre`), the scan (`defer_try`), the kept draws
+  (`defer_take`) and Q's targets and load actions (`defer_q_enter`; the backend's `defer_begin_q` ends the pass before Q first, and it keeps
+  drawing the kept draws and the fallback). `rt_sub_eq` (was `sub_eq`) goes to `core/rt.c`. What the decisions need of the backend: a
+  handle's texture serial (`nvn_be_handle_ser`) and its view (`nvn_be_handle_view`), and the program's reflection (`nvn_be_prog_refl`, as
+  the store index). Two functions nothing called (`defer_release`, `defer_apply_p_clear`) are gone. Fixed on the way: at Q a slot no P
+  colour maps to (`lmap` 0xff) indexed the group's clears at 255, past its 8 entries, into the high byte of its clear colour 7's green, so
+  such a slot was cleared whenever an earlier clear of colour slot 7 had left a non-zero green (whether a game reaches it is not known); it
+  is skipped now. `gfx/tests/t_core_defer.c` (16; the old indexing, `-DDM_TEST_DEFER_LMAP_ANY`, fails 1); `t_core_pass` +7 (24; a cleared
+  texture on a slot hoisted all the same, `-DDM_TEST_HOIST_BOUND_OK`, fails 1). The backend's warnings as before; the pass dumps of 11 gfx
+  tests (9 deferral groups made, 16 refused) line for line as before. Smoke: the same red lines and frames (Tears of the Kingdom's cutscene
+  a moment further on, looked at; its Mac default keeps these rewrites off).

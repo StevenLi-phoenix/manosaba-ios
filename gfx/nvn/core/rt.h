@@ -18,6 +18,8 @@ static inline int scissor_full_of(const p_scissor *sc, int has_sc, const tex_t *
 
 // Same set of targets: compared by texture serial and view (not by object pointer: the game may copy texture objects by value)
 int rt_same(const p_set_rt *a, const p_set_rt *b);
+// Attachment ka of a and kb of b (0–7 color, 8 depth) are the same subresource: one texture's level and layer
+int rt_sub_eq(const p_set_rt *a, int ka, const p_set_rt *b, int kb);
 // Colour slots i and j attach the same level / layer of one texture (by serial: records hold copies of the texture objects)
 int rt_same_sub(const p_set_rt *r, int i, int j);
 // Colour slot i is left out of its pass: the same level / layer of one texture attached at more than one colour slot is attached once. On the

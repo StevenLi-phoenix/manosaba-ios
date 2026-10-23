@@ -1,11 +1,14 @@
 // Pass planning without a GPU (gfx/nvn/core/pass.c, plan item 264), on synthetic command streams with the backend's lookups faked as in
 // t_core_store_index.c. The replay cursor: through calls back to the caller, jumps, then the submission's remaining handles; ops run early
-// skipped, and taken when the replay reaches them. A pass's depth / stencil need: none
+// skipped, and taken when the replay reaches them; the next segment after a list's end. The clear-only hoist: groups of new targets and full
+// clears between this pass's draws and its targets set again run before it (their ops skipped where they stand), not when a cleared texture is
+// on a slot, a clear is under a partial scissor, a copy comes between or a group draws. A pass's depth / stencil need: none
 // without a depth target or a start point (3); the pending clears and the opening draw's state; later draws by their depth-stencil state, up to
 // new targets; through the caller and the remaining handles; a clear inside the pass needs both. The store decision at a pass end: an attachment
 // cleared in full before it is drawn again not stored, one a later draw loads stored, depth and stencil apart; all stored with the store part
 // off or no op being replayed; one loaded and not written not stored (udc); the bandwidth ledger.
-// A clear inside the pass taken as needing neither (-DDM_TEST_DS_CLEAR_FREE, the broken variant): 1 fails.
+// A clear inside the pass taken as needing neither (-DDM_TEST_DS_CLEAR_FREE, a broken variant): 1 fails. A cleared texture on a slot hoisted all
+// the same (-DDM_TEST_HOIST_BOUND_OK, the other): 1 fails.
 #include "../nvn/core/pass.h"
 #include "../nvn/core/state.h"
 #include "../nvn/core/store_index.h"
@@ -24,6 +27,7 @@ void nvn_be_parallel(int cnt, void (*fn)(void *ctx, size_t i), void *ctx) { for 
 uint64_t nvn_be_done_fence(void) { return 0; }
 int nvn_be_prog_refl(const prog_t *p, const nvn_refl *rf[6], int stage[6]) { (void)p; (void)rf; (void)stage; return 0; }   // no program known: every bound texture is read
 void nvn_be_bind_sers(const p_bind_handles *b, int nh, uint64_t *ser) { for (int k = 0; k < nh; k++) ser[k] = b->h[k]; }   // a handle is the texture serial
+uint64_t nvn_be_handle_ser(uint64_t h) { return h; }
 static int n, fail;
 static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-104s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 
@@ -52,6 +56,9 @@ static const uint8_t *ds_state(int dt, int dw, int st) { p_bind_state b = {.kind
 static const uint8_t *call(const void *sub) { uint64_t a = (uint64_t)(uintptr_t)sub; return rec(OP_CALL, &a, 8); }
 static const uint8_t *jump(const void *to) { uint64_t a = (uint64_t)(uintptr_t)to; return rec(OP_JUMP, &a, 8); }
 static const uint8_t *end(void) { return rec(OP_END, NULL, 0); }
+static const uint8_t *scissor(int w, int h) { p_scissor s = {0, 0, w, h}; return rec(OP_SCISSOR, &s, sizeof s); }
+static const uint8_t *copy(const tex_t *s, const tex_t *d) { p_copy_t2t c = {0}; c.src = s; c.dst = d; return rec(OP_COPY_T2T, &c, sizeof c); }
+static int hoist_at(const uint8_t *draw_op, hoist_grp G[4]) { op_hdr h; memcpy(&h, draw_op, 8); g_exec_next = draw_op + h.size; int r = hoist_plan(G); g_exec_next = NULL; return r; }
 static void ds_off(void) { S.ds.dt = S.ds.dw = S.ds.st = 0; }
 static int need_at(const uint8_t *draw_op) { op_hdr h; memcpy(&h, draw_op, 8); g_exec_next = draw_op + h.size; int r = pass_ds_need(); g_exec_next = NULL; return r; }
 static void att(int k, const tex_t *t, int depth, int idx, int load, int wrote) { g_sd[k] = (sd_att){0}; g_sd[k].ser = t->serial; g_sd[k].bytes = 1000 * (k + 1); g_sd[k].idx = idx; g_sd[k].depth = (uint8_t)depth; g_sd[k].load = (uint8_t)load; g_sd[k].wrote = (uint8_t)wrote; }
@@ -74,11 +81,27 @@ int main(void) {
     while (ns < 8 && op_next(&cur, &q, NULL, NULL)) seen[ns++] = q;
     check("... an op run early skipped", 1, ns == 4 && seen[1] == b0);
     check("the replay reaching it takes it once", 1, hoist_take(c) && g_hoist_n == 0 && !hoist_take(c));
-    mtl_exec_rest(NULL, 0);
+    g_ret[0] = b0; g_ret[1] = c; g_ret_n = 2; int ci = 0; const uint8_t *n0 = exec_cont(&ci), *n1 = exec_cont(&ci), *n2 = exec_cont(&ci), *n3 = exec_cont(&ci);
+    check("after a list's end: the callers innermost first, then the remaining handles", 1, n0 == c && n1 == b0 && n2 == g_mem[3] && !n3);
+    g_ret_n = 0; mtl_exec_rest(NULL, 0);
+
+    // ---- the clear-only hoist ----
+    hoist_grp G[4]; reset(); R = (nvn_rt_state){0}; R.rt = rt_of(&A, NULL); R.has_rt = 1;
+    const uint8_t *f = draw(); draw(); const uint8_t *g0 = set_rt(&B, NULL), *g1 = clear(0); set_rt(&A, NULL); draw(); end();
+    int ng = hoist_at(f, G);
+    check("draws, new targets cleared in full, this pass's targets again: one group run early, its two ops skipped", 1, ng == 1 && G[0].rt_op == g0 && G[0].nops == 1 && G[0].ops[0] == g1 && G[0].clear_c[0] && g_hoist_n == 2);
+    check("... not planned again while they are pending", 0, hoist_at(f, G)); g_hoist_n = 0;
+    S.tex[1][0] = B.serial; check("the cleared texture on a slot: none [-DDM_TEST_HOIST_BOUND_OK]", 0, hoist_at(f, G)); S.tex[1][0] = 0; g_hoist_n = 0;
+    reset(); f = draw(); set_rt(&B, NULL); scissor(32, 32); clear(0); set_rt(&A, NULL); draw(); end();
+    check("a clear under a partial scissor: none", 0, hoist_at(f, G));
+    reset(); f = draw(); copy(&D, &B); set_rt(&B, NULL); clear(0); set_rt(&A, NULL); end();
+    check("a copy between: none", 0, hoist_at(f, G));
+    reset(); f = draw(); set_rt(&B, NULL); clear(0); draw(); set_rt(&A, NULL); end();
+    check("a group that draws: none", 0, hoist_at(f, G)); g_hoist_n = 0;
 
     // ---- a pass's depth / stencil need ----
     reset(); ds_off(); R = (nvn_rt_state){0}; R.rt = rt_of(&A, NULL); R.has_rt = 1;
-    const uint8_t *f = draw(); ds_state(1, 0, 0); draw(); end();
+    f = draw(); ds_state(1, 0, 0); draw(); end();
     check("no depth target: 3", 3, need_at(f));
     R.rt.depth = &D; check("no start point: 3", 3, pass_ds_need());
     reset(); ds_off(); f = draw(); ds_state(0, 0, 1); draw(); set_rt(&A, &D); ds_state(1, 1, 0); draw(); end();
