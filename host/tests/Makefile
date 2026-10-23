@@ -26,6 +26,8 @@ run: \
 	$(B)/t_waitsync \
 	$(B)/t_coremask \
 	$(B)/t_coremask_noproc \
+	$(B)/t_mainqos \
+	$(B)/t_mainqos_ignored \
 	$(B)/t_crash_bt \
 	$(B)/t_crash_bt_unguarded \
 	$(B)/t_crash_stderr \
@@ -97,6 +99,8 @@ run: \
 	$(B)/t_oe_noios \
 	$(B)/t_movie_fps \
 	$(B)/t_movie_fps_any \
+	$(B)/t_optref \
+	$(B)/t_optref_one \
 	$(B)/t_survey \
 	$(B)/t_lang \
 	$(B)/t_lang_region \
@@ -104,6 +108,8 @@ run: \
 	$(B)/t_guest_as \
 	$(B)/t_romfs_parts \
 	$(B)/t_coolstart \
+	$(B)/t_pwrspec \
+	$(B)/t_pwrspec_noduty \
 	$(B)/t_rtld \
 	$(B)/t_rng_font \
 	$(B)/t_rng_font_rev \
@@ -207,6 +213,12 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ mask 8, outside the process's cores" $(B)/t_coremask_noproc.log; then \
 	   cat $(B)/t_coremask_noproc.log; echo "t_coremask_noproc: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_coremask_noproc: a core mask outside the process's cores let through moves the thread to core 3, as expected"
+	$(B)/t_mainqos
+	$(B)/t_mainqos --ui
+	@status=0; $(B)/t_mainqos_ignored --ui > $(B)/t_mainqos_ignored.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_mainqos_ignored.log)" -ne 1 ]; then \
+	   cat $(B)/t_mainqos_ignored.log; echo "t_mainqos_ignored: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_mainqos_ignored: with the switch ignored the main thread keeps no class, as expected"
 	$(B)/t_crash_bt
 	@status=0; $(B)/t_crash_bt_unguarded > $(B)/t_crash_bt_unguarded.log 2>&1 || status=$$?; \
 	 if [ "$$status" -ne 1 ] || ! grep -q "✗ a corrupt frame pointer" $(B)/t_crash_bt_unguarded.log; then \
@@ -387,6 +399,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || ! grep -q "main+0x770f04 .*✗" $(B)/t_movie_fps_any.log; then \
 	   cat $(B)/t_movie_fps_any.log; echo "t_movie_fps_any: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_movie_fps_any: holding every cutscene holds the prologue's real-time one too, as expected"
+	$(B)/t_optref
+	@status=0; $(B)/t_optref_one > $(B)/t_optref_one.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_optref_one.log)" -ne 1 ] || ! grep -q "the iPhone's.*✗" $(B)/t_optref_one.log; then \
+	   cat $(B)/t_optref_one.log; echo "t_optref_one: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_optref_one: MacNativeGames' value alone lets the iPhone's crash through, as expected"
 	TMPDIR="$(abspath $(B))" $(B)/t_survey
 	$(B)/t_lang
 	@status=0; $(B)/t_lang_region > $(B)/t_lang_region.log 2>/dev/null || status=$$?; \
@@ -411,6 +428,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_romfs_parts_anypath.log)" -ne 1 ] || ! grep -q "evil.*✗" $(B)/t_romfs_parts_anypath.log; then \
 	   cat $(B)/t_romfs_parts_anypath.log; echo "t_romfs_parts_anypath: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_romfs_parts_anypath: paths taken as they are write outside the tree, as expected"
+	$(B)/t_pwrspec
+	@status=0; $(B)/t_pwrspec_noduty > $(B)/t_pwrspec_noduty.log 2>/dev/null || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_pwrspec_noduty.log)" -ne 1 ]; then \
+	   cat $(B)/t_pwrspec_noduty.log; echo "t_pwrspec_noduty: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_pwrspec_noduty: with the share ignored the GPU runs fully busy, as expected"
 	$(B)/t_coolstart
 	@status=0; $(B)/t_coolstart_onelook > $(B)/t_coolstart_onelook.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_coolstart_onelook.log)" -ne 3 ]; then \
@@ -794,6 +816,10 @@ $(B)/t_coremask: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_mainqos: t_mainqos.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_mainqos.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_mainqos_ignored: t_mainqos.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_MAIN_QOS_IGNORED -I.. -o $@ t_mainqos.c t_condvar_stub.c ../hle_thread.c
 $(B)/t_totk_defaults: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_totk_defaults.c
 $(B)/t_totk_defaults_noxlat: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
@@ -907,6 +933,10 @@ $(B)/t_movie_fps: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fp
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ ../../games/totk/tests/t_movie_fps.c
 $(B)/t_movie_fps_any: ../../games/totk/tests/t_movie_fps.c ../../games/totk/movie_fps.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_MOVIE_ANY_CUTSCENE -I.. -o $@ ../../games/totk/tests/t_movie_fps.c
+$(B)/t_optref: ../../games/totk/tests/t_optref.c ../../games/totk/optref.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ ../../games/totk/tests/t_optref.c
+$(B)/t_optref_one: ../../games/totk/tests/t_optref.c ../../games/totk/optref.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_OPTREF_ONE_VALUE -I.. -o $@ ../../games/totk/tests/t_optref.c
 $(B)/t_quitwait: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_quitwait.c
 $(B)/t_quitwait_old: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
@@ -948,6 +978,11 @@ $(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_thread_leak.c
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h ../game.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_touch.c ../hle_touch.c
+
+$(B)/t_pwrspec: t_pwrspec.c ../pwrspec.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_pwrspec.c
+$(B)/t_pwrspec_noduty: t_pwrspec.c ../pwrspec.h | $(B)
+	clang -O1 -Wall -DDM_TEST_PWRSPEC_NO_DUTY -I.. -o $@ t_pwrspec.c
 
 $(B):
 	mkdir -p $@

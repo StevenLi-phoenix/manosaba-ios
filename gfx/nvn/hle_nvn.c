@@ -1981,13 +1981,21 @@ static void tsummary(uint64_t frame) {
           qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0; pthread_get_qos_class_np(pthread_self(), &qc, &rp);
           uint64_t aw = 0, ag = 0; int an = 0; void mtl_alloc_stats(uint64_t *, uint64_t *, int *); mtl_alloc_stats(&aw, &ag, &an);
           static uint64_t pyn, pyns; uint64_t yn = 0, yns = 0; dm_main_yield_stats(&yn, &yns);
-          char lvl[160] = ""; { static uint64_t plc[THR_LVL_MAX], plm[THR_LVL_MAX]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+          char lvl[360] = ""; { static uint64_t plc[THR_LVL_MAX], plm[THR_LVL_MAX]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
             double tot = 0, ms[THR_LVL_MAX], gc[THR_LVL_MAX]; size_t o = 0;
             for (int k = 0; k < thr_nlvl(); k++) { uint64_t c_ = atomic_load(&g_cum_lvl_cyc[k]), m_ = atomic_load(&g_cum_lvl_mach[k]);
                 ms[k] = (double)(m_ - plm[k]) * tb.numer / tb.denom / 1e6; gc[k] = (double)(c_ - plc[k]); tot += ms[k]; plc[k] = c_; plm[k] = m_; }
             for (int k = 0; k < thr_nlvl() && tot > 0 && o < sizeof lvl; k++) {
                 char nm[32] = "", key[32]; size_t nz = sizeof nm; snprintf(key, sizeof key, "hw.perflevel%d.name", k); if (sysctlbyname(key, nm, &nz, NULL, 0)) snprintf(nm, sizeof nm, "level %d", k);
-                o += (size_t)snprintf(lvl + o, sizeof lvl - o, "%s%s %.0f%% at %.2f GHz", k ? ", " : "; the translating thread on ", nm, 100 * ms[k] / tot, ms[k] > 0 ? gc[k] / (ms[k] * 1e6) : 0); } }
+                o += (size_t)snprintf(lvl + o, sizeof lvl - o, "%s%s %.0f%% at %.2f GHz", k ? ", " : "; the translating thread on ", nm, 100 * ms[k] / tot, ms[k] > 0 ? gc[k] / (ms[k] * 1e6) : 0); }
+            // The same for this thread, the one presenting (Tears of the Kingdom's main thread, real-time but of no QoS class: plan item 229)
+            static thr_lvl pme[THR_LVL_MAX]; thr_lvl me[THR_LVL_MAX]; double mt = 0, mm[THR_LVL_MAX];
+            if (thr_levels(me)) { for (int k = 0; k < thr_nlvl(); k++) { mm[k] = (double)((me[k].user + me[k].sys) - (pme[k].user + pme[k].sys)) * tb.numer / tb.denom / 1e6; mt += mm[k]; }
+                for (int k = 0; k < thr_nlvl() && mt > 0 && o < sizeof lvl; k++) {
+                    char nm[32] = "", key[32]; size_t nz = sizeof nm; snprintf(key, sizeof key, "hw.perflevel%d.name", k); if (sysctlbyname(key, nm, &nz, NULL, 0)) snprintf(nm, sizeof nm, "level %d", k);
+                    o += (size_t)snprintf(lvl + o, sizeof lvl - o, "%s%s %.0f%% at %.2f GHz", k ? ", " : "; this thread on ", nm, 100 * mm[k] / mt, mm[k] > 0 ? (double)(me[k].cyc - pme[k].cyc) / (mm[k] * 1e6) : 0); }
+                if (mt > 0 && o < sizeof lvl) o += (size_t)snprintf(lvl + o, sizeof lvl - o, " (%.2f ms a frame)", mt / nf);
+                memcpy(pme, me, sizeof pme); } }
           LOG("[nvn] translation detail up to frame %llu: per-frame submit cycles %.2f M (%.2f cycles per instruction), CPU %.3f ms of which kernel %.3f ms, wall %.3f ms; avg clock %.2f GHz (cycles / CPU time); this thread QoS %#x; allocator pools %d, cumulative GPU waits %llu; real-time declared computation %.2f ms; main thread yields per frame %.0f / %.3f ms%s", frame,
               cyc / 1e6 / nf, cyc / (double)(ci - pi), cpu / 1e6 / nf, (double)(ck - pk) / 1e6 / nf, (double)(cw - pw) / 1e6 / nf, cpu > 0 ? cyc / cpu : 0, (unsigned)qc, an, (unsigned long long)aw, g_rt_comp_ms, (double)(yn - pyn) / nf, (double)(yns - pyns) / 1e6 / nf, lvl); pyn = yn; pyns = yns; }
         if (frame % 300 == 0) { unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; int okx = thread_info(pthread_mach_thread_np(pthread_self()), THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;

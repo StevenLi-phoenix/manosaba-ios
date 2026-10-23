@@ -267,6 +267,7 @@ static void *boot_thread(void *arg) {
     { int lv = cool_level(getenv("DM_COOL_START")), at;   // an A/B run on the phone starts cool (coolstart.h, plan item 62f)
       if (lv >= 0) { int was = thermal_now(); double w = cool_wait(lv, thermal_now, sleep_for, 5, 600, &at);
           plog("%sboot: DM_COOL_START=%s: thermal state %d → %d after %.0f s", at > lv ? "[red] " : "", getenv("DM_COOL_START"), was, at, w); } }
+    { int dm_pwrtest(void); if (dm_pwrtest()) return NULL; }   // DM_PWRTEST: a plain CPU / GPU load instead of the game (pwrtest.m, plan item 230)
     dm_cloud_boot();   // iCloud: newer cloud saves are swapped in before the save is mounted (waits up to 5 s)
     int rc = dm_main(g_argc, g_argv);
     plog("boot: dm_main returned %d", rc);

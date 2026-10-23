@@ -475,6 +475,12 @@ uint32_t svc_thread_main_init(void) {
     t->cur_core = -1;
     pthread_mutex_lock(&G); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; t->all = g_all; g_all = t; core_take(t); pthread_mutex_unlock(&G);
     pthread_setspecific(g_keythr, t);
+    // The guest main thread runs on the host thread that calls this (the iOS app's boot thread), made without a QoS class, while every other guest
+    // thread runs user-interactive (thread_main). DM_MAIN_QOS=ui gives it that class too (plan item 229, a measurement: Tears of the Kingdom's main
+    // thread is its busiest, 143.6 s of CPU in 7 minutes on the iPhone, and on the frame's chain; it also runs real-time while it presents)
+#ifndef DM_TEST_MAIN_QOS_IGNORED   // negative control of t_mainqos only: the switch ignored
+    { const char *e = getenv("DM_MAIN_QOS"); if (e && !strcmp(e, "ui")) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); LOG("DM_MAIN_QOS=ui: the guest main thread runs user-interactive"); } }
+#endif
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
     pthread_get_qos_class_np(pthread_self(), &qc, &rp); t->qos = (uint32_t)qc;
     return t->handle;

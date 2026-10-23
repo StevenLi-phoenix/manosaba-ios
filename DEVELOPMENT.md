@@ -1116,8 +1116,12 @@ Tier 6, optional (seen, not planned before; listed at the user's request 2026-10
     Atmosphère's documented encodings (docs/features/cheats.md; facts only, its code is GPL); `host/cheats.c` (Mac): `DM_CHEATS=<file>` (main's
     build ID), `DM_CHEATS_ON=all` or names; store-only cheats into main's code at load (refused over the rewriter's words), the rest about 30 times
     a second on a host thread (mach_vm_read_overwrite / mach_vm_write). No cheat codes in the repository. iOS: a red line. `t_cheat_vm`, `t_cheats`
-- [-] batch 60 · 151 the save-loading crash workaround at 1.4.3 main+0x1bd01c4 (MacNativeGames dd0e893): not seen, no log here has that address; to
-  take if it ever shows up
+- [x] batch 79 · 151 the save-loading crash at 1.4.3 main+0x1bd01c4 (MacNativeGames dd0e893, MIT; written anew; batch 60 left it until it showed up):
+  on the iPhone on 2026-10-23, 7 minutes into play (thread BaseProcExecutor0), the optional reference at x19+0x6b0 held 0xffffffffffffffff
+  (MacNativeGames' Mac: 0xffff0000ffffffff while a save loaded) and `ldr x21, [x8]` read through it. `games/totk/optref.c`, a fault hook of crash.c:
+  at that pc with the product's two loads only, a value above the 39-bit address space is taken as absent, as the game's cbz takes 0: the field
+  cleared (compare-and-swap) and the load run again; one log line each time. `games/totk/tests/t_optref.c` runs the game's three instructions
+  under a signal handler (10 checks); MacNativeGames' value alone (`DM_TEST_OPTREF_ONE_VALUE`) fails 1, the iPhone's crash
 - [-] batch 61 · 152 frame interpolation by replaying the frame (LASRecomp `frame-interp-rt`; peiikai/LASRecomp `runtime/nvn/interp.c`,
   dc1842b..777fe71, MIT, work in progress): not taken. product60 already presents at 120 Hz on the Mac (GPU p50 4.5-4.8 ms); on a phone a replay
   costs a frame's GPU work again, and what limits Tears of the Kingdom there is not measured yet. To look at again once it runs there, if the GPU
@@ -1388,6 +1392,17 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
   into frames (225: 50.6 → 56.0). The scene size is set once, at boot (main+0x585e64 hit once in a run), so a dynamic resolution of our own
   through the host page would rebuild the render targets, and the game's own is off (131a). The user keeps the game's 720p as the default
   (2026-10-23); Settings → the app → Graphics → Render resolution 540p (MetalFX upscaling on) holds about 60 on the island
+- Why the CPU's clock falls, measured without the game (230, 2026-10-23 morning, `DM_PWRTEST`, two CPU threads of plain arithmetic at
+  user-interactive, 240 s each, thermal state nominal throughout): alone, 4.10 GHz at 6.4-6.8 W, easing to 3.64 GHz at 5.0 W, then at 65-66 s a step
+  to 3.31-3.33 GHz at 3.6 W for good; beside a GPU kept fully busy (compute dispatches back to back), 4.10 → 2.85 GHz over the first minute, then at
+  61-62 s 1.31 GHz at 0.65 W for good, a third of the time on the efficiency cores (which ran 1.70 GHz), while the GPU lost 22 % of its
+  dispatches (54 → 42 a second); beside a GPU about 60 % busy, 3.57 GHz, then 3.23 GHz at 3.4 W after the step (the GPU's clock fell instead:
+  its dispatches 29 → 6-7 a second at the same share). So the phone grants a burst for about a minute and then a sustained budget, and a busy GPU
+  keeps its share of it while the CPU is cut to 1.3 GHz. Tears of the Kingdom's GPU is busy 75-80 % of the time there (12.5-17 ms a frame at 47-64
+  fps), its CPU at 1.4-1.7 GHz, and the frame waits on the CPU's chain. No API lets an app move that split (Game Mode's thread-group flag for
+  the performance controller needs Apple's entitlement, XNU kern_resource.c); less GPU work a frame gives the CPU its clock back (960x540: 1.81 →
+  2.09 GHz, 56.0 → 59.6 fps). Low Power Mode for a while and off again brings the burst back: the minute at 30 fps refilled it (the user's
+  session: 88 fps after 90 s of it, not after 4 s)
 - [x] batch 77 · 216 frame-rate trials (`gfx/nvn/nvn_fptrial.h`, `DM_FPS_TRIAL=1`): a game whose step the host sets, held at interval 2 or 3 for
   5 s with the target at 60, reads its report times drawn toward their submission's GPU start (× 0.35) until it picks interval 1 and 1 s after,
   so the clock can come up; a trial that steps back within 4 s on the real times has failed and the wait doubles (up to 32 s). Only at a 60 Hz
@@ -1458,6 +1473,14 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
   buffer), 4 checks each; `DM_TEST_CHUNK_ANY_TBDR` fails 1. Store decisions and same-target continuation alone (`DM_NVN_TBDR=1
   DM_NVN_TBDR_OFF=defer,fuse,hoist,cover,sdx,xv,zskip,ds,range,rtheap`): the Mac's island 671 → 588 MB of loads and stores a frame at the same CPU,
   the prologue 640 → 545 MB with its pictures as before; on the phone 679 → 598 MB, translation cycles +6 %, 55.1 fps against 56.0. Not a default
+- [ ] 229 the guest main thread's QoS class: it runs on the host thread that called `svc_thread_main_init` (the iOS app's boot thread, made without
+  one) while every other guest thread runs user-interactive, and it is Tears of the Kingdom's busiest thread (143.6 s of CPU in the iPhone's
+  7-minute session of 2026-10-23, the busiest worker 119.7 s); it runs real-time at priority 97 while it presents. Batch 79: `DM_MAIN_QOS=ui` gives
+  it user-interactive (`host/tests/t_mainqos.c`, run without and with the switch; `DM_TEST_MAIN_QOS_IGNORED` fails 1), and the translation detail
+  line shows the presenting thread's time and clock per CPU kind too. The A/B on the phone is not run: after 230 the limit is the power split
+- [x] batch 79 · 230 `DM_PWRTEST=<threads>[:gpu[<busy %>]][:<seconds>]` (`ios/Sources/pwrtest.m`): the app runs a plain load instead of the game and
+  logs each second each thread's share and clock per CPU kind, the work done, the CPU energy and the thermal state (results above, "Why the CPU's
+  clock falls"). The spec in `host/pwrspec.h`, `host/tests/t_pwrspec.c` (7 checks; `DM_TEST_PWRSPEC_NO_DUTY` fails 1)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the
