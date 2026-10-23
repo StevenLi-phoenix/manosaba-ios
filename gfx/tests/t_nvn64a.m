@@ -71,7 +71,7 @@ int main(void) { @autoreleasepool {
     h_nvnCommandBufferBindSeparateSamplersDeferred(&cb, fs, 20, 2, (const NVNseparateSamplerHandle *)g_smp);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cb);
     rewrite();   // the game fills the arrays after recording, before submitting (as BotW's engine does, nxnative)
-    uint64_t hs[1] = {(uint64_t)h}; state_reset(); mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    uint64_t hs[1] = {(uint64_t)h}; state_reset(); mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
     check("BindImage: slot 3; BindTextures: slots 1 and 2", S.img[fs][3] == 0x33 && S.tex[fs][1] == 0x41 && S.tex[fs][2] == 0x42);
     check("the deferred image, separate texture and separate sampler binds: the handles at the submission's start", S.img[fs][5] == 0x61 && S.img[fs][6] == 0x62 &&
           S.tex[fs][10] == 0x71 && S.tex[fs][11] == 0x72 && S.samp[fs][20] == 0x81 && S.samp[fs][21] == 0x82);

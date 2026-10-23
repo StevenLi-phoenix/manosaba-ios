@@ -1483,8 +1483,8 @@ static uint64_t sub_exec(int n, const uint64_t *h, mtl_cap *cap) {
     mtl_sub_install(cap);
     mtl_sub_index(h, n);
     mtl_sub_snapshot(h, n);
-    for (int i = 0; i < n; i++) { mtl_exec_rest(h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
-    mtl_exec_rest(NULL, 0);
+    for (int i = 0; i < n; i++) { nvn_exec_rest(h + i + 1, n - i - 1); nvn_exec((const uint8_t *)h[i]); }
+    nvn_exec_rest(NULL, 0);
     uint64_t f = mtl_sub_commit();
     uint64_t dw = now_ns() - t0;
     atomic_fetch_add(&g_nvn_ns, dw); atomic_fetch_add(&g_sub_wall_ns, dw);

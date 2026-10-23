@@ -24,7 +24,7 @@ static uint32_t corner(int itype, const void *ix, int n, int set, int en, uint32
     memcpy(g_mem, ix, (size_t)n * (itype == 0 ? 1 : itype == 1 ? 2 : 4));
     p_draw_idx di = {NVN_DRAW_PRIMITIVE_TRIANGLE_STRIP, itype, n, 0, 0, 1, (uint64_t)(uintptr_t)g_mem}; emit(&c, OP_DRAW_IDX, &di, sizeof di);
     emit(&c, OP_END, NULL, 0);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p);
     id<MTLBuffer> b = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(b);
     [blit() copyFromTexture:tex_mtl(&t) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1) toBuffer:b destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];
     mtl_wait(mtl_sub_commit(), 5000000000ull); uint32_t v; memcpy(&v, (uint8_t *)b.contents + 7 * 4, 4); return v;
@@ -36,7 +36,7 @@ static uint32_t corner_after_update(const uint8_t *before, const uint8_t *after,
     uint8_t up[16 + 8] = {0}; uint64_t dst = (uint64_t)(uintptr_t)g_mem, len = 8; memcpy(up, &dst, 8); memcpy(up + 8, &len, 8); memcpy(up + 16, after, n); emit(&c, OP_UPDATE_UB, up, sizeof up);
     p_draw_idx di = {NVN_DRAW_PRIMITIVE_TRIANGLE_STRIP, 0, n, 0, 0, 1, dst}; emit(&c, OP_DRAW_IDX, &di, sizeof di);
     emit(&c, OP_END, NULL, 0);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p);
     id<MTLBuffer> b = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(b);
     [blit() copyFromTexture:tex_mtl(&t) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1) toBuffer:b destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];
     mtl_wait(mtl_sub_commit(), 5000000000ull); uint32_t v; memcpy(&v, (uint8_t *)b.contents + 7 * 4, 4); return v;

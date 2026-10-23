@@ -39,7 +39,7 @@ static int rows(const char *path, row *out, int max) {   // the rows written so 
 static int wait_rows(const char *path, int want, row *out, int max) { int n = 0; for (int i = 0; i < 400 && (n = rows(path, out, max)) < want; i++) usleep(5000); return n; }
 static void submit(chain *c) {
     emit(c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c->p);
+    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c->p);
     if (!mtl_wait(mtl_sub_commit(), 10000000000ull) || mtl_last_commit_error()) { printf("GPU did not complete\n"); abort(); }
 }
 

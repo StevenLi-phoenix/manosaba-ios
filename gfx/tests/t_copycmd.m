@@ -25,7 +25,7 @@ static void add(NVNcommandBuffer *c, int mode, uint32_t v) { ev_t e = {MAGIC('E'
 static NVNcommandHandle list(ptrdiff_t off, uint32_t v) { NVNcommandBuffer c; begin(&c, off, 4096); add(&c, NVN_EVENT_SIGNAL_MODE_ADD, v); return h_nvnCommandBufferEndRecording(&c); }
 static uint32_t run(NVNcommandHandle h) {   // the event after one submission of h, from 0
     *g_cc_ev = 0; uint64_t hs[1] = {(uint64_t)h};
-    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
     return *g_cc_ev;
 }
 static ptrdiff_t g_cc_give;

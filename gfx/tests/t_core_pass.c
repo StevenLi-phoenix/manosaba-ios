@@ -73,7 +73,7 @@ int main(void) {
     g_cur = 2; const uint8_t *jd = draw(); end();
     g_cur = 3; const uint8_t *dd = draw(); end();
     g_cur = 0; const uint8_t *a0 = draw(); call(g_mem[1]); const uint8_t *b0 = draw(); jump(jd); end();
-    uint64_t rest[1] = {(uint64_t)(uintptr_t)g_mem[3]}; mtl_exec_rest(rest, 1);
+    uint64_t rest[1] = {(uint64_t)(uintptr_t)g_mem[3]}; nvn_exec_rest(rest, 1);
     const uint8_t *seen[8]; int ns = 0; op_cursor cur = {.p = a0}; const uint8_t *q;
     while (ns < 8 && op_next(&cur, &q, NULL, NULL)) seen[ns++] = q;
     check("the cursor: the call, back to the caller, the jump, the remaining handle, then the end", 1, ns == 5 && seen[0] == a0 && seen[1] == c && seen[2] == b0 && seen[3] == jd && seen[4] == dd);
@@ -83,7 +83,7 @@ int main(void) {
     check("the replay reaching it takes it once", 1, hoist_take(c) && g_hoist_n == 0 && !hoist_take(c));
     g_ret[0] = b0; g_ret[1] = c; g_ret_n = 2; int ci = 0; const uint8_t *n0 = exec_cont(&ci), *n1 = exec_cont(&ci), *n2 = exec_cont(&ci), *n3 = exec_cont(&ci);
     check("after a list's end: the callers innermost first, then the remaining handles", 1, n0 == c && n1 == b0 && n2 == g_mem[3] && !n3);
-    g_ret_n = 0; mtl_exec_rest(NULL, 0);
+    g_ret_n = 0; nvn_exec_rest(NULL, 0);
 
     // ---- the clear-only hoist ----
     hoist_grp G[4]; reset(); R = (nvn_rt_state){0}; R.rt = rt_of(&A, NULL); R.has_rt = 1;
@@ -112,12 +112,12 @@ int main(void) {
     reset(); ds_off(); f = draw(); clear_ds(1, 0); draw(); end();
     check("a clear inside the pass: both (3) [-DDM_TEST_DS_CLEAR_FREE]", 3, need_at(f));
     reset(); g_cur = 1; ds_state(1, 0, 0); draw(); end(); g_cur = 0; f = draw(); end();
-    rest[0] = (uint64_t)(uintptr_t)g_mem[1]; mtl_exec_rest(rest, 1); ds_off();
+    rest[0] = (uint64_t)(uintptr_t)g_mem[1]; nvn_exec_rest(rest, 1); ds_off();
     check("a remaining handle's draw tests depth: depth (1)", 1, need_at(f));
     reset(); g_cur = 1; f = draw(); end(); g_cur = 0; draw(); end(); g_cur = 2; ds_state(0, 0, 1); draw(); end();
     g_ret[0] = g_mem[0]; g_ret_n = 1; rest[0] = (uint64_t)(uintptr_t)g_mem[2]; ds_off();
     check("a draw in a called list: the caller, then the remaining handle (stencil, 2)", 2, need_at(f));
-    g_ret_n = 0; mtl_exec_rest(NULL, 0);
+    g_ret_n = 0; nvn_exec_rest(NULL, 0);
 
     // ---- the store decision at a pass end ----
     // pass 1 on A + D ends at the second SetRenderTargets; pass 2 clears A's colour and D's depth in full, then draws (D's stencil loaded)

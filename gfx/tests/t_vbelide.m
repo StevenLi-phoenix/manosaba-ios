@@ -44,7 +44,7 @@ int main(void) { @autoreleasepool {
     emit(&c, OP_END, NULL, 0);
     setenv("DM_NVN_TBDR", "0", 1);   // two separate passes
     uint64_t s0, k0; mtl_vb_stats(&s0, &k0);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p);
     id<MTLBuffer> ra = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared], rb = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(ra); res_add(rb);
     [blit() copyFromTexture:tex_mtl(&a) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1) toBuffer:ra destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];
     [blit() copyFromTexture:tex_mtl(&b) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];

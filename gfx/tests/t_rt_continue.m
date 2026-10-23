@@ -122,9 +122,9 @@ static void run_case(int sc, prog_t *pg, int tbdr) {
     state_reset(); memset(&R, 0, sizeof R);
     uint64_t passes = g_stat_pass, draws = g_stat_draw, loads = g_bw_load, h[2] = {(uint64_t)first, (uint64_t)second};
     mtl_sub_begin(); mtl_sub_index(h, 2); mtl_sub_snapshot(h, 2);
-    mtl_exec_rest(h + 1, 1); mtl_exec((const uint8_t *)(uintptr_t)h[0]);
+    nvn_exec_rest(h + 1, 1); nvn_exec((const uint8_t *)(uintptr_t)h[0]);
     if (sc == REGISTRY_CHANGE) mtl_reg_tex(1900, &color, NULL);
-    mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h[1]);
+    nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h[1]);
     int done = mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error();
     char why[160] = "";
     int ok = done && planes_ok(&color, &depth, sc == CLEAR ? M_CLEAR : sc == SAMPLE_ATTACHMENT ? M_SAMPLED : sc == OTHER_LEVEL ? M_FIRST_ONLY : M_NORMAL, why, sizeof why);

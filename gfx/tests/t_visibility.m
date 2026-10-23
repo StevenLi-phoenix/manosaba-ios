@@ -33,7 +33,7 @@ static void pass(void) {   // a new render pass on the target
 }
 static void triangle(void) { h_nvnCommandBufferDrawArrays(&cmd, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3); }
 static void begin(void) { h_nvnCommandBufferBeginRecording(&cmd); h_nvnCommandBufferBindProgram(&cmd, (const NVNprogram *)&prog, 3); }
-static uint64_t submit_async(void) { NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd); mtl_sub_begin(); mtl_exec((const uint8_t *)h); return mtl_sub_commit(); }
+static uint64_t submit_async(void) { NVNcommandHandle h = h_nvnCommandBufferEndRecording(&cmd); mtl_sub_begin(); nvn_exec((const uint8_t *)h); return mtl_sub_commit(); }
 static void complete(uint64_t f) { int done = mtl_wait(f, 5000000000ull); if (!done) { printf("GPU did not complete\n"); abort(); } if (mtl_last_commit_error()) { printf("GPU error\n"); abort(); } }
 static void submit(void) { complete(submit_async()); }
 

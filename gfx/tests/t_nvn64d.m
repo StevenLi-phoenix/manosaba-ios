@@ -29,7 +29,7 @@ static int drawn(int discard, prog_t *p) {
     h_nvnCommandBufferSetRasterizerDiscard(&c, (uint32_t)discard); h_nvnCommandBufferBindProgram(&c, (const NVNprogram *)p, 3); h_nvnCommandBufferDrawArrays(&c, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3);
     h_nvnCommandBufferSetRasterizerDiscard(&c, 0);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&c); uint64_t hs[1] = {(uint64_t)h}; state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
     id<MTLBuffer> out = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared]; id<MTLCommandBuffer> cb = [g_q commandBuffer]; id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
     [bl copyFromTexture:tex_mtl(&color) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(4, 4, 1) toBuffer:out destinationOffset:0 destinationBytesPerRow:16 destinationBytesPerImage:64];
     [bl endEncoding]; [cb commit]; [cb waitUntilCompleted];
@@ -38,7 +38,7 @@ static int drawn(int discard, prog_t *p) {
 static void replay(void (*rec)(NVNcommandBuffer *)) {   // record with rec and replay, leaving the state behind
     NVNcommandBuffer c; h_nvnCommandBufferInitialize(&c, NULL); h_nvnCommandBufferAddCommandMemory(&c, (const NVNmemoryPool *)&g_d_pool, 16384, 16384); h_nvnCommandBufferBeginRecording(&c);
     rec(&c); NVNcommandHandle h = h_nvnCommandBufferEndRecording(&c); uint64_t hs[1] = {(uint64_t)h}; state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 static void rec_batches(NVNcommandBuffer *c) { int sc[8] = {1, 2, 30, 40, 1, 2, 30, 40}; float dr[2] = {0.25f, 0.75f}; h_nvnCommandBufferSetScissors(c, 0, 2, sc); h_nvnCommandBufferSetDepthRanges(c, 0, 1, dr); }
 static void rec_mixed(NVNcommandBuffer *c) { int sc[8] = {3, 4, 50, 60, 9, 9, 9, 9}; h_nvnCommandBufferSetScissors(c, 0, 2, sc); }

@@ -21,7 +21,7 @@ static void render_clear(const tex_t *t, float r, float g, float b) {   // one s
     p_set_rt rt = {.n = 1}; rt.color[0] = t; emit(&c, OP_SET_RT, &rt, sizeof rt);
     p_clear_color x = {.index = 0, .mask = 15, .rgba = {r, g, b, 1}}; emit(&c, OP_CLEAR_COLOR, &x, sizeof x);
     emit(&c, OP_END, NULL, 0);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p); mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 static uint32_t texel(const tex_t *t, unsigned x, unsigned y) { uint32_t lin[64]; nvn_deswizzle(&t->d, 0, 0, t->mem, lin, 32); return lin[y * 8 + x]; }
 static void empty_sub(void) { state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); mtl_wait(mtl_sub_commit(), 5000000000ull); }

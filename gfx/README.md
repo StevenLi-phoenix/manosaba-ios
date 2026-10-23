@@ -25,7 +25,8 @@ them anyway): they are translated offline, once, into Metal libraries.
 - **Interface layer `nvn/hle_nvn.c`**: object implementations, and recording of command buffer calls into the command memory the game provides.
 - **Replay layer `nvn/nvn_mtl.m`** with its parts in `nvn/mtl/`: replays the records as Metal commands at submit time.
   - The decisions that need no Metal are moving to `nvn/core/` (plan item 264): plain C modules, each its own translation unit with a header,
-    for a second backend (Vulkan) to share. What a module needs of the backend its header declares ("The backend provides").
+    for a second backend (Vulkan) to share. What a module needs of the backend its header declares ("The backend provides"). The replay
+    loop is there too (`nvn/core/exec.c`); each command it does not keep itself it hands to the backend through `nvn/nvn_backend.h`.
   - Memory pools become zero-copy `MTLBuffer`s on the game's memory; GPU address = CPU address, so only unified-memory devices are supported.
   - GPU completion effects (sync objects, events, counters) become visible only after the Metal command buffer has completed.
   - Pipeline and depth-stencil states are cached by state hash.
@@ -111,7 +112,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/u8_layers.inc` | 8-bit indices the GPU wrote, and layered passes |
 | `nvn/mtl/metalfx_scene.inc` | MetalFX for the game's own upscale of its scene (plan item 63) |
 | `nvn/mtl/draw.inc` | Draws, dispatches, copies, texel reads and writes, clears |
-| `nvn/mtl/exec.inc` | The power-saving mode and the replay loop (mtl_exec) |
+| `nvn/mtl/exec.inc` | The power-saving mode; the execution interface's commands (`nvn_be_*`, `nvn/nvn_backend.h`) |
 | `nvn/mtl/shot.inc` | Present screenshots |
 | `nvn/mtl/texdump.inc` | Texture dumps and snapshots (DM_NVN_TEXDUMP, DM_NVN_TEXSNAP), presented times |
 | `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |
@@ -123,6 +124,8 @@ Binding conventions used by the translation:
 | `nvn/core/pass.c`, `nvn/core/pass.h` | Pass planning: where the replay is and a cursor in replay order, the ops run before their place, the clear-only pass hoist's groups (`hoist_plan`), what a pass needs of depth and stencil (`pass_ds_need`), whether each attachment is stored at a pass end (`sd_decide`), the bandwidth ledger |
 | `nvn/core/defer.c`, `nvn/core/defer.h` | The deferred merged pass's decisions: whether a pass's draws wait for a later pass that attaches its colour targets (`defer_try`), the groups, Q's targets and load actions (`defer_q_enter`) |
 | `nvn/core/fuse.c`, `nvn/core/fuse.h` | The readable-tile pass merge's plan (`fuse_try`): whether the next pass merges into this one, the union of attachments, its clears and skipped ops |
+| `nvn/core/exec.c`, `nvn/core/exec.h` | The replay loop (`nvn_exec`): the command walk in replay order, the commands that only set state, FenceSync; every other command handed to the backend |
+| `nvn/nvn_backend.h` | The execution interface: what the replay hands a backend, command by command (`nvn_be_*`); each core module declares what else it asks of the backend |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
 | `nvn/core/live.c`, `nvn/core/live.h` | The texture living at a storage address (a finalized registration follows it), and the texture objects' host copies that recorded commands use |
 | `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |

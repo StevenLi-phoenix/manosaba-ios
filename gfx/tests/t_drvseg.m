@@ -35,7 +35,7 @@ int main(void) { @autoreleasepool {
     p_bind_buf sb = {NVN_SHADER_STAGE_COMPUTE, 0, out, 256}; emit(&c, OP_BIND_SSBO, &sb, sizeof sb);
     p_bind_buf ub = {NVN_SHADER_STAGE_COMPUTE, 0, ubo, 512}; emit(&c, OP_BIND_UBO, &ub, sizeof ub);
     p_dispatch d = {3, 5, 7, 0}; emit(&c, OP_DISPATCH, &d, sizeof d); emit(&c, OP_END, NULL, 0);
-    state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+    state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c.p);
     EXPECT("submission completed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
     EXPECT("no error in the submission's feedback", 0, mtl_last_commit_error());
     const uint32_t *o = (const uint32_t *)mem;
@@ -59,7 +59,7 @@ int main(void) { @autoreleasepool {
         p_bind_program b2 = {&pr, NVN_SHADER_STAGE_COMPUTE_BIT}; emit(&c2, OP_BIND_PROGRAM, &b2, sizeof b2);
         emit(&c2, OP_DISPATCH, &d1, sizeof d1); emit(&c2, OP_END, NULL, 0);
         uint64_t sh0 = g_disp_shared;
-        state_reset(); mtl_sub_begin(); uint64_t h2 = (uint64_t)c2.p; mtl_sub_index(&h2, 1); mtl_sub_snapshot(&h2, 1); mtl_exec(c2.p);
+        state_reset(); mtl_sub_begin(); uint64_t h2 = (uint64_t)c2.p; mtl_sub_index(&h2, 1); mtl_sub_snapshot(&h2, 1); nvn_exec(c2.p);
         EXPECT("two dispatches: submission completed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
         EXPECT("the second dispatch read the first one's write (123 + 1)", 124, o[36]);
 #if !DM_NVN_M3

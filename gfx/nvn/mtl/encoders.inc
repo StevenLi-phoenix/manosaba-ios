@@ -27,7 +27,7 @@ static void up_owner_check(const char *where) {
 // wait for the upload to complete after flushing it, and only then can the old queue read the upload result (mtl_read_texels waited first and flushed afterwards, the readback beat the upload, 4 failures on t_nvn upload content)
 static id<MTLCommandBuffer> q_cb(void) { if (on_sub_thread()) { up_flush(); up_wait_zero(&g_up_pending); } return [g_q commandBuffer]; }
 static post_op *g_post; static int g_npost, g_postcap;
-static uint32_t g_sub_work;   // draws, dispatches, copies and clears replayed in this submission so far (counter timestamps, nvn_ts.h)
+// g_sub_work, the work replayed in this submission so far: gfx/nvn/core/exec.h
 // The parts of a submission committed before its end (mid-submission commits): their work boundaries and GPU start / end on the guest clock, filled
 // by each part's feedback, read by the last part's (nvn_ts.h ts_place). Allocated at the first part; the submission and every part hold a reference
 #define SUBCLK_N 128
@@ -227,7 +227,7 @@ static BENC blit(void) { if (g_nupd && !g_upd_flushing) upd_flush(); blit_note()
     return g_blit; }
 #endif
 
-void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
+void nvn_be_copy_b2b(uint64_t src, uint64_t dst, uint64_t n) {
     pend_note(dst, n, NULL, src);
     us_drop(dst, n);   // later readers see the copied bytes in memory
     void *sb, *db; uint64_t so, dof;
@@ -260,7 +260,7 @@ static void ring_put(const void *data, uint64_t n, __unsafe_unretained id<MTLBuf
     g_ubs_off += need;
 }
 static void upd_log(uint64_t lo, uint64_t hi, const uint8_t *data);
-void mtl_sub_update(const void *data, uint64_t dst, uint64_t n) {
+void nvn_be_update_ub(const void *data, uint64_t dst, uint64_t n) {
     if (!n) return;
     void *db; uint64_t dof;
     if (!mtl_addr(dst, n, &db, &dof)) MDIE("uniform update destination not in any memory pool dst=%#llx n=%#llx", (unsigned long long)dst, (unsigned long long)n);
@@ -277,7 +277,7 @@ static void post(post_op o) {
     if (g_npost == g_postcap) { g_postcap = g_postcap ? g_postcap * 2 : 64; g_post = realloc(g_post, g_postcap * sizeof *g_post); }
     g_post[g_npost++] = o;
 }
-void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v) { post((post_op){1, val, mode, v, 0, 0, NULL}); }
+void nvn_be_signal_event(volatile uint32_t *val, uint32_t mode, uint32_t v) { post((post_op){1, val, mode, v, 0, 0, NULL}); }
 void mtl_sub_counter(uint64_t addr, uint32_t type) { post((post_op){2, NULL, 0, 0, addr, type, NULL, g_sub_work}); }
 void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]) { memcpy(rep, g_cnt_report, sizeof g_cnt_report); memcpy(rst, g_cnt_reset, sizeof g_cnt_reset); }
 void mtl_vis_state(int *open, uint64_t *folded) { *open = g_nvs; *folded = g_vis_folded; }   // samples-passed slots since the last reset, slots folded so far (power line)

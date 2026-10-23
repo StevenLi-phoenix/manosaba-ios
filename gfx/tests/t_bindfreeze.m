@@ -27,7 +27,7 @@ static void submit(NVNcommandHandle h, void (*after)(void)) {
     uint64_t hs[1] = {(uint64_t)h};
     mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1);
     if (after) after();
-    mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)hs[0]);
+    nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)hs[0]);
     mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 static int same(const uint64_t *a, const uint64_t *b, int n) { return !memcmp(a, b, 8 * (size_t)n); }

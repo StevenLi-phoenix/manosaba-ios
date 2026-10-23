@@ -32,7 +32,7 @@ static void draw_blocks(tex_t *t, prog_t *pg, ptrdiff_t off) {   // one submissi
     h_nvnCommandBufferSetViewports(&c, 0, 1, (float[]){0, 0, 2, 2}); h_nvnCommandBufferSetScissor(&c, 0, 0, 2, 2);
     h_nvnCommandBufferBindProgram(&c, (const NVNprogram *)pg, 3); h_nvnCommandBufferDrawArrays(&c, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&c); uint64_t hs[1] = {(uint64_t)h}; state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 static void read_back(id<MTLTexture> mt, void *out, size_t row, size_t bytes, MTLSize sz) {
     id<MTLBuffer> b = [g_dev newBufferWithLength:bytes options:MTLResourceStorageModeShared]; id<MTLCommandBuffer> cb = [g_q commandBuffer]; id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];

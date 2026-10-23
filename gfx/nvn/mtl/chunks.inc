@@ -62,7 +62,5 @@ static void chunk_maybe_split(void) {   // where a new encoder is about to open 
 }
 uint64_t mtl_chunk_commits(void) { return g_chunk_commits; }
 static void chunk_reset(void) { g_sub_chunks = 0; g_chunk_mark = g_stat_draw; }   // mtl_sub_begin
-static int g_rt_merged;         // The current pass has already been continued (at least one same-target SetRenderTargets was merged in)
-static uint64_t g_rt_merge_n;   // Cumulative continuation count
 static void fz_end(void);   // Wrap-up of the readable-tile pass merge (defined before draw)
 static void defer_fallback(void);

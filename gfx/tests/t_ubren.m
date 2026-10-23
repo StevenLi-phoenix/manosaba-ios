@@ -30,7 +30,7 @@ static const float RED[4] = {1, 0, 0, 1}, GREEN[4] = {0, 1, 0, 1}, BLUE[4] = {0,
 static void run(chain *c, const tex_t *t, uint32_t *left, uint32_t *right, uint64_t *passes) {
     emit(c, OP_END, NULL, 0);
     uint64_t p0 = g_stat_pass;
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c->p);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c->p);
     *passes = g_stat_pass - p0;
     id<MTLBuffer> b = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(b);
     [blit() copyFromTexture:tex_mtl(t) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1) toBuffer:b destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];
@@ -160,7 +160,7 @@ int main(int argc, char **argv) { @autoreleasepool {
       chain c = chain_new(); p_bind_buf ub = {NVN_SHADER_STAGE_FRAGMENT, 3, g_ubo, 256}; emit(&c, OP_BIND_UBO, &ub, sizeof ub); emit(&c, OP_END, NULL, 0);
       state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_snapshot(&hh, 1);
       float out[4]; pend_read(g_ubo, out, 16); int before = !memcmp(out, RED, 16);
-      mtl_sub_update(GREEN, g_ubo, 16); pend_read(g_ubo, out, 16); int after = !memcmp(out, GREEN, 16);
+      nvn_be_update_ub(GREEN, g_ubo, 16); pend_read(g_ubo, out, 16); int after = !memcmp(out, GREEN, 16);
       float f1; uint16_t ref = 3 << 8 | 0 << 2 | 1; S.ubo[1][3] = ub; int okf = ubo_float(1, ref, &f1);
       mtl_wait(mtl_sub_commit(), 5000000000ull);
       EXPECT("replay-time read before the update: red", 1, before);
@@ -170,7 +170,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     if (rename) { memcpy((void *)(uintptr_t)g_ubo, RED, 16);
       chain c = chain_new(); p_bind_buf ub = {NVN_SHADER_STAGE_FRAGMENT, 3, g_ubo, 256}; emit(&c, OP_BIND_UBO, &ub, sizeof ub); emit(&c, OP_END, NULL, 0);
       state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_snapshot(&hh, 1);
-      mtl_sub_update(GREEN, g_ubo, 16); upd_flush();
+      nvn_be_update_ub(GREEN, g_ubo, 16); upd_flush();
       float out[4]; pend_read(g_ubo, out, 16); int after = !memcmp(out, GREEN, 16);
       float f1; uint16_t ref = 3 << 8 | 0 << 2 | 1; S.ubo[1][3] = ub; int okf = ubo_float(1, ref, &f1);
       mtl_wait(mtl_sub_commit(), 5000000000ull);
@@ -184,7 +184,7 @@ int main(int argc, char **argv) { @autoreleasepool {
       p_bind_buf ub = {NVN_SHADER_STAGE_COMPUTE, 0, g_ubo, 256}; emit(&c, OP_BIND_UBO, &ub, sizeof ub);
       update(&c, g_ubo, GREEN);
       p_dispatch d = {1, 1, 1, 0}; emit(&c, OP_DISPATCH, &d, sizeof d); emit(&c, OP_END, NULL, 0);
-      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c.p);
       int done = mtl_wait(mtl_sub_commit(), 5000000000ull);
       EXPECT("compute: submission completed", 1, done);
       EXPECT("compute: the kernel reads the inline update (green) [-DDM_TEST_UB_FLUSHED_SNAPSHOT: the snapshot, red]", 1, !memcmp(o, GREEN, 16)); }
@@ -212,7 +212,7 @@ int main(int argc, char **argv) { @autoreleasepool {
       uint64_t m0 = g_ren.ul_moves;
       for (int k = 0; k < 200; k++) { float v[4] = {(float)k, 0, 0, 1}; update(&c, g_ubo, v); }
       emit(&c, OP_END, NULL, 0);
-      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+      state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c.p);
       mtl_wait(mtl_sub_commit(), 5000000000ull);
       float m[4]; memcpy(m, (const void *)(uintptr_t)g_ubo, 16);
       EXPECT("9. 200 updates of one range: memory holds the newest (r = 199)", 1, m[0] == 199.0f);

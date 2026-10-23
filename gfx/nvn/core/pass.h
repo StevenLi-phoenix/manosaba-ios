@@ -13,10 +13,13 @@
 extern const uint8_t *g_exec_cur;                      // The op being replayed (inclusive): the store decision of a pass ending there starts there
 extern const uint8_t *g_exec_next;                     // The op following the current draw in the replay (NULL outside a draw): the lookaheads start there
 extern const uint8_t *g_ret[16]; extern int g_ret_n;   // Call return stack of the replay (at OP_CALL the caller's next op is pushed; g_ret_n counts past 16)
-extern const uint64_t *g_rest; extern int g_nrest;     // Handles in this submission still to be replayed after the current handle (mtl_exec_rest)
+extern const uint64_t *g_rest; extern int g_nrest;     // Handles in this submission still to be replayed after the current handle (nvn_exec_rest)
 // The next segment after a list ends (within the same submit): first the caller return stack, then the remaining handles of this submit; returns
 // NULL when there are none left (or the return stack is deeper than it keeps). *ci counts the segments taken, from 0
 const uint8_t *exec_cont(int *ci);
+
+extern int g_rt_merged;         // The current pass has already been continued (at least one same-target SetRenderTargets was merged in)
+extern uint64_t g_rt_merge_n;   // Cumulative continuation count
 
 // ---- Ops run before their place ----
 // Clear-only pass hoist (hoist_try) and the readable-tile pass merge: ops that were already executed early and must be skipped when replay reaches

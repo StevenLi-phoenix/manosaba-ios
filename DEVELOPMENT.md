@@ -209,8 +209,10 @@ decide):
   texture, the submit call's capture, inline uniform updates). Next the mixed parts (the replay loop, lookahead, tile merge, draw) split into
   what is decided and what is executed: the replay state (`S`, `R`) and the commands that only set it (batch 96), pass planning's own
   decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
-  hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99); next the execution interface (`nvn_backend.h`) and
-  the replay loop; then the file-scope variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
+  hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99), the execution interface (`nvn_backend.h`) with the
+  replay loop in `core/exec.c` (batch 100); next the decisions still inside the interface's record handlers (SetRenderTargets' continuation,
+  clears made load actions, render enable), then the file-scope variables grouped by module; the Vulkan backend once the interface covers what
+  manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -418,3 +420,15 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   nor hoists there; both refuse deferrals for the same reasons in 1815 of the 1934 frames both reached (the others around scene changes,
   reached at other moments), with the same red lines. The backend's warnings as before; the pass dumps of 11 gfx tests line for line as
   before. Smoke: the same red lines and frames.
+- [x] batch 100 · 264, the execution interface and the replay loop: `gfx/nvn/nvn_backend.h` declares what the replay hands a backend, command
+  by command (`nvn_be_reset`, `nvn_be_state`, `nvn_be_draw`, `nvn_be_dispatch`, the copies and the texture clear, `nvn_be_copy_b2b`,
+  `nvn_be_update_ub`, `nvn_be_signal_event` (they were `mtl_sub_copy`, `mtl_sub_update`, `mtl_sub_event`), `nvn_be_sub_fence`, and the
+  records whose handling still mixes decisions with the backend's own pass state: SetRenderTargets, the clears, render enable, the counters,
+  barriers, the descriptor pools). `gfx/nvn/core/exec.c` takes the replay loop from `mtl/exec.inc` (`nvn_exec` and `nvn_exec_rest`, they
+  were `mtl_exec` and `mtl_exec_rest`): the walk, the return stack, the ops run early, the deferred groups' P end, the commands that only set
+  state (`st_op`, the backend marking what changed in `nvn_be_state`), FenceSync, the work count (`g_sub_work`); with it the continued pass's
+  mark (`g_rt_merged`) to `core/pass.c` and `fz_unskip` to `core/fuse.c`. The record handlers hold the case bodies as they were.
+  `gfx/tests/t_core_exec.c` (14; the call itself pushed for the caller, `-DDM_TEST_EXEC_RET_AT_CALL`, fails 1); `t_rqueue`'s
+  `-DDM_TEST_FENCE_SYNC_LAST` still fails 5. The backend's warnings as before; the pass dumps of 13 gfx tests (16,455 lines of
+  `t_visibility` among them) line for line as before. The submit path's instructions per draw in Tears of the Kingdom's smoke run within
+  the spread of batches 96-99 at every checkpoint (frame 600: 28,061 against 28,045-28,105). Smoke: the same red lines and frames.

@@ -58,7 +58,7 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
         memcpy(um,GREEN,16);
         uint8_t rd[16]; pend_read(u,rd,16);
         EXPECT(on?"1. replay-time reads (pend_read) see the submit-time bytes":"1. off: replay-time reads see memory",on?0:1,(uint64_t)!memcmp(rd,GREEN,16));
-        mtl_exec(c.p);
+        nvn_exec(c.p);
         EXPECT(on?"1. the draw reads the block as it was at the submit call (red)":"1. off: the draw reads the rewritten block (green)",on?C_RED:C_GREEN,px0(&a));
     }
     g_us.on=1;
@@ -69,7 +69,7 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
         set_rt(&c,&a); ds_off(&c); bind_prog(&c,&pg); bind_ubo(&c,u,256); draw_cmd(&c);
         update_ub(&c,u,BLUE,16);
         set_rt(&c,&b); draw_cmd(&c); emit(&c,OP_END,NULL,0);
-        begin(&c); memcpy(um,GREEN,16); mtl_exec(c.p);
+        begin(&c); memcpy(um,GREEN,16); nvn_exec(c.p);
         EXPECT("2. draw before the update: the copy (red)",C_RED,px0(&a));   // a and b are read back in two submissions: the first commit carries both draws
         EXPECT(ub_rename_on()?"2. renamed: the update keeps the copy (private copies add it)":"2. DM_NVN_UB_RENAME=0: the update drops the copy",ub_rename_on()?0:1,g_us.drops-d0);
         mtl_sub_begin(); EXPECT("2. draw after the update: the update's bytes (blue)",C_BLUE,px0(&b));

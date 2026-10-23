@@ -22,7 +22,7 @@ static void set_face(chain *c, const tex_t *t, int f) {
 static void fill(const tex_t *t) {   // every face grey, one submission
     chain c = chain_new(); p_clear_tex ct = {0}; ct.tex = t; ct.r = (NVNcopyRegion){0, 0, 0, 16, 16, 6}; ct.c.f[0] = ct.c.f[1] = ct.c.f[2] = 0x40 / 255.0f; ct.c.f[3] = 1; ct.mask = 15;
     emit(&c, OP_CLEAR_TEX, &ct, sizeof ct); emit(&c, OP_END, NULL, 0);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p); mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 // One submission drawing faces [0, n) (face f in colour f), sampling program or not, optional clear before the first draw; the six faces' first pixels
 static uint64_t faces(const tex_t *t, int n, const prog_t *pg, int clear0, uint32_t px[6]) {
@@ -39,7 +39,7 @@ static uint64_t faces(const tex_t *t, int n, const prog_t *pg, int clear0, uint3
     }
     emit(&c, OP_END, NULL, 0);
     uint64_t p0 = g_stat_pass;
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c.p);
     uint64_t np = g_stat_pass - p0;
     id<MTLBuffer> b = [g_dev newBufferWithLength:6 * 16 * 16 * 4 options:MTLResourceStorageModeShared]; res_add(b);
     for (int f = 0; f < 6; f++) [blit() copyFromTexture:tex_mtl(t) sourceSlice:f sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(16,16,1) toBuffer:b destinationOffset:(size_t)f * 1024 destinationBytesPerRow:64 destinationBytesPerImage:1024];
@@ -109,7 +109,7 @@ int main(int argc, char **argv) { @autoreleasepool {
       p_draw dw = {NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3, 0, 1}; emit(&c, OP_DRAW, &dw, sizeof dw);
       for (int f = 1; f < 4; f++) { set_face(&c, &t, f); p_bind_buf u2 = {NVN_SHADER_STAGE_FRAGMENT, 3, g_ubo + (uint64_t)f * 256, 256}; emit(&c, OP_BIND_UBO, &u2, sizeof u2); emit(&c, OP_DRAW, &dw, sizeof dw); }
       emit(&c, OP_END, NULL, 0);
-      state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+      state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c.p);
       id<MTLBuffer> b = [g_dev newBufferWithLength:6 * 1024 options:MTLResourceStorageModeShared]; res_add(b);
       for (int f = 0; f < 6; f++) [blit() copyFromTexture:tex_mtl(&t) sourceSlice:f sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(16,16,1) toBuffer:b destinationOffset:(size_t)f * 1024 destinationBytesPerRow:64 destinationBytesPerImage:1024];
       mtl_wait(mtl_sub_commit(), 5000000000ull);

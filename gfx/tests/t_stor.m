@@ -14,7 +14,7 @@ static int fail, count;
 typedef struct { uint8_t *p; size_t n; } chain;
 static void emit(chain *c, unsigned op, const void *a, size_t n) { size_t z=(8+n+7)&~7ull; op_hdr h={op,(uint32_t)z}; memcpy(c->p+c->n,&h,8); if(n) memcpy(c->p+c->n+8,a,n); c->n+=z; }
 static uint8_t *g_cm;
-static void submit(chain *c) { emit(c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c->p; mtl_sub_index(&hh, 1); mtl_exec(c->p); mtl_wait(mtl_sub_commit(), 5000000000ull); }
+static void submit(chain *c) { emit(c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c->p; mtl_sub_index(&hh, 1); nvn_exec(c->p); mtl_wait(mtl_sub_commit(), 5000000000ull); }
 static void render_clear(const tex_t *t, float r, float g, float b) {   // one submission: a render pass on t cleared to (r, g, b, 1)
     chain c = {g_cm, 0}; memset(g_cm, 0, 65536);
     p_set_rt rt = {.n = 1}; rt.color[0] = t; emit(&c, OP_SET_RT, &rt, sizeof rt);

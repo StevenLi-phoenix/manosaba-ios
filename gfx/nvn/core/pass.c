@@ -10,7 +10,8 @@
 const uint8_t *g_exec_cur, *g_exec_next;
 const uint8_t *g_ret[16]; int g_ret_n;
 const uint64_t *g_rest; int g_nrest;
-void mtl_exec_rest(const uint64_t *h, int n) { g_rest = h; g_nrest = n; }
+int g_rt_merged; uint64_t g_rt_merge_n;
+void nvn_exec_rest(const uint64_t *h, int n) { g_rest = h; g_nrest = n; }
 const uint8_t *exec_cont(int *ci) {
     for (;;) { int k = (*ci)++;
         if (k < g_ret_n) { if (g_ret_n > 16) return NULL; return g_ret[g_ret_n - 1 - k]; }

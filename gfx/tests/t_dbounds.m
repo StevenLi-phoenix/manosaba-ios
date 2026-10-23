@@ -41,7 +41,7 @@ static int run(int en, float lo, float hi, int serial) {   // a bitmask of the t
     h_nvnCommandBufferSetDepthBounds(&c, 0, 0, 1);
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&c);
     uint64_t hs[1] = {(uint64_t)h}; state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h);
+    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h);
     int done = mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error();
     id<MTLBuffer> out = [g_dev newBufferWithLength:24 options:MTLResourceStorageModeShared]; id<MTLCommandBuffer> cb = [g_q commandBuffer]; id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
     [bl copyFromTexture:tex_mtl(&color) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(3, 2, 1) toBuffer:out destinationOffset:0 destinationBytesPerRow:12 destinationBytesPerImage:24];

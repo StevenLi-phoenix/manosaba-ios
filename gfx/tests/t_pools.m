@@ -20,7 +20,7 @@ static uint8_t *g_p_mem; static pool_t g_p_pool;
 static void set_pools(const NVNtexturePool *tp, const NVNsamplerPool *sp) {   // a submission that sets the pools
     NVNcommandBuffer c; h_nvnCommandBufferInitialize(&c, NULL); h_nvnCommandBufferAddCommandMemory(&c, (const NVNmemoryPool *)&g_p_pool, 0x80000, 4096); h_nvnCommandBufferBeginRecording(&c);
     h_nvnCommandBufferSetTexturePool(&c, tp); h_nvnCommandBufferSetSamplerPool(&c, sp); NVNcommandHandle h = h_nvnCommandBufferEndRecording(&c);
-    uint64_t hs[1] = {(uint64_t)h}; mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    uint64_t hs[1] = {(uint64_t)h}; mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
 }
 static NSUInteger width_of(uint64_t handle) { pthread_mutex_lock(&g_rmu); id<MTLTexture> t = (__bridge id<MTLTexture>)tex_fast(h_tid(handle)); pthread_mutex_unlock(&g_rmu); return t ? t.width : 0; }
 static MTLSamplerMinMagFilter filter_of(uint64_t handle) { int sid = h_sid(handle); return sid > 0 && sid < g_nsreg && g_sreg_ok[sid] ? (MTLSamplerMinMagFilter)(g_sreg[sid].magf == NVN_MAG_FILTER_LINEAR) : (MTLSamplerMinMagFilter)99; }

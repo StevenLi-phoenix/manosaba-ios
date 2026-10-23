@@ -1,4 +1,4 @@
-// Fixed command chain experiment: production mtl_exec, hand-written constant shaders and closed-form expectations; does not include the production reorderer.
+// Fixed command chain experiment: production nvn_exec, hand-written constant shaders and closed-form expectations; does not include the production reorderer.
 // G full stencil block, M small view + copy, U blend, R stencil resolve; only G/M are swapped.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
@@ -68,7 +68,7 @@ static int bind_view(const tex_t *t, int lv) { return bind_view_range(t,lv,1,0,0
 typedef struct { uint8_t a[256],b[256],c[256],e[256]; uint64_t query; } result;
 static result execute(chain *c, const tex_t *a, const tex_t *b, const tex_t *out, const tex_t *e, uint64_t *q) {
     emit(c,OP_END,NULL,0); state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0;
-    mtl_sub_begin(); mtl_exec(c->p);
+    mtl_sub_begin(); nvn_exec(c->p);
     const tex_t *t[4]={a,b,out,e}; id<MTLBuffer> buf[4];
     for(int k=0;k<4;k++) { buf[k]=[g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
         [blit() copyFromTexture:tex_mtl(t[k]) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1)
@@ -123,7 +123,7 @@ static uint64_t query_case(int reordered, int mode) {
     if(mode==2) {   // both blocks' counts are wiped by the subsequent reset before any report; only the new 4x4 draw is reported.
         emit(&c,OP_RESET_COUNTER,&type,8); clear(&c,&b,0,NULL,0,0,0); draw_prog(&c,1,0); }
     uint64_t report[2]={type,(uint64_t)q}; emit(&c,OP_REPORT_COUNTER,report,sizeof report); emit(&c,OP_END,NULL,0);
-    state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); mtl_exec(c.p);
+    state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); nvn_exec(c.p);
     EXPECT("query completed",1,mtl_wait(mtl_sub_commit(),5000000000ull)); EXPECT("no error in query submit feedback",0,mtl_last_commit_error());
     const char *names[]={"query","same_interval_query","later_reset_overrides_query"};
     save_raw(names[mode],reordered,q,sizeof q); mtl_pool_del(c.p); free(c.p); return q[0];
@@ -135,7 +135,7 @@ static uint64_t midpass_query_case(void) {
     stencil(&c,0,8,1,255,255,0); blending(&c,0); clear(&c,&a,0,NULL,0,0,0); draw_prog(&c,0,0);
     emit(&c,OP_RESET_COUNTER,&type,8); draw_prog(&c,0,0);
     uint64_t report[2]={type,(uint64_t)q}; emit(&c,OP_REPORT_COUNTER,report,sizeof report); emit(&c,OP_END,NULL,0);
-    state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); mtl_exec(c.p);
+    state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0; mtl_sub_begin(); nvn_exec(c.p);
     EXPECT("mid-pass query completed",1,mtl_wait(mtl_sub_commit(),5000000000ull));
     mtl_pool_del(c.p); free(c.p); return q[0];
 }

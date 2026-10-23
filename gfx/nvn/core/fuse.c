@@ -9,6 +9,7 @@
 #include <string.h>
 
 fuse_t g_fz; uint64_t g_fz_n, g_fz_draws, g_fz_fallback;
+void fz_unskip(void) { for (int i = 0; i < g_fz.nskip; i++) for (int j = 0; j < g_hoist_n; j++) if (g_hoist_skip[j] == g_fz.skip[i]) { g_hoist_skip[j] = g_hoist_skip[--g_hoist_n]; break; } }
 static uint32_t ext1(uint32_t v) { return v > 1u ? v : 1u; }   // a level's extent: at least 1
 static int prog_samples_ser(const prog_t *pg, uint64_t tex[6][128], uint64_t img[6][32], uint64_t ser) {   // Whether this texture is bound in any texture / image / typed buffer slot declared by the program's reflection
     const nvn_refl *rf[6]; int stg[6]; if (!pg || !nvn_be_prog_refl(pg, rf, stg)) return 1;

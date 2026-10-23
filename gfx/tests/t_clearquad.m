@@ -55,7 +55,7 @@ static void setup(void) {
 // Runs the chain, then pixel (3,3) of each texture's level as 0xRRGGBB
 static void run(chain *c, int n, const tex_t *const *t, const int *lv, uint32_t *out) {
     emit(c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_exec(c->p);
+    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); nvn_exec(c->p);
     id<MTLBuffer> b[4];
     for (int i = 0; i < n; i++) { int w = 8 >> lv[i]; b[i] = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
         [blit() copyFromTexture:tex_mtl(t[i]) sourceSlice:0 sourceLevel:(NSUInteger)lv[i] sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, w, 1) toBuffer:b[i] destinationOffset:0
@@ -79,7 +79,7 @@ int main(void) { @autoreleasepool {
       set_rt(&c, &U, 0); draw_cmd(&c);
       const tex_t *ts[1] = {&T}; int lv[1] = {0}; uint32_t in[1], out[1];
       emit(&c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R);
-      mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p);
+      mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p);
       id<MTLBuffer> b = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
       [blit() copyFromTexture:tex_mtl(ts[0]) sourceSlice:0 sourceLevel:(NSUInteger)lv[0] sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1) toBuffer:b destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];
       if (!mtl_wait(mtl_sub_commit(), 5000000000ull) || mtl_last_commit_error()) { printf("GPU did not complete\n"); abort(); }

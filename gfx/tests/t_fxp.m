@@ -63,7 +63,7 @@ static void pass_with(const prog_t *first, const prog_t *after, int clear_first,
     h_nvnCommandBufferBindProgram(&c, (const NVNprogram *)first, 3); h_nvnCommandBufferDrawArrays(&c, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3);
     if (after) { h_nvnCommandBufferSetScissor(&c, 0, 0, 1, 1); h_nvnCommandBufferBindProgram(&c, (const NVNprogram *)after, 3); h_nvnCommandBufferDrawArrays(&c, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3); }
     NVNcommandHandle h = h_nvnCommandBufferEndRecording(&c); uint64_t hs[1] = {(uint64_t)h}; state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); mtl_exec_rest(NULL, 0); mtl_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
+    mtl_sub_begin(); mtl_sub_index(hs, 1); mtl_sub_snapshot(hs, 1); nvn_exec_rest(NULL, 0); nvn_exec((const uint8_t *)(uintptr_t)h); mtl_wait(mtl_sub_commit(), 5000000000ull);
     read_canvas(tex_mtl(&canvas), px);
 }
 static void pass(int clear_first, int white_after, uint8_t *px) { pass_with(&g_easu, white_after ? &g_white : NULL, clear_first, px); }

@@ -32,7 +32,7 @@ static int run(void) {   // returns red of pixel (3, 3)
         p_set_rt none = {.n = 0}; emit(&c, OP_SET_RT, &none, sizeof none);
     }
     emit(&c, OP_END, NULL, 0);
-    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_exec(c.p);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); nvn_exec(c.p);
     id<MTLBuffer> rb = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(rb);
     id<MTLBuffer> rb2 = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; res_add(rb2);
     [blit() copyFromTexture:tex_mtl(&t) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(8,8,1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];

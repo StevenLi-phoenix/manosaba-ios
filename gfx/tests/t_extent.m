@@ -41,7 +41,7 @@ static void setup(void) {
 static void run(chain *c, uint64_t out[5]) {
     uint64_t a[13], b[13]; mtl_counts(a);
     emit(c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_exec(c->p);
+    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); nvn_exec(c->p);
     if (!mtl_wait(mtl_sub_commit(), 5000000000ull) || mtl_last_commit_error()) { printf("GPU did not complete\n"); abort(); }
     mtl_counts(b); out[0] = b[7] - a[7]; out[1] = b[8] - a[8]; out[2] = b[10] - a[10]; out[3] = b[11] - a[11]; out[4] = b[12] - a[12];
 }

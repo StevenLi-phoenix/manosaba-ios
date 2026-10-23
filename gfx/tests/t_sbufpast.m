@@ -31,7 +31,7 @@ int main(void) { @autoreleasepool {
     p_bind_buf sf = {NVN_SHADER_STAGE_COMPUTE, 0, far, 256}; emit(&c, OP_BIND_SSBO, &sf, sizeof sf);
     emit(&c, OP_DISPATCH, &d, sizeof d); emit(&c, OP_END, NULL, 0);
     uint64_t p0, l0; mtl_sbuf_stats(&p0, &l0);
-    state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); mtl_exec(c.p);
+    state_reset(); mtl_sub_begin(); uint64_t hh = (uint64_t)c.p; mtl_sub_index(&hh, 1); mtl_sub_snapshot(&hh, 1); nvn_exec(c.p);
     EXPECT("submission completed", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
     EXPECT("no error in the submission's feedback", 0, mtl_last_commit_error());
     uint64_t p1, l1; mtl_sbuf_stats(&p1, &l1); const uint32_t *o = (const uint32_t *)(uintptr_t)at;

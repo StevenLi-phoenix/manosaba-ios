@@ -52,4 +52,4 @@ static void keepalive_start(void) {
     });
 }
 static void rp_flush(void);
-static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before mtl_exec)
+static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_exec)

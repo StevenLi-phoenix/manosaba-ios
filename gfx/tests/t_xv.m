@@ -32,7 +32,7 @@ static void cycle(const tex_t *a, const tex_t *b, int aid, int kind, uint8_t px[
                    set_rt(&c,&t_mid,NULL,0); clear_color(&c,0,0,0,0); draw_cmd(&c); }   /* A's pass ends in the command stream (at the next SetRenderTargets), as in the game; this last pass only ends when the submit ends (always stored) */
     if (kind) { set_rt(&c,b,NULL,0); clear_color(&c,0,0,0,0); ds_off(&c); bind_prog(&c,&t_pg[1]); bind_tex(&c,aid); draw_cmd(&c); }
     emit(&c,OP_END,NULL,0); state_reset(); memset(&R,0,sizeof R); vis_clear(); g_vis_on=g_vis_counting=0;
-    mtl_sub_begin(); uint64_t hh=(uint64_t)c.p; mtl_sub_index(&hh,1); mtl_exec(c.p);
+    mtl_sub_begin(); uint64_t hh=(uint64_t)c.p; mtl_sub_index(&hh,1); nvn_exec(c.p);
     if (kind) readback(b,px); else commit();
 }
 int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0);setenv("DM_NVN_TBDR","1",1);

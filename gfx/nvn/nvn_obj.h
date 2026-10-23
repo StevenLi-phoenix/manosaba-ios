@@ -209,8 +209,8 @@ typedef struct { int32_t enable; float lo, hi; } p_depth_bounds;   // SetDepthBo
 typedef struct { int32_t enable; uint32_t index; } p_prim_restart;   // SetPrimitiveRestart   // 1 = depth clamp (fragments beyond the near / far planes are kept at the boundary depth, Metal DepthClipModeClamp)
 
 // Entry point of the Metal replay layer (nvn_mtl.m): replays a set of command handles into the current submission
-void mtl_exec(const uint8_t *handle);
-void mtl_exec_rest(const uint64_t *handles, int n);   // Tells which handles in this submission still follow the current handle (used by the pass lookahead across handles)
+void nvn_exec(const uint8_t *handle);   // Replay a command list (gfx/nvn/core/exec.c)
+void nvn_exec_rest(const uint64_t *handles, int n);   // Tells which handles in this submission still follow the current handle (used by the pass lookahead across handles)
 // Present: draw the swapchain texture to the front-end CAMetalLayer (only counts when there is no window)
 uint64_t mtl_present(const tex_t *t, double period_s, const int crop[4]);   // Enqueue a present and return the ticket immediately; period_s: minimum time this image is displayed (= present period, 0 = unlimited)
 void mtl_present_wait(uint64_t ticket);                    // Wait until the present with this ticket has been processed (blit committed to the GPU queue)

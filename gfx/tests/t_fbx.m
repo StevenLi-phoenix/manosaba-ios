@@ -100,7 +100,7 @@ static void setup(void) {
 // Runs the chain, returns pixel (3,3) of the level as 0xRRGGBB
 static uint32_t run(chain *c, const tex_t *t, int lv) {
     emit(c, OP_END, NULL, 0); state_reset(); memset(&R, 0, sizeof R);
-    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); mtl_exec(c->p);
+    mtl_sub_begin(); uint64_t hh = (uint64_t)c->p; mtl_sub_index(&hh, 1); nvn_exec(c->p);
     int w = 8 >> lv; id<MTLBuffer> b = [g_dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
     [blit() copyFromTexture:tex_mtl(t) sourceSlice:0 sourceLevel:(NSUInteger)lv sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, w, 1) toBuffer:b destinationOffset:0 destinationBytesPerRow:(NSUInteger)w * 4 destinationBytesPerImage:(NSUInteger)w * w * 4];
     if (!mtl_wait(mtl_sub_commit(), 5000000000ull) || mtl_last_commit_error()) { printf("GPU did not complete\n"); abort(); }
