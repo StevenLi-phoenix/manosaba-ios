@@ -93,7 +93,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/upload.inc` | Texture uploads: batches, staging blocks, BC on GPUs without it, texture descriptors |
 | `nvn/mtl/writeback.inc` | CPU-filled textures, and GPU results written back when the CPU invalidates a pool |
 | `nvn/mtl/rtheap.inc` | Render targets of virtual pools in a heap, the memory census, the finalize queue |
-| `nvn/mtl/live.inc` | The live texture at a storage address, texture snapshots and releases |
+| `nvn/mtl/live.inc` | Texture releases |
 | `nvn/mtl/passes.inc` | Render pass bookkeeping: zero-source skip, the pass dump (PD), attachment use |
 | `nvn/mtl/tbdr_xv.inc` | The store decisions' attachments, load elision, same-target continuation, layered passes (their state and declarations) |
 | `nvn/mtl/chunks.inc` | Mid-submission commits (MacNativeGames' TOTK_CHUNK_DRAWS) |
@@ -122,6 +122,7 @@ Binding conventions used by the translation:
 | `nvn/core/tbdr.c`, `nvn/core/tbdr.h` | The TBDR rewrites' switches (`DM_NVN_TBDR`, `DM_NVN_TBDR_OFF`, the ruler, `DM_NVN_UNWRITTEN_DC`) and the cross-submission attachment validity ledger (`xv_*`) |
 | `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
+| `nvn/core/live.c`, `nvn/core/live.h` | The texture living at a storage address (a finalized registration follows it), and the texture objects' host copies that recorded commands use |
 | `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |
 | `nvn/core/frame.c`, `nvn/core/frame.h` | Measurements by frame: boot instrumentation (DM_BOOTPROF), the GPU time as the union of command buffer spans, DM_NVN_UB |
 | `nvn/core/usnap.c`, `nvn/core/usnap.h` | Uniform snapshots: each submission's copies of the uniform ranges it binds; deferred binding handles read once a submission |

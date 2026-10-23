@@ -80,6 +80,7 @@
 #include "core/tbdr.h"
 #include "core/pend.h"
 #include "core/frame.h"
+#include "core/live.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>

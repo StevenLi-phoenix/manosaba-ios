@@ -207,7 +207,7 @@ decide):
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
   In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91; then the live
+  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91, the live texture in 92; then the live
   texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
   is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
   covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
@@ -340,3 +340,8 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   a copy reading its source as it is now, `-DDM_TEST_PEND_COPY_NOW`, fails 2), `t_core_frame.c` (15; the plain sum, `-DDM_TEST_GIV_SUM`,
   fails 3); `t_ub.m` / `t_pend.m` read `g_pend.*` / `g_ub.*`. Batch tests as in batch 88; smoke: the same red lines, Tears of the Kingdom's
   frames the same scenes a little further on (looked at), its long frames' GPU times of the same shape (0.2 ms, one of 68 ms, 5-17 ms).
+- [x] batch 92 · 264, the live texture: `gfx/nvn/core/live.c` takes from `mtl/live.inc` the texture living at each storage address
+  (`mtl_tex_live`, `live_finalized`, `live_released`, `live_follow`, `g_fin_gen`, `g_live_follows`) and the texture objects' host copies
+  (`mtl_tex_snap`, `tex_snap_retire`, `tex_snap_reap`, `SNAP_KEEP`); the part keeps the releases (`fin_drain`, `mtl_tex_release`).
+  `gfx/tests/t_core_live.c` (13; the texture there followed whatever its shape, `-DDM_TEST_LIVE_ANY_SHAPE`, fails 1). Batch tests as in batch
+  88; smoke: the same red lines and frames (Tears of the Kingdom's looked at), its shared-storage log lines 75 against 73.
