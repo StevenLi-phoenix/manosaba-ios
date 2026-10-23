@@ -111,8 +111,9 @@ Binding conventions used by the translation:
 | `nvn/mtl/tile_merge.inc` | Readable tile render pass merge: the later pass's draws proven and specialized, the in-run check; the deferred merged pass's Q opened and its kept draws drawn |
 | `nvn/mtl/u8_layers.inc` | 8-bit indices the GPU wrote, and layered passes |
 | `nvn/mtl/metalfx_scene.inc` | MetalFX for the game's own upscale of its scene (plan item 63) |
-| `nvn/mtl/draw.inc` | Draws, dispatches, copies, texel reads and writes, clears |
-| `nvn/mtl/exec.inc` | The power-saving mode; the execution interface's commands (`nvn_be_*`, `nvn/nvn_backend.h`) |
+| `nvn/mtl/draw.inc` | Draws (in three stages: admitted, its render pass, its encoding) and dispatches |
+| `nvn/mtl/copies.inc` | Copies between buffers and textures, texel reads and writes, texture clears |
+| `nvn/mtl/exec.inc` | A submission's context for the failure line; the power-saving mode; the execution interface's commands (`nvn_be_*`, `nvn/nvn_backend.h`) |
 | `nvn/mtl/shot.inc` | Present screenshots |
 | `nvn/mtl/texdump.inc` | Texture dumps and snapshots (DM_NVN_TEXDUMP, DM_NVN_TEXSNAP), presented times |
 | `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |

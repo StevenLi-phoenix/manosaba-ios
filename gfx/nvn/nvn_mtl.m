@@ -340,6 +340,7 @@ void bf_want_note(const char *shader_key) {
 #include "mtl/u8_layers.inc"
 #include "mtl/metalfx_scene.inc"
 #include "mtl/draw.inc"
+#include "mtl/copies.inc"
 #include "mtl/exec.inc"
 #include "mtl/shot.inc"
 #include "mtl/texdump.inc"

@@ -1,4 +1,13 @@
-// gfx/nvn/mtl/exec.inc, part of nvn_mtl.m (included there in order, one translation unit): The power-saving mode; the execution interface (gfx/nvn/nvn_backend.h: the replay loop is gfx/nvn/core/exec.c)
+// gfx/nvn/mtl/exec.inc, part of nvn_mtl.m (included there in order, one translation unit): A submission's context for the failure line (cctx_snap); the power-saving mode; the execution interface (gfx/nvn/nvn_backend.h: the replay loop is gfx/nvn/core/exec.c)
+// Context description of one submit (mtl_sub_commit takes one per submit and prints it into the failure line when the command buffer errors): for the GPU memory fault on the first frame entering Travincal, the failure line had only the sequence number and error code, and it was impossible to tell what was in that submit
+static const char *cctx_snap(void) {
+    static char b[320]; static uint64_t p_pass, p_up, p_reup, p_ser; uint64_t up = 0, reup = 0; mtl_pkg_stats(&up, &reup);
+    pthread_mutex_lock(&g_deferred_mu); unsigned long nd = (unsigned long)g_deferred.count; pthread_mutex_unlock(&g_deferred_mu);
+    snprintf(b, sizeof b, "frame %llu; since the last submit: passes +%llu, first uploads +%llu, re-uploads +%llu, serial table changes +%llu; deferred-release queue %lu",
+             (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)(g_stat_pass - p_pass), (unsigned long long)(up - p_up), (unsigned long long)(reup - p_reup),
+             (unsigned long long)(g_ser_gen - p_ser), nd);
+    p_pass = g_stat_pass; p_up = up; p_reup = reup; p_ser = g_ser_gen; return b;
+}
 // ---------- Power-saving mode (30 frames per second) ----------
 // DM_FPS=30: present at 30 Hz (the display link and the frame rate hint of the front end follow, so a ProMotion screen lowers its refresh rate).
 // mtl_fps_set changes it while running (iOS Settings page): the display link follows on the next frame (link_sync)

@@ -53,6 +53,17 @@ static void exec_clear_ds(const p_clear_ds *c) {
     if (c->stencil_mask) { R.clear_s = 1; R.cs = (uint32_t)c->stencil; }
 }
 
+// A draw that draws nothing whatever its pass: rendering off (counted when a conditional on a pending result is in effect), no program, depth
+// bounds that admit no depth. The backend asks it first (its draw is also how kept and merged draws are drawn again)
+int exec_draw_dropped(void) {
+    if (g_render_off) return 1;   // SetRenderEnable(false)
+    if (g_rc_on_pending) g_rc_pend_draws++;
+    if (!S.prog) { RED_ONCE(18, "no program bound before draw"); return 1; }
+#ifndef DM_TEST_DBOUNDS_EMPTY_DRAWN   // negative control of gfx/tests t_dbounds only: drawn with the bounds as they are
+    if (S.db_en && (S.db_lo > S.db_hi || S.db_lo > 1 || S.db_hi < 0)) return 1;   // depth bounds that admit no stored depth (plan item 64c): Metal takes only 0 <= lo <= hi <= 1
+#endif
+    return 0;
+}
 void nvn_exec(const uint8_t *p) {
     static int inited; if (!inited) { inited = 1; st_reset(); nvn_be_reset(); }
     static int dump_all = -1; if (dump_all < 0) dump_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;

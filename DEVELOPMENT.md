@@ -210,10 +210,9 @@ decide):
   what is decided and what is executed: the replay state (`S`, `R`) and the commands that only set it (batch 96), pass planning's own
   decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
   hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99), the execution interface (`nvn_backend.h`) with the
-  replay loop in `core/exec.c` (batch 100), SetRenderTargets, the clears and conditional rendering (batch 101); next `mtl/draw.inc` split
-  (the draw's decisions from its encoding, the copies apart), then the file-scope variables grouped by module and the parts as their own
-  translation units; then `hle_nvn.c` by its sections, `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user,
-  2026-10-24: no Android for now, a clean base first).
+  replay loop in `core/exec.c` (batch 100), SetRenderTargets, the clears and conditional rendering (batch 101), `mtl/draw.inc` split (batch
+  102); next the file-scope variables grouped by module and the parts as their own translation units; then `hle_nvn.c` by its sections,
+  `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -445,3 +444,13 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   builds at once, each test recipe's commands several at once with a failure run again alone and still counted, the smoke runs on an idle
   machine); `make run-m3` copies the tests with their times, so make rebuilds only what changed. The backend's warnings as before; the pass
   dumps of 15 gfx tests line for line as before. Smoke: the same red lines and frames.
+- [x] batch 102 · 264, the draw part split: the copies between buffers and textures, the texel reads and writes and the texture clears go from
+  `mtl/draw.inc` to `mtl/copies.inc`, and the submission's failure-line context (`cctx_snap`) to the start of `mtl/exec.inc`, so the
+  preprocessed backend stays byte for byte the same (`clang -E -P`, Metal 4 and Metal 3). `draw()` is three stages: what keeps the draw from
+  drawing or comes before it (`draw_admit`), the render pass it draws in (`draw_pass`), its encoding (`draw_encode`); the first checks, which
+  need only the state (rendering off, no program, depth bounds that admit no depth), are `exec_draw_dropped` in `core/exec.c`, still asked
+  first by `draw()` (also how kept and merged draws are drawn again). `t_core_exec` +6 (34; `t_dbounds`'s `-DDM_TEST_DBOUNDS_EMPTY_DRAWN`
+  fails 1 there; in `t_dbounds` still 2 without the Metal debug layer and Metal's assertion with it, as before, now noted there). The
+  backend's warnings as before (24 of them now say the encoder is a `const __strong` parameter); the pass dumps of 19 gfx tests line for line
+  as before; the submit path's instructions per draw within the spread of batches 96-101 (at its top at three of six checkpoints, under 0.5 %
+  from the bottom). Smoke: the same red lines and frames.

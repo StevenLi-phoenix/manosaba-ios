@@ -4,7 +4,7 @@
 // then lands where the stored depth is within the bounds, inclusive:
 //   on [0.2, 0.3]: the first two; on [0.3, 0.2]: none; off: all; on [0, 1]: all; on [0.5, 2] (clamped to 1): 0.5, 0.75, 1.0; on [1.5, 2]: none
 // 36 texels. Not given to Metal (-DDM_TEST_DBOUNDS_NOT_SET): 2 fail; bounds that admit nothing drawn as they are (-DDM_TEST_DBOUNDS_EMPTY_DRAWN;
-// Metal takes 0 <= min <= max <= 1 only): 2 fail.
+// Metal takes 0 <= min <= max <= 1 only): 2 fail (under the Metal debug layer it stops at Metal's own assertion on those bounds).
 #include "../nvn/nvn_mtl.m"
 #include "../nvn/hle_nvn.c"
 const dm_game_profile dm_game = { .id = "test", .nvn_api_major = 55, .nvn_api_minor = 15, .nvn_c2 = {0x168, 128, 0x568, 128, 0x120, 8}, .nvn_depth_mode = 1 };

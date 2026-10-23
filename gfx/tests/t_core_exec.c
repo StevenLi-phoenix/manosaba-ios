@@ -7,7 +7,9 @@
 // the submission. A list that calls itself stops 64 lists deep. SetRenderTargets: new targets end the open pass; the same targets continue it,
 // not a pass opened for clears only nor with clears pending; another layer goes on in a layered pass; a waiting deferred group's Q ends the pass
 // and takes Q's targets. Clears: the next pass's load action with no pass open, drawn inside one or under a partial mask; a continued pass ended
-// first; none while rendering is off; a depth clear with a partial stencil mask drawn. SetRenderEnable decides whether clears are dropped.
+// first; none while rendering is off; a depth clear with a partial stencil mask drawn. SetRenderEnable decides whether clears are dropped. A
+// draw drawing nothing whatever its pass: rendering off (counted under a conditional on a pending result), no program, depth bounds that admit
+// no depth (t_dbounds's -DDM_TEST_DBOUNDS_EMPTY_DRAWN fails 1 here too).
 // The call itself pushed for the caller instead of the op after it (-DDM_TEST_EXEC_RET_AT_CALL, a broken variant): 1 fails. A clear inside an
 // open pass taken as the next pass's load action (-DDM_TEST_EXEC_CLEAR_IN_PASS, the other): 1 fails.
 #include "../nvn/core/exec.h"
@@ -148,6 +150,14 @@ int main(void) {
     R.rt.depth = &B; p_clear_ds dpart = {1.0f, 1, 0, 0x0f}, dfull = {0.5f, 1, 0, 0};
     ONE(OP_CLEAR_DS, dpart); check("a depth clear with a partial stencil mask: drawn", 0, strcmp(joined(), "clear_ds_quad"));
     ONE(OP_CLEAR_DS, dfull); check("a depth clear alone: the load action", 1, g_nlog == 0 && R.clear_d && R.cd == 0.5);
+    static prog_t pg; S.prog = &pg; S.db_en = 0; g_render_off = 0; g_rc_on_pending = 0;
+    check("a draw with a program, rendering on: not dropped", 0, exec_draw_dropped());
+    g_render_off = 1; g_rc_on_pending = 1; uint64_t pd0 = g_rc_pend_draws;
+    check("rendering off: dropped, counted under a conditional on a pending result", 1, exec_draw_dropped() && g_rc_pend_draws == pd0); g_render_off = 0;
+    check("... with rendering on under it, the draw counted", 1, !exec_draw_dropped() && g_rc_pend_draws == pd0 + 1); g_rc_on_pending = 0;
+    S.prog = NULL; check("no program: dropped", 1, exec_draw_dropped()); S.prog = &pg;
+    S.db_en = 1; S.db_lo = 0.7f; S.db_hi = 0.3f; check("depth bounds that admit no depth: dropped [t_dbounds's -DDM_TEST_DBOUNDS_EMPTY_DRAWN]", 1, exec_draw_dropped());
+    S.db_lo = 0.2f; S.db_hi = 0.8f; check("... bounds that admit some: not", 0, exec_draw_dropped()); S.db_en = 0;
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

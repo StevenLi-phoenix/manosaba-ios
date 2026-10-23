@@ -7,3 +7,4 @@
 #include "../nvn_obj.h"
 
 extern uint32_t g_sub_work;   // draws, dispatches, copies and clears replayed in this submission so far (counter timestamps, nvn_ts.h; the backend zeroes it)
+int exec_draw_dropped(void);   // The current draw draws nothing whatever its pass (rendering off, no program, depth bounds admitting no depth)
