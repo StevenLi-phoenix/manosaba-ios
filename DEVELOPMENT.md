@@ -200,6 +200,15 @@ iPads are not tried (GPUs without BC turn BC1 into ASTC and decompress the other
 
 The open plan items, shortened (their history: the archive under the same number), by what they need. New items continue from 260.
 
+The codebase (2026-10-24, the user: the Metal backend in one 10,000-line file is the first thing to fix, before Android; what stays is mine to
+decide):
+- 262 the single-draw kernel passes of 217 removed: off by default and no GPU time saved on the iPhone (the code, `nvn_kpass.h`,
+  `gfx/tools/dmsh_kernel.py`, `t_kpass`, `t_kpnvn`, `t_dmsh_kernel.py`, `games/totk/kernel_shaders.txt`); git history keeps them.
+- 263 the other switches off by default traced to their origin and measurement (`DM_NVN_RT_RANGE`, spread over ten parts with no recorded
+  result, first), each kept as a diagnostic, kept as an option with its numbers written down, or removed.
+- 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
+  counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
+
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
   against 56.0). Upstream's controller counts only the first 3 frames of a run of dropped frames unless the run lasts 1 s; its GPU-time rule does
@@ -263,3 +272,13 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   +7 (the rewrite, and a library compiled with iOS's flags calling `air.fmin` / `fmax` / `clamp` and no fast one); `T_MSL_PRECISE_OFF=1` fails 3.
   Smoke: Tears of the Kingdom's two red lines as before and its prologue frames the same by eye, manosaba's shots identical. The iPhone 17 Pro's
   (A19 Pro) own `fast::` results were not measured.
+- [x] batch 86 · 261 the Metal backend split by subject: `gfx/nvn/nvn_mtl.m` (10,113 lines, 914 KB, 356 file-scope variables) keeps the
+  device, queues, residency and deferred releases (295 lines) and includes 38 parts from `gfx/nvn/mtl/` in the original order, each a
+  contiguous run of the old file cut where conditionals, braces and `@implementation` are closed (`work/scripts/split_mtl.py`, not in git).
+  One translation unit as before: preprocessed (`clang -E -P`) for the Mac on Metal 4 and Metal 3 and for iOS 26 and iOS 18, the old file and the
+  split give the same text but for blank lines and the 19 `__LINE__` values of 217's `KP_NO` (a pass dump's line numbers). The parts' quoted
+  includes go one directory up; `host/Makefile` and `gfx/tests/Makefile` list the parts as headers, `t_red_once.py` reads them; the file
+  table of `gfx/README.md` names each part. `tools/tests/t_mtl_parts.py` (6 checks: each part included once and none left out, each opening
+  with its name, closing every conditional, brace and `@implementation` it opens, its includes resolving, both Makefiles rebuilding on a
+  change); a part with an `#if` left open (`T_MTL_PARTS_BROKEN=1`) fails 1. Batch tests as in batch 85; smoke: the same red lines, the
+  frames as batch 85's but for the animation's timing (looked at).

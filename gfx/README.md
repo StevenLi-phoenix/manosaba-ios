@@ -23,7 +23,7 @@ them anyway): they are translated offline, once, into Metal libraries.
 ### Record and replay
 
 - **Interface layer `nvn/hle_nvn.c`**: object implementations, and recording of command buffer calls into the command memory the game provides.
-- **Replay layer `nvn/nvn_mtl.m`**: replays the records as Metal commands at submit time.
+- **Replay layer `nvn/nvn_mtl.m`** with its parts in `nvn/mtl/`: replays the records as Metal commands at submit time.
   - Memory pools become zero-copy `MTLBuffer`s on the game's memory; GPU address = CPU address, so only unified-memory devices are supported.
   - GPU completion effects (sync objects, events, counters) become visible only after the Metal command buffer has completed.
   - Pipeline and depth-stencil states are cached by state hash.
@@ -81,7 +81,45 @@ Binding conventions used by the translation:
 | Location | Contents |
 |---|---|
 | `nvn/hle_nvn.c` | Interface layer: NVN takeover, objects, command recording, presentation pacing, `DM_SHDUMP` capture |
-| `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: Metal device, memory pools, textures, shader loading, pipelines, draws, presentation |
+| `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: the Metal device, queues, residency and deferred releases, then the parts below, included in this order (one translation unit, plan item 261) |
+| `nvn/mtl/pools.inc` | Memory pools: the pool table, GPU addresses of guest memory and the buffers behind them |
+| `nvn/mtl/occlusion.inc` | Occlusion queries (samples passed) and the report writes still pending |
+| `nvn/mtl/usnap.inc` | Uniform snapshots: each submission's copies of the uniform ranges it binds |
+| `nvn/mtl/capture.inc` | The submit call's view for the translation thread (plan item 61) and the snapshot lookups on it |
+| `nvn/mtl/encoders.inc` | The encoder layer: Metal 4 / Metal 3 encoder wrappers, blits, inline updates, events, counters, timestamps |
+| `nvn/mtl/frame_timing.inc` | Boot instrumentation, per-frame GPU time, same-process alternating measurement (DM_NVN_UB), GPU time tags, DM_NVN_GPUWATCH |
+| `nvn/mtl/keepalive.inc` | GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE) |
+| `nvn/mtl/commit.inc` | The GPU memory budget, submission commits, fences, waits and drains |
+| `nvn/mtl/textures.inc` | Textures as Metal textures, and GPU textures sharing one storage |
+| `nvn/mtl/upload.inc` | Texture uploads: batches, staging blocks, BC on GPUs without it, texture descriptors |
+| `nvn/mtl/writeback.inc` | CPU-filled textures, and GPU results written back when the CPU invalidates a pool |
+| `nvn/mtl/rtheap.inc` | Render targets of virtual pools in a heap, the memory census, the finalize queue |
+| `nvn/mtl/live.inc` | The live texture at a storage address, texture snapshots and releases |
+| `nvn/mtl/passes.inc` | Render pass bookkeeping: zero-source skip, the pass dump (PD), attachment use |
+| `nvn/mtl/tbdr_xv.inc` | TBDR rewrite switches and the cross-submission attachment validity ledger |
+| `nvn/mtl/chunks.inc` | Mid-submission commits (MacNativeGames' TOTK_CHUNK_DRAWS) |
+| `nvn/mtl/passgpu.inc` | GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49) |
+| `nvn/mtl/renderpass.inc` | Render passes: encoder labels, block-compressed targets, attachments, pass begin / end, clears |
+| `nvn/mtl/shaders.inc` | The shader mapping table, programs, pipeline lists |
+| `nvn/mtl/descriptors.inc` | Texture and sampler descriptor pools, argument arenas |
+| `nvn/mtl/pipeline.inc` | Draw state, vertex formats, blending, pipeline states, the pipeline prediction |
+| `nvn/mtl/border_warm.inc` | Sampler border colours in the shader (plan item 161), the pipeline warm-up, depth-stencil states |
+| `nvn/mtl/args.inc` | Argument buffers: dummy resources, bindings, the driver segment fill |
+| `nvn/mtl/uniform_rename.inc` | Inline uniform updates without ending the render pass |
+| `nvn/mtl/encode_args.inc` | Draws that sample what their own pass draws (plan item 42), argument encoding |
+| `nvn/mtl/lookahead.inc` | Pass lookahead: deferral, hoisting, depth / stencil use, store decisions, first-draw coverage, feedback copies |
+| `nvn/mtl/store_index.inc` | The store lookahead index (one scan per submission) |
+| `nvn/mtl/tile_merge.inc` | Readable tile render pass merge |
+| `nvn/mtl/u8_layers.inc` | 8-bit indices the GPU wrote, and layered passes |
+| `nvn/mtl/metalfx_scene.inc` | MetalFX for the game's own upscale of its scene (plan item 63) |
+| `nvn/mtl/kpass.inc` | Single-draw passes as compute kernels (plan item 217, opt-in) |
+| `nvn/mtl/draw.inc` | Draws, dispatches, copies, texel reads and writes, clears |
+| `nvn/mtl/exec.inc` | The power-saving mode and the replay loop (mtl_exec) |
+| `nvn/mtl/shot.inc` | Present screenshots |
+| `nvn/mtl/texdump.inc` | Texture dumps and snapshots (DM_NVN_TEXDUMP, DM_NVN_TEXSNAP), presented times |
+| `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |
+| `nvn/mtl/present.inc` | MetalFX upscaling of the presented picture, live shots, the perf line, present_now |
+| `nvn/mtl/present_thread.inc` | The present thread and the display link, statistics getters |
 | `nvn/nvn_obj.h` | Host object layouts and the command record format, shared by both layers |
 | `nvn/nvn_entry.S`, `nvn/nvn_thunks.S` | Unimplemented stub and timing wrapper entries; per-function thunks (generated) |
 | `nvn/nvn_tex.c`, `nvn/nvn_tex.h` | Block-linear texture storage size, alignment and per-level offsets (ported from deko3d) |

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""RED_ONCE tags (gfx/nvn/nvn_mtl.m, plan item 125): a red line printed once per tag, so a tag shared by two unrelated messages silenced the second
+"""RED_ONCE tags (gfx/nvn/nvn_mtl.m and its parts in gfx/nvn/mtl, plan item 125): a red line printed once per tag, so a tag shared by two unrelated messages silenced the second
 for good once the first fired (13 of 74 tags were). Every RED_ONCE in gfx/nvn has a numeric tag and a message literal, each tag one message (the
 same message may repeat), and every tag fits the g_red_once array. A copy with a duplicated tag (T_RED_ONCE_SRC=<file>, by hand) fails 1."""
 import glob, os, re, sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
-srcs = [os.environ['T_RED_ONCE_SRC']] if os.environ.get('T_RED_ONCE_SRC') else sorted(glob.glob(os.path.join(ROOT, 'gfx', 'nvn', '*.[cmh]')))
+srcs = [os.environ['T_RED_ONCE_SRC']] if os.environ.get('T_RED_ONCE_SRC') else sorted(glob.glob(os.path.join(ROOT, 'gfx', 'nvn', '*.[cmh]')) + glob.glob(os.path.join(ROOT, 'gfx', 'nvn', 'mtl', '*.inc')))
 fails = total = 0
 def check(name, ok):
     global fails, total

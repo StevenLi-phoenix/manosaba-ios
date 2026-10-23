@@ -56,7 +56,7 @@ SRC = \
 	$(sort $(wildcard $(GAMEDIR)/*.c $(GAMEDIR)/*.m))
 # NVN → Metal and nn::vi (gfx/): sources under gfx, gfx/nvn and gfx/tex by wildcard (tests/ and metal/ are not part of the host)
 GFX = $(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
-GFX_H = $(sort $(wildcard ../gfx/nvn/*.h ../gfx/nvn/include/*.h ../gfx/tex/*.h))
+GFX_H = $(sort $(wildcard ../gfx/nvn/*.h ../gfx/nvn/mtl/*.inc ../gfx/nvn/include/*.h ../gfx/tex/*.h))   # mtl/*.inc: the parts nvn_mtl.m includes
 HDR = $(wildcard *.h) $(GFX_H) $(wildcard $(GAMEDIR)/*.h)
 FRAMEWORKS = -framework Cocoa -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework CoreAudio -framework ImageIO \
 	-framework UniformTypeIdentifiers -framework GameController -framework CoreHaptics -framework IOKit -framework Network -framework AVFoundation -framework CoreMedia -framework CoreVideo
