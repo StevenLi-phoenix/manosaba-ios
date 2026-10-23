@@ -206,6 +206,12 @@ decide):
   result, first), each kept as a diagnostic, kept as an option with its numbers written down, or removed.
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
+  In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
+  little Metal (store index done in batch 88; then uniform snapshots, the TBDR switches and validity ledger, occlusion, frame timing, the live
+  texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
+  is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
+  covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
+  interface covers what manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -286,3 +292,17 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   `games/totk/kernel_shaders.txt` and the switches' rows in `gfx/README.md`; the kernels left in the workspace's chain folders went too. The
   backend is the one before 217 again: preprocessed for the four configurations (Metal 4 and Metal 3 on the Mac and iOS), it is the same text
   as 55de9bf's `nvn_mtl.m` with today's headers but for blank lines, and `hle_nvn.c` the same file. Git history keeps all of it (b921a1e).
+- [x] batch 88 · 264, its first module: the store lookahead index in plain C. `gfx/nvn/core/` starts: its own translation units, no Metal,
+  Objective-C or Grand Central Dispatch, a header for all the backend may use of a module and, under "The backend provides", what the module
+  asks of the backend. `core.h` / `core.c` hold `MLOG`, `MDIE` and `RED_ONCE` with `g_red_once` (the backend's, the same lines);
+  `rt.h` a mip level's extent, an attachment's subresource and whether a scissor covers a target; `prog.c` `prog_bind` (the program per
+  stage); `store_index.c` the index (the scan, the buckets, the replay order check `sdx_seq`, the decision `sdx_first`), its state in
+  `g_sdx`. The backend gives it a program's reflection per stage (`nvn_be_prog_refl`) and a binding record's texture serials
+  (`nvn_be_bind_sers`); `mtl/store_index.inc` keeps the build at the submit's start and the ledger's check, `hoist_try` moves to
+  `mtl/lookahead.inc`, `tile_merge` reads `g_sdx`. Both Makefiles build `core/*.c` (the iOS app follows the host's command). Tests:
+  `gfx/tests/t_core_store_index.c` (35 checks on synthetic streams, the backend faked; a set-before-the-end attachment counting as set again,
+  `-DDM_TEST_SDX_ANY_RTSEQ`, fails 2), `t_core_prog.c` (11; the whole program replaced, `-DDM_TEST_PROG_BIND_WHOLE`, fails 6),
+  `tools/tests/t_core.py` (6: the files compile as plain C and include no framework or backend part, both Makefiles take them, each module
+  has its test; a module importing Metal, `T_CORE_BROKEN=1`, fails 2); `t_red_once.py` reads `core/`. The backend's warnings are HEAD's.
+  Batch tests as in batch 87. Smoke: the same red lines and frames (manosaba's title by eye: particles and the fade's timing); the store
+  statistics of manosaba's log moved within what equivalent builds show run to run (b85 → b86: 5 of 13 lines).

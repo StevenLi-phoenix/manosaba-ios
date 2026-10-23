@@ -190,22 +190,22 @@ static const uint8_t *defer_cont(int *ci) {   // The next segment after a list e
 // Deferral pre-screen (binary search on the store lookahead index, zero scanning): for every color subresource of P, the first "used as attachment / cleared" event after this draw must be "used as attachment under a different SetRenderTargets,
 // whose targets cover all of P's colors"; cleared first / never used as attachment again in this submit -> deferral is impossible, return directly. Read events carry no level; handed to the full lookahead to check by level.
 static int defer_pre(void) {
-    if (!g_sdx_ok || !g_exec_cur || !g_exec_seq || g_sdx_op[g_exec_seq - 1] != g_exec_cur) return 0;
-    uint32_t P = g_exec_seq - 1;
+    if (!g_sdx.ok || !g_exec_cur || !g_sdx.exec_seq || g_sdx.op[g_sdx.exec_seq - 1] != g_exec_cur) return 0;
+    uint32_t P = g_sdx.exec_seq - 1;
     for (int k = 0; k < R.rt.n; k++) { if (!R.rt.color[k]) continue;
         uint64_t ser; int lv, sl; rt_sub(&R.rt, k, &ser, &lv, &sl);
         int b = sdx_bucket(ser, 0); if (b < 0) return 0;
-        uint32_t lo = g_sdx_bst[b], end = g_sdx_bst[b + 1], hi = end;
-        while (lo < hi) { uint32_t m = (lo + hi) / 2; if (g_sdx[m].seq <= P) lo = m + 1; else hi = m; }
-        int ok = 0, same = 0; uint32_t walk = 0, prt = lo > g_sdx_bst[b] && g_sdx[lo - 1].seq == P ? g_sdx[lo - 1].rtseq : SDX_NONE;   // SetRenderTargets sequence number of P's own render pass (taken from this draw's used-as-attachment event)
-        for (uint32_t j = lo; j < end; j++) { const sdx_ev *e = &g_sdx[j];
+        uint32_t lo = g_sdx.bst[b], end = g_sdx.bst[b + 1], hi = end;
+        while (lo < hi) { uint32_t m = (lo + hi) / 2; if (g_sdx.ev[m].seq <= P) lo = m + 1; else hi = m; }
+        int ok = 0, same = 0; uint32_t walk = 0, prt = lo > g_sdx.bst[b] && g_sdx.ev[lo - 1].seq == P ? g_sdx.ev[lo - 1].rtseq : SDX_NONE;   // SetRenderTargets sequence number of P's own render pass (taken from this draw's used-as-attachment event)
+        for (uint32_t j = lo; j < end; j++) { const sdx_ev *e = &g_sdx.ev[j];
             if (++walk > 64) return 0;   // Too many events (a heavily sampled texture): not taken as a candidate, conservative and avoids a long walk
             if (g_hoist_n && hoist_skipped(e->op)) continue;
             if (e->kind == SDX_READ || e->kind == SDX_NEED) continue;   // Read events carry no level (reading another level is not a conflict); handed to the full lookahead to check by level
             if (e->plane != 0 || e->lv != lv || e->sl != sl) continue;
             if (e->kind == SDX_CLEAR) return 0;
-            if (e->rtseq == SDX_NONE || e->rtseq >= g_sdx_nop) return 0;
-            const uint8_t *rop = g_sdx_op[e->rtseq]; const p_set_rt *r = (const p_set_rt *)(rop + 8);
+            if (e->rtseq == SDX_NONE || e->rtseq >= g_sdx.nop) return 0;
+            const uint8_t *rop = g_sdx.op[e->rtseq]; const p_set_rt *r = (const p_set_rt *)(rop + 8);
             if (rt_same(r, &R.rt)) { if (e->rtseq != prt) same = 1; continue; }   // Same target: one immediately following is a continuation segment of P, one separated by other render passes is Q; the pre-screen does not distinguish them, and if there is still no other candidate at the end it is handed to the full lookahead
             for (int i = 0; i < R.rt.n; i++) { if (!R.rt.color[i]) continue; int f = 0;
                 for (int q = 0; q < r->n && !f; q++) if (r->color[q] && sub_eq(&R.rt, i, r, q)) f = 1;
@@ -310,20 +310,20 @@ q_found:
 // samples some color attachment of the earlier pass", i.e. there is an SDX_READ event for that attachment at that draw's sequence number. If not satisfied there is certainly no merge, saving the per-operation scan below;
 // only if satisfied does it go through the original planning (the decision is exactly the same as without the pre-screen). When the index is unavailable, plan as before.
 static int fz_prefilter(void) {
-    if (!g_sdx_ok || !g_exec_seq || g_sdx_op[g_exec_seq - 1] != g_exec_cur) return 1;
-    uint32_t P = g_exec_seq - 1, lo = 0, hi = g_rtx_n;
-    while (lo < hi) { uint32_t m = (lo + hi) / 2; if (g_rtx_seq[m] <= P) lo = m + 1; else hi = m; }
-    for (; lo < g_rtx_n; lo++) { const uint8_t *op = g_sdx_op[g_rtx_seq[lo]]; if (g_hoist_n && hoist_skipped(op)) continue; if (!rt_same(&R.rt, (const p_set_rt *)(op + 8))) break; }
-    if (lo >= g_rtx_n) return 0;
-    uint32_t r2 = g_rtx_seq[lo], a = 0, b = g_drx_n;
-    while (a < b) { uint32_t m = (a + b) / 2; if (g_drx_seq[m] <= r2) a = m + 1; else b = m; }
-    if (a >= g_drx_n) return 0;
-    uint32_t fd = g_drx_seq[a];
-    for (uint32_t k = lo + 1; k < g_rtx_n && g_rtx_seq[k] < fd; k++) if (!(g_hoist_n && hoist_skipped(g_sdx_op[g_rtx_seq[k]]))) return 0;   // The target changes again before the first draw: step two of the original planning gives up as well
+    if (!g_sdx.ok || !g_sdx.exec_seq || g_sdx.op[g_sdx.exec_seq - 1] != g_exec_cur) return 1;
+    uint32_t P = g_sdx.exec_seq - 1, lo = 0, hi = g_sdx.nrtx;
+    while (lo < hi) { uint32_t m = (lo + hi) / 2; if (g_sdx.rtx[m] <= P) lo = m + 1; else hi = m; }
+    for (; lo < g_sdx.nrtx; lo++) { const uint8_t *op = g_sdx.op[g_sdx.rtx[lo]]; if (g_hoist_n && hoist_skipped(op)) continue; if (!rt_same(&R.rt, (const p_set_rt *)(op + 8))) break; }
+    if (lo >= g_sdx.nrtx) return 0;
+    uint32_t r2 = g_sdx.rtx[lo], a = 0, b = g_sdx.ndrx;
+    while (a < b) { uint32_t m = (a + b) / 2; if (g_sdx.drx[m] <= r2) a = m + 1; else b = m; }
+    if (a >= g_sdx.ndrx) return 0;
+    uint32_t fd = g_sdx.drx[a];
+    for (uint32_t k = lo + 1; k < g_sdx.nrtx && g_sdx.rtx[k] < fd; k++) if (!(g_hoist_n && hoist_skipped(g_sdx.op[g_sdx.rtx[k]]))) return 0;   // The target changes again before the first draw: step two of the original planning gives up as well
     for (int j = 0; j < R.rt.n && j < 8; j++) { if (!R.rt.color[j]) continue; int bk = sdx_bucket(R.rt.color[j]->serial, 0); if (bk < 0) continue;
-        uint32_t e0 = g_sdx_bst[bk], e1 = g_sdx_bst[bk + 1];
-        while (e0 < e1) { uint32_t m = (e0 + e1) / 2; if (g_sdx[m].seq < fd) e0 = m + 1; else e1 = m; }
-        for (; e0 < g_sdx_bst[bk + 1] && g_sdx[e0].seq == fd; e0++) if (g_sdx[e0].kind == SDX_READ) return 1; }
+        uint32_t e0 = g_sdx.bst[bk], e1 = g_sdx.bst[bk + 1];
+        while (e0 < e1) { uint32_t m = (e0 + e1) / 2; if (g_sdx.ev[m].seq < fd) e0 = m + 1; else e1 = m; }
+        for (; e0 < g_sdx.bst[bk + 1] && g_sdx.ev[e0].seq == fd; e0++) if (g_sdx.ev[e0].kind == SDX_READ) return 1; }
     return 0;
 }
 static void fuse_try(void) {

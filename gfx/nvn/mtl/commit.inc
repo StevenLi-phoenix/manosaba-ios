@@ -137,8 +137,6 @@ void mtl_drain(void) { @autoreleasepool { present_drop_for_suspend(); mtl_presen
 
 // ================= Render replay =================
 #include "../../../host/front.h"
-static int g_red_once[120];
-#define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("[red] " __VA_ARGS__); } while (0)
 // A storage binding's buffer: one whose range runs past the end of its pool binds from the pool it starts in (plan item 233, after nxport 79b736d,
 // MIT). Pools are Metal buffers of their own here, so what lies past the end is not the next pool as in the console's address space; the shader
 // reaches what it uses from the start. Before, such a binding, and one in no pool, fell silently to the dummy buffer: the GPU's writes were lost

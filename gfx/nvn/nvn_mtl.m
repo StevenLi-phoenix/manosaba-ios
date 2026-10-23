@@ -72,6 +72,10 @@
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree
 #include "nvn_hmap.h"
 #include "nvn_pace.h"
+#include "core/core.h"   // the replay's decisions in plain C (plan item 264): MLOG / MDIE / RED_ONCE, and the modules below
+#include "core/rt.h"
+#include "core/prog.h"
+#include "core/store_index.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
@@ -89,9 +93,6 @@
 #include <os/lock.h>
 // Function parameters in this file are never retained again in the callee (the caller / global tables already hold them, and lifetime is guaranteed by defer_obj_release): saves a retain / release pair per call on the hot path
 #pragma clang attribute push(__attribute__((objc_externally_retained)), apply_to = function)
-
-#define MLOG(...) do { fprintf(stderr, "[dm] [nvn-mtl] " __VA_ARGS__); fputc('\n', stderr); } while (0)
-#define MDIE(...) do { MLOG("FATAL " __VA_ARGS__); abort(); } while (0)
 
 static void warm_start(void);
 static void warm_claim(void);

@@ -24,6 +24,8 @@ them anyway): they are translated offline, once, into Metal libraries.
 
 - **Interface layer `nvn/hle_nvn.c`**: object implementations, and recording of command buffer calls into the command memory the game provides.
 - **Replay layer `nvn/nvn_mtl.m`** with its parts in `nvn/mtl/`: replays the records as Metal commands at submit time.
+  - The decisions that need no Metal are moving to `nvn/core/` (plan item 264): plain C modules, each its own translation unit with a header,
+    for a second backend (Vulkan) to share. What a module needs of the backend its header declares ("The backend provides").
   - Memory pools become zero-copy `MTLBuffer`s on the game's memory; GPU address = CPU address, so only unified-memory devices are supported.
   - GPU completion effects (sync objects, events, counters) become visible only after the Metal command buffer has completed.
   - Pipeline and depth-stencil states are cached by state hash.
@@ -104,8 +106,8 @@ Binding conventions used by the translation:
 | `nvn/mtl/args.inc` | Argument buffers: dummy resources, bindings, the driver segment fill |
 | `nvn/mtl/uniform_rename.inc` | Inline uniform updates without ending the render pass |
 | `nvn/mtl/encode_args.inc` | Draws that sample what their own pass draws (plan item 42), argument encoding |
-| `nvn/mtl/lookahead.inc` | Pass lookahead: deferral, hoisting, depth / stencil use, store decisions, first-draw coverage, feedback copies |
-| `nvn/mtl/store_index.inc` | The store lookahead index (one scan per submission) |
+| `nvn/mtl/lookahead.inc` | Pass lookahead: deferral, hoisting (hoist_try), depth / stencil use, store decisions, first-draw coverage, feedback copies |
+| `nvn/mtl/store_index.inc` | The store lookahead index's backend side: what the index needs of the backend, its build at the start of a submit, the ledger's check against it |
 | `nvn/mtl/tile_merge.inc` | Readable tile render pass merge |
 | `nvn/mtl/u8_layers.inc` | 8-bit indices the GPU wrote, and layered passes |
 | `nvn/mtl/metalfx_scene.inc` | MetalFX for the game's own upscale of its scene (plan item 63) |
@@ -116,6 +118,10 @@ Binding conventions used by the translation:
 | `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |
 | `nvn/mtl/present.inc` | MetalFX upscaling of the presented picture, live shots, the perf line, present_now |
 | `nvn/mtl/present_thread.inc` | The present thread and the display link, statistics getters |
+| `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend |
+| `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target |
+| `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
+| `nvn/core/store_index.c`, `nvn/core/store_index.h` | The store lookahead index: one scan per submission, the first valid event after a pass end decides each attachment's write-back |
 | `nvn/nvn_obj.h` | Host object layouts and the command record format, shared by both layers |
 | `nvn/nvn_entry.S`, `nvn/nvn_thunks.S` | Unimplemented stub and timing wrapper entries; per-function thunks (generated) |
 | `nvn/nvn_tex.c`, `nvn/nvn_tex.h` | Block-linear texture storage size, alignment and per-level offsets (ported from deko3d) |
@@ -203,7 +209,7 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 
 ## Known limitations
 
-Paths that are not implemented log a red line once when reached (`RED_ONCE` in `nvn/nvn_mtl.m`): clears in the middle of a render pass and color
+Paths that are not implemented log a red line once when reached (`RED_ONCE`, `nvn/core/core.h`): clears in the middle of a render pass and color
 clears with a partial mask or scissor; indexed quads and 8-bit indices; some texture-to-texture copies and texture clears.
 
 The functions in `g_nops` (`nvn/hle_nvn.c`), such as `MultiDraw*IndirectCount`, `DispatchComputeIndirect`, `SetDepthBounds` and

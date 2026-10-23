@@ -116,7 +116,11 @@ static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
 // Different levels / layers of the same texture are decided separately (a downsample chain writes level k and reads level k−1); a sampler binding counts as a read of the whole texture (conservative)
 static const uint8_t *g_exec_cur;   // The op currently being replayed (inclusive)
 static void sd_need(sd_att *t, int why) { if (!t->state) { t->state = 1; t->why = (uint8_t)why; } }   // why: 1 a draw reads it as a texture 2 as an attachment, drawn before cleared 3 copy 4 texture clear 5 scanned to the end undecided 6 no start point / index unavailable
-static int sdx_decide(uint8_t st[9]);   // Store lookahead decision (for the index see mtl_sub_index)
+static int sdx_decide(uint8_t st[9]) {   // Store lookahead decision by the index (gfx/nvn/core/store_index.c; built by mtl_sub_index): st[i] 2 redundant, otherwise why << 2 (the reason it is needed, same as sd_need). Returns 0 = index unavailable
+    uint32_t P; if (!sdx_pos(g_exec_cur, &P)) return 0;
+    for (int i = 0; i < g_nsd; i++) st[i] = sdx_first(g_sd[i].ser, g_sd[i].lv, g_sd[i].sl, g_sd[i].depth, P, g_hoist_skip, g_hoist_n);
+    return 1;
+}
 static void sd_finish(void) {
     if (!g_nsd) return;
     if (!tbdr_part(TBP_STORE)) {   // All optimizations off: always write back
@@ -240,7 +244,6 @@ static int state_op(uint32_t op, const void *a) {
     return 1;
 }
 
-static void rt_sub(const p_set_rt *r, int k, uint64_t *ser, int *lv, int *sl);
 
 // Prediction for parallel precompilation (see the note before pso_get): scan from after the current operation to the end of this submit, replaying only state; at a draw, compute the pipeline key from "the state at that time + that render pass's attachment formats" and dispatch those not yet built to the background.
 // Whether a render pass actually attaches depth / stencil is only decided at replay (depth-only / stencil-only / neither attached are omitted), so one key is computed for each possible attach mode -- guessing too many only means wasted background compiles and does not affect the result.
@@ -587,3 +590,71 @@ static int pass_ds_need(void) {
 // Equivalence conditions (hoist only if all hold, otherwise leave as-is): the scan range has only draws, state and these clears, no copies / dispatches / texture clears / sub-lists; the cleared subresources (texture + level + layer)
 // are disjoint from this render pass's attachments; the cleared textures are neither on any current texture / image slot nor bound within the scan range (conservative: regardless of whether the program samples them); the scissor at the time of the clear covers the whole block (same requirement as executing at the original position)
 static uint64_t h_ser(uint64_t h) { int tid = h_tid(h); return tid ? atomic_load_explicit(&g_tser[tid], memory_order_relaxed) : 0; }
+static void hoist_try(void) {
+    if (g_hoist_n || !g_exec_next) return;
+    typedef struct { const uint8_t *rt_op; const p_set_rt *rt; uint8_t clear_c[8]; MTLClearColor cc[8]; uint8_t clear_d, clear_s; double cd; uint32_t cs;
+                     p_scissor sc; int has_sc; const uint8_t *ops[8]; int nops; } grp;
+    grp G[4]; int ng = 0, in_grp = 0; p_scissor sc = R.sc; int has_sc = R.has_sc;
+    // The binding set needed for "the cleared texture is not on any slot": the table is looked up only when a hoistable clear group is really found and we are back to this render pass's targets (the vast majority of render passes never get that far).
+    // Handles bound within the scan range are noted first and converted to texture serials together with the current slots at lookup time; the scan only reads commands and the current slots S do not change meanwhile, so the result is the same as checking at the start
+    uint64_t bh[512]; int nbh = 0;
+    const uint8_t *p = g_exec_next;
+    for (int guard = 0; guard < 200000; guard++) {
+        op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
+        switch (h.op) {
+            case OP_END: case OP_CALL: case OP_COPY_T2T: case OP_COPY_B2T: case OP_COPY_T2B: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_RENDER_ENABLE: return;   // clears are not moved across a render enable change
+            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
+            case OP_DRAW: case OP_DRAW_IDX: if (in_grp) return; break;
+            case OP_SCISSOR: sc = *(const p_scissor *)a; has_sc = 1; break;
+            case OP_BIND_TEX: case OP_BIND_IMG: { const p_bind_handles *b = a; bh_fresh(b); for (int k = 0; k < b->n && k < 32 && nbh < 512; k++) if (b->h[k]) bh[nbh++] = b->h[k]; break; }
+            case OP_CLEAR_COLOR: case OP_CLEAR_DS: {
+                if (!in_grp || G[ng - 1].nops >= 8) return;
+                grp *g = &G[ng - 1];
+                if (h.op == OP_CLEAR_COLOR) { const p_clear_color *c = a;
+                    if (c->index < 0 || c->index >= g->rt->n || !g->rt->color[c->index] || c->mask != 0xf) return;
+                    const tex_t *t = g->rt->color[c->index];
+                    if (has_sc && !(sc.x <= 0 && sc.y <= 0 && sc.x + sc.w >= (int)t->d.width && sc.y + sc.h >= (int)t->d.height)) return;
+                    g->clear_c[c->index] = 1; g->cc[c->index] = MTLClearColorMake(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]); }
+                else { const p_clear_ds *c = a; if (!g->rt->depth) return;
+                    if (!scissor_full_of(&sc, has_sc, g->rt->depth, &g->rt->dview, g->rt->has_dview) || ((c->stencil_mask & 255) && (c->stencil_mask & 255) != 255)) return;   // drawn as a triangle (clear_ds_quad), not a load action
+                    if (c->depth_mask) { g->clear_d = 1; g->cd = c->depth; } if (c->stencil_mask) { g->clear_s = 1; g->cs = (uint32_t)c->stencil; } }
+                g->sc = sc; g->has_sc = has_sc; g->ops[g->nops++] = p; break; }
+            case OP_SET_RT: { const p_set_rt *r = a;
+                if (rt_same(&R.rt, r)) {   // Back to this render pass's targets: execute if hoisting holds
+                    if (!ng) return;
+                    uint64_t bound[512]; int nb = 0;   // The order of the original "check at the start": the current slots (stage x textures 128 + images 32), followed by those bound within the scan range
+                    for (int st = 0; st < 6; st++) { for (int k = 0; k < 128 && nb < 512; k++) if (S.tex[st][k]) bound[nb++] = h_ser(S.tex[st][k]);
+                                                     for (int k = 0; k < 32 && nb < 512; k++) if (S.img[st][k]) bound[nb++] = h_ser(S.img[st][k]); }
+                    for (int k = 0; k < nbh && nb < 512; k++) bound[nb++] = h_ser(bh[k]);
+                    for (int gi = 0; gi < ng; gi++) {   // Disjoint and not bound
+                        grp *g = &G[gi]; if (!g->nops) return;
+                        for (int k = 0; k < 9; k++) { if (k < 8 ? !g->clear_c[k] : !(g->clear_d || g->clear_s)) continue;
+                            uint64_t ser; int lv, sl; rt_sub(g->rt, k, &ser, &lv, &sl); if (!ser) return;
+                            for (int j = 0; j < nb; j++) if (bound[j] == ser) return;
+                            for (int m = 0; m < 9; m++) { uint64_t s2; int l2, sl2; if (m < 8 && m >= R.rt.n) continue; rt_sub(&R.rt, m, &s2, &l2, &sl2);
+                                if (s2 == ser && l2 == lv && sl2 == sl) return; } } }
+                    // Register all skip entries first, then execute: when a hoisted render pass ends the store lookahead scans forward, and the clears at their original positions must already be in the skip set
+                    for (int gi = 0; gi < ng; gi++) { g_hoist_skip[g_hoist_n++] = G[gi].rt_op; for (int k = 0; k < G[gi].nops; k++) g_hoist_skip[g_hoist_n++] = G[gi].ops[k]; }
+                    p_set_rt rt0 = R.rt; p_scissor sc0 = R.sc; int hs0 = R.has_sc;   // This render pass's targets, scissor and pending clears: restored as they were after execution
+                    uint8_t cc0f[8]; MTLClearColor cc0[8]; uint8_t cd0f = R.clear_d, cs0f = R.clear_s; double cd0 = R.cd; uint32_t cs0 = R.cs;
+                    memcpy(cc0f, R.clear_c, 8); memcpy(cc0, R.cc, sizeof cc0);
+                    for (int gi = 0; gi < ng; gi++) {   // Execute: temporarily swap in that group's targets and clears and open a clear-only render pass
+                        grp *g = &G[gi];
+                        R.rt = *g->rt; memcpy(R.clear_c, g->clear_c, 8); memcpy(R.cc, g->cc, sizeof R.cc); R.clear_d = g->clear_d; R.clear_s = g->clear_s; R.cd = g->cd; R.cs = g->cs;
+                        R.sc = g->sc; R.has_sc = g->has_sc;
+                        PD("H %llu hoisted pure-clear pass (original position after this pass)", g_stat_pass + 1);
+                        rp_begin_ex(1); rp_end();
+                    }
+                    R.rt = rt0; R.sc = sc0; R.has_sc = hs0; memcpy(R.clear_c, cc0f, 8); memcpy(R.cc, cc0, sizeof cc0); R.clear_d = cd0f; R.clear_s = cs0f; R.cd = cd0; R.cs = cs0;
+                    if (!g_hoist_groups) MLOG("pure-clear pass hoist: first case %d groups (before pass %llu)", ng, g_stat_pass + 1);
+                    g_hoist_groups += (uint64_t)ng;
+                    return;
+                }
+                if (in_grp && !G[ng - 1].nops) return;   // The previous group has no clear (only set targets): not recognized
+                if (ng >= 4) return;
+                memset(&G[ng], 0, sizeof G[ng]); G[ng].rt_op = p; G[ng].rt = r; ng++; in_grp = 1; break; }
+            default: break;
+        }
+        p += h.size;
+    }
+}

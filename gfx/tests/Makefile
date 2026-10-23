@@ -2,8 +2,8 @@
 # Sources by wildcard, as GFX in host/Makefile (hle_nvn.c is #included by t_nvn.c, so it is left out); the host's crash.c is linked in so the
 # write-protect tests use the production fault hook
 CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include
-GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../tex/*.c ../tex/*.m)))
-GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/mtl/*.inc ../nvn/include/*.h ../tex/*.h)
+GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../nvn/core/*.c ../tex/*.c ../tex/*.m)))
+GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/mtl/*.inc ../nvn/core/*.h ../nvn/include/*.h ../tex/*.h)
 FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 # HSTACK: the NVN trampolines end in the host stack switch (host/hstack.S)
 HSTACK=../../host/hstack.S ../../host/hstack.c
@@ -21,6 +21,12 @@ t_tex_auto: t_tex_auto.c ../nvn/nvn_tex.c ../nvn/nvn_tex.h ../tex/nvn_deswizzle.
 	clang -O1 -Wall -o $@ t_tex_auto.c ../nvn/nvn_tex.c ../tex/nvn_deswizzle.c
 t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_d16clear.m -framework Metal -framework Foundation
+# gfx/nvn/core: the replay's decisions in plain C (plan item 264), each with a test that needs no GPU
+CORE_H=$(wildcard ../nvn/core/*.h)
+t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
+	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
+t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
+	clang $(CFLAGS) -Werror -o $@ t_core_prog.c ../nvn/core/prog.c
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
 	clang -O1 -Wall -o $@ t_hmap.c
 t_cover: t_cover.c ../nvn/nvn_cover.h
@@ -236,6 +242,8 @@ run: \
 	t_border \
 	t_chunk \
 	t_copy_pitch \
+	t_core_prog \
+	t_core_store_index \
 	t_cover \
 	t_cull_prim \
 	t_d16clear \
@@ -351,6 +359,8 @@ run: \
 	./t_fstep
 	./t_fptrial
 	./t_hmap
+	./t_core_prog
+	./t_core_store_index
 	./t_cover
 	./t_copy_pitch
 	./t_pool_find

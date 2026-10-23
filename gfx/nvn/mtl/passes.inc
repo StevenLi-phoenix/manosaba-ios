@@ -106,9 +106,7 @@ static uint64_t att_bytes(id<MTLTexture> t, NSUInteger level) {
     return (uint64_t)w * h * bpp * t.sampleCount;
 }
 // The render attachment selects a particular mip, while MTLTexture.width/height still describe the base level. Empty attachments do not take part in the bounds.
-static NSUInteger mip_extent(NSUInteger size, NSUInteger level) {
-    return level < sizeof(size) * 8 ? MAX(size >> level, 1) : 1;
-}
+static NSUInteger mip_extent(NSUInteger size, NSUInteger level) { return (NSUInteger)nvn_mip_extent(size, level); }   // (gfx/nvn/core/rt.h)
 static void pass_dims(RPD *pd, NSUInteger nc, NSUInteger *w, NSUInteger *h) {
     *w = *h = 0;
     for (NSUInteger i = 0; i < nc + 2; i++) {

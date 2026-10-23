@@ -407,11 +407,6 @@ static void rp_flush(void) {
     if (pend && !g_enc && g_cb) { uint64_t st0 = g_bw_store; rp_begin_ex(1); rp_end(); g_clear_only_n++; g_clear_only_bytes += g_bw_store - st0; return; }
     rp_end();
 }
-static int scissor_full_of(const p_scissor *sc, int has_sc, const tex_t *t, const view_t *v, int has_v) {
-    NSUInteger level = has_v && v->set_levels ? v->base_level : 0;
-    NSUInteger w = mip_extent(t->d.width, level), h = mip_extent(t->d.target == 0 || t->d.target == 3 ? 1 : t->d.height, level);
-    return !has_sc || (sc->x <= 0 && sc->y <= 0 && (int64_t)sc->x + sc->w >= (int64_t)w && (int64_t)sc->y + sc->h >= (int64_t)h);
-}
 static int scissor_full(const tex_t *t, const view_t *v, int has_v) { return scissor_full_of(&R.sc, R.has_sc, t, v, has_v); }
 // Clears a load action cannot do (inside a render pass, a partial channel mask, a partial scissor, a partial stencil mask) are drawn as one
 // full-target triangle under the scissor: colour writes only that attachment's masked channels, depth / stencil write the clear value with compare
