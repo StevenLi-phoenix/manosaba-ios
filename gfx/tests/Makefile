@@ -23,6 +23,8 @@ t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_d16clear.m -framework Metal -framework Foundation
 # gfx/nvn/core: the replay's decisions in plain C (plan item 264), each with a test that needs no GPU
 CORE_H=$(wildcard ../nvn/core/*.h)
+t_core_state: t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
 	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
 t_core_tbdr: t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
@@ -255,6 +257,7 @@ run: \
 	t_core_live \
 	t_core_pend \
 	t_core_prog \
+	t_core_state \
 	t_core_store_index \
 	t_core_tbdr \
 	t_core_upd \
@@ -376,6 +379,7 @@ run: \
 	./t_core_live
 	./t_core_pend
 	./t_core_prog
+	./t_core_state
 	./t_core_store_index
 	./t_core_tbdr
 	./t_core_upd

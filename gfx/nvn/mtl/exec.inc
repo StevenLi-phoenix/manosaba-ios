@@ -119,7 +119,7 @@ void mtl_exec(const uint8_t *p) {
                 if (g_rt_merged || g_lay.active) rp_end();   // A clear arrived in a continued (or layered) render pass: end it here, and the clear is attached to the start of the next render pass as usual
                 if (c->index < 0 || c->index >= R.rt.n || !R.rt.color[c->index]) { RED_ONCE(5, "color clear target %d invalid", c->index); break; }
                 if (g_enc || c->mask != 0xf || !scissor_full(R.rt.color[c->index], &R.rt.cview[c->index], R.rt.has_cview[c->index])) { clear_quad(c); break; }
-                R.clear_c[c->index] = 1; R.cc[c->index] = MTLClearColorMake(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]);
+                R.clear_c[c->index] = 1; R.cc[c->index] = nvn_rgba_make(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]);
                 break;
             }
             case OP_CLEAR_DS: {

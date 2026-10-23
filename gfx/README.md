@@ -127,6 +127,7 @@ Binding conventions used by the translation:
 | `nvn/core/frame.c`, `nvn/core/frame.h` | Measurements by frame: boot instrumentation (DM_BOOTPROF), the GPU time as the union of command buffer spans, DM_NVN_UB |
 | `nvn/core/upd.c`, `nvn/core/upd.h` | Inline uniform updates without ending the render pass: the update log, private copies of the ranges they reach |
 | `nvn/core/usnap.c`, `nvn/core/usnap.h` | Uniform snapshots: each submission's copies of the uniform ranges it binds; deferred binding handles read once a submission |
+| `nvn/core/state.c`, `nvn/core/state.h` | The replay's state: the draw state `S`, the render targets' state `R`, the commands that only set state (`st_op` answers what changed) |
 | `nvn/core/store_index.c`, `nvn/core/store_index.h` | The store lookahead index: one scan per submission, the first valid event after a pass end decides each attachment's write-back |
 | `nvn/nvn_obj.h` | Host object layouts and the command record format, shared by both layers |
 | `nvn/nvn_entry.S`, `nvn/nvn_thunks.S` | Unimplemented stub and timing wrapper entries; per-function thunks (generated) |

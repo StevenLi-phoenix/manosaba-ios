@@ -1,12 +1,7 @@
 // gfx/nvn/mtl/passes.inc, part of nvn_mtl.m (included there in order, one translation unit): Render pass bookkeeping: zero-source skip, the pass dump (PD), attachment use
 // ---------- Render passes: SetRenderTargets opens a new pass; clears before the first command in the pass are folded into the load action ----------
 static void state_vp_ms(float vp[4], int ms[3]);   // the draw state's viewport 0 (zeros without one) and multisample enable / samples / raster samples (defined with S)
-static struct {
-    p_set_rt rt; int has_rt;
-    uint8_t clear_c[8]; MTLClearColor cc[8];
-    uint8_t clear_d, clear_s; double cd; uint32_t cs;
-    p_scissor sc; int has_sc;
-} R;
+// The render targets' state R: gfx/nvn/core/state.h
 
 // ---------- Zero-source skip ----------
 // Shader fact table (statically proven keys): 'the textures it samples are all 0 and the coefficient is finite ⇒ the output is all 0'. Coefficient = component comp of vector vec of fragment-stage constant buffer register ubo_slot.

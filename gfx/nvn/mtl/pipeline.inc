@@ -1,18 +1,5 @@
 // gfx/nvn/mtl/pipeline.inc, part of nvn_mtl.m (included there in order, one translation unit): Draw state, vertex formats, blending, pipeline states, the pipeline prediction
 // ---------- Draw state ----------
-static struct {
-    const prog_t *prog;
-    blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
-    va_st attr[16]; int nattr; vs_st stream[16]; int nstream;
-    NVNbufferRange vbuf[16];
-    p_bind_buf ubo[6][16], ssbo[6][16];
-    uint64_t tex[6][128], samp[6][128], img[6][32];
-    uint32_t st_vmask[2], st_wmask[2], st_ref[2];
-    p_poly_offset po; float vp[16][4]; float dr[2]; int has_vp; int depth_clamp, db_en, raster_discard; float db_lo, db_hi;   // db: depth bounds (plan item 64c); raster_discard: 64d
-    int restart_set, restart_en; uint32_t restart_idx;   // SetPrimitiveRestart (restart_set: the game has set it; its default is not documented)
-    float blend_color[4], alpha_ref; int64_t copy_stride, copy_image_stride;
-    uint8_t border_bound[2];   // the vertex / fragment stage has a sampler bound whose border colour Metal lacks (border_rebind, plan item 161)
-} S;
 static void state_vp_ms(float vp[4], int ms[3]) { for (int k = 0; k < 4; k++) vp[k] = S.has_vp ? S.vp[0][k] : 0; ms[0] = S.ms.enable; ms[1] = S.ms.samples; ms[2] = S.ms.raster_samples; }
 static uint32_t cur_chmask(void) { return S.chmask.mask; }
 // BindProgram per stage: prog_bind (gfx/nvn/core/prog.c)
@@ -46,15 +33,7 @@ static void udc_note_draw(NvProg *pr) {
         if (!t->wwhy) t->wwhy = w0;
     }
 }
-static void state_reset(void) {
-    memset(&S, 0, sizeof S);
-    g_pso_dirty = g_dss_dirty = 1;
-    for (int i = 0; i < 8; i++) S.blend[i] = (blend_st){i, NVN_BLEND_FUNC_ONE, NVN_BLEND_FUNC_ZERO, NVN_BLEND_FUNC_ONE, NVN_BLEND_FUNC_ZERO, NVN_BLEND_EQUATION_ADD, NVN_BLEND_EQUATION_ADD};
-    S.color = (color_st){0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS}; S.chmask.mask = 0xffffffffu;
-    S.poly = (poly_st){NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0};
-    S.ds = (ds_st){0, 1, NVN_DEPTH_FUNC_LESS, 0, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_FUNC_ALWAYS, 1, 1, 1, 1, 1, 1};
-    S.st_vmask[0] = S.st_vmask[1] = S.st_wmask[0] = S.st_wmask[1] = 0xff; S.dr[1] = 1;
-}
+static void state_reset(void) { st_reset(); g_pso_dirty = g_dss_dirty = 1; }   // (the state: gfx/nvn/core/state.c)
 
 static MTLVertexFormat vfmt(int f) {
     switch (f) {

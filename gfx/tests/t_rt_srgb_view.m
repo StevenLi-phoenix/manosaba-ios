@@ -16,7 +16,7 @@ static int fail, count;
 static int clear_and_read(tex_t *t, int view, uint32_t *cfmt) {
     memset(&R, 0, sizeof R); R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = t;
     if (view) { R.rt.has_cview[0] = 1; R.rt.cview[0].set_format = 1; R.rt.cview[0].format = NVN_FORMAT_RGBA8_SRGB; }
-    R.clear_c[0] = 1; R.cc[0] = MTLClearColorMake(0.5, 0.5, 0.5, 1);
+    R.clear_c[0] = 1; R.cc[0] = nvn_rgba_make(0.5, 0.5, 0.5, 1);
     mtl_sub_begin(); rp_begin_ex(1); *cfmt = g_pass.cfmt[0]; rp_end();
     id<MTLBuffer> b = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared]; res_add(b);
     [blit() copyFromTexture:tex_mtl(t) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(4, 4, 1)

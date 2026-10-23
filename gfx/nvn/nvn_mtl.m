@@ -83,6 +83,7 @@
 #include "core/live.h"
 #include "core/capture.h"
 #include "core/upd.h"
+#include "core/state.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>

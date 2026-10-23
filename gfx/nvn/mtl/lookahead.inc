@@ -45,7 +45,7 @@ typedef struct {
     p_set_rt rt1, rt2;                 // Logical targets of each of the two passes (R.rt is the union during the merge)
     int8_t p2map[8];                   // Logical color number of the later pass → physical attachment
     uint8_t lmap1[8], lmap2[8];        // Physical attachment → logical color number of this phase's draws (0xff = not written)
-    uint8_t clr2[8], cd2f, cs2f; MTLClearColor cc2[8]; double cd2; uint32_t cs2;   // Clears at the start of the later pass (used as-is when the in-run dual render redraws)
+    uint8_t clr2[8], cd2f, cs2f; nvn_rgba cc2[8]; double cd2; uint32_t cs2;   // Clears at the start of the later pass (used as-is when the in-run dual render redraws)
     uint8_t wrote[8];                   // Physical attachments written by the later pass
     uint8_t cov2[8];                     // Physical attachments covered by the first draw of the later pass
 } fuse_t;
@@ -56,7 +56,7 @@ typedef struct {
     p_set_rt p_rt, q_rt;
     const uint8_t *p_end_op, *q_op;
     uint8_t clear_c[8], lmap[8];
-    MTLClearColor cc[8];
+    nvn_rgba cc[8];
     uint8_t clear_d, clear_s;
     double cd; uint32_t cs;
     uint64_t p_reads[512]; int nreads, p_dw, p_st;
@@ -196,51 +196,15 @@ static int first_draw_covers(int i, id<MTLTexture> t, NSUInteger level) {
                      S.has_vp, vp, R.has_sc, sc, (long)MAX(t.width >> level, 1), (long)MAX(t.height >> level, 1));
 }
 
-static int state_op(uint32_t op, const void *a) {
-    switch (op) {
-        case OP_SCISSOR: R.sc = *(const p_scissor *)a; R.has_sc = 1; break;
-        case OP_BIND_PROGRAM: { const p_bind_program *b = a; const prog_t *np = prog_bind(S.prog, b->prog, b->stages); if (np != S.prog) { S.prog = np; g_pso_dirty = 1; args_dirty_all(); } break; }
-        case OP_BIND_STATE: {
-            const p_bind_state *b = a; void *dst = NULL; size_t n = 0;
-            blend_st bs;
-            switch (b->kind) {
-                case 0: memcpy(&bs, b->bytes, sizeof bs); dst = &S.blend[bs.target]; n = sizeof bs; break;
-                case 1: dst = &S.color; n = sizeof S.color; break;
-                case 2: dst = &S.chmask; n = sizeof S.chmask; break;
-                case 3: dst = &S.ms; n = sizeof S.ms; break;
-                case 4: dst = &S.poly; n = sizeof S.poly; break;
-                case 5: dst = &S.ds; n = sizeof S.ds; break;
-                case 6: dst = &S.alpha_ref; n = sizeof S.alpha_ref; break;
-            }
-            if (dst && memcmp(dst, b->bytes, n)) { memcpy(dst, b->bytes, n); if (b->kind == 5) g_dss_dirty = 1; else g_pso_dirty = 1; }
-            break;
-        }
-        case OP_BIND_VATTR: { const p_bind_vattr *b = a; if (S.nattr != b->n || memcmp(S.attr, b->st, 4 * b->n)) { memcpy(S.attr, b->st, 4 * b->n); S.nattr = b->n; g_pso_dirty = 1; } break; }
-        case OP_BIND_VSTREAM: { const p_bind_vstream *b = a; if (S.nstream != b->n || memcmp(S.stream, b->st, 8 * b->n)) { memcpy(S.stream, b->st, 8 * b->n); S.nstream = b->n; g_pso_dirty = 1; } break; }
-        case OP_BIND_VBUF: { const p_bind_vbuf *b = a; memcpy(&S.vbuf[b->first], b->r, sizeof *b->r * b->n); break; }
-        case OP_BIND_UBO: { const p_bind_buf *b = a; gw_note(b, 0); PD("b bind_ub st%d r%d addr=%#llx size=%llu", b->stage, b->index, (unsigned long long)b->addr, (unsigned long long)b->size); if (b->stage < 6 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
-        case OP_BIND_SSBO: { const p_bind_buf *b = a; gw_note(b, 1); if (b->stage < 6 && b->index < 16 && memcmp(&S.ssbo[b->stage][b->index], b, sizeof *b)) { S.ssbo[b->stage][b->index] = *b; g_args_dirty[b->stage] = 1; } break; }
-        case OP_BIND_TEX: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.tex[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.tex[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; if (g_border_any && b->stage < 2) border_rebind(b->stage, b->h, b->n); } break; }
-        case OP_BIND_SAMP: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first + b->n <= 128 && memcmp(&S.samp[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.samp[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; if (g_border_any && b->stage < 2) border_rebind(b->stage, b->h, b->n); } break; }
-        case OP_BIND_IMG: { const p_bind_handles *b = a; bh_fresh(b); if (b->stage < 6 && b->first >= 0 && b->first + b->n <= 32) { if (memcmp(&S.img[b->stage][b->first], b->h, 8 * b->n)) { memcpy(&S.img[b->stage][b->first], b->h, 8 * b->n); g_args_dirty[b->stage] = 1; } } else RED_ONCE(31, "image slot out of range stage %d first %d count %d", b->stage, b->first, b->n); break; }
-        case OP_STENCIL: {
-            const p_stencil *b = a;
-            if (b->which != 2) g_dss_dirty = 1;
-            for (int f = 0; f < 2; f++) if (b->face & (1 << f)) { if (b->which == 0) S.st_vmask[f] = b->value_mask; else if (b->which == 1) S.st_wmask[f] = b->mask; else S.st_ref[f] = b->ref; }
-            break;
-        }
-        case OP_POLY_OFFSET: S.po = *(const p_poly_offset *)a; break;
-        case OP_VIEWPORTS: { const p_viewports *b = a; for (int i = 0; i < b->n; i++) memcpy(S.vp[b->first + i], b->v[i], 16); S.has_vp = 1; break; }
-        case OP_DEPTH_RANGE: { const p_depth_range *b = a; S.dr[0] = b->n; S.dr[1] = b->f; break; }
-        case OP_BLEND_COLOR: memcpy(S.blend_color, ((const p_blend_color *)a)->rgba, 16); break;
-        case OP_DEPTH_CLAMP: S.depth_clamp = ((const p_depth_clamp *)a)->enable; break;
-        case OP_DEPTH_BOUNDS: { const p_depth_bounds *b = a; S.db_en = b->enable; S.db_lo = b->lo; S.db_hi = b->hi; break; }
-        case OP_RASTER_DISCARD: S.raster_discard = *(const int32_t *)a; break;
-        case OP_PRIM_RESTART: { const p_prim_restart *r = a; S.restart_set = 1; S.restart_en = r->enable; S.restart_idx = r->index; break; }
-        case OP_COPY_STRIDE: S.copy_stride = ((const p_copy_stride *)a)->stride; break;
-        case OP_COPY_IMAGE_STRIDE: S.copy_image_stride = ((const p_copy_stride *)a)->stride; break;
-        default: return 0;
-    }
+static int state_op(uint32_t op, const void *a) {   // a command that only sets state (gfx/nvn/core/state.c st_op), and what the backend marks after it
+    int c = st_op(op, a);
+    if (!c) return 0;
+    if (op == OP_BIND_UBO || op == OP_BIND_SSBO) gw_note(a, op == OP_BIND_SSBO);
+    if (c & ST_PSO) g_pso_dirty = 1;
+    if (c & ST_DSS) g_dss_dirty = 1;
+    if (c & ST_ARGS_ALL) args_dirty_all();
+    for (int st = 0; st < 6; st++) if (c & ST_ARGS(st)) g_args_dirty[st] = 1;
+    if ((c & ST_HANDLES) && g_border_any) { const p_bind_handles *b = a; if (b->stage < 2) border_rebind(b->stage, b->h, b->n); }
     return 1;
 }
 
@@ -553,7 +517,7 @@ static int pass_ds_need(void) {
 static uint64_t h_ser(uint64_t h) { int tid = h_tid(h); return tid ? atomic_load_explicit(&g_tser[tid], memory_order_relaxed) : 0; }
 static void hoist_try(void) {
     if (g_hoist_n || !g_exec_next) return;
-    typedef struct { const uint8_t *rt_op; const p_set_rt *rt; uint8_t clear_c[8]; MTLClearColor cc[8]; uint8_t clear_d, clear_s; double cd; uint32_t cs;
+    typedef struct { const uint8_t *rt_op; const p_set_rt *rt; uint8_t clear_c[8]; nvn_rgba cc[8]; uint8_t clear_d, clear_s; double cd; uint32_t cs;
                      p_scissor sc; int has_sc; const uint8_t *ops[8]; int nops; } grp;
     grp G[4]; int ng = 0, in_grp = 0; p_scissor sc = R.sc; int has_sc = R.has_sc;
     // The binding set needed for "the cleared texture is not on any slot": the table is looked up only when a hoistable clear group is really found and we are back to this render pass's targets (the vast majority of render passes never get that far).
@@ -575,7 +539,7 @@ static void hoist_try(void) {
                     if (c->index < 0 || c->index >= g->rt->n || !g->rt->color[c->index] || c->mask != 0xf) return;
                     const tex_t *t = g->rt->color[c->index];
                     if (has_sc && !(sc.x <= 0 && sc.y <= 0 && sc.x + sc.w >= (int)t->d.width && sc.y + sc.h >= (int)t->d.height)) return;
-                    g->clear_c[c->index] = 1; g->cc[c->index] = MTLClearColorMake(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]); }
+                    g->clear_c[c->index] = 1; g->cc[c->index] = nvn_rgba_make(c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3]); }
                 else { const p_clear_ds *c = a; if (!g->rt->depth) return;
                     if (!scissor_full_of(&sc, has_sc, g->rt->depth, &g->rt->dview, g->rt->has_dview) || ((c->stencil_mask & 255) && (c->stencil_mask & 255) != 255)) return;   // drawn as a triangle (clear_ds_quad), not a load action
                     if (c->depth_mask) { g->clear_d = 1; g->cd = c->depth; } if (c->stencil_mask) { g->clear_s = 1; g->cs = (uint32_t)c->stencil; } }
@@ -597,7 +561,7 @@ static void hoist_try(void) {
                     // Register all skip entries first, then execute: when a hoisted render pass ends the store lookahead scans forward, and the clears at their original positions must already be in the skip set
                     for (int gi = 0; gi < ng; gi++) { g_hoist_skip[g_hoist_n++] = G[gi].rt_op; for (int k = 0; k < G[gi].nops; k++) g_hoist_skip[g_hoist_n++] = G[gi].ops[k]; }
                     p_set_rt rt0 = R.rt; p_scissor sc0 = R.sc; int hs0 = R.has_sc;   // This render pass's targets, scissor and pending clears: restored as they were after execution
-                    uint8_t cc0f[8]; MTLClearColor cc0[8]; uint8_t cd0f = R.clear_d, cs0f = R.clear_s; double cd0 = R.cd; uint32_t cs0 = R.cs;
+                    uint8_t cc0f[8]; nvn_rgba cc0[8]; uint8_t cd0f = R.clear_d, cs0f = R.clear_s; double cd0 = R.cd; uint32_t cs0 = R.cs;
                     memcpy(cc0f, R.clear_c, 8); memcpy(cc0, R.cc, sizeof cc0);
                     for (int gi = 0; gi < ng; gi++) {   // Execute: temporarily swap in that group's targets and clears and open a clear-only render pass
                         grp *g = &G[gi];

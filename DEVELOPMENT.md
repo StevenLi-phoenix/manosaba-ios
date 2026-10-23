@@ -207,7 +207,7 @@ decide):
   each into `gfx/nvn/core/` with its header and a test that needs no GPU. The parts that use little Metal are done (batches 88-94: the store
   index, uniform snapshots, the TBDR switches and validity ledger with the pass dump, pending writes and frame measurements, the live
   texture, the submit call's capture, inline uniform updates). Next the mixed parts (the replay loop, lookahead, tile merge, draw) split into
-  what is decided and what is executed, starting with the replay state (`S`, `R`) and the commands that only set it; then the file-scope
+  what is decided and what is executed, starting with the replay state (`S`, `R`) and the commands that only set it (batch 96); then the file-scope
   variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
@@ -372,3 +372,11 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   metadata (its cases 2 and 3 never read it with the switch off). The batch's first gfx run stopped at that compile error before any test ran
   (Metal 3) or before t_present_fx (Metal 4, where the run always stops there, so it was not seen); the tests ran again whole after the fix
   (no compile error, all as in batch 94), and the batch summary counts compile errors since. Smoke: the same red lines and frames.
+- [x] batch 96 · 264, the replay state: `gfx/nvn/core/state.c` takes the draw state `S` (from `mtl/pipeline.inc`) and the render targets'
+  state `R` (from `mtl/passes.inc`), the state at the start (`st_reset`) and the commands that only set state (`st_op`, from
+  `mtl/lookahead.inc`). `st_op` answers what changed (`ST_PSO`, `ST_DSS`, `ST_ARGS_ALL`, `ST_ARGS(stage)`, `ST_HANDLES`) and the backend's
+  `state_op` marks its own encoder state from it, notes GPUWATCH's bindings and rebinds border colours; `state_reset` marks everything dirty
+  after `st_reset`. A clear colour is `nvn_rgba` (Metal's field names) in `R` and in what deferral, the clear-only hoist and the tile merge
+  keep, made a Metal one where a pass descriptor takes it. `gfx/tests/t_core_state.c` (25; a depth-stencil change taken for a pipeline one,
+  `-DDM_TEST_ST_DSS_AS_PSO`, fails 1); `t_fuse_check` and `t_rt_srgb_view` set `R`'s clear colour the new way (the batch's first gfx run
+  stopped there; all 118 test targets build for Metal 4 and Metal 3 now and the tests ran again whole). Smoke: the same red lines and frames.

@@ -206,7 +206,7 @@ static RENC rp_begin_ex(int clear_only) {
         preaux[i] = blk_aux(R.rt.color[i], &R.rt.cview[i], R.rt.has_cview[i], &pre[i]);
         if (preaux[i] && !R.clear_c[i]) {
             if (!pre[i].dec) blk_copy(pre[i].dst, 0, preaux[i], &pre[i]);
-            else if (pre[i].fresh) { R.clear_c[i] = 1; R.cc[i] = MTLClearColorMake(0, 0, 0, 0); }   // the auxiliary texture holds the content (62c3): zero blocks when new
+            else if (pre[i].fresh) { R.clear_c[i] = 1; R.cc[i] = nvn_rgba_make(0, 0, 0, 0); }   // the auxiliary texture holds the content (62c3): zero blocks when new
         }
     }
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
@@ -222,7 +222,7 @@ static RENC rp_begin_ex(int clear_only) {
         if (!pd.colorAttachments[i].texture) continue;
         any = 1;
         pd.colorAttachments[i].loadAction = R.clear_c[i] ? MTLLoadActionClear : MTLLoadActionLoad;
-        pd.colorAttachments[i].clearColor = R.cc[i];
+        pd.colorAttachments[i].clearColor = MTLClearColorMake(R.cc[i].red, R.cc[i].green, R.cc[i].blue, R.cc[i].alpha);
         { static long long rtc = -2; if (rtc == -2) { const char *e = getenv("DM_NVN_RTCLEAR"); rtc = e ? atoll(e) : -1; }   // diagnostic: passes on this colour serial start cleared to magenta (does the attachment reach the texture?)
           if (rtc >= 0 && R.rt.color[i]->serial == (uint64_t)rtc) { pd.colorAttachments[i].loadAction = MTLLoadActionClear; pd.colorAttachments[i].clearColor = MTLClearColorMake(1, 0, 1, 1); } }
         int cov = tbdr_part(TBP_COVER) && !R.clear_c[i] && (g_fd_dw || g_fd_di) && fz_load_covers(i, pd.colorAttachments[i].texture, pd.colorAttachments[i].level);
