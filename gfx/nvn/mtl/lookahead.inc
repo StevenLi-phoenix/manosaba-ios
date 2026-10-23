@@ -376,45 +376,6 @@ static int rt_same(const p_set_rt *a, const p_set_rt *b) {   // Same set of targ
     }
     return 1;
 }
-// Experimental RT range candidate: only ignore positive nlevels differences not used by the actual render attachments; other fields stay word-for-word identical.
-#define NVN_RT_RANGE_IMPL 1
-static int rt_range_shape(const p_set_rt *a, const p_set_rt *b) {
-    if (a->n != 1 || b->n != 1 || !a->color[0] || !b->color[0] || !a->has_cview[0] || !b->has_cview[0] ||
-        !a->depth != !b->depth || a->has_dview != b->has_dview ||
-        (a->has_dview && memcmp(&a->dview,&b->dview,sizeof a->dview))) return 0;
-    const tex_t *x=a->color[0], *y=b->color[0];
-    if (!x->serial || x->serial != y->serial || x->d.target != NVN_TEXTURE_TARGET_2D || y->d.target != NVN_TEXTURE_TARGET_2D ||
-        x->d.samples > 1 || y->d.samples > 1 || (x->has_layout && x->mem) || (y->has_layout && y->mem) ||
-        memcmp(&x->d,&y->d,sizeof x->d) || x->mem != y->mem || x->pool != y->pool || x->off != y->off) return 0;
-    const view_t *v=&a->cview[0], *w=&b->cview[0]; int levels=x->d.levels;
-    if (!v->set_levels || !w->set_levels || v->base_level < 0 || v->base_level >= levels ||
-        v->nlevels <= 0 || v->nlevels > levels-v->base_level || w->nlevels <= 0 || w->nlevels > levels-v->base_level ||
-        (v->set_layers && (v->min_layer || v->nlayers != 1)) || (v->set_format && v->format != x->d.format) ||
-        (v->set_target && v->target != NVN_TEXTURE_TARGET_2D)) return 0;
-    view_t cv=*w; cv.nlevels=v->nlevels;
-    if (memcmp(v,&cv,sizeof cv)) return 0;
-    if (a->depth) { const tex_t *d=a->depth,*e=b->depth;
-        if (!d->serial || d->serial != e->serial || d->d.target != NVN_TEXTURE_TARGET_2D || e->d.target != NVN_TEXTURE_TARGET_2D ||
-            d->d.samples > 1 || e->d.samples > 1 || (d->has_layout && d->mem) || (e->has_layout && e->mem) ||
-            memcmp(&d->d,&e->d,sizeof d->d) || d->mem != e->mem || d->pool != e->pool || d->off != e->off) return 0;
-        int dl=a->has_dview && a->dview.set_levels ? a->dview.base_level : 0;
-        if (dl < 0 || dl >= d->d.levels || mip_extent(d->d.width,dl) < mip_extent(x->d.width,v->base_level) ||
-            mip_extent(d->d.height,dl) < mip_extent(x->d.height,v->base_level)) return 0; }
-
-    return v->nlevels != w->nlevels;
-}
-#define NVN_RT_RANGE_DEPTH_IMPL 1
-static void rt_range_note_depth(void) { if (rt_range_on() && S.ds.dw) g_pass.range_depth_nonro=1; }
-static int rt_range_same(const p_set_rt *a, const p_set_rt *b) {
-    if (!rt_range_on() || !g_enc || g_fz.active || g_pass.range_external || g_pass.range_depth_nonro || !S.ds.dt || S.ds.dw || S.ds.st || g_enc_mode != 4 || !g_pass.hd || g_pass.hs ||
-        (g_vis_on && !g_enc_has_vis) || g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now() || !rt_range_shape(a,b) || !b->depth) return 0;
-    id<MTLTexture> color=tex_mtl(b->color[0]), depth=tex_mtl(b->depth);
-    int lv=b->cview[0].base_level;
-    return mip_extent(color.width,lv) == g_pass.tw && mip_extent(color.height,lv) == g_pass.th &&
-        color == g_pass.range_color && depth == g_pass.range_depth && color.textureType == MTLTextureType2D &&
-        depth.textureType == MTLTextureType2D && color.sampleCount == 1 && depth.sampleCount == 1 &&
-        g_pass.reg_gen == g_reg_gen && g_pass.ser_gen == g_ser_gen && g_pass.range_dirty == nvn_dirty_now();
-}
 static int draw_samples_rt(NvProg *pr) {   // Sampled attachments keep the original conservative ser-level guard, not split by level/layer
     uint64_t rs[9]; int nr = 0;
     for (int k = 0; k < R.rt.n && k < 8; k++) if (R.rt.color[k]) rs[nr++] = R.rt.color[k]->serial;
@@ -506,7 +467,7 @@ static void fbx_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
             } } }
     if (!need) return;
     g_fbx_self = 1;
-    if (g_fz.active || g_lay.active || g_rt_range_active) { g_fbx_refused++; RED_ONCE(97, "a draw samples what its pass draws inside a merged, layered or range pass: not copied (first case pass %llu)", g_stat_pass); return; }
+    if (g_fz.active || g_lay.active) { g_fbx_refused++; RED_ONCE(97, "a draw samples what its pass draws inside a merged, layered or range pass: not copied (first case pass %llu)", g_stat_pass); return; }
     g_fbx_draws++;
     { static uint8_t seen[16][8]; static int nseen; __unsafe_unretained NvShader *f = pr->sh[1];   // which shaders (plan item 113): each once
       if (f && nseen < 16) { int k = 0; while (k < nseen && memcmp(seen[k], f->key, 8)) k++;

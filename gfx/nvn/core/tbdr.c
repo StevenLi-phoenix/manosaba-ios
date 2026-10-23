@@ -13,10 +13,11 @@ void tbdr_read(void) {
 }
 void tbdr_read_off(void) {
     int off = 0; const char *e = getenv("DM_NVN_TBDR_OFF");
-    static const char *const nm[] = {"zskip", "xv", "cover", "store", "sdx", "defer", "fuse", "hoist", "ds", "range", "cont", "rtheap"};
+    static const struct { const char *n; int bit; } nm[] = {{"zskip", TBP_ZSKIP}, {"xv", TBP_XV}, {"cover", TBP_COVER}, {"store", TBP_STORE}, {"sdx", TBP_SDX}, {"defer", TBP_DEFER},
+                                                          {"fuse", TBP_FUSE}, {"hoist", TBP_HOIST}, {"ds", TBP_DS}, {"cont", TBP_CONT}, {"rtheap", TBP_RTHEAP}};
     for (const char *q = e; q && *q; q = strchr(q, ',') ? strchr(q, ',') + 1 : q + strlen(q)) { size_t n = strcspn(q, ",");
         if (n == 3 && !strncmp(q, "all", 3)) off = TBP_RTHEAP * 2 - 1;   // every part (~0, as before, is -1: taken for "not read yet", it was read again at every call)
-        for (int i = 0; i < 12; i++) if (strlen(nm[i]) == n && !strncmp(q, nm[i], n)) off |= 1 << i; }
+        for (size_t i = 0; i < sizeof nm / sizeof nm[0]; i++) if (strlen(nm[i].n) == n && !strncmp(q, nm[i].n, n)) off |= nm[i].bit; }
     if (e && *e) MLOG("DM_NVN_TBDR_OFF=%s: these TBDR rewrites stay off (mask %#x)", e, off);
     g_tbdr_off = off;
 }

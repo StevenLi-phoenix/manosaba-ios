@@ -114,7 +114,7 @@ static int fxp_refuse(int which, int why, NvShader *fs, id<MTLTexture> src, id<M
                                           R.rt.n, (unsigned long)src.width, (unsigned long)src.height, (unsigned long)dst.width, (unsigned long)dst.height);
     return 0;
 }
-static int fxp_tbdr_busy(void) { return defer_has_in_p() || g_fz.active || g_lay.active || g_rt_range_active; }
+static int fxp_tbdr_busy(void) { return defer_has_in_p() || g_fz.active || g_lay.active; }
 static id<MTLTexture> fxp_scene_tex(void) {   // the texture at fragment slot 0
     int tid = h_tid(S.tex[NVN_SHADER_STAGE_FRAGMENT][0]); id<MTLTexture> t = nil;
     pthread_mutex_lock(&g_rmu); if (tid) t = tex_by_id(tid); pthread_mutex_unlock(&g_rmu);

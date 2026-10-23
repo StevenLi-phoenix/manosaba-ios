@@ -38,7 +38,7 @@ static void shmap_load(void) {
     warm_start();
 }
 
-@interface NvShader : NSObject { @public id<MTLFunction> fn; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage, range_ro; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
+@interface NvShader : NSObject { @public id<MTLFunction> fn; nvn_refl rf; id<MTLArgumentEncoder> ae; NSUInteger arg_len; int stage; char key[24]; id<MTLBuffer> c1buf; uint64_t c1_gpu; size_t c1off;
     id<MTLLibrary> vi_lib; NSString *vi_entry; uint32_t vi_mask; NSMutableDictionary<NSNumber *, id<MTLFunction>> *vi_fns;   // integer vertex input variant (dmsh_build.py vi_variant): locations that can be specialized
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
@@ -114,7 +114,6 @@ static uint64_t g_warm_shaders, g_warm_rps, g_warm_cps, g_warm_skip_fz, g_warm_o
 static uint64_t g_warm_claim_shaders, g_warm_claim_rps, g_warm_claim_cps;
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap);
 static id<MTLFunction> alpha_plain(id<MTLLibrary> lib, NSString *entry);
-static int rt_range_bindings_ro(NSDictionary *j);
 static FILE *g_pso_record; static int g_pso_record_checked;
 static FILE *pso_record_file(void) {
     if (g_pso_record_checked) return g_pso_record;
@@ -207,7 +206,6 @@ static NvShader *shader_load(NSString *pc, int stage) {
     NvShader *o = [NvShader new];
     char err[160];
     if (nvn_refl_from_json(j, &o->rf, err, sizeof err)) { MLOG("[red] shader %s reflection conversion failed: %s", pc.UTF8String, err); return nil; }
-    if (rt_range_on()) o->range_ro=rt_range_bindings_ro(j);
     o->fn = [lib newFunctionWithName:j[@"entry"]]; o->stage = stage; strlcpy(o->key, pc.UTF8String, sizeof o->key);
     if (stage == 1 && [j[@"alpha_test"] boolValue]) { o->alib = lib; o->fn = alpha_plain(lib, j[@"entry"]); }   // the alpha test epilogue: specialized with ALWAYS (alpha_fn)
     if (!o->fn) { MLOG("[red] shader %s: no function %s", pc.UTF8String, [[j[@"entry"] description] UTF8String]); return nil; }
@@ -228,29 +226,7 @@ static int stage_of(NSString *st) {   // NVN shader stage of a shader map entry
     if ([st isEqualToString:@"vs"]) return 0; if ([st isEqualToString:@"ps"]) return 1; if ([st isEqualToString:@"cs"]) return 5;
     if ([st isEqualToString:@"hs"]) return 3; if ([st isEqualToString:@"ds"]) return 4; return -1;
 }
-#define NVN_RT_RANGE_RO_IMPL 1
-// Private continuation accepts only B reflection that is explicitly RO; a missing rw on sbuf does not let the default 0 count as proof; does not change the existing reflection / translation chain.
-static int rt_range_bindings_ro(NSDictionary *j) {
-    if (![j[@"route"] isEqual:@"B"] || ![j[@"bindings"] isKindOfClass:[NSArray class]] ||
-        ![j[@"drv_reads"] isKindOfClass:[NSDictionary class]] || [j[@"drv_reads"] count]) return 0;
-    for (NSDictionary *b in j[@"bindings"]) {
-        if (![b isKindOfClass:[NSDictionary class]] || ![b[@"kind"] isKindOfClass:[NSString class]] || ![b[@"msl_type"] isKindOfClass:[NSString class]]) return 0;
-        NSString *k=b[@"kind"], *t=b[@"msl_type"];
-        if (b[@"rw"] && (![b[@"rw"] isKindOfClass:[NSNumber class]] || [b[@"rw"] boolValue])) return 0;
-        if ([k isEqual:@"cbuf"] || [k isEqual:@"c1"]) { if (![t hasPrefix:@"constant "]) return 0; }
-        else if ([k isEqual:@"sbuf"]) { if (![b[@"rw"] isKindOfClass:[NSNumber class]] || [b[@"rw"] boolValue] || ![t hasPrefix:@"const device "]) return 0; }
-        else if ([k isEqual:@"samp"] || [k isEqual:@"sampt"]) { if (![t isEqual:@"sampler"]) return 0; }
-        else if ([k isEqual:@"tex"] || [k isEqual:@"tbuf"]) {
-            if (![t hasPrefix:@"texture"] || ([t containsString:@"access::"] && ![t containsString:@"access::sample>"] && ![t containsString:@"access::read>"])) return 0; }
-        else return 0;
-    }
-    return 1;
-}
-static int rt_range_pr_ro(NvProg *p) {
-    if (!p || !p->sh[0] || !p->sh[1]) return 0;
-    for (int k=0;k<6;k++) if (p->sh[k] && (k>1 || p->sh[k]->stage != k || !p->sh[k]->range_ro || p->sh[k]->rf.drv_read[0] || p->sh[k]->rf.drv_read[2])) return 0;
-    return 1;
-}
+
 // Programs' functional keys by serial (plan item 169; a side table: prog_t cannot grow, nvn_obj.h): set at SetShaders, dropped with the program
 static nvn_hmap g_pfk = {.klen = 8}; static pthread_mutex_t g_pfk_mu = PTHREAD_MUTEX_INITIALIZER;
 void mtl_prog_fkeys(uint64_t serial, const uint8_t fk[6][8]) {

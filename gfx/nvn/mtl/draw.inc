@@ -51,7 +51,6 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if ((g_rt_merged || (g_enc && g_ren.pass == g_pass.serial)) && g_enc_mode != 0 && (((S.ds.dt || S.ds.dw) && !g_pass.hd) || (S.ds.st && !g_pass.hs))) {   // (a pass that went on past a renamed update: its lookahead did too, this is a safety net)
         static int once2; if (!once2++) MLOG("same-target continuation: a draw in the continued pass needs a depth / stencil plane that is not attached, splitting here (first case pass %llu)", g_stat_pass);
         PD("M %llu a draw in the continued pass needs an unattached depth / stencil plane, splitting here", g_stat_pass); rp_end(); }
-    if (g_rt_range_active && (!rt_range_pr_ro(pr) || !S.ds.dt || S.ds.dw || S.ds.st)) rp_end();   // The external write visibility at the original encoder boundary is not removed
     if (g_lay.active && (!lay_prim_ok(dw ? dw->prim : di->prim) || lay_reads_target(pr))) { g_lay.splits++; g_lay.refuse = 1; rp_end(); }   // a draw a layered pass cannot hold: the pass ends, the next opens plain
     if (g_rt_merged && draw_samples_rt(pr)) { static int once; if (!once++) MLOG("same-target continuation: a draw in the continued pass samples an attachment, splitting here (first case pass %llu)", g_stat_pass);
         PD("M %llu a draw in the continued pass samples an attachment, splitting here", g_stat_pass); rp_end(); }
@@ -140,7 +139,6 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (pr->sh[0]) encode_args(en, pr->sh[0], 0, 1);
     if (pr->sh[1]) encode_args(en, pr->sh[1], 1, 0);
     // Parameter binding captures the actual resources under the registry lock; if the version changed between the eligibility check and the binding, split and retry before any GPU draw.
-    if (g_rt_range_active && (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
     int prim = dw ? dw->prim : di->prim;
     MTLPrimitiveType mp;
     switch (prim) {
@@ -199,8 +197,6 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
                S.has_vp ? S.vp[0][0] : 0, S.has_vp ? S.vp[0][1] : 0, S.has_vp ? S.vp[0][2] : (float)tw, S.has_vp ? S.vp[0][3] : (float)th, (int)S.poly.cull, (int)S.poly.front, S.dr[0], S.dr[1], di ? di->itype : -1);
         }
     }
-    if (rt_range_on() && !rt_range_pr_ro(pr)) g_pass.range_external=1;
-    rt_range_note_depth();
     udc_note_draw(pr);
     // A draw with 0 primitives (the game does send count=0) draws no pixels, so skip encoding; Metal requires the count to be non-zero, otherwise the validation layer aborts on the spot (measured on the camp / wilderness / combat pages)
     if (dw && prim == 7) {   // Quads: shared indices 0,1,2,0,2,3
@@ -227,7 +223,6 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
                 use_rec("buf", di->ibuf, (uint64_t)di->count, 0, NULL);
                 enc_r_draw_indexed(en, mp, di->count, MTLIndexTypeUInt16, g_wide_gpu, (NSUInteger)di->count * 2, di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
                 g_wide_gpu = 0;
-                if (g_rt_range_pending) { PD("j rt_level_range pass=%llu vc=%u", g_stat_pass, (unsigned)di->count); g_rt_range_pending = 0; }
                 return;
             }
             if (pend_hits(di->ibuf, (uint64_t)di->count)) RED_ONCE(83, "8-bit indices written by the GPU earlier in this submission are widened from memory (first case %#llx)", (unsigned long long)di->ibuf);
@@ -261,7 +256,6 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
                     di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
         }
     }
-    if (g_rt_range_pending) { PD("j rt_level_range pass=%llu vc=%u", g_stat_pass, (unsigned)(dw ? dw->count : di->count)); g_rt_range_pending=0; }
 }
 static nvn_hmap g_cps = {.klen = sizeof(void *)};
 static void warm_claim(void) {

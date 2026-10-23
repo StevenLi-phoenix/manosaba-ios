@@ -16,7 +16,7 @@ static void rp_end(void) { if (g_fbx_nact) { g_fbx_nact = 0; args_dirty_all(); }
     g_cnt_ext_x = g_cnt_ext_y = 0;
     if (enc_label_on()) { static uint64_t lf = ~0ull, base; uint64_t f = atomic_load(&g_cur_frame); if (f != lf) { lf = f; base = g_stat_pass - 1; }   // Intra-frame serial: the same pass has the same name every frame, so the table can aggregate by name
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
-    sd_finish(); pg_render_end(g_enc); enc_r_end(g_enc); zskip_commit_clears(); g_enc = nil; g_rt_merged = 0; g_lay.active = 0; g_rt_range_active = g_rt_range_pending = 0; ts_after(); if (g_lp.count) lp_finish(); fz_end();
+    sd_finish(); pg_render_end(g_enc); enc_r_end(g_enc); zskip_commit_clears(); g_enc = nil; g_rt_merged = 0; g_lay.active = 0; ts_after(); if (g_lp.count) lp_finish(); fz_end();
     if (g_nblk_wb) blk_writeback();   // blocks rendered into auxiliary textures → the compressed textures
 } }
 // A compressed texture as a render target (Tears of the Kingdom, as nxnative found in Breath of the Wild: a BC4 texture written through an RGBA16UI
@@ -197,10 +197,6 @@ static RENC rp_begin_ex(int clear_only) {
     g_enc_mode = clear_only;
     if (!R.has_rt) { RED_ONCE(3, "no render target set before draw"); return nil; }
     int lay_first = 0, lay_n = lay_decide(clear_only, &lay_first);
-    // The version of the attachment-range candidate is taken before capturing any attachment; if it changes during setup, there is no continuation.
-    uint64_t reg0 = 0, ser0 = 0, dirty0 = 0;
-    if (rt_range_on()) { reg0 = g_reg_gen; ser0 = g_ser_gen; }
-    if (rt_range_on()) dirty0=nvn_dirty_now();
     int any = 0; g_rt_dup_skip = 0;
     for (int i = 0; i < R.rt.n && i < 8; i++) if (R.clear_c[i] && rt_dup_slot(&R.rt, i))   // a pending clear on a slot left out goes to the slot kept (see rt_dup_slot)
         for (int j = 0; j < R.rt.n && j < 8; j++) if (j != i && rt_same_sub(&R.rt, i, j) && !rt_dup_slot(&R.rt, j)) { if (!R.clear_c[j]) { R.clear_c[j] = 1; R.cc[j] = R.cc[i]; } break; }
@@ -358,8 +354,6 @@ static RENC rp_begin_ex(int clear_only) {
         g_pass.dfmt = g_pass.hd ? (uint32_t)dt.pixelFormat : 0; g_pass.sfmt = stt ? (uint32_t)stt.pixelFormat : 0;
         if (dt || stt) g_pass.samples = (uint32_t)(dt ? dt : stt).sampleCount;
         pass_dims(pd, (NSUInteger)R.rt.n, &g_pass.tw, &g_pass.th);
-        if (rt_range_on()) { g_pass.reg_gen = reg0; g_pass.ser_gen = ser0; }
-        if (rt_range_on()) { g_pass.range_dirty=dirty0; g_pass.range_color=pd.colorAttachments[0].texture; g_pass.range_depth=pd.depthAttachment.texture; }
         g_enc_pso = nil; g_enc_dss = nil;
     }
     if (g_vis_on) {

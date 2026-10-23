@@ -171,10 +171,6 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     d.usage = MTLTextureUsageShaderRead | (fmt_compressed(t->d.format) || packaged ? 0 : MTLTextureUsageRenderTarget)
             | (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE ? MTLTextureUsageShaderWrite : 0)   // Image usage: shader-writable (compute kernels generating the 3D color lookup table, etc.)
             | (unp ? MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView : 0);   // No BC: textures in the decompressed format are written by the GPU decompression kernel (up_dec) / receive whole-block copies from ASTC sources (copy_t2t_astc)
-    // DM_NVN_DEPTH_PLAIN=1 (plan item 99, an A/B): depth / stencil textures without the GPU's lossless compression (allowGPUOptimizedContents NO;
-    // LASRecomp PR #204 lost its ambient occlusion with it on, cause unknown). Tears of the Kingdom's shots and brightness: the same either way
-    static int plain = -1; if (plain < 0) { const char *e = getenv("DM_NVN_DEPTH_PLAIN"); plain = e && atoi(e); if (plain) MLOG("DM_NVN_DEPTH_PLAIN=1: depth / stencil textures uncompressed"); }
-    if (plain && pf_is_depth_stencil(d.pixelFormat)) d.allowGPUOptimizedContents = NO;
     return d;
 }
 // In-place upgrade: when the original texture was not created with PixelFormatView (off by default, to keep Apple GPU lossless compression) but a different-format view is needed, create a new one with the original spec + PixelFormatView, copy over every slice × level, and replace the registration.

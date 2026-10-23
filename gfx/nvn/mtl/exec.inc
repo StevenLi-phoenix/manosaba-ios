@@ -95,8 +95,6 @@ void mtl_exec(const uint8_t *p) {
                 const p_set_rt *r = a;
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
-                if (g_enc && !pend && R.has_rt && tbdr_part(TBP_RANGE) && rt_range_same(&R.rt,r)) {
-                    g_rt_merged = g_rt_range_active = g_rt_range_pending = 1; R.rt = *r; break; }
                 if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_part(TBP_FUSE) && rt_same(&g_fz.rt1, r)) {
                     g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continued pass", g_stat_pass); break; }
                 // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)

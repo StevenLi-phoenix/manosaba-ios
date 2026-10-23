@@ -87,7 +87,7 @@ static NvShader *border_variant(NvShader *sh, int st) {
     if (msl && cnt) { MTLCompileOptions *o = [MTLCompileOptions new]; o.mathMode = MTLMathModeSafe; o.preserveInvariance = YES; lib = [g_dev newLibraryWithSource:msl options:o error:&e]; }
     id<MTLFunction> fn = lib ? (st == 1 && sh->alib ? alpha_plain(lib, j[@"entry"]) : [lib newFunctionWithName:j[@"entry"]]) : nil;
     if (fn) {
-        v = [NvShader new]; v->fn = fn; v->rf = sh->rf; v->ae = sh->ae; v->arg_len = sh->arg_len; v->stage = sh->stage; v->range_ro = sh->range_ro;
+        v = [NvShader new]; v->fn = fn; v->rf = sh->rf; v->ae = sh->ae; v->arg_len = sh->arg_len; v->stage = sh->stage;
         memcpy(v->key, sh->key, sizeof v->key); v->c1buf = sh->c1buf; v->c1_gpu = sh->c1_gpu; v->c1off = sh->c1off;
         if (sh->vi_lib) { v->vi_lib = lib; v->vi_entry = sh->vi_entry; v->vi_mask = sh->vi_mask; }
         if (sh->alib) v->alib = lib;

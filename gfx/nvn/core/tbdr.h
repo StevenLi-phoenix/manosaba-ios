@@ -5,12 +5,12 @@
 #include "../nvn_obj.h"
 #include "core.h"
 
-enum { TBP_ZSKIP = 1, TBP_XV = 2, TBP_COVER = 4, TBP_STORE = 8, TBP_SDX = 16, TBP_DEFER = 32, TBP_FUSE = 64, TBP_HOIST = 128, TBP_DS = 256, TBP_RANGE = 512, TBP_CONT = 1024, TBP_RTHEAP = 2048 };
+enum { TBP_ZSKIP = 1, TBP_XV = 2, TBP_COVER = 4, TBP_STORE = 8, TBP_SDX = 16, TBP_DEFER = 32, TBP_FUSE = 64, TBP_HOIST = 128, TBP_DS = 256, TBP_CONT = 1024, TBP_RTHEAP = 2048 };   // (512 was the attachment-range continuation, removed: plan item 263)
 // Diagnostic DM_NVN_TBDR=0: turns off all TBDR optimizations (store lookahead, load elision, same-target continuation, clear-only pass hoist, on-demand depth-stencil attach); replay takes the plainest 'attach all, load all, store all' path.
 // Only for equivalence comparison (the same replay run on / off, comparing the picture byte by byte), not a product configuration
 // DM_NVN_TBDR_OFF=<part>[,<part>...] (diagnostic, plan item 62j): with the TBDR rewrites on, the parts named stay off: zskip, xv, cover (load
-// elision by coverage), store (store decisions), sdx (the store lookahead index), defer, fuse, hoist, ds (on-demand depth-stencil), range, cont
-// (same-target continuation), rtheap; "all" is DM_NVN_TBDR=0's set of parts
+// elision by coverage), store (store decisions), sdx (the store lookahead index), defer, fuse, hoist, ds (on-demand depth-stencil), cont (same-target
+// continuation), rtheap; "all" is DM_NVN_TBDR=0's set of parts
 // The checks are asked a few times a draw, so they stay inline; the first one reads the environment
 extern int g_tbdr, g_tbdr_off;                 // -1: not read yet
 extern int g_ruler_truth, g_ruler_pending;     // DM_NVN_RULER=1: the ruler's reference run with the rewrites off, then the measured mode (g_ruler_truth -1: not read yet)

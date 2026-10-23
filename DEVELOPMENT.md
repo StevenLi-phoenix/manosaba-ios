@@ -202,16 +202,13 @@ The open plan items, shortened (their history: the archive under the same number
 
 The codebase (2026-10-24, the user: the Metal backend in one 10,000-line file is the first thing to fix, before Android; what stays is mine to
 decide):
-- 263 the other switches off by default traced to their origin and measurement (`DM_NVN_RT_RANGE`, spread over ten parts with no recorded
-  result, first), each kept as a diagnostic, kept as an option with its numbers written down, or removed.
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
-  counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
-  In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91, the live texture in 92, the submit call's capture in 93, inline uniform updates in 94; then the live
-  texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
-  is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
-  covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
-  interface covers what manosaba needs.
+  counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes. In steps,
+  each into `gfx/nvn/core/` with its header and a test that needs no GPU. The parts that use little Metal are done (batches 88-94: the store
+  index, uniform snapshots, the TBDR switches and validity ledger with the pass dump, pending writes and frame measurements, the live
+  texture, the submit call's capture, inline uniform updates). Next the mixed parts (the replay loop, lookahead, tile merge, draw) split into
+  what is decided and what is executed, starting with the replay state (`S`, `R`) and the commands that only set it; then the file-scope
+  variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -361,3 +358,17 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   2, `UL_NO_REVERSE` 1, `UL_SEQ_STALE` 6, `UB_FLUSHED_SNAPSHOT` 4 as at batch 93; `t_nvn`: `UB_NEWEST_FIRST` 1); `t_core_usnap`'s fake arena
   aligned as the backend's. Batch tests as in batch 88; smoke: the same red lines and frames; Tears of the Kingdom's rename statistics at frame
   300 are one of the two counts the batches since 88 alternate between (14,012 as in batch 91).
+- [x] batch 95 · 263 the two switches off by default traced and removed. `DM_NVN_RT_RANGE` (a pass continued across a SetRenderTargets that
+  only narrows a colour view's levels) came with the initial release (46578a2) and has no measurement on record; it spread over ten parts
+  (`rt_range_on`, `rt_range_shape` / `rt_range_same` in lookahead, the read-only reflection `rt_range_bindings_ro` / `rt_range_pr_ro` and
+  `NvShader.range_ro`, its branch in `mtl_exec`, the checks in `draw`, `chunks`, `metalfx_scene` and the fbx refusal, `g_pass`'s range
+  fields, the `TBP_RANGE` part). `DM_NVN_DEPTH_PLAIN` (plan item 99's A/B: the same picture either way) leaves `tex_desc`. Every removed
+  branch was gated by a switch off by default or by state only the candidate set, so the default path is unchanged. `DM_NVN_TBDR_OFF` reads a
+  table of names and bits (the other parts keep their bits; "range" now names nothing). Tests: `t_rt_range` becomes
+  `gfx/tests/t_view_levels.m` with what its `--disabled` run covered (two passes ended by hand or by the SetRenderTargets, the same
+  picture, depth read-only first draw, occlusion samples, the attachment bytes with and without unwritten DontCare; 19 checks in each of
+  four runs; the first targets taken for the second's, `--same-targets`, fails 2); `t_rt_range_shape`, `t_rt_depth_ro` and `t_depth_plain`
+  (only the removed switches) go; `t_core_tbdr` +1 (31: "range" names nothing, the 11 parts); `t_rt_continue` no longer sets the removed
+  metadata (its cases 2 and 3 never read it with the switch off). The batch's first gfx run stopped at that compile error before any test ran
+  (Metal 3) or before t_present_fx (Metal 4, where the run always stops there, so it was not seen); the tests ran again whole after the fix
+  (no compile error, all as in batch 94), and the batch summary counts compile errors since. Smoke: the same red lines and frames.

@@ -3,7 +3,7 @@
 // an 8x4 RGBA8 target of two levels with a depth-stencil (D32F S8) one, cleared (black, 0.875, 0x2d); the first command buffer draws red at depth
 // 0.5 with stencil 0x55 into the left half (scissor 4x4); the second draws green at depth 0.75 with stencil 0x66 over all of it (LESS: only the
 // right half passes). Between or in the second: nothing (same), a clear of both again (all green, depth 0.75, stencil 0x66), a barrier before or
-// after its SetRenderTargets, programs without read-only metadata before or after, a copy of the colour target to a buffer (which must hold the
+// after its SetRenderTargets, other programs before or after (once without the removed DM_NVN_RT_RANGE's read-only metadata), a copy of the colour target to a buffer (which must hold the
 // first command buffer's result), a view of level 0 (the same subresource), the colour texture's ID registered again, a second program that
 // samples level 1 of the colour target (cleared red beforehand: red everywhere), and a view of level 1 with the same depth target, drawn without depth
 // or stencil tests (other level: level 0 keeps the first command buffer's result alone, level 1 all green; only the view differs). Every case reads back colour, depth and stencil exactly, with the bytes past
@@ -155,12 +155,11 @@ int main(void) { @autoreleasepool {
     NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:src options:nil error:&e];
     if (!lib) { printf("%s\n", e.localizedDescription.UTF8String); return 2; }
     static prog_t pg[5]; static NvProg *keep[5];
-    for (int k = 0; k < 5; k++) {   // 0 red, 1 green, 2 / 3 the same without read-only metadata, 4 sampling level 1 of its texture
+    for (int k = 0; k < 5; k++) {   // 0 red, 1 green, 2 / 3 the same as other programs, 4 sampling level 1 of its texture
         pg[k] = (prog_t){.serial = 2100000 + k}; NvProg *p = [NvProg new];
         p->sh[0] = [NvShader new]; p->sh[0]->fn = [lib newFunctionWithName:k == 0 || k == 2 ? @"v" : @"w"];
         p->sh[1] = [NvShader new]; p->sh[1]->fn = [lib newFunctionWithName:k == 4 ? @"sampled" : k == 0 || k == 2 ? @"red" : @"green"];
         p->sh[1]->stage = 1; p->sh[1]->rf.color_mask = 1;
-        p->sh[0]->range_ro = p->sh[1]->range_ro = k != 2 && k != 3;
         if (k == 4) { p->sh[1]->rf.nb = 1; p->sh[1]->rf.b[0] = (nvn_rbind){.kind = NVN_RB_TEX, .reg = 0, .dtt = 2, .decl_tt = MTLTextureType2D}; p->sh[1]->ae = [p->sh[1]->fn newArgumentEncoderWithBufferIndex:0]; }
         serial_put(pg[k].serial, p); keep[k] = p;
     }

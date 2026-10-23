@@ -104,7 +104,7 @@ void mtl_sub_begin(void) {
 
 static void rp_end(void);
 // Metal 4 conservative barriers (first version): a consumer barrier at the start of an encoder (all prior work → this encoder) and a producer barrier at the end (this encoder and earlier → later encoders).
-// Only the one at the start is not enough: t_rt_range 'pass 1 → pass 2 → copy' read back black, and after adding the end barrier it is 19/19. Old-queue encoders (upload / diagnostics / present) do not go through these barriers.
+// Only the one at the start is not enough: t_view_levels' 'pass 1 → pass 2 → copy' (then t_rt_range) read back black, and after adding the end barrier it is 19/19. Old-queue encoders (upload / diagnostics / present) do not go through these barriers.
 #if DM_NVN_M3
 static inline void m4_end(id e) { [e endEncoding]; }   // the older API has no explicit barriers: dependencies come from useResource declarations plus the system's automatic tracking
 static inline void m3_rbuf(id<MTLRenderCommandEncoder> e, int vertex, NSUInteger i, uint64_t gpu) {

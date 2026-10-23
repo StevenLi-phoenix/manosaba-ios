@@ -154,7 +154,7 @@ make -C gfx/tex/tests run
 
 The tests compile the production sources in directly and read no game data. `t_nvn` drives the interface layer the way a game does, from
 `nvnBootstrapLoader` to presentation; the `.m` tests compile the replay layer and check its pass optimizations (`t_reorder_chain`, `t_defer_chain`,
-`t_fuse_check`, `t_zskip`, `t_xv`, `t_rt_range*`, …), presentation cropping, mip extents, sRGB views and GPU deswizzling.
+`t_fuse_check`, `t_zskip`, `t_xv`, `t_view_levels`, …), presentation cropping, mip extents, sRGB views and GPU deswizzling.
 
 ## Run-time switches
 
@@ -189,7 +189,6 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_WB_IDLE=1` | An experiment (plan item 94): a texture the GPU wrote in a CPU-visible pool and left alone for 30 submissions is written back to its storage, and one whose storage the CPU writes afterwards is uploaded from it again. Off: it changes more than the terrain it is for (94a) |
 | `DM_NVN_WB_IDLE_SUBS=<n>` | With `DM_NVN_WB_IDLE=1`: write back after n idle submissions instead of 30 (1: after every GPU write; a diagnostic) |
 | `DM_NVN_ANISO=<2..16>` | Anisotropic filtering raised to that on mipmapped linear samplers without a depth compare or a reduction (most of Tears of the Kingdom's ask for 1); off by default, which keeps the shots comparable with the console's |
-| `DM_NVN_DEPTH_PLAIN=1` | Depth / stencil textures without the GPU's lossless compression (an A/B; the same picture in Tears of the Kingdom's prologue) |
 | `DM_NVN_COUNTS=1` | Counters in the power summary: draws sampling their own attachment, timestamp reports, ClearTexture, passes without a draw, passes drawing only a top-left part, counter reads and svcs a second |
 | `DM_NVN_TS_LATE_US=<µs>` | Report counter timestamps that much later (the game sees a slower GPU) |
 | `DM_FPS_TRIAL=1` | Frame-rate trials (plan item 216, `nvn/nvn_fptrial.h`; off by default: on the iPhone 17 Pro at 60 Hz none of 22 held on Great Sky Island). A game whose step the host sets (Tears of the Kingdom with the option realtime), held at interval 2 or 3 for 5 s while the player's target is 60, reads its counter times drawn nearer their submission's GPU start (× 0.35) until it picks interval 1 and for 1 s after, so the GPU's clock can come up; a game that steps back up within 4 s on the real times has failed, and the wait doubles (up to 32 s). Only at a 60 Hz present rate in game interval mode |

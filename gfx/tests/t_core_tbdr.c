@@ -22,7 +22,8 @@ void nvn_be_bind_sers(const p_bind_handles *b, int nh, uint64_t *ser) { for (int
 
 static void env(const char *k, const char *v) { if (v) setenv(k, v, 1); else unsetenv(k); }
 static void reread(void) { g_tbdr = g_tbdr_off = -1; g_ruler_truth = -1; }
-static int all_parts(void) { int on = 0; for (int b = 1; b <= TBP_RTHEAP; b <<= 1) on += tbdr_part(b); return on; }
+static const int parts[] = {TBP_ZSKIP, TBP_XV, TBP_COVER, TBP_STORE, TBP_SDX, TBP_DEFER, TBP_FUSE, TBP_HOIST, TBP_DS, TBP_CONT, TBP_RTHEAP};
+static int all_parts(void) { int on = 0; for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) on += tbdr_part(parts[i]); return on; }
 
 static uint8_t g_mem[4096] __attribute__((aligned(8))); static size_t g_len;
 static void rec(uint32_t op, const void *pl, size_t sz) {
@@ -49,9 +50,11 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     const char *keys[] = {"DM_NVN_TBDR", "DM_NVN_TBDR_OFF", "DM_NVN_RULER", "DM_NVN_UNWRITTEN_DC", "DM_NVN_UDC_AB"};
     for (int i = 0; i < 5; i++) env(keys[i], NULL);
-    reread(); check("no switch set: the rewrites on, all 12 parts", 1, tbdr_on() && all_parts() == 12);
+    reread(); check("no switch set: the rewrites on, all 11 parts", 1, tbdr_on() && all_parts() == 11);
     env("DM_NVN_TBDR_OFF", "sdx,hoist"); reread();
-    check("DM_NVN_TBDR_OFF=sdx,hoist: those two off, store on", 1, !tbdr_part(TBP_SDX) && !tbdr_part(TBP_HOIST) && tbdr_part(TBP_STORE) && all_parts() == 10);
+    check("DM_NVN_TBDR_OFF=sdx,hoist: those two off, store on", 1, !tbdr_part(TBP_SDX) && !tbdr_part(TBP_HOIST) && tbdr_part(TBP_STORE) && all_parts() == 9);
+    env("DM_NVN_TBDR_OFF", "cont,rtheap,range"); reread();
+    check("DM_NVN_TBDR_OFF=cont,rtheap,range: the last two parts by their bits; range, removed, names nothing", 1, !tbdr_part(TBP_CONT) && !tbdr_part(TBP_RTHEAP) && g_tbdr_off == (TBP_CONT | TBP_RTHEAP));
     env("DM_NVN_TBDR_OFF", "all"); reread();
     check("DM_NVN_TBDR_OFF=all: every part off, the switch itself on", 1, tbdr_on() && all_parts() == 0);
     check("... read once (the mask is not taken for \"not read yet\")", 0xfff, g_tbdr_off);

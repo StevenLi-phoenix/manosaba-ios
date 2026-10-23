@@ -139,8 +139,6 @@ t_flushtexels: t_flushtexels.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_flushtexels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_vfetch: t_vfetch.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vfetch.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_depth_plain: t_depth_plain.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_depth_plain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_cubearr: t_cubearr.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_cubearr.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_libcopy: t_libcopy.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -225,12 +223,8 @@ t_visibility: t_visibility.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX
 	clang $(CFLAGS) -fobjc-arc -o $@ t_visibility.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_rt_range_shape: t_rt_range_shape.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_range_shape.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_rt_range: t_rt_range.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_range.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_rt_depth_ro: t_rt_depth_ro.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_depth_ro.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_view_levels: t_view_levels.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_view_levels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_skey.m -framework Foundation
 t_pso_canon: t_pso_canon.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
@@ -271,7 +265,6 @@ run: \
 	t_defer_chain \
 	t_dirty_shared \
 	t_drvseg \
-	t_depth_plain \
 	t_cubearr \
 	t_deswz_gpu \
 	t_dirty_race \
@@ -344,9 +337,7 @@ run: \
 	t_rstream \
 	t_retire \
 	t_reorder_chain \
-	t_rt_depth_ro \
-	t_rt_range \
-	t_rt_range_shape \
+	t_view_levels \
 	t_rt_srgb_view \
 	t_samp \
 	t_snapreap \
@@ -498,20 +489,16 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_drvseg
 	MTL_DEBUG_LAYER=1 ./t_mip_extent
 	MTL_DEBUG_LAYER=1 ./t_mip_extent --stencil-only
-	./t_rt_depth_ro
-	./t_rt_range_shape
-	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range
-	MTL_DEBUG_LAYER=1 ./t_rt_range   # DontCare on by default: the expected attachment bytes save one depth-stencil store per pass
-	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --disabled
-	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --small-depth
-	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
+	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_view_levels
+	MTL_DEBUG_LAYER=1 ./t_view_levels   # DontCare on by default: the expected attachment bytes save one depth-stencil store per pass
+	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_view_levels --small-depth
+	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_view_levels --sample-attachment
 	./t_pso_skey
 	./t_pso_canon
 	MTL_DEBUG_LAYER=1 ./t_samp
 	MTL_DEBUG_LAYER=1 ./t_fmt_swz
 	MTL_DEBUG_LAYER=1 ./t_vfetch
 	./t_writetexels 2>/dev/null
-	DM_NVN_DEPTH_PLAIN=1 ./t_depth_plain
 	./t_cubearr 2>/dev/null
 	DM_NVN_LIB_COPY=1 ./t_libcopy
 	./t_retry 2>/dev/null

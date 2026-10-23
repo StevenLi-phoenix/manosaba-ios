@@ -52,9 +52,9 @@ static void mtl_sub_split(void) {
 static void chunk_maybe_split(void) {   // where a new encoder is about to open and none is open
     chunk_cfg();
 #ifndef DM_TEST_CHUNK_ANY_TBDR   // negative control of t_chunk only: no commits while any TBDR rewrite is on, as before
-    if (!g_chunk_size || !g_cb || g_enc || g_rt_range_active || tbdr_merging()) return;
+    if (!g_chunk_size || !g_cb || g_enc || tbdr_merging()) return;
 #else
-    if (!g_chunk_size || !g_cb || g_enc || g_rt_range_active || tbdr_on()) return;
+    if (!g_chunk_size || !g_cb || g_enc || tbdr_on()) return;
 #endif
     if (g_stat_draw - g_chunk_mark < (uint64_t)(g_sub_chunks ? g_chunk_size : g_chunk_first)) return;
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
