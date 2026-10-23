@@ -1,5 +1,5 @@
-// Uniform snapshots at submission start (nvn_mtl.m mtl_sub_snapshot; method from MacNativeGames' usnap): a draw reads a uniform block as it was when
-// the submission started, although the CPU rewrites it during the replay (negative control: g_us_on = 0, the draw reads the rewritten bytes); an
+// Uniform snapshots at submission start (nvn_mtl.m mtl_sub_snapshot, gfx/nvn/core/usnap.c; method from MacNativeGames' usnap): a draw reads a uniform block as it was when
+// the submission started, although the CPU rewrites it during the replay (negative control: g_us.on = 0, the draw reads the rewritten bytes); an
 // inline update within the submission is seen by the draws after it and not by those before; nearby ranges are merged, each copy keeps its offset
 // modulo 256; a range that a GPU write of a submission still running reaches is not copied; a range made unreadable after its pool was registered
 // drops that copy and the process goes on (on this thread and on the workers that copy in parts; without the fault guard it ends with SIGBUS);
@@ -51,7 +51,7 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
 
     // 1. The CPU rewrites the block after the submission started (as Tears of the Kingdom's worker threads do during the replay)
     for (int on=1; on>=0; on--) {
-        g_us_on=on; memcpy(um,RED,16); tex_t a=tex(8); chain c=chain_new();
+        g_us.on=on; memcpy(um,RED,16); tex_t a=tex(8); chain c=chain_new();
         set_rt(&c,&a); ds_off(&c); bind_prog(&c,&pg); bind_ubo(&c,u,256); draw_cmd(&c); emit(&c,OP_END,NULL,0);
         begin(&c);
         EXPECT(on?"1. snapshot on: the bound range is copied":"1. snapshot off (negative control): nothing is copied",on,us_find(u,256)!=NULL);
@@ -61,17 +61,17 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
         mtl_exec(c.p);
         EXPECT(on?"1. the draw reads the block as it was at the submit call (red)":"1. off: the draw reads the rewritten block (green)",on?C_RED:C_GREEN,px0(&a));
     }
-    g_us_on=1;
+    g_us.on=1;
 
     // 2. An inline update within the submission: the draw before it reads the copy, the draw after it what the GPU wrote
     {
-        memcpy(um,RED,16); tex_t a=tex(8), b=tex(8); chain c=chain_new(); uint64_t d0=g_us_drops;
+        memcpy(um,RED,16); tex_t a=tex(8), b=tex(8); chain c=chain_new(); uint64_t d0=g_us.drops;
         set_rt(&c,&a); ds_off(&c); bind_prog(&c,&pg); bind_ubo(&c,u,256); draw_cmd(&c);
         update_ub(&c,u,BLUE,16);
         set_rt(&c,&b); draw_cmd(&c); emit(&c,OP_END,NULL,0);
         begin(&c); memcpy(um,GREEN,16); mtl_exec(c.p);
         EXPECT("2. draw before the update: the copy (red)",C_RED,px0(&a));   // a and b are read back in two submissions: the first commit carries both draws
-        EXPECT(ub_rename_on()?"2. renamed: the update keeps the copy (private copies add it)":"2. DM_NVN_UB_RENAME=0: the update drops the copy",ub_rename_on()?0:1,g_us_drops-d0);
+        EXPECT(ub_rename_on()?"2. renamed: the update keeps the copy (private copies add it)":"2. DM_NVN_UB_RENAME=0: the update drops the copy",ub_rename_on()?0:1,g_us.drops-d0);
         mtl_sub_begin(); EXPECT("2. draw after the update: the update's bytes (blue)",C_BLUE,px0(&b));
     }
 
@@ -79,34 +79,34 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
     //    modulo 256; the update of section 2 has completed, so its range is copied again
     {
         for (int i=0;i<0x3000;i++) um[i]=(uint8_t)(i*7+3);
-        chain c=chain_new(); uint64_t s0=g_us_skip_gpu;
+        chain c=chain_new(); uint64_t s0=g_us.skip_gpu;
         bind_ubo(&c,u,256); bind_ubo(&c,u+256,256); bind_ubo(&c,u+0x1000,512); bind_ubo(&c,u+0x2040,64); bind_ubo(&c,u+0x1100,16); emit(&c,OP_END,NULL,0);
         begin(&c);
-        EXPECT("3. three copies",3,g_us_n);
-        int ok=g_us_n==3 && g_us[0].lo==u && g_us[0].hi==u+512 && g_us[1].lo==u+0x1000 && g_us[1].hi==u+0x1200 && g_us[2].lo==u+0x2040 && g_us[2].hi==u+0x2080;
+        EXPECT("3. three copies",3,g_us.n);
+        int ok=g_us.n==3 && g_us.ent[0].lo==u && g_us.ent[0].hi==u+512 && g_us.ent[1].lo==u+0x1000 && g_us.ent[1].hi==u+0x1200 && g_us.ent[2].lo==u+0x2040 && g_us.ent[2].hi==u+0x2080;
         EXPECT("3. copies [u, +512) [u+0x1000, +512) [u+0x2040, +64)",1,ok);
-        int al=1, eq=1; for (int i=0;i<g_us_n;i++) { al&=(g_us[i].gpu&255)==(g_us[i].lo&255); eq&=!memcmp(g_us[i].cpu,(const void *)(uintptr_t)g_us[i].lo,g_us[i].hi-g_us[i].lo); }
+        int al=1, eq=1; for (int i=0;i<g_us.n;i++) { al&=(g_us.ent[i].gpu&255)==(g_us.ent[i].lo&255); eq&=!memcmp(g_us.ent[i].cpu,(const void *)(uintptr_t)g_us.ent[i].lo,g_us.ent[i].hi-g_us.ent[i].lo); }
         EXPECT("3. every copy at the same offset modulo 256 as its range",1,al);
         EXPECT("3. every copy holds the range's bytes",1,eq);
-        EXPECT("3. a binding inside a copy finds it",1,us_find(u+0x1100,16)==&g_us[1]);
+        EXPECT("3. a binding inside a copy finds it",1,us_find(u+0x1100,16)==&g_us.ent[1]);
         EXPECT("3. a binding across two copies finds none",0,us_find(u+0x1180,0x100)!=NULL);
-        EXPECT("3. nothing skipped (the earlier GPU write has completed)",0,g_us_skip_gpu-s0);
+        EXPECT("3. nothing skipped (the earlier GPU write has completed)",0,g_us.skip_gpu-s0);
         us_drop(u+0x11f0,0x20);
         EXPECT("3. a GPU write over the end of one copy drops only that copy",1,!us_find(u+0x1100,16) && us_find(u,512) && us_find(u+0x2040,64));
         mtl_sub_commit(); mtl_finish();
-        EXPECT("3. the copies end with their submission",0,g_us_n);
+        EXPECT("3. the copies end with their submission",0,g_us.n);
     }
 
     // 4. A GPU write of a submission still running (its fence not reached) reaches one range: that range is not copied, the others are
     {
-        g_us_gwn=0; uint64_t far=g_fence+1000; us_gw w={u+0x1080,u+0x1090,far}; g_us_gw[g_us_gwn++]=w;   // the table holds at least 4096 entries since section 2
-        chain c=chain_new(); uint64_t s0=g_us_skip_gpu;
+        g_us.gwn=0; uint64_t far=g_fence+1000; us_gw w={u+0x1080,u+0x1090,far}; g_us.gw[g_us.gwn++]=w;   // the table holds at least 4096 entries since section 2
+        chain c=chain_new(); uint64_t s0=g_us.skip_gpu;
         bind_ubo(&c,u,256); bind_ubo(&c,u+0x1000,256); emit(&c,OP_END,NULL,0);
         begin(&c);
         EXPECT("4. the range the running write reaches is not copied",0,us_find(u+0x1000,256)!=NULL);
         EXPECT("4. the other range is copied",1,us_find(u,256)!=NULL);
-        EXPECT("4. counted as skipped",1,g_us_skip_gpu-s0);
-        mtl_sub_commit(); mtl_finish(); g_us_gwn=0;
+        EXPECT("4. counted as skipped",1,g_us.skip_gpu-s0);
+        mtl_sub_commit(); mtl_finish(); g_us.gwn=0;
     }
 
     // 5. A bound range made unreadable after its pool was registered (the game unmapped it): its copy faults, is dropped, the others are kept and
@@ -115,20 +115,20 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
         size_t pg=(size_t)getpagesize(), big=1u<<21; uint8_t *bm; if (posix_memalign((void **)&bm,pg,big)) abort(); memset(bm,0x5a,big); mtl_pool_add(bm,big);
         uint64_t b=(uint64_t)(uintptr_t)bm;
         for (int par=0; par<2; par++) {
-            chain c=chain_new(); uint64_t f0=g_us_faults, n0=g_us_par_n;
+            chain c=chain_new(); uint64_t f0=g_us.faults, n0=g_us.par_n;
             if (!par) { bind_ubo(&c,b,256); bind_ubo(&c,b+0x10000,256); bind_ubo(&c,b+0x20000,256); }
             else for (int i=0;i<5;i++) bind_ubo(&c,b+(uint64_t)i*0x20000,0x10000);
             emit(&c,OP_END,NULL,0);
-            uint64_t bad=par?b+2*0x20000:b+0x10000, j0=g_us_jumps;
+            uint64_t bad=par?b+2*0x20000:b+0x10000, j0=g_us.jumps;
             mprotect((void *)(uintptr_t)(bad&~(uint64_t)(pg-1)),pg,PROT_NONE);
             begin(&c);
             mprotect((void *)(uintptr_t)(bad&~(uint64_t)(pg-1)),pg,PROT_READ|PROT_WRITE);
-            EXPECT(par?"5. workers: one fault caught":"5. this thread: one fault caught",1,g_us_faults-f0);
-            EXPECT(par?"5. workers: the copies were made in parts":"5. this thread: copied here, not in parts",par?1:0,g_us_par_n-n0);
+            EXPECT(par?"5. workers: one fault caught":"5. this thread: one fault caught",1,g_us.faults-f0);
+            EXPECT(par?"5. workers: the copies were made in parts":"5. this thread: copied here, not in parts",par?1:0,g_us.par_n-n0);
             EXPECT("5. the unreadable range's copy is dropped (its draws read memory)",0,us_find(bad,256)!=NULL);
             EXPECT("5. the readable range's copy is kept",1,us_find(b,256)!=NULL);
             if (!par) { EXPECT("5. this thread: the copy after the fault is made too",1,us_find(b+0x20000,256)!=NULL);
-                        EXPECT("5. ... with one guard for the run and one after the fault [-DDM_TEST_US_GUARD_EACH: 4]",2,g_us_jumps-j0); }
+                        EXPECT("5. ... with one guard for the run and one after the fault [-DDM_TEST_US_GUARD_EACH: 4]",2,g_us.jumps-j0); }
             mtl_sub_commit(); mtl_finish();
         }
     }
@@ -148,19 +148,19 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0); mtl_init(); crash
     // 7. The submit call's capture (the game's thread, DM_NVN_XLAT): three blocks, the middle one unreadable: it is left to be read live, the
     //    others are taken, the one after the fault too, under one guard and one after the fault
     {
-        g_us_on=1; size_t pg=(size_t)getpagesize(), big=1u<<20; uint8_t *bm; if (posix_memalign((void **)&bm,pg,big)) abort(); memset(bm,0x3c,big); mtl_pool_add(bm,big);
+        g_us.on=1; size_t pg=(size_t)getpagesize(), big=1u<<20; uint8_t *bm; if (posix_memalign((void **)&bm,pg,big)) abort(); memset(bm,0x3c,big); mtl_pool_add(bm,big);
         uint64_t b=(uint64_t)(uintptr_t)bm; chain c=chain_new(); bind_ubo(&c,b,256); bind_ubo(&c,b+0x10000,256); bind_ubo(&c,b+0x20000,256); emit(&c,OP_END,NULL,0);
-        uint64_t f0=g_us_faults, j0=g_us_jumps, hh=(uint64_t)c.p;
+        uint64_t f0=g_us.faults, j0=g_us.jumps, hh=(uint64_t)c.p;
         mprotect((void *)(uintptr_t)(b+0x10000),pg,PROT_NONE);
         mtl_cap *cp=mtl_sub_capture(&hh,1,1);
         mprotect((void *)(uintptr_t)(b+0x10000),pg,PROT_READ|PROT_WRITE);
         int ok0=0, ok2=0, live1=0;
         for (int i=0;i<cp->nr;i++) { if (cp->r[i].lo==b) ok0=cp->off[i]!=UINT64_MAX&&cp->data[cp->off[i]]==0x3c; if (cp->r[i].lo==b+0x10000) live1=cp->off[i]==UINT64_MAX;
                                      if (cp->r[i].lo==b+0x20000) ok2=cp->off[i]!=UINT64_MAX&&cp->data[cp->off[i]+255]==0x3c; }
-        EXPECT("7. capture: one fault caught",1,g_us_faults-f0);
+        EXPECT("7. capture: one fault caught",1,g_us.faults-f0);
         EXPECT("7. capture: the unreadable block is read live at the replay",1,live1);
         EXPECT("7. capture: the blocks before and after it are taken",1,ok0&&ok2);
-        EXPECT("7. capture: one guard for the run and one after the fault",2,g_us_jumps-j0);
+        EXPECT("7. capture: one guard for the run and one after the fault",2,g_us.jumps-j0);
         mtl_cap_free(cp);
     }
     printf("== %d checks, %d failed ==\n",count,fail); return fail!=0;}}

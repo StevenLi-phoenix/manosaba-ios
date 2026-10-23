@@ -25,6 +25,8 @@ t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
 CORE_H=$(wildcard ../nvn/core/*.h)
 t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
 	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
+t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
 	clang $(CFLAGS) -Werror -o $@ t_core_prog.c ../nvn/core/prog.c
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
@@ -244,6 +246,7 @@ run: \
 	t_copy_pitch \
 	t_core_prog \
 	t_core_store_index \
+	t_core_usnap \
 	t_cover \
 	t_cull_prim \
 	t_d16clear \
@@ -361,6 +364,7 @@ run: \
 	./t_hmap
 	./t_core_prog
 	./t_core_store_index
+	./t_core_usnap
 	./t_cover
 	./t_copy_pitch
 	./t_pool_find

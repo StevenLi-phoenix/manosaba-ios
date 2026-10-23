@@ -87,7 +87,7 @@ static int ub_skip(const char *key) {   // Whether this phase should drop draws 
     for (int i = 0; i < g_ub_nk[uc]; i++) { const char *k = g_ub_keys[uc][i]; if (k[0] == '@') continue; if (k[0] == '*' || !strncmp(key, k, strlen(k))) return 1; }
     return 0;
 }
-static void us_report(uint64_t f); static void ren_report(uint64_t f); static void lay_report(uint64_t f); static void rc_report(uint64_t f);
+static void ren_report(uint64_t f); static void lay_report(uint64_t f); static void rc_report(uint64_t f);
 void mtl_set_frame(uint64_t f) { atomic_store(&g_cur_frame, f); if (g_ub_n) ub_frame(f); us_report(f); ren_report(f); lay_report(f); rc_report(f); }
 // GPU timing registration: gpu_tag_begin(frame) before commit, gpu_tag_done(frame, GPU start, GPU end) on completion (seconds on the CACurrentMediaTime base).
 // Old-queue command buffers go through gpu_tag_f; the Metal 4 main submission backfills in the feedback of mtl_sub_commit (when switching to Metal 4 all the call sites were lost and the GPU column of the "timing" line became empty)

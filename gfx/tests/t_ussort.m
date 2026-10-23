@@ -1,4 +1,4 @@
-// Uniform snapshot preparation (nvn_mtl.m us_rng_sort / us_seen / us_copy_all): the radix sort orders the bindings by start as qsort does (random,
+// Uniform snapshot preparation (gfx/nvn/core/usnap.c us_rng_sort / us_seen / us_copy_all): the radix sort orders the bindings by start as qsort does (random,
 // clustered and repeated starts, high bits shared or not); a binding repeated through a submission is collected once; a snapshot above US_PAR_MIN bytes
 // is copied in parts on worker threads and every copy holds its range's bytes. Negative control: DM_NVN_UBO_SNAPSHOT_PAR=0 fails "copied in parts".
 #include "../nvn/nvn_mtl.m"
@@ -36,18 +36,18 @@ int main(void) { @autoreleasepool {
     chain c = {0}; if (posix_memalign((void **)&c.p, getpagesize(), 1 << 20)) abort(); mtl_pool_add(c.p, 1 << 20);
     for (int r = 0; r < 8; r++) for (int b = 0; b < 600; b++) { p_bind_buf ub = {NVN_SHADER_STAGE_FRAGMENT, 3, (uint64_t)(uintptr_t)(mem + (size_t)b * 6144), 1024}; emit(&c, OP_BIND_UBO, &ub, sizeof ub); }
     emit(&c, OP_END, NULL, 0);
-    mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; uint64_t r0 = g_us_ranges;
-    uint64_t par0 = g_us_par_n;
+    mtl_sub_begin(); uint64_t hh = (uint64_t)(uintptr_t)c.p; uint64_t r0 = g_us.ranges;
+    uint64_t par0 = g_us.par_n;
     mtl_sub_snapshot(&hh, 1);
     // A block whose four probes in the seen table find no place (it depends on the addresses: about one run in ten here) is collected again at each
     // of its 7 later bindings, and the merge drops the repeats: 600 plus 7 per such block, a few at most
-    long long got = (long long)(g_us_ranges - r0);
+    long long got = (long long)(g_us.ranges - r0);
     printf("    (%lld collected)\n", got);
     EXPECT("4,800 bindings of 600 blocks: 600 collected, plus 7 for each block the seen table had no place for (at most 8)", 1, got >= 600 && got <= 600 + 7 * 8 && (got - 600) % 7 == 0);
-    EXPECT("600 copies (6 KiB apart: not merged)", 600, g_us_n);
+    EXPECT("600 copies (6 KiB apart: not merged)", 600, g_us.n);
     int bad = 0; for (int b = 0; b < 600; b++) { const us_ent *u = us_find((uint64_t)(uintptr_t)(mem + (size_t)b * 6144), 1024); bad += !u || memcmp(u->cpu, mem + (size_t)b * 6144, 1024); }
     EXPECT("every copy holds its block's bytes", 0, bad);
-    EXPECT("copied in parts on worker threads [DM_NVN_UBO_SNAPSHOT_PAR=0 fails]", 1, (long long)(g_us_par_n - par0));
+    EXPECT("copied in parts on worker threads [DM_NVN_UBO_SNAPSHOT_PAR=0 fails]", 1, (long long)(g_us.par_n - par0));
     mtl_wait(mtl_sub_commit(), 5000000000ull);
     printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
 } }

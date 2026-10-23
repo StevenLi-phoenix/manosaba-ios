@@ -83,7 +83,7 @@ Binding conventions used by the translation:
 | `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: the Metal device, queues, residency and deferred releases, then the parts below, included in this order (one translation unit, plan item 261) |
 | `nvn/mtl/pools.inc` | Memory pools: the pool table, GPU addresses of guest memory and the buffers behind them |
 | `nvn/mtl/occlusion.inc` | Occlusion queries (samples passed) and the report writes still pending |
-| `nvn/mtl/usnap.inc` | Uniform snapshots: each submission's copies of the uniform ranges it binds |
+| `nvn/mtl/usnap.inc` | Uniform snapshots' backend side: the pools, arena, worker threads and fences they use |
 | `nvn/mtl/capture.inc` | The submit call's view for the translation thread (plan item 61) and the snapshot lookups on it |
 | `nvn/mtl/encoders.inc` | The encoder layer: Metal 4 / Metal 3 encoder wrappers, blits, inline updates, events, counters, timestamps |
 | `nvn/mtl/frame_timing.inc` | Boot instrumentation, per-frame GPU time, same-process alternating measurement (DM_NVN_UB), GPU time tags, DM_NVN_GPUWATCH |
@@ -118,9 +118,10 @@ Binding conventions used by the translation:
 | `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |
 | `nvn/mtl/present.inc` | MetalFX upscaling of the presented picture, live shots, the perf line, present_now |
 | `nvn/mtl/present_thread.inc` | The present thread and the display link, statistics getters |
-| `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend |
+| `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend; a clock for statistics |
 | `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
+| `nvn/core/usnap.c`, `nvn/core/usnap.h` | Uniform snapshots: each submission's copies of the uniform ranges it binds; deferred binding handles read once a submission |
 | `nvn/core/store_index.c`, `nvn/core/store_index.h` | The store lookahead index: one scan per submission, the first valid event after a pass end decides each attachment's write-back |
 | `nvn/nvn_obj.h` | Host object layouts and the command record format, shared by both layers |
 | `nvn/nvn_entry.S`, `nvn/nvn_thunks.S` | Unimplemented stub and timing wrapper entries; per-function thunks (generated) |

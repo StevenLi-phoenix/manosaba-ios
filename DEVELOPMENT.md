@@ -207,7 +207,7 @@ decide):
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
   In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88; then uniform snapshots, the TBDR switches and validity ledger, occlusion, frame timing, the live
+  little Metal (store index done in batch 88, uniform snapshots in 89; then the TBDR switches and validity ledger, occlusion, frame timing, the live
   texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
   is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
   covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
@@ -306,3 +306,17 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   has its test; a module importing Metal, `T_CORE_BROKEN=1`, fails 2); `t_red_once.py` reads `core/`. The backend's warnings are HEAD's.
   Batch tests as in batch 87. Smoke: the same red lines and frames (manosaba's title by eye: particles and the fade's timing); the store
   statistics of manosaba's log moved within what equivalent builds show run to run (b85 → b86: 5 of 13 lines).
+- [x] batch 89 · 264, uniform snapshots: `gfx/nvn/core/usnap.c` takes `mtl/usnap.inc` (the walk, the deferred handles once a submission with
+  `bh_fresh` / `g_bh_gen`, the radix sort, the fault-guarded copies) and the snapshot half of `mtl/capture.inc` (`mtl_sub_snapshot`'s body as
+  `us_snapshot`, `us_find`, the GPU-write notes and drops, `us_report`); its state is `g_us` (`g_us.ent`, `.n`, `.gw`, the counters), and the
+  merge, the running-write filter and a copy's place in the arena are shared helpers that the capture now calls too (`us_merge`,
+  `us_gw_keep`, `us_gw_reaches`, `us_add`, `us_cap_copy`). The backend provides whether a range lies in one pool, the arena, worker threads
+  for the copies in parts (`dispatch_apply_f`; core has no Grand Central Dispatch) and the completed fence; `us_drop` stays the backend's
+  (it asks for the arguments to be encoded again). `core.h` gains `core_now_ns` (the uptime clock on Apple's systems, monotonic elsewhere).
+  `gfx/tests/t_core_usnap.c` (31 checks with the backend faked, pools of host memory and a page made unreadable; the last copy found taken
+  unchecked, `-DDM_TEST_US_LAST_UNCHECKED`, fails 7); `t_usnap.m` / `t_ussort.m` read `g_us.*`, and their broken variants that now live in
+  core still fail as written (`DM_TEST_US_GUARD_EACH` 1, `DM_TEST_US_LAST_UNCHECKED` 9, `t_bindfreeze`'s `DM_TEST_BH_EACH_READ` 2).
+  Batch tests as in batch 88 (host `t_sleep`'s short-sleep count failed once in the batch, as twice before, and passed three runs alone).
+  Smoke: the same red lines; Tears of the Kingdom's frames the same scenes with the cutscene further on (looked at), its snapshot
+  statistics the same at frames 300 and 600 and within timing after, each snapshot 2-10 µs slower (0.020-0.103 against 0.018-0.099 ms);
+  manosaba's shots as batch 88's.

@@ -57,32 +57,12 @@ mtl_cap *mtl_sub_capture(const uint64_t *h, int n, uint64_t token) {   // the ga
     for (int i = 0; i < n; i++) cap_walk(c, (const uint8_t *)(uintptr_t)h[i], 0);
     if (c->us && g_cap_rn) {
         us_rng_sort_x(g_cap_rng, g_cap_rn, &g_cap_tmp, &g_cap_tcap, g_cap_cnt);
-        us_rng *u = g_cap_rng; int k = 0;   // merged as mtl_sub_snapshot merges
-        for (int i = 1; i < g_cap_rn; i++) {
-            void *mb; uint64_t mo, hi = u[i].hi > u[k].hi ? u[i].hi : u[k].hi;
-            if (hi <= u[k].hi) continue;
-            if (u[i].lo <= u[k].hi + 256 && hi - u[k].lo <= (1u << 20) && mtl_addr(u[k].lo, hi - u[k].lo, &mb, &mo)) u[k].hi = hi;
-            else { us_rng r = u[i]; if (r.lo < u[k].hi) r.lo = u[k].hi; u[++k] = r; }
-        }
-        int nr = k + 1; uint64_t total = 0;
+        us_rng *u = g_cap_rng; int nr = us_merge(u, g_cap_rn); uint64_t total = 0;   // merged as mtl_sub_snapshot merges
         c->r = malloc((size_t)nr * sizeof *c->r); c->off = malloc((size_t)nr * sizeof *c->off); if (!c->r || !c->off) MDIE("submission capture");
         for (int i = 0; i < nr; i++) { void *mb; uint64_t mo; c->r[c->nr] = u[i]; c->off[c->nr] = mtl_addr(u[i].lo, u[i].hi - u[i].lo, &mb, &mo) ? total : UINT64_MAX;   // not in one pool: read live at the replay
                                        if (c->off[c->nr] != UINT64_MAX) total += u[i].hi - u[i].lo; c->nr++; }
         c->data = malloc(total ? total : 1); if (!c->data) MDIE("submission capture");
-        static dispatch_once_t hook; dispatch_once(&hook, ^{ dm_fault_hook_register(us_fault); });
-        volatile int i = 0;   // one guard for the run (us_copy_range)
-        for (;;) {
-            atomic_fetch_add_explicit(&g_us_jumps, 1, memory_order_relaxed);
-            if (!sigsetjmp(t_usg.jb, 1)) {
-                for (; i < c->nr; i++) {
-                    if (c->off[i] == UINT64_MAX) continue;
-                    t_usg.lo = c->r[i].lo; t_usg.hi = c->r[i].hi; t_usg.armed = 1;
-                    memcpy(c->data + c->off[i], (const void *)(uintptr_t)c->r[i].lo, (size_t)(c->r[i].hi - c->r[i].lo)); t_usg.armed = 0;
-                }
-                break;
-            }
-            c->off[i] = UINT64_MAX; atomic_fetch_add(&g_us_faults, 1); i++;   // not readable: read live at the replay
-        }
+        us_cap_copy(c->nr, c->r, c->off, c->data);   // one guard for the run; a range not readable is read live at the replay
     }
     pthread_mutex_unlock(&g_cap_mu);
     return c;
@@ -97,7 +77,6 @@ void mtl_sub_install(mtl_cap *c) {   // the translation thread, after mtl_sub_be
 static uint64_t g_test_us_at, g_test_us_val; static int g_test_us_hit = -1;
 void mtl_test_us_watch(uint64_t a) { g_test_us_at = a; g_test_us_hit = -1; }
 int mtl_test_us_seen(uint64_t *v) { *v = g_test_us_val; return g_test_us_hit; }
-static const us_ent *us_find(uint64_t a, uint64_t n);
 static void us_test_note(void) {
     if (!g_test_us_at) return;
     const us_ent *u = us_find(g_test_us_at, 8);
@@ -106,121 +85,31 @@ static void us_test_note(void) {
 }
 static void us_from_cap(const mtl_cap *c) {   // mtl_sub_snapshot with a capture: its bytes, less what a GPU write not complete at the capture reaches
     if (!us_on() || !c->nr) return;
-    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    g_us_subs++;
-    uint64_t done = mtl_done_fence(), keep = c->done < done ? c->done : done, gw_max = 0; int ng = 0;
+    uint64_t t0 = core_now_ns();
+    g_us.subs++;
+    uint64_t done = mtl_done_fence(), keep = c->done < done ? c->done : done, gw_max;
 #ifdef DM_TEST_XLAT_CAP_STALE   // negative control of t_xlat only: only the writes still running now count, as without a capture
     keep = done;
 #endif
-    for (int i = 0; i < g_us_gwn; i++) if (g_us_gw[i].fence > keep) { g_us_gw[ng++] = g_us_gw[i]; if (g_us_gw[i].hi - g_us_gw[i].lo > gw_max) gw_max = g_us_gw[i].hi - g_us_gw[i].lo; }
-    g_us_gwn = ng;
-    if (ng > 1) qsort(g_us_gw, (size_t)ng, sizeof *g_us_gw, us_gw_cmp);
-    g_us_ranges += (uint64_t)c->nr;
-    if (g_us_cap < c->nr) { g_us_cap = c->nr + 256; g_us = realloc(g_us, (size_t)g_us_cap * sizeof *g_us); }
+    int ng = us_gw_keep(keep, &gw_max);
+    g_us.ranges += (uint64_t)c->nr;
+    us_reserve(c->nr);
     for (int i = 0; i < c->nr; i++) {
         void *mb; uint64_t mo, sz = c->r[i].hi - c->r[i].lo;
         if (c->off[i] == UINT64_MAX || !mtl_addr(c->r[i].lo, sz, &mb, &mo)) continue;
-        if (ng) {
-            uint64_t from = c->r[i].lo > gw_max ? c->r[i].lo - gw_max : 0; int a = 0, b = ng;
-            while (a < b) { int m = (a + b) / 2; if (g_us_gw[m].lo < from) a = m + 1; else b = m; }
-            int hit = 0; for (int j = a; j < ng && g_us_gw[j].lo < c->r[i].hi; j++) if (g_us_gw[j].hi > c->r[i].lo) { hit = 1; break; }
-            if (hit) { g_us_skip_gpu++; continue; }
-        }
-        ARENA_OUT id<MTLBuffer> ab; uint64_t pad = c->r[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;
-        us_ent *e = &g_us[g_us_n++];
-        e->lo = c->r[i].lo; e->hi = c->r[i].hi; e->cpu = (uint8_t *)ab.contents + off; e->gpu = ab.gpuAddress + off; e->buf = (__bridge void *)ab; e->dropped = 0;
+        if (ng && us_gw_reaches(c->r[i].lo, c->r[i].hi, ng, gw_max)) { g_us.skip_gpu++; continue; }
+        us_ent *e = us_add(c->r[i].lo, c->r[i].hi);
         memcpy(e->cpu, c->data + c->off[i], (size_t)sz);
-        g_us_bytes += sz;
     }
-    g_us_copies += (uint64_t)g_us_n;
-    g_us_ns += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+    g_us.copies += (uint64_t)g_us.n;
+    g_us.ns += core_now_ns() - t0;
 }
 void mtl_sub_snapshot(const uint64_t *h, int n) {   // hle_nvn.c nvnQueueSubmitCommands, after mtl_sub_begin and before the replay
-    g_us_n = 0;
+    g_us.n = 0;
     if (g_cap_cur) { us_from_cap(g_cap_cur); us_test_note(); return; }   // the translation thread's replay: the submit call's bytes and handles (above)
-    if (!us_on() && g_bh_seen) for (int i = 0; i < n; i++) us_collect((const uint8_t *)(uintptr_t)h[i], 0, 0);
-    if (!us_on() || !n) return;
-    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    g_us_subs++;
-    uint64_t done = mtl_done_fence(), gw_max = 0; int ng = 0;   // GPU writes of submissions not completed yet, sorted by start
-    for (int i = 0; i < g_us_gwn; i++) if (g_us_gw[i].fence > done) { g_us_gw[ng++] = g_us_gw[i]; if (g_us_gw[i].hi - g_us_gw[i].lo > gw_max) gw_max = g_us_gw[i].hi - g_us_gw[i].lo; }
-    g_us_gwn = ng;
-    if (ng > 1) qsort(g_us_gw, (size_t)ng, sizeof *g_us_gw, us_gw_cmp);
-    g_us_rn = 0; memset(g_us_seen, 0, sizeof g_us_seen);
-    for (int i = 0; i < n; i++) us_collect((const uint8_t *)(uintptr_t)h[i], 0, 1);
-    if (!g_us_rn) return;
-    g_us_ranges += (uint64_t)g_us_rn;
-    us_rng_sort(g_us_rng, g_us_rn);
-    us_rng *u = g_us_rng; int k = 0;   // merge in place; the copies stay disjoint: a range overlapping a finished copy keeps only its part beyond it
-    for (int i = 1; i < g_us_rn; i++) {
-        void *mb; uint64_t mo, hi = u[i].hi > u[k].hi ? u[i].hi : u[k].hi;
-        if (hi <= u[k].hi) continue;
-        if (u[i].lo <= u[k].hi + 256 && hi - u[k].lo <= (1u << 20) && mtl_addr(u[k].lo, hi - u[k].lo, &mb, &mo)) u[k].hi = hi;
-        else { us_rng r = u[i]; if (r.lo < u[k].hi) r.lo = u[k].hi; u[++k] = r; }
-    }
-    int nr = k + 1;
-    if (g_us_cap < nr) { g_us_cap = nr + 256; g_us = realloc(g_us, (size_t)g_us_cap * sizeof *g_us); }
-    for (int i = 0; i < nr; i++) {
-        void *mb; uint64_t mo, sz = u[i].hi - u[i].lo;
-        if (!mtl_addr(u[i].lo, sz, &mb, &mo)) continue;   // not in one pool: read live memory
-        if (ng) {   // a GPU write still running reaches it: read on the GPU timeline
-            uint64_t from = u[i].lo > gw_max ? u[i].lo - gw_max : 0; int a = 0, b = ng;
-            while (a < b) { int m = (a + b) / 2; if (g_us_gw[m].lo < from) a = m + 1; else b = m; }
-            int hit = 0; for (int j = a; j < ng && g_us_gw[j].lo < u[i].hi; j++) if (g_us_gw[j].hi > u[i].lo) { hit = 1; break; }
-            if (hit) { g_us_skip_gpu++; continue; }
-        }
-        ARENA_OUT id<MTLBuffer> ab; uint64_t pad = u[i].lo & 255; size_t off = arena_alloc((size_t)(sz + pad), &ab) + (size_t)pad;   // same offset modulo 256 as the original
-        us_ent *c = &g_us[g_us_n++];
-        c->lo = u[i].lo; c->hi = u[i].hi; c->cpu = (uint8_t *)ab.contents + off; c->gpu = ab.gpuAddress + off; c->buf = (__bridge void *)ab; c->dropped = 0;
-        g_us_bytes += sz;
-    }
-    uint64_t uf0 = atomic_load(&g_us_faults);
-    us_copy_all();
-    if (atomic_load(&g_us_faults) != uf0) { static int once; if (once++ < 8) MLOG("[red] uniform snapshot: %llu source range(s) not readable (unmapped after the pool was registered): those copies dropped, their draws read memory", (unsigned long long)(atomic_load(&g_us_faults) - uf0)); }
-    g_us_copies += (uint64_t)g_us_n;
-    g_us_ns += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+    us_snapshot(h, n);
 }
-static int g_us_last;   // the copy the last lookup found, tried first (plan item 225: consecutive draws bind the same blocks; ~13,000 lookups a frame)
-static const us_ent *us_find(uint64_t a, uint64_t n) {   // the live copy holding all of [a, a + n), or NULL
-    if (!g_us_n || !a) return NULL;
-    if (!n) n = 1;
-    if (g_us_last < g_us_n) { const us_ent *c = &g_us[g_us_last];   // the copies are disjoint: one holding the range is the only one
-#ifndef DM_TEST_US_LAST_UNCHECKED   // negative control of t_usnap only: the last copy found taken whatever the range
-        if (c->lo <= a && a + n <= c->hi) return c->dropped ? NULL : c;
-#else
-        return c->dropped ? NULL : c;
-#endif
-    }
-    int lo = 0, hi = g_us_n;
-    while (lo < hi) { int m = (lo + hi) / 2; if (g_us[m].hi <= a) lo = m + 1; else hi = m; }
-    if (lo < g_us_n && g_us[lo].lo <= a && a + n <= g_us[lo].hi && !g_us[lo].dropped) { g_us_last = lo; return &g_us[lo]; }
-    return NULL;
-}
-static void us_gw_note(uint64_t a, uint64_t n) {   // a GPU write of this submission reaches [a, a + n): the next submissions do not copy it until it completes
-    int dup = 0;   // the same range written again and again (a storage buffer bound for many draws): noted once
-    for (int j = g_us_gwn - 1; j >= 0 && j >= g_us_gwn - 8; j--) if (g_us_gw[j].lo == a && g_us_gw[j].hi == a + n && g_us_gw[j].fence == g_fence + 1) { dup = 1; break; }
-    if (!dup) { if (g_us_gwn == g_us_gwcap) { g_us_gwcap = g_us_gwcap ? g_us_gwcap * 2 : 4096; g_us_gw = realloc(g_us_gw, (size_t)g_us_gwcap * sizeof *g_us_gw); }
-                g_us_gw[g_us_gwn++] = (us_gw){a, a + n, g_fence + 1}; }
-}
-static void us_drop(uint64_t a, uint64_t n) {   // ... and its copies are dropped from then on: later readers see memory
-    if (!n || !us_on()) return;
-    us_gw_note(a, n);
-    if (!g_us_n) return;
-    int lo = 0, hi = g_us_n;
-    while (lo < hi) { int m = (lo + hi) / 2; if (g_us[m].hi <= a) lo = m + 1; else hi = m; }
-    int any = 0;
-    for (int i = lo; i < g_us_n && g_us[i].lo < a + n; i++) if (!g_us[i].dropped) { g_us[i].dropped = 1; g_us_drops++; any = 1; }
-    if (any) args_dirty_all();   // bindings encoded from here on read memory
-}
-static void us_report(uint64_t f) {   // every 300 frames
-    static uint64_t p[7]; uint64_t c[7] = {g_us_subs, g_us_ranges, g_us_copies, g_us_bytes, g_us_drops, g_us_skip_gpu, g_us_ns};
-    if (f % 300 || c[0] == p[0]) return;
-    double ns = (double)(c[0] - p[0]);
-    MLOG("uniform snapshots up to frame %llu: %llu submissions, per submission %.0f bindings in %.0f copies, %.1f KB, %.3f ms; %llu copies dropped by a GPU write of their submission, %llu ranges not copied (a GPU write of an earlier submission still running)",
-         (unsigned long long)f, (unsigned long long)(c[0] - p[0]), (c[1] - p[1]) / ns, (c[2] - p[2]) / ns, (c[3] - p[3]) / ns / 1024, (c[6] - p[6]) / ns / 1e6,
-         (unsigned long long)(c[4] - p[4]), (unsigned long long)(c[5] - p[5]));
-    memcpy(p, c, sizeof p);
-}
+static void us_drop(uint64_t a, uint64_t n) { if (us_drop_range(a, n, g_fence + 1)) args_dirty_all(); }   // a GPU write of this submission reaches [a, a + n): bindings encoded from here on read memory
 // Bytes [a, a + n) as the GPU will see them at this point of the replay: guest memory with the pending writes recorded before entry `upto` applied in
 // order: an inline update's bytes, or what a GPU copy reads from its source as of that copy (MacNativeGames' pend_read, MIT). 0 when that is not known
 // (a copy without a source, the table overflowed, copies nested too deep)
