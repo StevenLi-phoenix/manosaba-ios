@@ -5,9 +5,10 @@
 // before it opens an encoder on the command buffer itself and before it ends one. B spins (wfe) for RS_SPIN_NS on an empty ring, then sleeps on a
 // semaphore; A wakes it after a publish (seq_cst store / fence / load on both sides, so a wake-up is never lost). Objects travel retained.
 // Only when the TBDR rewrites are off (DM_NVN_TBDR=0: they work on the encoder at pass end and in tile passes) and encoders are not labelled.
-// DM_NVN_RENDER_STREAM=1 turns it on; off by default. Measured in Tears of the Kingdom on an M5 (TBDR off, two runs each): submission time p50 lower
-// in light stretches (3.1 against 3.4 ms), higher in the heavy ones (8.0 against 7.5, 6.9 against 6.6 ms): A waits for B to drain before every copy
-// and dispatch between passes (about 15 a submission), and with the render-state filter the encoder calls it moves are cheap.
+// On by default on iOS only (rs_default_on, plan item 245); DM_NVN_RENDER_STREAM=0 / 1 chooses. Measured in Tears of the Kingdom on an M5 (TBDR off,
+// two runs each): submission time p50 lower in light stretches (3.1 against 3.4 ms), higher in the heavy ones (8.0 against 7.5, 6.9 against 6.6 ms):
+// A waits for B to drain before every copy and dispatch between passes (about 15 a submission), and with the render-state filter the encoder calls
+// it moves are cheap.
 // Method from MacNativeGames' nvn_render_stream.h and nvn_encode_fifo.h (ly05010419/MacNativeGames, MIT; it measured replay -18 % on an M4), written anew here.
 #pragma once
 #include <stdatomic.h>

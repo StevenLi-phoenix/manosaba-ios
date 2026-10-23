@@ -3927,7 +3927,8 @@ static RENC rp_begin_ex(int clear_only) {
     for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i] && zskip_zero_clear(i)) {
         g_zskip_cand_ok[i] = 1; g_zskip_cand[i] = (zskip_zero){R.rt.color[i]->serial, (uint16_t)(R.rt.has_cview[i] && R.rt.cview[i].set_levels ? R.rt.cview[i].base_level : 0), (uint16_t)(R.rt.has_cview[i] && R.rt.cview[i].set_layers ? R.rt.cview[i].min_layer : 0)};
     }
-    // Bandwidth ledger: attachments with Load count as load, all attachments count as store (currently always Store)
+    // Bandwidth ledger: attachments with Load count as load, all attachments count as store (a pass opens with Store; a store the TBDR store
+    // decision turns into DontCare is taken off again at the pass end, g_sd_dead_bytes)
     int nload = 0, natt = 0;
     for (int i = 0; i < R.rt.n; i++) {
         MTLRenderPassColorAttachmentDescriptor *c = pd.colorAttachments[i];
