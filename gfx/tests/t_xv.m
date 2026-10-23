@@ -54,7 +54,7 @@ int main(void){@autoreleasepool{setvbuf(stdout,NULL,_IONBF,0);setenv("DM_NVN_TBD
       xv_test_counts(&dc0,&viol0); cycle(&a,&b,aid,2,px); xv_test_counts(&dc,&viol); EXPECT("read after invalidation: violation +1",1,(uint64_t)(viol-viol0));
       for(int k=0;k<XV_TRIAL+3;k++) cycle(&a,&b,aid,0,NULL); EXPECT("after a violation the key is permanently disabled (A no longer enters the ledger)",0,(uint64_t)ST(a));
       FILE *f=fopen(path,"r"); char line[256]; int nl=0; while(f&&fgets(line,sizeof line,f)) nl++; if(f) fclose(f); EXPECT("violation written to disk: 1 line",1,(uint64_t)nl);
-      int nd=g_xv_ndis; g_xv_init=0; g_xv_ndis=0; xv_init(); EXPECT("disabled set restored after rereading the file (simulates the next launch)",1,(uint64_t)(g_xv_ndis>=1 && nd>=1)); }
+      int nd=g_xv.ndis; g_xv.init=0; g_xv.ndis=0; xv_init(); EXPECT("disabled set restored after rereading the file (simulates the next launch)",1,(uint64_t)(g_xv.ndis>=1 && nd>=1)); }
     // ③ A reader seen during the trial period: no failure reported, nothing written to disk, that key is not done (different size = different key)
     { tex_t a=tex(8),b=tex(8); int aid=view(&a,0); t_two=1;
       xv_test_counts(&dc0,&viol0); cycle(&a,&b,aid,0,NULL); cycle(&a,&b,aid,2,px); for(int k=0;k<6;k++) cycle(&a,&b,aid,0,NULL);

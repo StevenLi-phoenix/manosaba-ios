@@ -29,8 +29,6 @@ static void ts_now(uint64_t *host_ns, uint64_t *guest) { static mach_timebase_in
 // (command buffers, encoders, pass descriptors, etc.) are never released unless put in a pool. Measured on the character select screen of a real iOS device: the host heap grows by about 47 objects per frame, 0.22 MiB/s.
 void *objc_autoreleasePoolPush(void); void objc_autoreleasePoolPop(void *);
 static void *g_sub_pool;
-static int g_ruler_truth = -1, g_ruler_pending;
-static int tbdr_on(void);
 
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
 static void fin_drain(void);

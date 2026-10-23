@@ -207,7 +207,7 @@ decide):
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
   In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88, uniform snapshots in 89; then the TBDR switches and validity ledger, occlusion, frame timing, the live
+  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90; then occlusion, frame timing, the live
   texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
   is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
   covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
@@ -320,3 +320,13 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   Smoke: the same red lines; Tears of the Kingdom's frames the same scenes with the cutscene further on (looked at), its snapshot
   statistics the same at frames 300 and 600 and within timing after, each snapshot 2-10 µs slower (0.020-0.103 against 0.018-0.099 ms);
   manosaba's shots as batch 88's.
+- [x] batch 90 · 264, the TBDR switches and the validity ledger: `core.h` / `core.c` take the pass dump (`PD`, `passdump` inline,
+  `mtl_passdump_next`) with the frame number `g_cur_frame` and `g_stat_pass` / `g_stat_draw`; `gfx/nvn/core/tbdr.c` takes from
+  `mtl/tbdr_xv.inc` the switches (`tbdr_on` / `tbdr_part` inline over `g_tbdr` / `g_tbdr_off`, the `TBP_*` parts, the ruler's
+  `g_ruler_truth`, `udc_on`) and the ledger (its state `g_xv.*`, `xv_*`), and from `mtl/store_index.inc` the ledger's check against the
+  index (`xv_forward`). The part keeps the store decisions' attachments, load elision, continuation and layered passes. Fixed on the way:
+  `DM_NVN_TBDR_OFF=all` set the mask to ~0, which is the "not read yet" -1, so every call read the variable again and logged it; it is the 12
+  parts' mask now. `gfx/tests/t_core_tbdr.c` (30 checks: the switches, the ledger with `DM_XV_FILE` read back, `xv_forward` against a faked
+  submission; a full clear of another level counting, `-DDM_TEST_XV_ANY_LEVEL`, fails 1); `t_xv.m` reads `g_xv.*`. The pass dump of
+  `t_rt_continue` and `t_defer_chain` (`DM_NVN_PASSDUMP=0-1000000`) is batch 89's line for line but for two command buffer addresses. Batch
+  tests as in batch 88; smoke: the same red lines and frames.

@@ -135,9 +135,6 @@ typedef struct { uint64_t ser; uint16_t level, slice; } zskip_zero;
 static zskip_zero g_zskip_zero[4096]; static int g_zskip_n, g_zskip_count;
 static zskip_zero g_zskip_cand[8]; static uint8_t g_zskip_cand_ok[8];
 static void zskip_clear(void);
-static int tbdr_on(void);
-enum { TBP_ZSKIP = 1, TBP_XV = 2, TBP_COVER = 4, TBP_STORE = 8, TBP_SDX = 16, TBP_DEFER = 32, TBP_FUSE = 64, TBP_HOIST = 128, TBP_DS = 256, TBP_RANGE = 512, TBP_CONT = 1024, TBP_RTHEAP = 2048 };
-static int tbdr_part(int bit);   // DM_NVN_TBDR_OFF (plan item 62j)
 static id g_cb;
 static BENC g_blit;
 static NSMutableArray<dispatch_block_t> *g_commit_blocks;

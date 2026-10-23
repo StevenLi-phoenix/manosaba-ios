@@ -4,8 +4,9 @@
 // GFX) and into the graphics tests; each has a unit test that needs no GPU (gfx/tests/t_core_<module>.c); tools/tests/t_core.py checks that every
 // file here compiles as plain C and that the build takes them.
 // This header: the log lines and the red lines printed once a tag, shared with the backend (the same prefix, so whoever reads the log sees the same
-// lines as before the move), and a clock for statistics.
+// lines as before the move), the pass dump with the frame number and the pass and draw counts it names, and a clock for statistics.
 #pragma once
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,3 +25,19 @@ static inline uint64_t core_now_ns(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 #endif
 }
+// The frame the game is on (mtl_set_frame), and the replay's pass and draw counts so far
+extern _Atomic uint64_t g_cur_frame;
+extern uint64_t g_stat_draw, g_stat_pass;
+// DM_NVN_PASSDUMP: records pass attachments / samples / presents one by one (textures by serial) for offline data-flow analysis; the pass numbers of P / D / R / S lines agree (= g_stat_pass after the pass is opened)
+// DM_NVN_PASSDUMP=frame number, or start-end (inclusive at both ends)
+// The command channel's "passdump <n>" (host/cmdchan.c) sets the range to the next n frames while the game runs
+extern _Atomic long g_pd_a0, g_pd_a1;
+long passdump_read(void);   // The first call: DM_NVN_PASSDUMP; returns the range's start (-1 off)
+static inline int passdump(void) {
+    long a0 = atomic_load(&g_pd_a0);
+    if (a0 == -2) a0 = passdump_read();
+    if (a0 < 0) return 0;   // off: no read of the frame number (plan item 247, after shh632058099 e460049; called a few times a draw)
+    long f = (long)atomic_load(&g_cur_frame); return f >= a0 && f <= atomic_load(&g_pd_a1);
+}
+void mtl_passdump_next(long n);
+#define PD(...) do { if (passdump()) { fprintf(stderr, "[pass] F%llu ", (unsigned long long)atomic_load(&g_cur_frame)); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)

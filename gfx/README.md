@@ -95,7 +95,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/rtheap.inc` | Render targets of virtual pools in a heap, the memory census, the finalize queue |
 | `nvn/mtl/live.inc` | The live texture at a storage address, texture snapshots and releases |
 | `nvn/mtl/passes.inc` | Render pass bookkeeping: zero-source skip, the pass dump (PD), attachment use |
-| `nvn/mtl/tbdr_xv.inc` | TBDR rewrite switches and the cross-submission attachment validity ledger |
+| `nvn/mtl/tbdr_xv.inc` | The store decisions' attachments, load elision, same-target continuation, layered passes (their state and declarations) |
 | `nvn/mtl/chunks.inc` | Mid-submission commits (MacNativeGames' TOTK_CHUNK_DRAWS) |
 | `nvn/mtl/passgpu.inc` | GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49) |
 | `nvn/mtl/renderpass.inc` | Render passes: encoder labels, block-compressed targets, attachments, pass begin / end, clears |
@@ -118,7 +118,8 @@ Binding conventions used by the translation:
 | `nvn/mtl/present_pipe.inc` | The present pipeline and its encoding |
 | `nvn/mtl/present.inc` | MetalFX upscaling of the presented picture, live shots, the perf line, present_now |
 | `nvn/mtl/present_thread.inc` | The present thread and the display link, statistics getters |
-| `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend; a clock for statistics |
+| `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend; the pass dump (`PD`, `DM_NVN_PASSDUMP`) with the frame number and the pass and draw counts; a clock for statistics |
+| `nvn/core/tbdr.c`, `nvn/core/tbdr.h` | The TBDR rewrites' switches (`DM_NVN_TBDR`, `DM_NVN_TBDR_OFF`, the ruler, `DM_NVN_UNWRITTEN_DC`) and the cross-submission attachment validity ledger (`xv_*`) |
 | `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
 | `nvn/core/usnap.c`, `nvn/core/usnap.h` | Uniform snapshots: each submission's copies of the uniform ranges it binds; deferred binding handles read once a submission |

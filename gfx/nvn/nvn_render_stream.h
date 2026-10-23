@@ -32,7 +32,7 @@ static int g_rs_created, g_rs_active;
 static id g_rs_sentinel;
 static uint64_t g_rs_passes, g_rs_packets, g_rs_syncs, g_rs_sync_ns, g_rs_full, g_rs_full_ns, g_rs_subs;
 static _Atomic uint64_t g_rs_sleeps;
-static int tbdr_on(void); static int enc_label_on(void);
+static int enc_label_on(void);   // (tbdr_on: core/tbdr.h)
 // On by default on iOS (plan item 245, 2026-10-23): on the iPhone 17 Pro's island at 120 Hz, two pairs of runs, the stage on against off: sustained
 // 60.0 / 60.6 against 59.6 / 53.4 fps (the second pair warm, thermal state 1), frames at 16.7 ms 97-98 % against 98 / 74 %, the first 25 s 84.0 /
 // 87.9 against 76.9 / 78.1 fps, and the process's CPU energy 1.22 / 1.20 against 1.39 / 1.31 W: under the phone's power split two threads at lower

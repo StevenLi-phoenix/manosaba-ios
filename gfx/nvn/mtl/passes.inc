@@ -37,23 +37,8 @@ static id<MTLRenderPipelineState> g_enc_pso; static id<MTLDepthStencilState> g_e
 static int g_enc_vis, g_enc_has_vis;   // This encoder's current visibility count mode (0 off / slot number + 1), and whether a visibility buffer is attached
 static int g_pso_dirty = 1, g_dss_dirty = 1;   // Pipeline / depth-stencil related state was changed during replay
 static uint64_t g_stat_args_enc, g_stat_args_reuse;   // Argument buffer: new-encode / reuse counts
-static uint64_t g_stat_draw, g_stat_pass, g_bw_load, g_bw_store, g_pass_full_rw, g_udc_saved_bytes;   // Bandwidth ledger: attachment load / store bytes, number of full load-store passes
-// DM_NVN_PASSDUMP: records pass attachments / samples / presents one by one (textures by serial) for offline data-flow analysis; the pass numbers of P / D / R / S lines agree (= g_stat_pass after the pass is opened)
-// DM_NVN_PASSDUMP=frame number, or start-end (inclusive at both ends)
-// The command channel's "passdump <n>" (host/cmdchan.c) sets the range to the next n frames while the game runs
-static _Atomic long g_pd_a0 = -2, g_pd_a1;
-static int passdump(void) {
-    long a0 = atomic_load(&g_pd_a0);
-    if (a0 == -2) { const char *e = getenv("DM_NVN_PASSDUMP"); long b0 = e ? atol(e) : -1, b1 = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : b0;
-        long exp = -2; if (atomic_compare_exchange_strong(&g_pd_a0, &exp, b0)) atomic_store(&g_pd_a1, b1); a0 = atomic_load(&g_pd_a0); }
-    if (a0 < 0) return 0;   // off: no read of the frame number (plan item 247, after shh632058099 e460049; called a few times a draw)
-    long f = (long)atomic_load(&g_cur_frame); return f >= a0 && f <= atomic_load(&g_pd_a1);
-}
-void mtl_passdump_next(long n) {
-    long f = (long)atomic_load(&g_cur_frame); atomic_store(&g_pd_a0, -1); atomic_store(&g_pd_a1, f + n); atomic_store(&g_pd_a0, f + 1);
-    MLOG("pass records of frames %ld-%ld (command channel)", f + 1, f + n);
-}
-#define PD(...) do { if (passdump()) { fprintf(stderr, "[pass] F%llu ", (unsigned long long)atomic_load(&g_cur_frame)); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
+static uint64_t g_bw_load, g_bw_store, g_pass_full_rw, g_udc_saved_bytes;   // Bandwidth ledger: attachment load / store bytes, number of full load-store passes
+// The pass dump (PD, DM_NVN_PASSDUMP) and g_stat_pass / g_stat_draw: gfx/nvn/core/core.h
 static void blit_note(void) { if (g_enc) PD("E %llu copy / buffer update ends the render pass", g_stat_pass); }
 // DM_GFXUSE=<file>[:<first frame>] (default frame 1): over 30 consecutive frames from that frame, record the ranges in guest memory of the resources
 // the GPU actually reads (texture storage, UBO / SSBO, vertex / index buffers), deduplicated by (kind, address, length), one line on first sight.

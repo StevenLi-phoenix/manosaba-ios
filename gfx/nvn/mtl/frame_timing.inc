@@ -36,7 +36,6 @@ static void giv_add(uint64_t f, uint64_t s0, uint64_t s1) {
     g_giv[k].iv[g_giv[k].n][0] = s0; g_giv[k].iv[g_giv[k].n][1] = s1; g_giv[k].n++;
     os_unfair_lock_unlock(&g_giv[k].lk);
 }
-static _Atomic uint64_t g_cur_frame;
 // ---------- Same-process alternating measurement (DM_NVN_UB, off by default: without the environment variable the code below only adds one 'is it enabled' check) ----------
 // On a hot real device the system keeps adjusting power / frequency, and segment comparison (segments A and B each run for a minute) cannot resolve differences of <10%; within the same run, toggle by phase in turn and take differences of adjacent phase pairs, so the drift cancels.
 // DM_NVN_UB="name=item,item;name=item", one phase every DM_NVN_UB_N frames (default 180, minimum 60): even phases = baseline (nothing changed), odd phases take one category in turn. Each item of a category:
