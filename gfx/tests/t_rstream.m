@@ -3,7 +3,7 @@
 // index: every pixel must be its draw's, so packets kept their order and every draw read the address set before it (4,096 draws are more than the
 // ring holds: A waited for B). A mid-submission commit at the next encoder boundary (rs_sync before the command buffer ends), a texture clear and a
 // copy between passes (rs_sync before A's own encoder). Run with DM_NVN_RENDER_STREAM=1 and =0 (Makefile): the pixels must be the same; the "encode stage
-// used" check fails with =0 unless --off is given.
+// used" check fails with =0 unless --off is given. On by default on iOS only (plan item 245); off everywhere (-DDM_TEST_RS_DEFAULT_OFF): 1 fails.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -25,6 +25,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     setenv("DM_NVN_TBDR", "0", 1); setenv("DM_NVN_CHUNK_DRAWS", "500", 1); setenv("DM_NVN_CHUNK_FIRST", "300", 1);
     int off = argc > 1 && !strcmp(argv[1], "--off");
     mtl_init();
+#if !DM_NVN_M3
+    // The default (plan item 245): on on iOS, off elsewhere, the switch either way
+    EXPECT("unset on iOS: on [-DDM_TEST_RS_DEFAULT_OFF: off]", 1, rs_default_on(NULL, 1));
+    EXPECT("... unset elsewhere: off", 0, rs_default_on(NULL, 0));
+    EXPECT("... DM_NVN_RENDER_STREAM=0 on iOS: off, =1 elsewhere: on", 1, !rs_default_on("0", 1) && rs_default_on("1", 0));
+#endif
     enum { W = 64, N = W * W };
     uint8_t *ubo; if (posix_memalign((void **)&ubo, getpagesize(), (size_t)N * 256)) abort(); memset(ubo, 0, (size_t)N * 256); mtl_pool_add(ubo, (size_t)N * 256);
     for (int i = 0; i < N; i++) { float c[4] = {(i & 255) / 255.0f, (i >> 8) / 255.0f, 0x5a / 255.0f, 1}; memcpy(ubo + (size_t)i * 256, c, 16); }

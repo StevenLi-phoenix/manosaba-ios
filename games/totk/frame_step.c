@@ -129,7 +129,7 @@ void dm_game_boot(void) {
     else if (getenv("DM_ASPECT")) LOG("[red] DM_ASPECT needs the option aspect (DM_OPTIONS)");
     if (!(g_realtime = dm_option_on("realtime"))) { LOG("[frame step] the game's own (option realtime not on: DM_OPTIONS or the product's options.default)"); return; }
     if (g_pin > 0) LOG("[frame step] pinned at %.3f ms (DM_FRAME_STEP_MS, diagnostics)", g_pin * 1000);
-    else LOG("[frame step] real time: the mean of the last five present intervals (1/120 .. 1/15 s each)");
+    else LOG("[frame step] real time: the mean of the last five present intervals (kept between 1/120 and 1/15 s)");
 }
 int dm_game_realtime_step(void) { return g_realtime && g_pin <= 0; }   // (a pinned step needs the fixed pacing)
 int nvn_fstep_step(void);   // gfx/nvn/hle_nvn.c: DM_FRAME_STEP=vsync, the host's step in vsyncs of 60 Hz (plan item 133), 0 otherwise

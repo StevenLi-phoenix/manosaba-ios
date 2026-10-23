@@ -5,7 +5,8 @@
 // spans it, its increment is 0; the heavy loop is about 18 ms so the first pass's GPU start, up to 3 ms, stays under a quarter: at 10 ms it failed
 // 2 runs in 20 on Metal 3); the increments add up to no more than the span from the first start to the last end.
 // A second submission writes its own rows (the ring's next heap, nothing left over from the first). Negative control: -DDM_TEST_PG_NO_END (no
-// end timestamp written) leaves no row.
+// end timestamp written) leaves no row. --every (plan item 256): DM_NVN_PASSGPU_EVERY=2, six one-pass submissions give three rows, and
+// DM_NVN_PASSGPU_FROM past the frame none; every submission timed (-DDM_TEST_PG_SAMPLE_ALL): 2 fail.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -42,10 +43,13 @@ static void submit(chain *c) {
     if (!mtl_wait(mtl_sub_commit(), 10000000000ull) || mtl_last_commit_error()) { printf("GPU did not complete\n"); abort(); }
 }
 
-int main(void) { @autoreleasepool {
+int main(int argc, char **argv) { @autoreleasepool {
     setvbuf(stdout, NULL, _IONBF, 0);
+    int every = argc > 1 && !strcmp(argv[1], "--every");
     char path[512]; snprintf(path, sizeof path, "%s/t_passgpu_%d.tsv", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", getpid());
-    setenv("DM_NVN_PASSGPU", path, 1); setenv("DM_NVN_TBDR", "0", 1); setenv("DM_NVN_CHUNK_DRAWS", "0", 1); mtl_init();
+    setenv("DM_NVN_PASSGPU", path, 1); setenv("DM_NVN_TBDR", "0", 1); setenv("DM_NVN_CHUNK_DRAWS", "0", 1);
+    if (every) setenv("DM_NVN_PASSGPU_EVERY", "2", 1);
+    mtl_init();
     NSError *e = nil;
     id<MTLLibrary> l = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
         "vertex float4 v(uint n [[vertex_id]]) { float2 p[3] = {float2(-1,-1), float2(3,-1), float2(-1,3)}; return float4(p[n], 0, 1); }\n"
@@ -65,6 +69,16 @@ int main(void) { @autoreleasepool {
     uint8_t *mem; if (posix_memalign((void **)&mem, getpagesize(), 65536)) abort(); memset(mem, 0, 65536); mtl_pool_add(mem, 65536);
 
     tex_t A = tex(64), B = tex(512), C = tex(64);
+    if (every) {   // six submissions of one light pass each, every second one timed
+        for (int i = 0; i < 6; i++) { chain ce = chain_new(); pass(&ce, &A, &pl); submit(&ce); }
+        row re[16]; int ne = wait_rows(path, 3, re, 16); usleep(200000); ne = rows(path, re, 16);
+        EXPECT("DM_NVN_PASSGPU_EVERY=2: six submissions, three rows [-DDM_TEST_PG_SAMPLE_ALL: six]", ne == 3);
+        g_pgt_from = atomic_load(&g_cur_frame) + 1000;   // DM_NVN_PASSGPU_FROM past this frame
+        for (int i = 0; i < 4; i++) { chain ce = chain_new(); pass(&ce, &A, &pl); submit(&ce); }
+        usleep(200000); int nf = rows(path, re, 16);
+        EXPECT("... and with the first frame to time still ahead: no more rows [-DDM_TEST_PG_SAMPLE_ALL: four more]", nf == ne);
+        unlink(path); printf("== %d checks, %d failed ==\n", count, fail); return fail != 0;
+    }
     chain c = chain_new(); uint64_t pass0 = g_stat_pass;
     pass(&c, &A, &pl); pass(&c, &B, &ph); pass(&c, &C, &pl);
     p_bind_buf sb = {NVN_SHADER_STAGE_COMPUTE, 0, (uint64_t)(uintptr_t)mem, 4096}; emit(&c, OP_BIND_SSBO, &sb, sizeof sb);

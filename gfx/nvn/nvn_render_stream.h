@@ -32,9 +32,19 @@ static id g_rs_sentinel;
 static uint64_t g_rs_passes, g_rs_packets, g_rs_syncs, g_rs_sync_ns, g_rs_full, g_rs_full_ns, g_rs_subs;
 static _Atomic uint64_t g_rs_sleeps;
 static int tbdr_on(void); static int enc_label_on(void);
+// On by default on iOS (plan item 245, 2026-10-23): on the iPhone 17 Pro's island at 120 Hz, two pairs of runs, the stage on against off: sustained
+// 60.0 / 60.6 against 59.6 / 53.4 fps (the second pair warm, thermal state 1), frames at 16.7 ms 97-98 % against 98 / 74 %, the first 25 s 84.0 /
+// 87.9 against 76.9 / 78.1 fps, and the process's CPU energy 1.22 / 1.20 against 1.39 / 1.31 W: under the phone's power split two threads at lower
+// clocks do the frame for less than one at a higher clock (230). Off by default elsewhere (the M5 above). DM_NVN_RENDER_STREAM=0 / 1 chooses
+static inline int rs_default_on(const char *env, int ios) {
+#ifdef DM_TEST_RS_DEFAULT_OFF   // negative control of t_rstream only: off unless asked, everywhere, as before
+    ios = 0;
+#endif
+    return env ? atoi(env) != 0 : ios;
+}
 static int rs_enabled(void) {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("DM_NVN_RENDER_STREAM"); v = e && atoi(e); }
+    if (v < 0) v = rs_default_on(getenv("DM_NVN_RENDER_STREAM"), TARGET_OS_IPHONE);
     return v;
 }
 static inline uint64_t rs_now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }

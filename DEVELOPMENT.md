@@ -1515,8 +1515,9 @@ iPhone without asking; F, the features, later). All sources MIT unless said. Cor
   pool still gets the dummy buffer; both are counted and given a red line the first time (before, silent: the GPU's writes lost).
   `gfx/tests/t_sbufpast.m` (a kernel writes two words through a binding 64 bytes before its pool's end with 4096 bytes; 6 checks);
   `DM_TEST_SBUF_WHOLE_RANGE` fails 3
-- [ ] 234 uniform reads at a computed index bounded by the bound size (nxport `msl_specialize.rs`: skinning indices going negative, a GPU hang in
-  Wonder); ours guards c1 only (`c1_guard.py`), 7,023 shader files read c3-c19 at a computed index. A chain rebuild
+- [-] 234 uniform reads at a computed index bounded by the bound size (nxport `msl_specialize.rs`: skinning indices going negative, a GPU hang in
+  Wonder); ours guards c1 only (`c1_guard.py`), 7,023 shader files read c3-c19 at a computed index: no GPU fault, hang or command buffer error
+  in Tears of the Kingdom's logs, and the checks would add instructions to those 7,023 shaders (a chain rebuild). Until a game shows it
 - [-] 235 a Stencil8 view of a depth-stencil texture as `MTLPixelFormatX32_Stencil8` with every channel from red, and integer textures sampled as
   such (blade2 a7dff99; the known gaps above list stencil views): not seen in Tears of the Kingdom (no red line 72, "not a valid Metal view", or
   11 in 66 Mac runs and the phone's sessions), and a stencil view samples right only from a shader typed for integers (a chain rebuild). Until a
@@ -1558,14 +1559,20 @@ GPU work a frame (230: less of it gives the CPU its clock back):
   usage costs compression, so only small targets
 
 CPU energy a frame:
-- [ ] 242 a uniform range's private copy only as long as the shader reads (DavidZande b9f8b16 after tvc97 PR #159 / nxnative f5646ef; MacNativeGames
-  PR #257: Breath of the Wild on a Mac, render thread 88 → 65 % busy; on 1.4.3 most bindings read under 2.4 KB). Ours copies the whole binding
+- [-] 242 a uniform range's private copy only as long as the shader reads (DavidZande b9f8b16 after tvc97 PR #159 / nxnative f5646ef; MacNativeGames
+  PR #257: Breath of the Wild on a Mac, render thread 88 → 65 % busy; on 1.4.3 most bindings read under 2.4 KB): our bindings are about that
+  short already (the snapshot line: 802 bindings, 1,414.8 KB a submission, 1.8 KB each), and the private copies take 4.4 % of the translation
+  thread on the Mac's island (Time Profiler, 2026-10-23); the extents would need a new reflection field from the chain. Not now
 - [ ] 243 guest loops that spin on memory without a system call allowed to sleep (nxnative 99c3f91: Paper Mario on a Mac, CPU energy a frame about
   halved; 843 such loops in Tears of the Kingdom's main). Measure the phone's workers first; a rewriter change
-- [ ] 244 the border-colour pipeline variant's key cached (MacNativeGames PR #286: `pso_get` 11.7 → 3.4 % of replay on an M4 Air); ours builds a
-  string per bind (`border_variant`)
-- [ ] 245 the Metal calls on a worker thread of their own (nxnative PR #62, `nvn_rec.h`: Breath of the Wild on an iPhone 17 Pro Max, submit thread 8 →
-  3.3-4.5 ms; the same PR's phone still fell to 30). Ours moves render encoders only (`nvn_render_stream.h`, it lost on the M5)
+- [-] 244 the border-colour pipeline variant's key cached (MacNativeGames PR #286: `pso_get` 11.7 → 3.4 % of replay on an M4 Air): on the Mac's
+  island `border_variant` is 0.4 % of the translation thread (`pso_get` 4.8 %). Not worth a cache here
+- [x] batch 82 · 245 the Metal calls on a worker thread of their own (nxnative PR #62, `nvn_rec.h`: Breath of the Wild on an iPhone 17 Pro Max, submit
+  thread 8 → 3.3-4.5 ms): our encode stage (`nvn_render_stream.h`: render encoders on a second thread; it lost on the M5) is on by default on iOS
+  now. On the phone's island at 120 Hz, two pairs: sustained 60.0 / 60.6 fps against 59.6 / 53.4 (the second pair warm, thermal state 1), frames
+  at 16.7 ms 97 / 98 % against 98 / 74 %, the first 25 s 84.0 / 87.9 against 76.9 / 78.1, the process's CPU energy 1.22 / 1.20 against 1.39 /
+  1.31 W: under the power split two threads at lower clocks do the frame for less. Off elsewhere; `DM_NVN_RENDER_STREAM=0 / 1` chooses. t_rstream
+  +3 (`rs_default_on`); `DM_TEST_RS_DEFAULT_OFF` fails 1. PR #62's wider worker (copies, dispatches and commits too) not done
 - [x] batch 81 · 246 the player's pipeline list written on a serial queue of its own (AnySwitch c483c04): the first new line read the seed and the
   list (6,365 rows for Tears of the Kingdom) into a set, and every one flushed the file, on the submit / translation thread. `gfx/tests/t_psouser.m`
   (with the queue held a recorded line is not in the file yet, then once; repeats left out; 200 lines from two threads; 4 checks);
@@ -1583,8 +1590,9 @@ Pacing and hitches:
 - [x] batch 81 · 250 the frame step averages the intervals before its floor (MacNativeGames' Breath of the Wild path: clamping each made it run 6 %
   fast at about 95 fps under 120 Hz): `frame_step.c` takes the mean of the last five present intervals, then keeps it between 1/120 and 1/15 s
   (presents 6 and 11 ms apart in turn: 9.0 ms, 9.9 before). `games/totk/tests/t_frame_step.c` +3 (53 checks); `DM_TEST_FSTEP_CLAMP_EACH` fails 3
-- [ ] 251 first-sight pipelines (totkrecomp bbf0fd4, an 8 ms budget a frame on the submitting thread, the rest in the background with their draws
-  skipped: 8,024 → 84 skipped draws in the prologue). We never skip; measure our stalls against 184's walk before anything
+- [-] 251 first-sight pipelines (totkrecomp bbf0fd4, an 8 ms budget a frame on the submitting thread, the rest in the background with their draws
+  skipped: 8,024 → 84 skipped draws in the prologue): a budget only limits skipping, which we declined; our first-sight stalls are 184's
+  (10 frames, 730 ms in a walk, a game over and its reload)
 - [-] 252 the frame step's trials leave out one-off hitches and want the late frames spread over the window (LASRecomp f99186b): the host's frame
   step (`DM_FRAME_STEP=vsync`, 133) is off by default in both games. With 133, if it becomes a default
 - [x] batch 81 · 253 pipeline keys with the write mask and blend bit of the colour targets a normal pass lacks cleared (MacNativeGames f3e2f66;
@@ -1593,11 +1601,17 @@ Pacing and hitches:
   do not have
 
 Tools:
-- [ ] 254 one frame's submissions replayed K times, two settings alternating on the same frame (nxport `--replay=F:K[:M]`, `--replay-ab`): A/B runs
-  on the phone without its thermal and clock drift
-- [ ] 255 waits per kind with the wake-to-run latency and the core reacquire time (totkrecomp 65a9411), and system calls counted a frame by number
-  (AnySwitch 477f749)
-- [ ] 256 pass GPU times every Nth submission, and a capture that waits out the first minute (shh632058099 9ecf169, GirlNet 9dc64f9)
+- [-] 254 one frame's submissions replayed K times, two settings alternating on the same frame (nxport `--replay=F:K[:M]`, `--replay-ab`): a frame
+  replayed repeats its GPU writes into the game's memory (storage buffers, counters, query results, fences), which the next frames read. Our
+  phone A/B alternates runs with a rest between (230, 239, 245 told their differences apart)
+- [x] batch 82 · 255 `DM_SCHED_STATS=1`: waits per kind with the wake-to-run latency and the time taking a virtual core back (totkrecomp 65a9411),
+  and system calls a second by number (AnySwitch 477f749), a `[sched]` line every 5 s (`host/schedstats.h`, fed by `hle_thread.c`).
+  `host/tests/t_schedstats.c` (6 checks); `DM_TEST_SCHED_WAKE_FROM_START` fails 1. Tears of the Kingdom's prologue on the Mac: wake-to-run about
+  0.01 ms for every kind (max 0.56), but svc 0xB (sleep, yields among them) 300,000-480,000 a second against 3,500-4,300 of 0x34 / 0x35: guest
+  threads spin on yields, a lead for 243
+- [x] batch 82 · 256 `DM_NVN_PASSGPU_EVERY=<n>`, `DM_NVN_PASSGPU_FROM=<frame>`, `DM_NVN_PASSGPU_FRAMES=<n>` (shh632058099 9ecf169, GirlNet 9dc64f9):
+  a submission left out takes no heap and writes no row. `t_passgpu --every` (six submissions, three rows; the first frame ahead, none);
+  `DM_TEST_PG_SAMPLE_ALL` fails 2
 - [x] batch 81 · 257 `DM_CLEAR_SHADER_CACHE=1`: the iOS app starts with an empty Metal shader cache, as after a fresh install (AnySwitch ec152a8):
   Library/Caches/<bundle id>/com.apple.metal, com.apple.gpuarchiver and com.apple.metalfe removed at boot (`host/shadercache.h`).
   `host/tests/t_shadercache.c` (4 checks); `DM_TEST_SHADERCACHE_METAL_ONLY` fails 2

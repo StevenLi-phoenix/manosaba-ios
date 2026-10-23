@@ -386,6 +386,7 @@ run: \
 	  echo "t_fbx without a residency set (a virtual GPU's path, plan item 176): 26 checks, 0 failed"; fi
 	MTL_DEBUG_LAYER=1 ./t_extent
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_passgpu
+	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_passgpu --every
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_pairs
 	TMPDIR=. MTL_DEBUG_LAYER=1 ./t_pluma
 	./t_present_vp

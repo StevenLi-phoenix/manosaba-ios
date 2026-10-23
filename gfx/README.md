@@ -134,6 +134,8 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_PASSDUMP=<frame>` or `<a>-<b>` | Log each render pass (attachments, loads / stores, samples) for those frames to stderr; `DM_NVN_PASSDUMP_ALL=1` adds every draw |
 | `DM_NVN_PROF=1` | Time every implemented NVN function |
 | `DM_NVN_PASSGPU=<file>` | GPU time of each render pass and dispatch as TSV (timestamps: an `MTL4CounterHeap` on Metal 4, stage-boundary samples on Metal 3); every 300 frames a line with the GPU time a frame and the kinds of pass that took the most |
+| `DM_NVN_PASSGPU_EVERY=<n>`, `DM_NVN_PASSGPU_FROM=<frame>`, `DM_NVN_PASSGPU_FRAMES=<n>` | With `DM_NVN_PASSGPU`: time every nth submission only, and none before that frame or from n frames after it (plan item 256: the iPhone's first minute runs on burst power) |
+| `DM_RT_PEAK=1` | The real-time computation declared for the per-frame threads covers 1.1 x each 120-frame window's longest frame too (plan item 248; measured worse on the iPhone, off) |
 | `DM_NVN_TEXCENSUS=1` | One line per new texture shape of the kinds whose layout or sampling rules came from outside checks: cube arrays, LINEAR_RENDER_TARGET without LINEAR, MINIMAL_LAYOUT, packaged 3D, linear block-compressed, formats with their own swizzle (sampled or as render targets) |
 | `DM_NVN_WB_IDLE=1` | An experiment (plan item 94): a texture the GPU wrote in a CPU-visible pool and left alone for 30 submissions is written back to its storage, and one whose storage the CPU writes afterwards is uploaded from it again. Off: it changes more than the terrain it is for (94a) |
 | `DM_NVN_WB_IDLE_SUBS=<n>` | With `DM_NVN_WB_IDLE=1`: write back after n idle submissions instead of 30 (1: after every GPU write; a diagnostic) |

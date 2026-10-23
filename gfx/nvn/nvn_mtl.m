@@ -3414,6 +3414,16 @@ typedef struct { uint64_t frame, pass; int idx, kind, w, h, draws, slot; uint32_
 #define PG_SLOTS 4096
 #define PG_RING 8
 static int g_pgt = -1; static FILE *g_pgt_f;
+// Which submissions are timed (plan item 256): DM_NVN_PASSGPU_EVERY=<n> every nth only (shh632058099 9ecf169, MIT; the timestamps' own cost
+// spread thinner), DM_NVN_PASSGPU_FROM=<frame> none before that frame and DM_NVN_PASSGPU_FRAMES=<n> none from n frames after it (GirlNet 9dc64f9,
+// MIT: on the iPhone the first minute runs on burst power, 230). A submission left out takes no heap and writes no row
+static uint64_t g_pgt_every = 1, g_pgt_from, g_pgt_frames;
+static inline int pg_sampled(uint64_t sub, uint64_t frame, uint64_t every, uint64_t from, uint64_t frames) {
+#ifdef DM_TEST_PG_SAMPLE_ALL   // negative control of t_passgpu only: every submission timed, as before
+    (void)sub; (void)frame; (void)every; (void)from; (void)frames; return 1;
+#endif
+    return (every <= 1 || sub % every == 0) && frame >= from && (!frames || frame < from + frames);
+}
 #if DM_NVN_M3
 static id<MTLCounterSampleBuffer> g_pgt_buf[PG_RING];
 #define PG_RSLOTS 4   // vertex start / end, fragment start / end
@@ -3460,6 +3470,10 @@ static int pg_on(void) {
     for (int i = 0; i < PG_RING; i++) { NSError *er = nil; g_pgt_buf[i] = [g_dev newCounterHeapWithDescriptor:hd error:&er]; if (!g_pgt_buf[i]) { MLOG("[red] DM_NVN_PASSGPU: no timestamp counter heap: %s", er.localizedDescription.UTF8String ?: "?"); return 0; } }
     { uint64_t fq = [g_dev queryTimestampFrequency]; g_pgt_ns_tick = fq ? 1e9 / (double)fq : 1; }
 #endif
+    { const char *v; if ((v = getenv("DM_NVN_PASSGPU_EVERY")) && atoll(v) > 1) g_pgt_every = (uint64_t)atoll(v);
+      if ((v = getenv("DM_NVN_PASSGPU_FROM"))) g_pgt_from = (uint64_t)atoll(v); if ((v = getenv("DM_NVN_PASSGPU_FRAMES"))) g_pgt_frames = (uint64_t)atoll(v);
+      if (g_pgt_every > 1 || g_pgt_from || g_pgt_frames) MLOG("DM_NVN_PASSGPU: every %llu submission(s), from frame %llu%s", (unsigned long long)g_pgt_every, (unsigned long long)g_pgt_from,
+                                                                g_pgt_frames ? [NSString stringWithFormat:@" for %llu frames", (unsigned long long)g_pgt_frames].UTF8String : ""); }
     if (!(g_pgt_f = fopen(e, "w"))) { MLOG("[red] DM_NVN_PASSGPU: cannot open %s", e); return 0; }
     fprintf(g_pgt_f, "frame\tidx\tkind\tgpu_ms\tinc_ms\tw\th\tfmt0\tdfmt\tload\tdraws\tt0_ns\tt1_ns\tpass\n"); fflush(g_pgt_f);
     MLOG("DM_NVN_PASSGPU: the GPU time of each render pass and dispatch → %s", e);
@@ -3467,6 +3481,7 @@ static int pg_on(void) {
 }
 static void pg_sub_begin(uint64_t fence) {   // this submission takes heap fence % PG_RING, once the one that used it last has completed
     if (!pg_on()) return;
+    if (!pg_sampled(fence, atomic_load(&g_cur_frame), g_pgt_every, g_pgt_from, g_pgt_frames)) { g_pgt_np = 0; g_pgt_open = -1; g_pgt_used = PG_SLOTS; return; }   // (pg_new: no slot left)
     if (fence > PG_RING) mtl_wait(fence - PG_RING, UINT64_MAX);
     g_pgt_b = (int)(fence % PG_RING); g_pgt_used = 0; g_pgt_np = 0; g_pgt_open = -1;
 #if !DM_NVN_M3

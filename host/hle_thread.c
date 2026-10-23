@@ -10,6 +10,7 @@
 // Semantics follow the public Horizon kernel behavior (KConditionVariable / KAddressArbiter / KSynchronization of Atmosphère mesosphère).
 // All waits hang on one global lock G, with one condition variable per thread; correctness first, performance to be measured later.
 #include "dm.h"
+#include "schedstats.h"
 #include "game.h"
 #include <errno.h>
 #include <sched.h>
@@ -73,6 +74,7 @@ typedef struct thr {
     int last_svc; uint64_t last_lr;
     int closed;                // Handle closed: the object is freed only when this holds together with exited (Horizon: the thread object goes away with the last reference)
     uint64_t nsvc;             // SVC count (for the state dump)
+    uint64_t woke_ns;          // when wake() signalled it (DM_SCHED_STATS: the wake-to-run latency, schedstats.h)
     uint64_t nyield, nyield_seen, nbackoff, nbackoff_seen;   // yields and those the back-off turned into short sleeps, both at the last power line (dm_yield_top)
     uint64_t yrun_svc, yrun_t0;   // the current run of yields: nsvc of its last yield and when it began (a run lasts while no other SVC comes between two yields)
     mach_port_t mport;         // Host thread port (to get CPU time)
@@ -142,7 +144,10 @@ static thr_t *pick(int kind, uint64_t a) {
     }
     return b;
 }
-static void wake(thr_t *t, int64_t res) { wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res; pthread_cond_signal(&t->cv); }
+// DM_SCHED_STATS=1: waits by kind, wake-to-run latency, the time taking a core back, system calls by number; a line every 5 s (plan item 255)
+static int sched_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_SCHED_STATS"); v = e && atoi(e) > 0; } return v; }
+static sched_stats g_sched;
+static void wake(thr_t *t, int64_t res) { wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res; if (sched_on()) t->woke_ns = now_ns(); pthread_cond_signal(&t->cv); }
 // ---------- Virtual cores ----------
 // Horizon runs at most one thread per core, and Tears of the Kingdom keys per-core data (allocators, job queues, the render job output blocks) by
 // GetCurrentProcessorNumber without locks: its main thread and ModuleSystemWorker0 share core 0. With every guest thread a free pthread, two threads
@@ -200,6 +205,14 @@ static int64_t block_core(thr_t *t, int kind, int64_t ns) {
     core_put(t); int64_t r = block_inner(t, kind, ns); core_take(t); return r;
 }
 static int64_t block(thr_t *t, int kind, int64_t ns) {   // Boot timeline: accumulated by wait kind (all threads) + the main thread listed separately
+    if (sched_on() && ns != 0) {   // (holding G)
+        uint64_t a = now_ns(); int had = t->cur_core >= 0; t->woke_ns = 0;
+        if (had) core_put(t);
+        int64_t r = block_inner(t, kind, ns); uint64_t b = now_ns();
+        if (had) core_take(t);
+        sched_note(&g_sched, kind & 7, a, t->woke ? t->woke_ns : 0, b, had ? now_ns() : b);
+        return r;
+    }
     if (!g_flag.bootprof) return block_core(t, kind, ns);
     uint64_t t0 = now_ns(); int64_t r = block_core(t, kind, ns); uint64_t d = now_ns() - t0;
     static const int id[] = {0, PROF_WAIT_LOCK, PROF_WAIT_CV, PROF_WAIT_ADDR, PROF_WAIT_SYNC};
@@ -800,6 +813,13 @@ static void kt_dump(int last) {
 }
 int svc_thread(int num, uint64_t *regs) {
     { thr_t *me = pthread_getspecific(g_keythr); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->nsvc++; core_checkpoint(me); } }
+    if (sched_on()) {
+        sched_svc(&g_sched, num); static _Atomic uint64_t next; uint64_t t = now_ns(), nx = atomic_load(&next);
+        if (!nx) { pthread_mutex_lock(&G); if (!g_sched.t0) g_sched.t0 = t; pthread_mutex_unlock(&G); atomic_compare_exchange_strong(&next, &nx, t + 5000000000ull); }
+        else if (t >= nx && atomic_compare_exchange_strong(&next, &nx, t + 5000000000ull)) {
+            char line[1200]; pthread_mutex_lock(&G); sched_report(&g_sched, t, line, sizeof line); pthread_mutex_unlock(&G); LOG("[sched] %s", line);
+        }
+    }
     if (g_flag.thr && num != 0x0B) { thr_t *me = pthread_getspecific(g_keythr); LOG("[%#x] svc %#x x0=%#llx x1=%#llx x2=%#llx x3=%#llx", me ? me->handle : 0, num, regs[0], regs[1], regs[2], regs[3]); }
     switch (num) {
     case 0x32: svc_thread_activity(regs); return 1;   // SetThreadActivity(handle, 0 runnable / 1 paused)
