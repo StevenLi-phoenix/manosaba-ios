@@ -1,7 +1,6 @@
 // gfx/nvn/mtl/pipeline.inc, part of nvn_mtl.m (included there in order, one translation unit): Draw state, vertex formats, blending, pipeline states, the pipeline prediction
 // ---------- Draw state ----------
 static void state_vp_ms(float vp[4], int ms[3]) { for (int k = 0; k < 4; k++) vp[k] = S.has_vp ? S.vp[0][k] : 0; ms[0] = S.ms.enable; ms[1] = S.ms.samples; ms[2] = S.ms.raster_samples; }
-static uint32_t cur_chmask(void) { return S.chmask.mask; }
 // BindProgram per stage: prog_bind (gfx/nvn/core/prog.c)
 static uint64_t g_udc_rt_walks;   // attachment walks of udc_note_draw (once per pass and attachment set; t_poolcache counts them)
 static void udc_note_draw(NvProg *pr) {

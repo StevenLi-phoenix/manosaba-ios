@@ -23,6 +23,8 @@ t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_d16clear.m -framework Metal -framework Foundation
 # gfx/nvn/core: the replay's decisions in plain C (plan item 264), each with a test that needs no GPU
 CORE_H=$(wildcard ../nvn/core/*.h)
+t_core_rt: t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_state: t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
 	clang $(CFLAGS) -Werror -o $@ t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
@@ -41,6 +43,8 @@ t_core_upd: t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.
 	clang $(CFLAGS) -Werror -o $@ t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
 t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
 	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
+t_core_pass: t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
 t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
 	clang $(CFLAGS) -Werror -o $@ t_core_prog.c ../nvn/core/prog.c
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
@@ -256,7 +260,9 @@ run: \
 	t_core_frame \
 	t_core_live \
 	t_core_pend \
+	t_core_pass \
 	t_core_prog \
+	t_core_rt \
 	t_core_state \
 	t_core_store_index \
 	t_core_tbdr \
@@ -378,7 +384,9 @@ run: \
 	./t_core_frame
 	./t_core_live
 	./t_core_pend
+	./t_core_pass
 	./t_core_prog
+	./t_core_rt
 	./t_core_state
 	./t_core_store_index
 	./t_core_tbdr

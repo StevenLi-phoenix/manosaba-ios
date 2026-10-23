@@ -331,9 +331,9 @@ static void fuse_try(void) {
     if (!fz_prefilter()) return;
     // One: from the earlier pass to the next SetRenderTargets, only draws and state are allowed
     const uint8_t *p = NULL, *r2op = NULL, *reuse[8]; int nreuse = 0; const p_set_rt *r2 = NULL; p_scissor sc = R.sc; int has_sc = R.has_sc;
-    fz_cursor cur = {.p = g_exec_next}; op_hdr h; const void *a;
+    op_cursor cur = {.p = g_exec_next}; op_hdr h; const void *a;
     for (int guard = 0; guard < 200000 && !r2; guard++) {
-        if (!fz_next(&cur, &p, &h, &a)) return;
+        if (!op_next(&cur, &p, &h, &a)) return;
         switch (h.op) {
             case OP_COPY_T2T: case OP_COPY_B2T: case OP_COPY_T2B: case OP_CLEAR_TEX: case OP_DISPATCH:
             case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_UPDATE_UB: case OP_COPY_B2B: case OP_RENDER_ENABLE: return;
@@ -352,7 +352,7 @@ static void fuse_try(void) {
     if (!r2 || rt_same(&R.rt, r2)) return;
     // Two: from the start of the later pass to its first draw, only clears (not clearing shared attachments) and state are allowed
     const uint8_t *cl[8]; int ncl = 0; uint8_t clr[8] = {0}; nvn_rgba cc[8]; int cd_f = 0, cs_f = 0; double cdv = 0; uint32_t csv = 0;
-    if (!fz_next(&cur, &p, &h, &a)) return;   // Continue from the cursor of step one (already past the later pass's SET_RT, keeping the cross-handle / return stack position)
+    if (!op_next(&cur, &p, &h, &a)) return;   // Continue from the cursor of step one (already past the later pass's SET_RT, keeping the cross-handle / return stack position)
     for (int guard = 0; guard < 200000; guard++) {
         if (h.op == OP_DRAW || h.op == OP_DRAW_IDX) break;
         switch (h.op) {
@@ -366,7 +366,7 @@ static void fuse_try(void) {
                 if (c->depth_mask) { cd_f = 1; cdv = c->depth; } if (c->stencil_mask) { cs_f = 1; csv = (uint32_t)c->stencil; } cl[ncl++] = p; break; }
             default: break;
         }
-        if (!fz_next(&cur, &p, &h, &a)) return;
+        if (!op_next(&cur, &p, &h, &a)) return;
     }
     // Three: union of attachments (the earlier pass's attachments keep their original indices, those unique to the later pass are appended), consistent sizes, compatible depth
     p_set_rt U = R.rt; int n = R.rt.n; int8_t p2map[8]; memset(p2map, -1, sizeof p2map);
@@ -386,14 +386,14 @@ static void fuse_try(void) {
     // Four: draws of the earlier pass must not sample attachments brought in by the later pass; when the depth comes from the later pass, depth-stencil testing must not be enabled
     static uint64_t tex[6][128], img[6][32]; memcpy(tex, S.tex, sizeof tex); memcpy(img, S.img, sizeof img);
     const prog_t *pg = S.prog; ds_st ds = S.ds;
-    cur = (fz_cursor){.p = g_exec_next};
+    cur = (op_cursor){.p = g_exec_next};
     for (;;) {   // The first loop iteration checks the draw that opens the render pass (current state), then checks the draws in the range one by one
         if (depth_from_r2 && (ds.dt || ds.dw || ds.st)) return;
         for (int j = R.rt.n; j < n; j++) if (prog_samples_ser(pg, tex, img, U.color[j]->serial)) return;
         if (depth_from_r2 && prog_samples_ser(pg, tex, img, U.depth->serial)) return;
         for (;;) {
             const uint8_t *q; op_hdr hq; const void *aq;
-            if (!fz_next(&cur, &q, &hq, &aq)) return;
+            if (!op_next(&cur, &q, &hq, &aq)) return;
             if (q == r2op) goto planned;
             if (hq.op == OP_BIND_PROGRAM) pg = prog_bind(pg, ((const p_bind_program *)aq)->prog, ((const p_bind_program *)aq)->stages);
             else if (hq.op == OP_BIND_STATE) { const p_bind_state *b = aq; if (b->kind == 5) memcpy(&ds, b->bytes, sizeof ds); }
@@ -405,8 +405,8 @@ static void fuse_try(void) {
 planned:
     {   // Five: pre-screen the first draw of the later pass (static conditions), to avoid attaching the union of attachments for nothing: track the program and texture bindings up to that draw
         const prog_t *pg2 = S.prog; static uint64_t t2[6][128], i2[6][32]; memcpy(t2, S.tex, sizeof t2); memcpy(i2, S.img, sizeof i2);
-        cur = (fz_cursor){.p = g_exec_next};
-        for (;;) { const uint8_t *q; op_hdr hq; const void *aq; if (!fz_next(&cur, &q, &hq, &aq)) return; if (q == p) break;
+        cur = (op_cursor){.p = g_exec_next};
+        for (;;) { const uint8_t *q; op_hdr hq; const void *aq; if (!op_next(&cur, &q, &hq, &aq)) return; if (q == p) break;
             if (hq.op == OP_BIND_PROGRAM) pg2 = prog_bind(pg2, ((const p_bind_program *)aq)->prog, ((const p_bind_program *)aq)->stages);
             else if (hq.op == OP_BIND_TEX || hq.op == OP_BIND_IMG) { const p_bind_handles *b = aq; bh_fresh(b); int lim = hq.op == OP_BIND_IMG ? 32 : 128;
                 if (b->stage >= 0 && b->stage < 6 && b->first >= 0 && b->first + b->n <= lim) for (int k = 0; k < b->n; k++) { if (hq.op == OP_BIND_IMG) i2[b->stage][b->first + k] = b->h[k]; else t2[b->stage][b->first + k] = b->h[k]; } }

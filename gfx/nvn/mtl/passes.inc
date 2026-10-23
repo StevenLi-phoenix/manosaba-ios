@@ -32,7 +32,7 @@ static id<MTLRenderPipelineState> g_enc_pso; static id<MTLDepthStencilState> g_e
 static int g_enc_vis, g_enc_has_vis;   // This encoder's current visibility count mode (0 off / slot number + 1), and whether a visibility buffer is attached
 static int g_pso_dirty = 1, g_dss_dirty = 1;   // Pipeline / depth-stencil related state was changed during replay
 static uint64_t g_stat_args_enc, g_stat_args_reuse;   // Argument buffer: new-encode / reuse counts
-static uint64_t g_bw_load, g_bw_store, g_pass_full_rw, g_udc_saved_bytes;   // Bandwidth ledger: attachment load / store bytes, number of full load-store passes
+// The bandwidth ledger (g_bw_load, g_bw_store, g_pass_full_rw, g_udc_saved_bytes): gfx/nvn/core/pass.h
 // The pass dump (PD, DM_NVN_PASSDUMP) and g_stat_pass / g_stat_draw: gfx/nvn/core/core.h
 static void blit_note(void) { if (g_enc) PD("E %llu copy / buffer update ends the render pass", g_stat_pass); }
 // DM_GFXUSE=<file>[:<first frame>] (default frame 1): over 30 consecutive frames from that frame, record the ranges in guest memory of the resources

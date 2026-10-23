@@ -1,5 +1,5 @@
 // gfx/nvn/core/rt.h: render target helpers in plain C (plan item 264): a mip level's extent, an attachment's subresource, whether a scissor covers
-// a target
+// a target; comparing target sets and colour slots (rt.c)
 #pragma once
 #include <stdint.h>
 #include "../nvn_obj.h"
@@ -15,3 +15,16 @@ static inline int scissor_full_of(const p_scissor *sc, int has_sc, const tex_t *
     uint64_t w = nvn_mip_extent(t->d.width, level), h = nvn_mip_extent(t->d.target == 0 || t->d.target == 3 ? 1 : t->d.height, level);
     return !has_sc || (sc->x <= 0 && sc->y <= 0 && (int64_t)sc->x + sc->w >= (int64_t)w && (int64_t)sc->y + sc->h >= (int64_t)h);
 }
+
+// Same set of targets: compared by texture serial and view (not by object pointer: the game may copy texture objects by value)
+int rt_same(const p_set_rt *a, const p_set_rt *b);
+// Colour slots i and j attach the same level / layer of one texture (by serial: records hold copies of the texture objects)
+int rt_same_sub(const p_set_rt *r, int i, int j);
+// Colour slot i is left out of its pass: the same level / layer of one texture attached at more than one colour slot is attached once. On the
+// Switch the ROP writes only the channels a slot's write mask enables, so the slots do not interfere; on Apple's TBDR every attachment has its own
+// tile memory and is stored back whole at the end of the pass, so the copy stored later (loaded or cleared, never written) overwrites the other
+// one's writes. Breath of the Wild's G-buffer attaches the albedo twice (nxnative, seedds, upstream d6cd8a8, MIT); Tears of the Kingdom's
+// half-resolution lighting passes attach their RG11B10F light buffer at c2 and c3, and the stored zeros left the title mural unlit (black). The slot
+// kept is the one the current channel write mask (S.chmask, the pass's opening draw) writes, else the first: tomodachi-native's variant (kuosuko,
+// MIT), since a pass may write only through a later slot
+int rt_dup_slot(const p_set_rt *r, int i);

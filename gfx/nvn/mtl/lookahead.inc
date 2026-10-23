@@ -1,42 +1,5 @@
-// gfx/nvn/mtl/lookahead.inc, part of nvn_mtl.m (included there in order, one translation unit): Pass lookahead: deferral, hoisting, depth / stencil use, store decisions, first-draw coverage, feedback copies
-// ---------- Pass lookahead: does this pass use depth / stencil ----------
-// When opening a pass, scan forward from the op after the current draw, simulating the changes of depth-stencil state, up to where this pass must end (target reset, copy, compute dispatch -
-// matching one-to-one the ops that end a pass in the replay). If no draw in between enables depth test / depth write / stencil test, this pass may leave the depth attachment unattached:
-// not one byte of the depth content is touched, and on TBDR the load and store of the whole depth texture are saved (measured on a real device: a single-draw fullscreen pass takes half the GPU, with an extra D32S8 load and store attached).
-// The scan follows real replay order across sub-list returns and across the remaining handles of this submission; end of submission = the pass must end. Undecidable cases such as a mid-pass clear or too-deep nesting always count as 'used'.
-static const uint8_t *g_exec_next;   // The op following the current draw in the replay
-static const uint8_t *g_ret[16]; static int g_ret_n;   // Call return stack of the replay (at OP_CALL the caller's next op is pushed)
-static const uint64_t *g_rest; static int g_nrest;      // Handles in this submission still to be replayed after the current handle
-void mtl_exec_rest(const uint64_t *h, int n) { g_rest = h; g_nrest = n; }
-static uint64_t g_stat_ds_omit;      // Number of passes that attach less depth-stencil because the lookahead proved it unused (including stencil-only / depth-only)
-static uint64_t g_stat_s_only, g_stat_d_only;   // Of those, the number of passes that attach only stencil / only depth
-// Clear-only pass hoist (hoist_try): ops that were already executed early and must be skipped when replay reaches their original position (each group's SetRenderTargets and the clears in it).
-// The exec loop, the store lookahead (sdx index) and the depth-stencil lookahead (ds_scan) all skip by it - otherwise the lookahead would take the clear at the original position as 'cleared again' and wrongly judge the early-cleared content redundant
-#define HOIST_MAX 40   // At most 4 groups × (1 set-target op + 8 clears)
-static const uint8_t *g_hoist_skip[HOIST_MAX]; static int g_hoist_n; static uint64_t g_hoist_groups;
-static int hoist_skipped(const uint8_t *p) { for (int i = 0; i < g_hoist_n; i++) if (g_hoist_skip[i] == p) return 1; return 0; }
-typedef struct { const uint8_t *p, *ret[8]; int ret_n, rest_i, bad; } fz_cursor;
-static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **oa) {
-    for (int guard = 0; guard < 1000000; guard++) {
-        if (!c->p) return 0;
-        op_hdr h; memcpy(&h, c->p, sizeof h); const void *a = c->p + 8;
-        switch (h.op) {
-            case OP_END:
-                if (c->ret_n) c->p = c->ret[--c->ret_n];
-                else if (c->rest_i < g_nrest) c->p = (const uint8_t *)g_rest[c->rest_i++];
-                else { c->p = NULL; return 0; }
-                continue;
-            case OP_JUMP: memcpy(&c->p, a, 8); continue;
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (c->ret_n >= 8) { c->bad = 1; return 0; }
-                c->ret[c->ret_n++] = c->p + h.size; c->p = (const uint8_t *)t; continue; }
-            default: break;
-        }
-        const uint8_t *p = c->p; c->p += h.size;
-        if (g_hoist_n && hoist_skipped(p)) continue;
-        if (out) *out = p; if (oh) *oh = h; if (oa) *oa = a; return 1;
-    }
-    c->bad = 1; return 0;
-}
+// gfx/nvn/mtl/lookahead.inc, part of nvn_mtl.m (included there in order, one translation unit): Pass lookahead: deferral, hoisting, store actions, first-draw coverage, feedback copies
+// Where the replay is, the ops run early, depth / stencil use and the store decisions: gfx/nvn/core/pass.c (plan item 264)
 // State of the readable-tile pass merge (merge B step 2): the earlier pass (phase 1) and the later pass (phase 2) share one render pass, and the attachments are the union
 typedef struct {
     int active, phase, n1, nskip;
@@ -84,74 +47,12 @@ static int defer_next(int at_q_only, uint64_t after) {   // Slot number of the n
 }
 static void defer_release_one(defer_t *d) { if (d->active) { g_defer_nact--; if (d->at_q) g_defer_natq--; if (d->in_p) g_defer_pend = NULL; } for (int i = 0; i < d->n; i++) free(d->snap[i].S_); memset(d, 0, sizeof *d); }
 static void defer_clear_all(void) { for (int i = 0; i < 4; i++) defer_release_one(&g_defer_slots[i]); g_defer_nact = g_defer_natq = 0; g_defer_pend = NULL; }
-static int hoist_take(const uint8_t *p) { for (int i = 0; i < g_hoist_n; i++) if (g_hoist_skip[i] == p) { g_hoist_skip[i] = g_hoist_skip[--g_hoist_n]; return 1; } return 0; }
-enum { DS_FREE = 0, DS_USED = 1, DS_RET = 2 };
-static int g_ds_why; static int g_ds_scanned; static int g_ds_need;   // g_ds_need: need accumulated during the scan, 1 depth 2 stencil   // Diagnostics: the opcode that triggered the 'used' verdict (for a draw, records 1000 + dt*100 + dw*10 + st), and the number of ops scanned
-static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
-    for (int guard = 0; guard < 1000000; guard++) {
-        op_hdr h; memcpy(&h, p, sizeof h);
-        const void *a = p + 8; g_ds_scanned++;
-        if (g_hoist_n && hoist_skipped(p)) { p += h.size; continue; }   // Clear pass already executed early
-        switch (h.op) {
-            case OP_END: return DS_RET;
-            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8) return DS_USED;
-                int r = ds_scan((const uint8_t *)t, ds, depth + 1); if (r != DS_RET) return r; break; }
-            case OP_UPDATE_UB: if (ub_rename_on()) break; return DS_FREE;   // renamed: the pass goes on past it
-            case OP_SET_RT: case OP_COPY_B2B: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX: case OP_DISPATCH: return DS_FREE;
-            case OP_CLEAR_COLOR: case OP_CLEAR_DS: g_ds_why = h.op; return DS_USED;
-            case OP_BIND_STATE: { const p_bind_state *b = a; if (b->kind == 5) memcpy(ds, b->bytes, sizeof *ds); break; }
-            case OP_DRAW: case OP_DRAW_IDX:   // Depth test / write → depth needed; stencil test → stencil needed; can stop once both are needed
-                g_ds_need |= (ds->dt || ds->dw ? 1 : 0) | (ds->st ? 2 : 0);
-                if (g_ds_need == 3) { g_ds_why = 1000 + ds->dt * 100 + ds->dw * 10 + ds->st; return DS_USED; } break;
-            default: break;
-        }
-        p += h.size;
-    }
-    return DS_USED;
-}
-// Store lookahead decision (command by command, in real replay order):
-//   Redundant: after being set as an attachment again and before any draw, it is cleared in full (color: all four channels of that index written; depth: depth clear; stencil: all 8 stencil bits cleared. Depth and stencil are decided separately and their write-back is set separately)
-//   Needed: at a draw / dispatch it is bound to a texture or image slot of any stage (including ones already bound when the scan starts); used as copy source / copy destination / texture-clear target; drawn before cleared after becoming an attachment again (load)
-// Different levels / layers of the same texture are decided separately (a downsample chain writes level k and reads level k−1); a sampler binding counts as a read of the whole texture (conservative)
-static const uint8_t *g_exec_cur;   // The op currently being replayed (inclusive)
-static void sd_need(sd_att *t, int why) { if (!t->state) { t->state = 1; t->why = (uint8_t)why; } }   // why: 1 a draw reads it as a texture 2 as an attachment, drawn before cleared 3 copy 4 texture clear 5 scanned to the end undecided 6 no start point / index unavailable
-static int sdx_decide(uint8_t st[9]) {   // Store lookahead decision by the index (gfx/nvn/core/store_index.c; built by mtl_sub_index): st[i] 2 redundant, otherwise why << 2 (the reason it is needed, same as sd_need). Returns 0 = index unavailable
-    uint32_t P; if (!sdx_pos(g_exec_cur, &P)) return 0;
-    for (int i = 0; i < g_nsd; i++) st[i] = sdx_first(g_sd[i].ser, g_sd[i].lv, g_sd[i].sl, g_sd[i].depth, P, g_hoist_skip, g_hoist_n);
-    return 1;
-}
-static void sd_finish(void) {
+static void sd_finish(void) {   // the store lookahead's decision (gfx/nvn/core/pass.c sd_decide) as each attachment's store action
     if (!g_nsd) return;
-    if (!tbdr_part(TBP_STORE)) {   // All optimizations off: always write back
-        for (int i = 0; i < g_nsd; i++) { sd_att *t = &g_sd[i];
-            enc_r_store(g_enc, t->depth, MTLStoreActionStore, (NSUInteger)t->idx); }
-        g_nsd = 0; return; }
-    uint8_t nst[9];
-    if (sdx_decide(nst)) { for (int i = 0; i < g_nsd; i++) if (nst[i] == 2) g_sd[i].state = 2; else sd_need(&g_sd[i], nst[i] >> 2); }
-    else for (int i = 0; i < g_nsd; i++) sd_need(&g_sd[i], 6);   // Pass ended outside the list / index unavailable: always write back
-    for (int i = 0; i < g_nsd; i++) {
-        sd_att *t = &g_sd[i]; int udc_dead = udc_on() && t->load && !t->wrote;
-        // A color attachment written in the same pass as the window texture does not enter the ledger: it is a link in the present chain, not a transient attachment that is 'reset every frame before use'.
-        // The in-run 'upscale' pass writes two textures at once - scene texture + window texture - and the UI composite was merged into the same pass, so in-run nobody reads back the scene texture; as soon as the game stops drawing 3D (loading screen)
-        // a separate composite pass samples it afterwards instead. 'About to enter the loading screen' is only known after the previous frame was submitted, so prediction cannot stop it: on iPad true fullscreen every install hits it once on the first act change
-        // (the 2732×2048 attachment of frame N was not written back and is sampled for 4 consecutive frames starting at frame N+1; the key is permanently disabled). At the iPhone aspect ratio the same-size key already sees a reader during the trial period and is silently disabled.
-        int xv_win = 0; for (int k = 0; k < R.rt.n && k < 8; k++) if (R.rt.color[k] && xv_present(R.rt.color[k]->serial)) xv_win = 1;
-        uint64_t xtag = 0; int xvcand = xv_on() && !xv_win && t->depth == 0 && t->state != 2 && t->why == 5 && xv_first_good(t->ser, t->lv, t->sl) && !xv_present(t->ser)
-                                        && !xv_disabled(xtag = xv_tag_pass(R.rt.color[t->idx], t->lv, t->idx, &R.rt));
-        int xvdead = xvcand && xv_trial_get(xtag, 0) >= XV_TRIAL;   // Only after the trial period is the write-back really skipped
-        if (xvcand && !xvdead) xv_set(t->ser, t->lv, t->sl, XV_PROBE, xtag);   // Trial period: write back as usual, only track the next touch
-        int dead = t->state == 2 || udc_dead || xvdead; MTLStoreAction sa = dead ? MTLStoreActionDontCare : MTLStoreActionStore;
-        if (xvdead) { xv_set(t->ser, t->lv, t->sl, XV_INVALID, xtag); g_xv.dc++; }
-        enc_r_store(g_enc, t->depth, sa, (NSUInteger)t->idx);
-        g_sd_n_all++; if (dead) { g_sd_n_dead++; g_sd_dead_bytes += t->bytes; g_bw_store -= t->bytes; if (udc_dead) g_udc_saved_bytes += t->bytes; }
-        if (!t->state) t->why = 5;
-        PD("Z %llu %s ser=%llu lv%u sl%u %s why=%d by=%s slot=%d", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, xvdead ? "dontcare-xv" : dead ? "dontcare" : "store", dead ? 0 : t->why, t->why == 1 && t->wkey ? t->wkey : "-", t->wslot);
-        if (udc_on()) PD("U %llu %s ser=%llu lv%u sl%u runtime=%s reason=%s state=%d load=%d", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, t->wrote ? "wrote" : "not-written", t->wwhy == 1 ? "image-write" : t->wwhy == 2 ? "color-write-mask" : t->wwhy == 3 ? "fragment-output" : t->wwhy == 4 ? "depth-write" : t->wwhy == 5 ? "stencil-write" : t->wwhy == 6 ? "clear-quad" : "none", t->state, t->load);
-    }
+    uint8_t st[9]; sd_decide(st);
+    for (int i = 0; i < g_nsd; i++) enc_r_store(g_enc, g_sd[i].depth, st[i] ? MTLStoreActionStore : MTLStoreActionDontCare, (NSUInteger)g_sd[i].idx);
     g_nsd = 0;
 }
-// Continue scanning in real replay order: current list -> callers at each level (return stack from the top down) -> remaining handles of this submit; the render pass necessarily ends when the submit ends (rp_flush before commit)
 // Coverage proof (holds only if all are satisfied; anything unrecognized is treated as not holding):
 //   Shader: the vertex position xyz is taken as-is from one vertex attribute, w is 1 or the same attribute's .w (dmsh_build raster_facts); the fragment does not discard, does not write sample_mask, and writes this color index
 //   State: this attachment has no blending, a full write mask, no alpha-to-coverage, fill mode, no depth test (or ALWAYS), no stencil test, single sample, not 3D
@@ -217,7 +118,7 @@ static void pso_predict_rest(void) {
     p_scissor sc0 = R.sc; int hsc0 = R.has_sc;   // state_op sets the scissor too: the draw that asked for the prediction used the last one walked over
     int pso_dirty = g_pso_dirty, dss_dirty = g_dss_dirty;
     uint32_t cf[8]; memcpy(cf, g_pass.cfmt, sizeof cf); uint32_t df = g_pass.dfmt, sf = g_pass.sfmt, samples = g_pass.samples, dfull = df, sfull = sf; int kicked0 = (int)g_pp_kicked, draws = 0;
-    fz_cursor cur = {.p = g_exec_next};
+    op_cursor cur = {.p = g_exec_next};
     // Keys for "attachments attached as-is" are kicked as they are found (most likely to be used), the other attach modes after the scan -- background concurrency is limited, and what is dispatched first is compiled first
     enum { QN = PP_SCAN_KEYS }; static struct { pso_key k; void *vs, *fs; } qa[QN], qb[QN]; int na = 0, nb = 0, stop = 0;
     uint64_t t0 = bp_now();
@@ -226,7 +127,7 @@ static void pso_predict_rest(void) {
         if (na >= QN) { stop = 2; break; }
         if (bp_now() - t0 > PP_SCAN_NS) { stop = 3; break; }
         const uint8_t *q; op_hdr hq; const void *aq;
-        if (!fz_next(&cur, &q, &hq, &aq)) break;
+        if (!op_next(&cur, &q, &hq, &aq)) break;
         if (hq.op == OP_SET_RT) {
             const p_set_rt *r = aq; memset(cf, 0, sizeof cf); dfull = sfull = 0; samples = 1;
             for (int i = 0; i < r->n && i < 8; i++) { id<MTLTexture> t = r->color[i] && !rt_dup_slot(r, i) ? tex_mtl(r->color[i]) : nil; if (t) { cf[i] = (uint32_t)rt_color_fmt(r->color[i], t, &r->cview[i], r->has_cview[i], 0); samples = (uint32_t)t.sampleCount; } }
@@ -271,10 +172,10 @@ static void fz_probe_cov2(const p_set_rt *r2, const uint8_t *first, const int8_t
     g_fd_dw = fh.op == OP_DRAW ? (const p_draw *)(first + 8) : NULL;
     g_fd_di = fh.op == OP_DRAW_IDX ? (const p_draw_idx *)(first + 8) : NULL;
     R.rt = *r2; R.has_rt = 1;
-    fz_cursor cur = {.p = g_exec_next};
+    op_cursor cur = {.p = g_exec_next};
     for (;;) {
         const uint8_t *q; op_hdr hq; const void *aq;
-        if (!fz_next(&cur, &q, &hq, &aq)) break;
+        if (!op_next(&cur, &q, &hq, &aq)) break;
         if (q == first) break;
         if (hq.op == OP_DRAW || hq.op == OP_DRAW_IDX || hq.op == OP_SET_RT || hq.op == OP_CLEAR_COLOR || hq.op == OP_CLEAR_DS) continue;
         state_op(hq.op, aq);
@@ -326,19 +227,6 @@ static void lp_finish(void) {
         }];
     }
     [dcb commit];
-}
-static int rt_same(const p_set_rt *a, const p_set_rt *b) {   // Same set of targets: compare by texture serial and view (not by object pointer: the game may copy texture objects by value)
-    if (a->n != b->n || !a->depth != !b->depth || (a->depth && a->depth->serial != b->depth->serial) || a->has_dview != b->has_dview) return 0;
-    if (a->has_dview && memcmp(&a->dview, &b->dview, sizeof a->dview)) return 0;
-    for (int k = 0; k < a->n && k < 8; k++) {
-#ifdef DM_TEST_RT_SAME_NO_VIEW   // negative control of gfx/tests t_rt_continue only: the colour targets compared by texture alone
-        if (!a->color[k] != !b->color[k] || (a->color[k] && a->color[k]->serial != b->color[k]->serial)) return 0;
-        continue;
-#endif
-        if (!a->color[k] != !b->color[k] || (a->color[k] && a->color[k]->serial != b->color[k]->serial) || a->has_cview[k] != b->has_cview[k]) return 0;
-        if (a->has_cview[k] && memcmp(&a->cview[k], &b->cview[k], sizeof a->cview[k])) return 0;
-    }
-    return 1;
 }
 static int draw_samples_rt(NvProg *pr) {   // Sampled attachments keep the original conservative ser-level guard, not split by level/layer
     uint64_t rs[9]; int nr = 0;
@@ -492,22 +380,6 @@ static void fbx_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
 static void fbx_activate(void) {
     if (!g_fbx_npend) return;
     memcpy(g_fbx_act, g_fbx_pend, sizeof g_fbx_act); g_fbx_nact = g_fbx_npend; g_fbx_npend = 0; args_dirty_all();
-}
-// The whole render pass's need for depth / stencil (bits: 1 depth 2 stencil; 3 = both needed or cannot be proven). Starting from the draw that opens the render pass, scan in real replay order to the end of the render pass:
-// the attached clears and this draw's state are counted first; later draws accumulate by their depth-stencil state; anything unprovable such as a mid-pass clear or nesting too deep is treated as both needed
-static int pass_ds_need(void) {
-    int need = (R.clear_d || S.ds.dt || S.ds.dw ? 1 : 0) | (R.clear_s || S.ds.st ? 2 : 0);
-    if (!R.rt.depth || need == 3 || !g_exec_next || g_ret_n > 16) {
-        PD("S %llu no lookahead depth=%d clear_d=%d clear_s=%d dt=%d dw=%d st=%d next=%d ret=%d", g_stat_pass + 1, R.rt.depth != NULL, R.clear_d, R.clear_s, (int)S.ds.dt, (int)S.ds.dw, (int)S.ds.st, g_exec_next != NULL, g_ret_n);
-        return 3;
-    }
-    ds_st ds = S.ds; g_ds_why = -1; g_ds_scanned = 0; g_ds_need = need;
-    int r = ds_scan(g_exec_next, &ds, 0);
-    for (int k = g_ret_n - 1; r == DS_RET && k >= 0; k--) r = ds_scan(g_ret[k], &ds, 0);
-    for (int k = 0; r == DS_RET && k < g_nrest; k++) r = ds_scan((const uint8_t *)g_rest[k], &ds, 0);
-    int out = r == DS_USED ? 3 : g_ds_need;
-    PD("S %llu lookahead result=%d need=%d (1 depth 2 stencil) why=%d scanned %d ops return stack %d remaining handles %d", g_stat_pass + 1, r, out, g_ds_why, g_ds_scanned, g_ret_n, g_nrest);
-    return out;
 }
 // Pure-clear render pass hoisting: when a render pass is opened, scan forward, and if the shape is "several draws of this render pass -> several groups (SetRenderTargets + only clears) -> back to the same targets as this render pass",
 // then hoist those groups of clears to execute before this render pass and skip them at their original positions, and on returning to the same targets the same-target continuation picks up -- this render pass's attachments are no longer stored whole and loaded again for the clears sandwiched in between

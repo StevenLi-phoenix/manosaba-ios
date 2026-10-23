@@ -94,7 +94,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/rtheap.inc` | Render targets of virtual pools in a heap, the memory census, the finalize queue |
 | `nvn/mtl/live.inc` | Texture releases |
 | `nvn/mtl/passes.inc` | Render pass bookkeeping: zero-source skip, the pass dump (PD), attachment use |
-| `nvn/mtl/tbdr_xv.inc` | The store decisions' attachments, load elision, same-target continuation, layered passes (their state and declarations) |
+| `nvn/mtl/tbdr_xv.inc` | Load elision, same-target continuation, layered passes (their state and declarations) |
 | `nvn/mtl/chunks.inc` | Mid-submission commits (MacNativeGames' TOTK_CHUNK_DRAWS) |
 | `nvn/mtl/passgpu.inc` | GPU time of each render pass and dispatch (DM_NVN_PASSGPU, plan item 49) |
 | `nvn/mtl/renderpass.inc` | Render passes: encoder labels, block-compressed targets, attachments, pass begin / end, clears |
@@ -105,7 +105,7 @@ Binding conventions used by the translation:
 | `nvn/mtl/args.inc` | Argument buffers: dummy resources, bindings, the driver segment fill |
 | `nvn/mtl/uniform_rename.inc` | Inline uniform updates' backend side: the argument blocks they make stale, writing them to memory |
 | `nvn/mtl/encode_args.inc` | Draws that sample what their own pass draws (plan item 42), argument encoding |
-| `nvn/mtl/lookahead.inc` | Pass lookahead: deferral, hoisting (hoist_try), depth / stencil use, store decisions, first-draw coverage, feedback copies |
+| `nvn/mtl/lookahead.inc` | Pass lookahead: deferral, hoisting (hoist_try), store actions, first-draw coverage, feedback copies |
 | `nvn/mtl/store_index.inc` | The store lookahead index's backend side: what the index needs of the backend, its build at the start of a submit, the ledger's check against it |
 | `nvn/mtl/tile_merge.inc` | Readable tile render pass merge |
 | `nvn/mtl/u8_layers.inc` | 8-bit indices the GPU wrote, and layered passes |
@@ -119,7 +119,8 @@ Binding conventions used by the translation:
 | `nvn/mtl/present_thread.inc` | The present thread and the display link, statistics getters |
 | `nvn/core/core.h`, `nvn/core/core.c` | The core's conventions; log lines and red lines once a tag (`MLOG`, `RED_ONCE`), shared with the backend; the pass dump (`PD`, `DM_NVN_PASSDUMP`) with the frame number and the pass and draw counts; a clock for statistics |
 | `nvn/core/tbdr.c`, `nvn/core/tbdr.h` | The TBDR rewrites' switches (`DM_NVN_TBDR`, `DM_NVN_TBDR_OFF`, the ruler, `DM_NVN_UNWRITTEN_DC`) and the cross-submission attachment validity ledger (`xv_*`) |
-| `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target |
+| `nvn/core/rt.c`, `nvn/core/rt.h` | Render target helpers: a mip level's extent, an attachment's subresource, whether a scissor covers a target; whether two target sets are the same (`rt_same`), a colour slot left out because another attaches the same subresource (`rt_dup_slot`) |
+| `nvn/core/pass.c`, `nvn/core/pass.h` | Pass planning: where the replay is and a cursor in replay order, the ops run before their place, what a pass needs of depth and stencil (`pass_ds_need`), whether each attachment is stored at a pass end (`sd_decide`), the bandwidth ledger |
 | `nvn/core/prog.c`, `nvn/core/prog.h` | The program bound per stage (prog_bind: per-stage keys combined into a composite program) |
 | `nvn/core/live.c`, `nvn/core/live.h` | The texture living at a storage address (a finalized registration follows it), and the texture objects' host copies that recorded commands use |
 | `nvn/core/pend.c`, `nvn/core/pend.h` | Buffer writes encoded but not executed on the GPU yet (copies, inline updates), and what a range reads as at a point of the replay |
@@ -199,7 +200,7 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 | `DM_NVN_FBX=all` or `0` | Copy the attachment for every draw that samples it (default: only after a texture barrier), or never |
 | `DM_GFXUSE=<file>[:<frame>]` | Record the guest memory ranges the GPU reads over 30 frames |
 | `DM_NVN_TBDR=0` | Turn off all pass optimizations (attach, load and store everything), for equivalence comparisons |
-| `DM_NVN_TBDR_OFF=<part>[,<part>...]` | With the pass optimizations on, keep the parts named off: `zskip`, `xv`, `cover`, `store`, `sdx`, `defer`, `fuse`, `hoist`, `ds`, `range`, `cont`, `rtheap`, or `all` (plan item 62j). Mid-submission commits stay on while `defer`, `fuse` and `hoist` are off (plan item 228) |
+| `DM_NVN_TBDR_OFF=<part>[,<part>...]` | With the pass optimizations on, keep the parts named off: `zskip`, `xv`, `cover`, `store`, `sdx`, `defer`, `fuse`, `hoist`, `ds`, `cont`, `rtheap`, or `all` (plan item 62j). Mid-submission commits stay on while `defer`, `fuse` and `hoist` are off (plan item 228) |
 | `DM_NVN_CHUNK_DRAWS=<n>`, `DM_NVN_CHUNK_FIRST=<n>` | Mid-submission commits: the work encoded so far goes to the GPU as a command buffer of its own after the first `DM_NVN_CHUNK_FIRST` draws (default 60), then every `DM_NVN_CHUNK_DRAWS` draws (default 75); either at 0 turns them off |
 | `DM_NVN_NOCULL=1` | Draw with face culling off (does a missing draw come back?) |
 | `DM_NVN_OCC_FORCE=<n>` | Every samples-passed (occlusion) result reported as n (does a missing object come back with n large?; a diagnostic) |

@@ -87,11 +87,11 @@ static int lay_decide(int clear_only, int *first) {
     if (mip_extent(t->d.width, lv) > LAY_MAX_EXTENT || mip_extent(t->d.height, lv) > LAY_MAX_EXTENT) return 0;
     if (!(g_fd_dw ? lay_prim_ok(g_fd_dw->prim) : g_fd_di && lay_prim_ok(g_fd_di->prim))) return 0;
     if (!g_exec_next || g_ret_n > 8) return 0;
-    fz_cursor cur = {.p = g_exec_next}; for (int k = 0; k < g_ret_n; k++) cur.ret[k] = g_ret[k]; cur.ret_n = g_ret_n;   // the replay's own return stack first
+    op_cursor cur = {.p = g_exec_next}; for (int k = 0; k < g_ret_n; k++) cur.ret[k] = g_ret[k]; cur.ret_n = g_ret_n;   // the replay's own return stack first
     int lo = v->min_layer, hi = v->min_layer;
     for (int guard = 0; guard < 4096; guard++) {
         const uint8_t *q; op_hdr oh; const void *oa;
-        if (!fz_next(&cur, &q, &oh, &oa) || cur.bad) break;
+        if (!op_next(&cur, &q, &oh, &oa) || cur.bad) break;
         if (oh.op == OP_SET_RT) { const p_set_rt *r = oa; if (!lay_same(r, t->serial, v)) break; int l = r->cview[0].min_layer; lo = MIN(lo, l); hi = MAX(hi, l); continue; }
         if (oh.op == OP_DRAW || oh.op == OP_DRAW_IDX) { if (!lay_prim_ok(oh.op == OP_DRAW ? ((const p_draw *)oa)->prim : ((const p_draw_idx *)oa)->prim)) break; continue; }
         if (!lay_op_safe(oh.op)) break;

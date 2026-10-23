@@ -92,27 +92,10 @@ static MTLPixelFormat rt_color_fmt(const tex_t *t, id<MTLTexture> base, const vi
 // color: when the view of a colour attachment changes the format (e.g. an RGBA8 base texture written through an RGBA8_SRGB view), attach a Metal view of that format - on the Switch writes and clears are encoded by the view's format,
 // and attaching only the base texture drops the sRGB encoding entirely, making the picture too dark (public repository #36, measured by seedds on another game); the pipeline colour formats take the attached texture's format (g_pass.cfmt), so they follow.
 // The view lives only until this submission completes (Metal 4 does not retain resources; the view shares storage with the base texture and is not made resident separately). Depth / stencil attachments do not change format
-// The same level / layer of one texture attached at more than one colour slot: only one slot is attached, the others are left out (their writes are
-// dropped). On the Switch the ROP writes only the channels a slot's write mask enables, so the slots do not interfere; on Apple's TBDR every attachment
-// has its own tile memory and is stored back whole at the end of the pass, so the copy stored later (loaded or cleared, never written) overwrites the
-// other one's writes. Breath of the Wild's G-buffer attaches the albedo twice (nxnative, seedds, upstream d6cd8a8, MIT); Tears of the Kingdom's
-// half-resolution lighting passes attach their RG11B10F light buffer at c2 and c3, and the stored zeros left the title mural unlit (black). The slot
-// kept is the one the pass's opening draw writes (write mask non-zero), else the first: tomodachi-native's variant (kuosuko, MIT), since a pass may
-// write only through a later slot. A pending clear on a slot left out moves to the slot kept; a draw writing a slot left out is reported once.
-static uint32_t cur_chmask(void);   // the current channel write mask (S.chmask, defined with the draw state)
+// The same level / layer of one texture attached at more than one colour slot: only one slot is attached (rt_dup_slot, gfx/nvn/core/rt.c), the
+// others are left out (their writes are dropped). A pending clear on a slot left out moves to the slot kept; a draw writing a slot left out is
+// reported once.
 static uint8_t g_rt_dup_skip;       // slots this pass left out
-static int rt_same_sub(const p_set_rt *r, int i, int j) {   // the two slots attach the same level / layer of one texture
-    if (!r->color[i] || !r->color[j] || r->color[j]->serial != r->color[i]->serial) return 0;   // by serial: records hold copies of the texture objects
-    uint8_t lv = r->has_cview[i] && r->cview[i].set_levels ? r->cview[i].base_level : 0; uint16_t ly = r->has_cview[i] && r->cview[i].set_layers ? r->cview[i].min_layer : 0;
-    uint8_t lj = r->has_cview[j] && r->cview[j].set_levels ? r->cview[j].base_level : 0; uint16_t yj = r->has_cview[j] && r->cview[j].set_layers ? r->cview[j].min_layer : 0;
-    return lj == lv && yj == ly;
-}
-static int rt_dup_slot(const p_set_rt *r, int i) {
-    if (!r->color[i]) return 0;
-    uint32_t cm = cur_chmask(); int first = -1, pick = -1, n = 0;
-    for (int j = 0; j < r->n && j < 8; j++) if (rt_same_sub(r, i, j)) { if (first < 0) first = j; if (pick < 0 && (cm >> (4 * j) & 0xf)) pick = j; n++; }
-    return n > 1 && i != (pick >= 0 ? pick : first);
-}
 typedef struct { __unsafe_unretained id<MTLTexture> aux, dst; NSUInteger level, slice, plane, lw, lh, bx, by, bpb; int dec, fresh; uint32_t fmt; } blk_wb;   // plane: depth plane of a 3D texture; dec: 0 copied back, 1 / 2 decoded (blk_decode)
 static NSMutableDictionary<NSNumber *, id<MTLTexture>> *g_blkaux;   // texture serial → auxiliary block texture (dropped when the texture is finalized)
 static blk_wb g_blk_wb[8];                                          // the open pass's attachments to copy back at rp_end (count g_nblk_wb)

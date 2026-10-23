@@ -1,11 +1,6 @@
-// gfx/nvn/mtl/tbdr_xv.inc, part of nvn_mtl.m (included there in order, one translation unit): The store decisions' attachments, load elision, same-target continuation, layered passes (their state and declarations)
+// gfx/nvn/mtl/tbdr_xv.inc, part of nvn_mtl.m (included there in order, one translation unit): Load elision, same-target continuation, layered passes (their state and declarations)
 // The TBDR switches and the cross-submission attachment validity ledger are gfx/nvn/core/tbdr.c (plan item 264)
-// ---------- Store lookahead: at pass end, decide from the later commands of the same submission whether each attachment's write-back is redundant ----------
-// On TBDR every attachment is written back to memory in full when the pass ends; Switch (Maxwell immediate-mode rendering) has no such cost. If an attachment is cleared in full before being read, the write-back is redundant (DontCare).
-// For the decision see mtl_sub_index / sdx_decide; only what can be proven within the same submission is accepted, and anything still undecided at the end of the submission is always written back.
-typedef struct { uint64_t ser, bytes; uint32_t lv, sl; int idx; uint8_t depth, state, ridx, drawn, why, load, wrote, wwhy, pw; const char *wkey; int wslot; } sd_att;   // pw: cleared, or written by a draw that samples none of the pass's attachments (fbx_prepare's split, plan item 165)   // depth: 0 color 1 depth 2 stencil (the two parts of a combined depth-stencil texture are decided separately)   // state 0 undecided 1 needed 2 redundant; idx: color attachment index, -1 for depth
-static sd_att g_sd[9]; static int g_nsd;
-static uint64_t g_sd_dead_bytes, g_sd_n_dead, g_sd_n_all;
+// The store lookahead (sd_att, g_sd, sd_decide): gfx/nvn/core/pass.h
 static void sd_finish(void);
 // Load elision (fully covering first draw): if the draw that opens the pass can be proven to cover a color attachment in full (first_draw_covers), that attachment's load becomes DontCare -
 // the first draw does not blend and writes all channels, every covered pixel is rewritten by it, and the original content is not visible (Switch immediate-mode rendering has no such cost; on TBDR load = reading the whole thing from memory into the tile)

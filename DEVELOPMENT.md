@@ -207,8 +207,10 @@ decide):
   each into `gfx/nvn/core/` with its header and a test that needs no GPU. The parts that use little Metal are done (batches 88-94: the store
   index, uniform snapshots, the TBDR switches and validity ledger with the pass dump, pending writes and frame measurements, the live
   texture, the submit call's capture, inline uniform updates). Next the mixed parts (the replay loop, lookahead, tile merge, draw) split into
-  what is decided and what is executed, starting with the replay state (`S`, `R`) and the commands that only set it (batch 96); then the file-scope
-  variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
+  what is decided and what is executed: the replay state (`S`, `R`) and the commands that only set it (batch 96), pass planning's own
+  decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons); next the clear-only
+  hoist's, the deferral's and the tile merge's decisions, then the execution interface (`nvn_backend.h`) and the replay loop; then the
+  file-scope variables grouped by module; the Vulkan backend once the interface covers what manosaba needs.
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -380,3 +382,14 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   keep, made a Metal one where a pass descriptor takes it. `gfx/tests/t_core_state.c` (25; a depth-stencil change taken for a pipeline one,
   `-DDM_TEST_ST_DSS_AS_PSO`, fails 1); `t_fuse_check` and `t_rt_srgb_view` set `R`'s clear colour the new way (the batch's first gfx run
   stopped there; all 118 test targets build for Metal 4 and Metal 3 now and the tests ran again whole). Smoke: the same red lines and frames.
+- [x] batch 97 · 264, pass planning: `gfx/nvn/core/pass.c` takes from `mtl/lookahead.inc` where the replay is (`g_exec_cur`, `g_exec_next`,
+  the return stack, the remaining handles, `mtl_exec_rest`) with the cursor in replay order (`op_cursor` / `op_next`, inline; they were
+  `fz_cursor` / `fz_next`), the ops run early (`g_hoist_skip`, `hoist_skipped` inline, `hoist_take`), the depth / stencil lookahead
+  (`pass_ds_need`) and the store decision (`sd_decide`; the backend's `sd_finish` only sets each store action from it); from
+  `mtl/tbdr_xv.inc` the store decisions' attachments (`sd_att`, `g_sd`), and from `mtl/passes.inc` the bandwidth ledger. `gfx/nvn/core/rt.c`
+  takes `rt_same` (from `mtl/lookahead.inc`), `rt_same_sub` and `rt_dup_slot` (from `mtl/renderpass.inc`; the write mask read from `S`).
+  `gfx/tests/t_core_pass.c` (17; a clear inside the pass taken as needing neither, `-DDM_TEST_DS_CLEAR_FREE`, fails 1) and `t_core_rt.c`
+  (9; `t_rt_continue`'s `-DDM_TEST_RT_SAME_NO_VIEW` fails 1 there, and 1 in `t_rt_continue` as before). The backend's warnings as before; the
+  pass dumps of 12 gfx tests through these paths (257 store decisions, 174 depth / stencil lookaheads) line for line as before.
+  `gfx/README.md` no longer lists `range` among the `DM_NVN_TBDR_OFF` parts (gone in batch 95). Smoke: the same red lines and frames (Tears of
+  the Kingdom's torch flame and manosaba's title fade at another moment, looked at).
