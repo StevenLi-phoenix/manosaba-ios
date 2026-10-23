@@ -1,4 +1,15 @@
 // gfx/nvn/mtl/encoders.inc, part of nvn_mtl.m (included there in order, one translation unit): The encoder layer: Metal 4 / Metal 3 encoder wrappers, blits, inline updates, events, counters, timestamps
+// Shared with the parts after this one: the zero-source skip's sets, the command buffer, the commit blocks, the in-flight slots
+typedef struct { uint64_t ser; uint16_t level, slice; } zskip_zero;
+static zskip_zero g_zskip_zero[4096]; static int g_zskip_n, g_zskip_count;
+static zskip_zero g_zskip_cand[8]; static uint8_t g_zskip_cand_ok[8];
+static void zskip_clear(void);
+static id g_cb;
+static BENC g_blit;
+static NSMutableArray<dispatch_block_t> *g_commit_blocks;
+static uint64_t g_alloc_fence[ALLOC_MAX]; static uint64_t g_alloc_waits, g_alloc_grown;
+int mtl_wait(uint64_t fence, uint64_t timeout_ns);
+static void up_flush(void);
 // The upload batch belongs only to the submit thread (the thread that called mtl_sub_begin): the batch's encoder cannot be used across threads. Every entry point asserts current thread == submit thread,
 // and on mismatch prints the stack and aborts on the spot - so that 'another thread touched the batch' is exposed deterministically on Mac too, not by timing (real iOS device stuck at the main menu: the present thread flushed the submit thread's batch via q_cb).
 static pthread_t g_sub_thread; static _Atomic int g_sub_thread_set;

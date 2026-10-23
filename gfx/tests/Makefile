@@ -31,6 +31,8 @@ t_core_live: t_core_live.c ../nvn/core/live.c ../nvn/core/core.c $(CORE_H) ../nv
 	clang $(CFLAGS) -Werror -o $@ t_core_live.c ../nvn/core/live.c ../nvn/core/core.c
 t_core_pend: t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c
+t_core_capture: t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
 t_core_frame: t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c
 t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
@@ -252,6 +254,7 @@ run: \
 	t_border \
 	t_chunk \
 	t_copy_pitch \
+	t_core_capture \
 	t_core_frame \
 	t_core_live \
 	t_core_pend \
@@ -374,6 +377,7 @@ run: \
 	./t_fstep
 	./t_fptrial
 	./t_hmap
+	./t_core_capture
 	./t_core_frame
 	./t_core_live
 	./t_core_pend

@@ -81,6 +81,7 @@
 #include "core/pend.h"
 #include "core/frame.h"
 #include "core/live.h"
+#include "core/capture.h"
 #include "../../host/dm.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
@@ -304,7 +305,6 @@ void bf_want_note(const char *shader_key) {
 #include "mtl/pools.inc"
 #include "mtl/occlusion.inc"
 #include "mtl/usnap.inc"
-#include "mtl/capture.inc"
 #include "mtl/encoders.inc"
 #include "mtl/frame_timing.inc"
 #include "mtl/keepalive.inc"

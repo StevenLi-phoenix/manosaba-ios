@@ -207,7 +207,7 @@ decide):
 - 264 the replay core and the Metal backend apart: what the replay decides (command walk, state, uniform snapshots, CPU-filled textures,
   counters, pass planning) in C behind an interface, the Metal calls behind it, so an Android Vulkan backend takes the same fixes.
   In steps, a module or two a batch, each into `gfx/nvn/core/` with its header and a test that needs no GPU: first the parts that use
-  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91, the live texture in 92; then the live
+  little Metal (store index done in batch 88, uniform snapshots in 89, the TBDR switches and validity ledger in 90, pending writes and frame measurements in 91, the live texture in 92, the submit call's capture in 93; then the live
   texture, the submit capture, inline uniform renames, the replay loop); then the mixed parts (lookahead, tile merge, draw) split into what
   is decided and what is executed, 263's `DM_NVN_RT_RANGE` and `DM_NVN_DEPTH_PLAIN` going there (keeping what `t_rt_range --disabled`
   covers of the pass bookkeeping and unwritten DontCare); then the file-scope variables grouped by module; the Vulkan backend once the
@@ -345,3 +345,10 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   (`mtl_tex_snap`, `tex_snap_retire`, `tex_snap_reap`, `SNAP_KEEP`); the part keeps the releases (`fin_drain`, `mtl_tex_release`).
   `gfx/tests/t_core_live.c` (13; the texture there followed whatever its shape, `-DDM_TEST_LIVE_ANY_SHAPE`, fails 1). Batch tests as in batch
   88; smoke: the same red lines and frames (Tears of the Kingdom's looked at), its shared-storage log lines 75 against 73.
+- [x] batch 93 · 264, the submit call's capture: `gfx/nvn/core/capture.c` takes `mtl/capture.inc`'s capture for the translation thread
+  (`mtl_sub_capture`, `mtl_sub_install`, `mtl_cap_free`, `struct mtl_cap` with `g_cap_cur` in the header), the snapshot from it and
+  `mtl_sub_snapshot`, and the test hooks; the pool check and the completed fence are the backend's hooks of batch 89. What the part held
+  besides went beside it (`us_drop` and `pend_read` to the end of `mtl/usnap.inc`, the declarations the later parts share to the start of
+  `mtl/encoders.inc`) and the part is gone: 36 parts. `gfx/tests/t_core_capture.c` (10; only the writes still running at the replay
+  counting, `-DDM_TEST_XLAT_CAP_STALE`, fails 1); `t_xlat`'s broken variants now in core fail as written (`NO_TOKEN` 2, `NO_CAPTURE` 2,
+  `CAP_STALE` 1). Batch tests as in batch 88; smoke (Tears of the Kingdom replays on the translation thread): the same red lines and frames.

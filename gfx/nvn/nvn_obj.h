@@ -121,7 +121,7 @@ static inline int sync_fence_load(const sync_t *s, uint64_t *fence) {   // 0: ne
 // first waits for the submission's translation, then for the Metal fence it ended with (hle_nvn.c x_token_fence). Metal fences never reach bit 63
 #define SYNC_TOKEN (1ull << 63)
 static inline void sync_token_store(sync_t *s, uint64_t sub) { sync_fence_store(s, sub | SYNC_TOKEN); }
-// The submit call's view of a submission for the translation thread (nvn_mtl.m): taken on the game's thread, installed by the replay, freed after its commit
+// The submit call's view of a submission for the translation thread (gfx/nvn/core/capture.c): taken on the game's thread, installed by the replay, freed after its commit
 typedef struct mtl_cap mtl_cap;
 mtl_cap *mtl_sub_capture(const uint64_t *h, int n, uint64_t token);
 void mtl_sub_install(mtl_cap *c);
