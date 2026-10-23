@@ -81,13 +81,14 @@ Binding conventions used by the translation:
 | Location | Contents |
 |---|---|
 | `nvn/hle_nvn.c` | Interface layer: NVN takeover, objects, command recording, presentation pacing, `DM_SHDUMP` capture |
-| `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: the Metal device, queues, residency and deferred releases, then the parts below, included in this order (one translation unit, plan item 261) |
+| `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: the Metal device, queues, residency and deferred releases, then the `.inc` parts below, included in this order (one translation unit, plan item 261) |
+| `nvn/mtl/mtl.h` | The Metal backend's private header: its includes, the Metal 4 / Metal 3 macros, and what its translation units share (plan item 264) |
 | `nvn/mtl/pools.inc` | Memory pools: the pool table, GPU addresses of guest memory and the buffers behind them |
 | `nvn/mtl/occlusion.inc` | Occlusion queries (samples passed) |
 | `nvn/mtl/usnap.inc` | Uniform snapshots' backend side: the pools, arena, worker threads and fences they use; dropping copies a GPU write reaches; what a range reads as at this point of the replay |
 | `nvn/mtl/encoders.inc` | The encoder layer: Metal 4 / Metal 3 encoder wrappers, blits, inline updates, events, counters, timestamps |
 | `nvn/mtl/frame_timing.inc` | The frame number, GPU time tags of command buffers, DM_NVN_GPUWATCH |
-| `nvn/mtl/keepalive.inc` | GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE) |
+| `nvn/mtl/keepalive.m` | GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE): a translation unit of its own |
 | `nvn/mtl/commit.inc` | The GPU memory budget, submission commits, fences, waits and drains |
 | `nvn/mtl/textures.inc` | Textures as Metal textures, and GPU textures sharing one storage |
 | `nvn/mtl/upload.inc` | Texture uploads: batches, staging blocks, BC on GPUs without it, texture descriptors |

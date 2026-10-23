@@ -1,13 +1,15 @@
-// gfx/nvn/mtl/keepalive.inc, part of nvn_mtl.m (included there in order, one translation unit): GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE)
+// gfx/nvn/mtl/keepalive.m: GPU keep-alive (MacNativeGames' TOTK_GPU_KEEPALIVE), a translation unit of the Metal backend of its own (plan item 264;
+// what others use of it: mtl/mtl.h)
+#include "mtl.h"
 // ---------- GPU keep-alive (MacNativeGames, MIT: TOTK_GPU_KEEPALIVE; written anew here) ----------
 // Apple GPUs lower their clock when they idle part of each frame: MacNativeGames measured the same compute work at 10.9 ms back to back, 16.8 ms with
 // 10 ms gaps, and Tears of the Kingdom's world scene at GPU p50 12.1 → 9.1 ms with a spinner in the gaps. While the game submits, a thread keeps one
 // short spin kernel (one threadgroup, ~1 ms, sized from its measured time) on a queue of its own, only while none of the game's command buffers is on
 // the GPU (so a game submission waits for at most one), and stops 100 ms after the last submission. Costs power: on by default on the Mac with a
 // window only (not headless, not in the tests); DM_NVN_KEEPALIVE=0 / 1 overrides (t_keepalive)
-static _Atomic int g_inflight;                   // the game's command buffers committed and not completed
-static dispatch_semaphore_t g_ka_idle;           // signalled when g_inflight drops to 0
-static _Atomic uint64_t g_last_sub_ns, g_ka_n, g_ka_us;
+_Atomic int g_inflight;
+dispatch_semaphore_t g_ka_idle;
+_Atomic uint64_t g_last_sub_ns, g_ka_n, g_ka_us;
 static _Atomic int g_ka_target_us = 1000;
 int mtl_display_hz(void);
 static int keepalive_on(void) {   // default: on with a window on the Mac (not in headless runs and the tests)
@@ -21,7 +23,7 @@ static int keepalive_on(void) {   // default: on with a window on the Mac (not i
     }
     return on;
 }
-static void keepalive_start(void) {
+void keepalive_start(void) {
     static int started; if (started || !keepalive_on()) return; started = 1;
     NSError *err = nil;
     id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -51,5 +53,4 @@ static void keepalive_start(void) {
         }
     });
 }
-static void rp_flush(void);
-static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_exec)
+#pragma clang attribute pop

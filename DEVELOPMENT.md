@@ -211,7 +211,8 @@ decide):
   decisions (batch 97: where the replay is, the ops run early, depth / stencil need, store decisions, target comparisons), the clear-only
   hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99), the execution interface (`nvn_backend.h`) with the
   replay loop in `core/exec.c` (batch 100), SetRenderTargets, the clears and conditional rendering (batch 101), `mtl/draw.inc` split (batch
-  102); next the file-scope variables grouped by module and the parts as their own translation units; then `hle_nvn.c` by its sections,
+  102), the backend's private header with the first part a translation unit of its own (batch 103); next the other parts outside the draw's
+  path as translation units of their own (the draw's path stays one for inlining); then `hle_nvn.c` by its sections,
   `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
@@ -454,3 +455,10 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   backend's warnings as before (24 of them now say the encoder is a `const __strong` parameter); the pass dumps of 19 gfx tests line for line
   as before; the submit path's instructions per draw within the spread of batches 96-101 (at its top at three of six checkpoints, under 0.5 %
   from the bottom). Smoke: the same red lines and frames.
+- [x] batch 103 · 264, the backend's translation units: `gfx/nvn/mtl/mtl.h` is the Metal backend's private header (nvn_mtl.m's includes and
+  Metal 4 / Metal 3 macros, its quoted paths one directory deeper, then what its translation units share), and the GPU keep-alive is the
+  first part of its own, `gfx/nvn/mtl/keepalive.m` (`g_inflight`, `g_ka_idle`, `g_last_sub_ns`, `g_ka_n`, `g_ka_us`, `keepalive_start`
+  declared in the header; `g_dev` is no longer static). Both Makefiles build `nvn/mtl/*.m` (the iOS app follows the host's command) and
+  rebuild on `mtl/*.h`. `t_keepalive` (3) as before. The backend's warnings as before, keepalive.m none on Metal 4 or Metal 3. Smoke: the
+  same red lines and frames; the submit path's instructions per frame within the spread (per draw they moved with the draws a frame: 502 at
+  frame 600 against 521-522).
