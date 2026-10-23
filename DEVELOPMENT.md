@@ -257,7 +257,7 @@ Read through on 2026-10-22 (sixth review): upstream main 53e7c5b (unchanged; a n
 tomodachi 5587d1b, bayonetta3 e5ce116, 4ppp44 2a7b1c6 and Kamisorara unchanged; lordran 1e6b2cf; GirlNet `codex/p5r-runtime` b3e60ce; blade2
 25a443e; acnh-mobile cc0ae3c; totk-mobile 6d4c1d3; Touchable 476fb39; super-mario-odyssey-ios 3ef14d3 (`codex/nxnative-verify-once` 103329c);
 dodola a7ab0c4; LASRecomp main da35b83, `beta_5` 5c7e498 (PR #238 iOS); SkyRecomp c8de7ab; d2r-port-radar 7b8d4ca (297 entries); yokeyhh
-8e1d2af; aerolithink 43cde9a; bluewater0121 30ca74e; DanielZhangyc 56737aa; realskyrin e508a1f (no licence). New: alanyangcn/smbwonder-ios (no
+8e1d2af; aerolithink 43cde9a; bluewater0121 30ca74e; DanielZhangyc 56737aa; realskyrin e508a1f (no licence then; MIT from 4d2986e). New: alanyangcn/smbwonder-ios (no
 licence: facts only; iPhone measurements of per-draw work and tile plans), armyja/nxnative-cuphead (MIT).
 
 Read through on 2026-10-22 afternoon (refresh; Tier 8 below): MacNativeGames 30a1b93 (PRs to #210); nxnative abcdbbd (PRs to #49); upstream main
@@ -268,6 +268,20 @@ DavidZande `performance` 1620f43, T5eng, totk-mobile, lordran, super-mario-odyss
 Tears of the Kingdom 1.1.2 only, independent; main 00e04bc), q520asdf0123/nsCHaojIMaLiAo (MIT, Super Mario 3D World on upstream),
 LNPANDY/nxnative-romfs-archive (MIT). MacNativeGames dab728a's `SignalToAddress` value − 2 is not taken: Atmosphère wrote − 2 from 7.0.0 until
 5f2d713fe4 (2022-06-08, "mea culpa (some time since 7.x)") made it − 1, as ours. Ryujinx is MIT.
+
+Read through on 2026-10-23 (seventh review, then a deep review of the new Tears of the Kingdom projects; Tier 10 below): MacNativeGames main a988b5e
+(PRs to #287; #222, #257, #286 open), DavidZande `performance` a60cdb3, tvc97 and T5eng unchanged; BennettStaley/NativeTOTK-Apple-Silicon (MIT, new:
+47c261f, its base MacNativeGames e55ad1c), dnlflores/MacNativeGames (MIT, new: c098279, base 4fdda41); nxnative main e454ac9 (PRs to #64; #62 open,
+`launcher` 47fc7f9), chayan-bit/AnySwitch (MIT, new: 30f6a8a, base nxnative 23a11da; its Tears of the Kingdom entry is nxnative's), LNPANDY 5738460;
+atone, armyja (cuphead a393de4), tomodachi, DanielZhangyc, q520asdf0123 and hyc1743 unchanged; nxport main 0ec6d37; upstream main 53e7c5b
+(unchanged), `android` 88b3221 (PRs #116, #117; open #118-#120), shh632058099/d2r-mobile (MIT, new, iOS: e460049), blade2 a7dff99, acnh-mobile
+1c0293b (its base is now nxnative e72a065), GirlNet `codex/p5r-runtime` c5538d3, dodola cc01ec6, n2ray main ce813ca; totk-mobile, bayonetta3, dr3,
+4ppp44, Kamisorara and VA-11 unchanged; LASRecomp main 466fee6, `beta_5` f7b986e (PRs to #331), `metal-overlap` 5d17070 (unmerged, its last commit a
+revert); SkyRecomp, lordran (PR #40 open), BotWRecomp and mush8 (PRs #21-#24 open) unchanged; d2r-port-radar c6ea97c (318 entries); Touchable
+unchanged; realskyrin 4d2986e (MIT since that commit). New, read: NicholasDominici/totk-ios (MIT, 1.0.0 on iPad and iPhone from MacNativeGames
+15b1afd; its aspect data is GPL-3.0), itzzslimechisel/totkrecomp (MIT, Windows through dynarmic and Vulkan), fedebuonco/nxrt (Unlicense, a runtime
+for Switch static recompilations), MayBAMemory/nvn-metal (MIT, Kirby), colonnellotong/MacNativePorts (MIT). Below the shaders none of the new
+projects does more than ours; what is better is in Tier 10.
 
 Not worth porting: nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK runtimes (dodola, imink/hades-ios), upstream's D2R-only parts.
 
@@ -284,6 +298,9 @@ Not worth porting: nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK 
 - 2026-10-20 evening sync (only what was new since the morning): 155-180, and changes written into 62b, 67, 94a, 100, 131, 133, 134, 139 and 151.
 - 2026-10-22, sixth review, read for performance on the iPhone (the user's 10 fps shrine; four reviewers of the references, one of Touchable's touch
   controls, one of Apple's documentation): Tier 7, 181-193, and 113 reopened as 181.
+- 2026-10-22 afternoon refresh: Tier 8, 194-215.
+- 2026-10-23, seventh review (five reviewers from the markers of 10-22 afternoon) and a deep review of the new Tears of the Kingdom projects (five
+  reviewers, each project's own work layer by layer against ours): Tier 10, 231-258.
 
 Evidence the open items rely on:
 - 94a: totk-mobile (`nvn_texture_rendered.inc`, `nvn_texture_writeback.inc`) writes back a GPU write after 30 frames without another, at the end of
@@ -1481,6 +1498,76 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
 - [x] batch 79 · 230 `DM_PWRTEST=<threads>[:gpu[<busy %>]][:<seconds>]` (`ios/Sources/pwrtest.m`): the app runs a plain load instead of the game and
   logs each second each thread's share and clock per CPU kind, the work done, the CPU energy and the thermal state (results above, "Why the CPU's
   clock falls"). The spec in `host/pwrspec.h`, `host/tests/t_pwrspec.c` (7 checks; `DM_TEST_PWRSPEC_NO_DUTY` fails 1)
+
+Tier 10, from the seventh review and the deep review of the new Tears of the Kingdom projects (2026-10-23; the user: A to E, in order, tested on the
+iPhone without asking; F, the features, later). All sources MIT unless said. Correctness:
+- [ ] 231 command memory (nxnative 0b3c7b1, its issue #61: Tears of the Kingdom 1.4.3 crashed in `mtl_exec` after 8-30 minutes on an M3 Pro, a JUMP's
+  target overwritten): keep 16 bytes after every record but the END, let the END take a segment's last bytes, link only recordings with records.
+  Ours keeps 24 after every record, the END included (`hle_nvn.c` `OP_RESERVE`), so a list measured at 496 bytes in a 512-byte slot puts its JUMP
+  across the slot's end. Check our slot + used model (t_nvn 5a(2)) against nxnative's fixed slots of the measured size first
+- [ ] 232 load-exclusives as acquire loads (nxport ce8f1c3: Apple cores reorder the reads after a plain `ldxr` that a spinlock protects; Breath of
+  the Wild's double-run jobs and crashes gone, Tears of the Kingdom's walking speed the same): 17,079 plain load-exclusives in our main, 234 in sdk.
+  A rewriter change (every product rebuilt)
+- [ ] 233 a storage binding that runs past its pool binds from the pool it starts in (nxport 79b736d); ours falls silently to the dummy buffer and
+  the GPU's writes are lost: a red line too
+- [ ] 234 uniform reads at a computed index bounded by the bound size (nxport `msl_specialize.rs`: skinning indices going negative, a GPU hang in
+  Wonder); ours guards c1 only (`c1_guard.py`), 7,023 shader files read c3-c19 at a computed index. A chain rebuild
+- [ ] 235 a Stencil8 view of a depth-stencil texture as `MTLPixelFormatX32_Stencil8` with every channel from red, and integer textures sampled as
+  such (blade2 a7dff99; the known gaps above list stencil views). Count Tears of the Kingdom's cases first
+- [ ] 236 the system fonts' `.bfttf` in both word orders (LASRecomp PR #330, b159129)
+- [ ] 237 socket Poll / Select wait out their timeout instead of failing at once (nxnative 65d4a4d: a network thread spun at 100 %)
+- [ ] 238 a cube view whose layer count is not a multiple of 6 counted as whole cubes, and CPU-written linear textures off the 256-byte row
+  alignment through the re-upload path (AnySwitch 6058d2e, 5e9fcc1); neither seen in our logs yet
+
+GPU work a frame (230: less of it gives the CPU its clock back):
+- [ ] 239 early fragment tests for the fragment shaders whose control section sets them (+0x718 bit 0, the driver's EarlyZForce; MacNativeGames PR
+  #222: 1,677 of 13,645 1.4.3 fragment shaders, the dotted stone lattice at the Great Sky Island start fixed on an M4 Max; nxport: -13 % GPU time in
+  play, but off by default because Tears of the Kingdom's tile classification "loses marks and most of the screen goes unlit (cause not found)").
+  Ours passes `earlyZForce` false (`dmsh_xlate/Program.cs`). A chain rebuild; judge the pictures (the lattice, the lighting) and the phone's pass
+  times
+- [ ] 240 the scene size changed while the game runs (NativeTOTK 1723fed, a5bbceb: a veneer at main+0x580920 sends the frame through the game's own
+  mode-change path, renderer+0xcd0 = -1, a latch at the present; sizes up to the boot reserve; measured on the Mac only), with render targets of a
+  size the game left released (9a92046: GPU +640 → +295 MB after size switches). What it would allow: 190 (960x540 holds 59.6 fps on the island
+  against 56.0). A rewriter change
+- [ ] 241 multiplies and adds fused in vertex stages, relaxed instead of safe math (nxport: ~12 % less GPU in Hateno; fusing fragment stages gave white
+  specks). Ours is safe everywhere since fast math broke a tile-light vertex shader. With 239's chain rebuild
+- 217 (open) has nxport's small-pass kernels (`tiny_kernels.rs`) as a reference: a render pass ~40 µs against ~1 µs for a dispatch, and shader-write
+  usage costs compression, so only small targets
+
+CPU energy a frame:
+- [ ] 242 a uniform range's private copy only as long as the shader reads (DavidZande b9f8b16 after tvc97 PR #159 / nxnative f5646ef; MacNativeGames
+  PR #257: Breath of the Wild on a Mac, render thread 88 → 65 % busy; on 1.4.3 most bindings read under 2.4 KB). Ours copies the whole binding
+- [ ] 243 guest loops that spin on memory without a system call allowed to sleep (nxnative 99c3f91: Paper Mario on a Mac, CPU energy a frame about
+  halved; 843 such loops in Tears of the Kingdom's main). Measure the phone's workers first; a rewriter change
+- [ ] 244 the border-colour pipeline variant's key cached (MacNativeGames PR #286: `pso_get` 11.7 → 3.4 % of replay on an M4 Air); ours builds a
+  string per bind (`border_variant`)
+- [ ] 245 the Metal calls on a worker thread of their own (nxnative PR #62, `nvn_rec.h`: Breath of the Wild on an iPhone 17 Pro Max, submit thread 8 →
+  3.3-4.5 ms; the same PR's phone still fell to 30). Ours moves render encoders only (`nvn_render_stream.h`, it lost on the M5)
+- [ ] 246 the pipeline list written off the translation thread (AnySwitch c483c04)
+- [ ] 247 `passdump` returns before reading the frame number when off (shh632058099 e460049)
+
+Pacing and hitches:
+- [ ] 248 the real-time computation declared covers 1.1 × the 120-frame peak as well as 1.25 × the p90 (nxnative 65d4a4d: p99 63-127 → 21 ms in Dark
+  Souls Remastered)
+- [ ] 249 `DM_PRESENT_INTERVAL=display` measured with product60 at 120 Hz (MacNativeGames issue #136, an iPhone 17 Pro Max: the game switched its
+  interval 920 times in 18 minutes, 43-61 presents a second; one frame a tick held about 65)
+- [ ] 250 the frame step averages the intervals before its floor (MacNativeGames' Breath of the Wild path: clamping each made it run 6 % fast at
+  about 95 fps under 120 Hz); ours clamps each (`frame_step.c`)
+- [ ] 251 first-sight pipelines (totkrecomp bbf0fd4, an 8 ms budget a frame on the submitting thread, the rest in the background with their draws
+  skipped: 8,024 → 84 skipped draws in the prologue). We never skip; measure our stalls against 184's walk before anything
+- [ ] 252 the frame step's trials leave out one-off hitches and want the late frames spread over the window (LASRecomp f99186b)
+- [ ] 253 pipeline keys with the write mask and blend bit of missing targets cleared (MacNativeGames f3e2f66), and prediction scans that stop after
+  one that kicked nothing, with a budget a frame (f134a7b)
+
+Tools:
+- [ ] 254 one frame's submissions replayed K times, two settings alternating on the same frame (nxport `--replay=F:K[:M]`, `--replay-ab`): A/B runs
+  on the phone without its thermal and clock drift
+- [ ] 255 waits per kind with the wake-to-run latency and the core reacquire time (totkrecomp 65a9411), and system calls counted a frame by number
+  (AnySwitch 477f749)
+- [ ] 256 pass GPU times every Nth submission, and a capture that waits out the first minute (shh632058099 9ecf169, GirlNet 9dc64f9)
+- [ ] 257 `DM_CLEAR_SHADER_CACHE`: start with an empty Metal shader cache, as after a fresh install (AnySwitch ec152a8)
+- [ ] 258 the address space a free-signed install gets (LASRecomp PR #238 8dd3116: 59 GB on an iPhone 15 Pro with the memory-limit entitlement;
+  previousdolphin: 6 GB above 0x70_0000_0000 without entitlements): read our "guest address space" line on such an install
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the
