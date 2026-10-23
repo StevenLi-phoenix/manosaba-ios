@@ -1935,6 +1935,12 @@ static void power_line(uint64_t frame) {
             frame, (ld - pld) / 1048576.0 / nf, (st - pst) / 1048576.0 / nf, (fu - pfu) / nf, (udc - pudc) / 1048576.0 / nf, (con - pcon) / nf, (cob - pcob) / 1048576.0 / nf); pcon = con; pcob = cob;
         char tc[400]; dm_thread_cpu(tc, sizeof tc, s);
         LOG("[nvn] threads up to frame %llu: guest CPU %s", frame, tc);
+        { uint64_t kp[10]; static uint64_t pkp[10]; void mtl_kp_stats(uint64_t out[10]); mtl_kp_stats(kp);   // plan item 217 (DM_NVN_KPASS)
+          if (memcmp(kp, pkp, sizeof kp))
+              LOG("[nvn] single-draw passes as kernels up to frame %llu: %.1f a frame, %.0f pixels a frame; declined a frame: no kernels %.1f, more than one draw %.1f, "
+                  "targets %.1f, state %.1f, vertex input %.1f, draw %.1f, blending %.1f, the pass's kind %.1f", frame, (kp[0] - pkp[0]) / nf, (kp[1] - pkp[1]) / nf, (kp[2] - pkp[2]) / nf,
+                  (kp[3] - pkp[3]) / nf, (kp[4] - pkp[4]) / nf, (kp[5] - pkp[5]) / nf, (kp[6] - pkp[6]) / nf, (kp[7] - pkp[7]) / nf, (kp[8] - pkp[8]) / nf, (kp[9] - pkp[9]) / nf);
+          memcpy(pkp, kp, sizeof kp); }
         uint64_t rep[32], rst[32], fold; int open; mtl_counter_stats(rep, rst); mtl_vis_state(&open, &fold);
         if (rep[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prep || rst[NVN_COUNTER_TYPE_SAMPLES_PASSED] > prst)
             LOG("[nvn] occlusion up to frame %llu: %.1f reports / %.1f resets a frame, %d slots in the open count, %.1f folded a frame", frame,

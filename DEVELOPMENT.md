@@ -1427,10 +1427,29 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
   22 trials on the island held (its sustained rate is under 60), each a few seconds of uneven frames: off by default. `gfx/tests/t_fptrial.c` (a
   clock that heads for 3/4 busy, 12 checks; `DM_TEST_FPT_NO_GRACE` fails 5, `DM_TEST_FPT_NO_BACKOFF` fails 1). Report times scaled per submission
   (`mtl_ts_factor`)
-- [ ] 217 single-draw passes up to 256x256 as compute kernels (210 reopened): the phone's 104 a frame took 3.7 of 23 ms of pass time at the 30 fps
-  clock. A fragment → kernel rewrite per vertex / fragment pair (the vertex shader run for the frame's 3-6 vertices inside the kernel, varyings
-  interpolated, implicit-LOD samples given gradients, blending and write masks in the kernel); 46 pairs in the island's frame (no discard, no
-  derivative instructions, 15 with several targets, 5 with a depth test). Its own artifacts beside b-<V>, so no chain rebuild
+- [x] batch 84 · 217 single-draw passes up to 256x256 as compute kernels (210 reopened; after nxport's `tiny_kernels.rs`, MIT, written anew),
+  opt-in (`DM_NVN_KPASS=1`): on the iPhone they did not save GPU time. Measured first: dropping every pass of up to 256 wide
+  (`DM_NVN_SKIP_SMALL=256`, the picture wrong) on the phone's island, two pairs: GPU 11.1 / 11.3 against 12.3 / 12.9 ms a frame, the game's
+  sustained fps 67.4 / 66.1 against 62.6 / 60.2, frame p95 15.9 / 16.3 against 20.4 / 21.1 ms. `gfx/tools/dmsh_kernel.py` makes each listed stage
+  (`games/totk/kernel_shaders.txt`, 48 stages from the island's pass dumps) into kernels beside its library (`<key>_bk.metallib`, Mac and iOS):
+  the stage's MSL as an inline function, the vertex kernel writing the draw's 3-6 vertices to records, the fragment kernel over the target's
+  pixels in 2x2 quads (implicit-LOD samples get the quad's gradients; uncovered pixels of a covered quad run as helpers), coverage on vertices
+  snapped to 1/256 pixel with the top-left rule (homogeneous for a vertex at w <= 0), perspective / no-perspective / flat inputs, the viewport,
+  scissor and depth clipping, blending and write masks (read-write targets: MTLReadWriteTextureTier 2 formats), and the samples-passed count.
+  `nvn_mtl.m` kp_draw takes a pass when it holds one draw (a scan to the pass's end), its targets have shader-write usage (up to 256x256, or
+  with levels from 512x512, cubes; `tex_desc`), no clear is pending, depth and stencil are unused, the draw is triangles or a strip of 3-6
+  vertices, one instance and sample, and the stages do not sample the level they draw; both stages' arguments are made before the shared compute
+  encoder flushes uniform updates, and while the game counts samples passed the kernel adds to a visibility slot of its own. On the island
+  38.9 passes a frame. `gfx/tests/t_kpass.m` (the kernels against Metal's render pipeline, 21 cases × pixels and samples passed, 42 checks;
+  `-DDM_TEST_KPASS_STRIP_AS_LISTED` fails 2, kernels made with `DM_TEST_KERNEL_NO_GRAD=1` fail 1, with `DM_TEST_KERNEL_TIE=1` fail 14),
+  `gfx/tests/t_kpnvn.m` (through the replay: one draw taken with the pass's pixels, two draws / a pending clear / no kernels not taken, a counted
+  pass reports 32; `-DDM_TEST_KPASS_NO_SCAN` fails 1), `tools/tests/t_dmsh_kernel.py` (22; `DM_TEST_KERNEL_NO_GRAD=1` fails 6).
+  `DM_NVN_KPASS_CHECK=<frame>` draws that frame's passes both ways and compares them: on the M5 all 96 within 0.002, on the iPhone the same but
+  the sky's cube map faces (RG11B10Float, 16x16 and 8x8): one unit of the format apart in up to every pixel. The phone's island, two pairs: GPU 12.6 / 13.0
+  against 12.3 / 12.4 ms, sustained 61.1 / 59.5 against 63.2 / 61.2 fps, CPU 1.20 / 1.20 against 1.27 / 1.24 W; the targets' shader-write usage
+  alone (`DM_NVN_KPASS=2`) 12.6 / 12.4 against 12.5 / 12.8 ms, no difference. So the kernels do not save what the passes cost here. A sky cloud
+  the first Mac shots showed only with the kernels comes and goes from run to run with a pinned frame step too (the clouds move with the
+  game's clock, which a different frame time moves differently)
 - [ ] 218 the G-buffer split by compute: two depth-probe dispatches (3c8e9ba061067c07_b, bc58d5dec860c367_b) sample the G-buffer's depth in the middle
   of it into a 23,232-byte buffer later passes bind, and 11 dispatches come before the decals; each split stores and reloads four colour targets and
   the depth (about 24 MB at 1024x576). Deferring the probes changes what they sample
@@ -1572,8 +1591,8 @@ GPU work a frame (230: less of it gives the CPU its clock back):
   with `-fmetal-math-mode=safe` already fuses a plain a * b + c (a scratch kernel: its bits equal fma's for 65,536 triples whose fused and rounded
   results all differ; with `#pragma clang fp contract(off)` they differ). t_fpcontract's note that safe math fuses nothing holds for a compile
   at run time (MTLCompileOptions), not for the game's offline libraries
-- 217 (open) has nxport's small-pass kernels (`tiny_kernels.rs`) as a reference: a render pass ~40 µs against ~1 µs for a dispatch, and shader-write
-  usage costs compression, so only small targets
+- 217 (batch 84, opt-in) after nxport's small-pass kernels (`tiny_kernels.rs`): a render pass ~40 µs against ~1 µs for a dispatch there; on the
+  iPhone the kernels did not take GPU time off
 
 CPU energy a frame:
 - [-] 242 a uniform range's private copy only as long as the shader reads (DavidZande b9f8b16 after tvc97 PR #159 / nxnative f5646ef; MacNativeGames
