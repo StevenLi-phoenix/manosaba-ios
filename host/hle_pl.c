@@ -33,11 +33,18 @@ static uint8_t *read_all(const char *path, size_t *n) {
     if (*n != (size_t)st.st_size) { free(b); return NULL; }
     return b;
 }
-// BFTTF → TTF (in place); returns TTF bytes, 0 if the format is wrong
+// BFTTF → TTF (in place); returns TTF bytes, 0 if the format is wrong. Its words come in two byte orders, told apart by the magic word (plan item
+// 236, after LASRecomp PR #330, MIT): read little-endian, XOR 0x06186249 gives 0x18029a7f and the font's bytes in their order (the files we had,
+// from a firmware's font archives), or XOR 0x49621806 gives 0x7f9a0218 and every word stored byte-swapped (the console files of LASRecomp issue #48)
 static size_t bfttf_decrypt(uint8_t *b, size_t n) {
     if (n < 8 || n % 4) return 0;
-    uint32_t w; memcpy(&w, b, 4); if ((w ^ 0x06186249u) != 0x18029a7fu) return 0;
-    for (size_t i = 8; i < n; i += 4) { memcpy(&w, b + i, 4); w ^= 0x06186249u; memcpy(b + i - 8, &w, 4); }
+    uint32_t w; memcpy(&w, b, 4); int swapped;
+    if ((w ^ 0x06186249u) == 0x18029a7fu) swapped = 0;
+#ifndef DM_TEST_BFTTF_ONE_ORDER   // negative control of t_bfttf only: the first order alone, as before
+    else if ((w ^ 0x49621806u) == 0x7f9a0218u) swapped = 1;
+#endif
+    else return 0;
+    for (size_t i = 8; i < n; i += 4) { memcpy(&w, b + i, 4); w = swapped ? __builtin_bswap32(w ^ 0x49621806u) : w ^ 0x06186249u; memcpy(b + i - 8, &w, 4); }
     return n - 8;
 }
 static void pl_load(void) {

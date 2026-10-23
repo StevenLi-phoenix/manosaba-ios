@@ -93,6 +93,8 @@ t_esfilter: t_esfilter.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_esfilter.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_vbelide: t_vbelide.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vbelide.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_sbufpast: t_sbufpast.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sbufpast.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_uppool: t_uppool.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_retire: t_retire.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -245,6 +247,7 @@ run: \
 	t_dirty_slots \
 	t_esfilter \
 	t_vbelide \
+	t_sbufpast \
 	t_extent \
 	t_findrain \
 	t_fmt_swz \
@@ -440,6 +443,7 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_chunk --tbdr-all
 	MTL_DEBUG_LAYER=1 ./t_esfilter
 	MTL_DEBUG_LAYER=1 ./t_vbelide
+	MTL_DEBUG_LAYER=1 ./t_sbufpast
 	./t_uppool
 	./t_upwait
 	MTL_DEBUG_LAYER=1 ./t_restart

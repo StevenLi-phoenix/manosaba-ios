@@ -1696,6 +1696,22 @@ void mtl_drain(void) { @autoreleasepool { present_drop_for_suspend(); mtl_presen
 #include "../../host/front.h"
 static int g_red_once[120];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("[red] " __VA_ARGS__); } while (0)
+// A storage binding's buffer: one whose range runs past the end of its pool binds from the pool it starts in (plan item 233, after nxport 79b736d,
+// MIT). Pools are Metal buffers of their own here, so what lies past the end is not the next pool as in the console's address space; the shader
+// reaches what it uses from the start. Before, such a binding, and one in no pool, fell silently to the dummy buffer: the GPU's writes were lost
+static uint64_t g_sbuf_past, g_sbuf_lost;
+void mtl_sbuf_stats(uint64_t *past, uint64_t *lost) { *past = g_sbuf_past; *lost = g_sbuf_lost; }
+static int sbuf_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {
+    if (mtl_gpu_addr(addr, len ? len : 1, buf, off, gpu)) return 1;
+#ifndef DM_TEST_SBUF_WHOLE_RANGE   // negative control of t_sbufpast only: the whole range or the dummy, as before
+    if (len > 1 && mtl_gpu_addr(addr, 1, buf, off, gpu)) {
+        if (!g_sbuf_past++) MLOG("[red] storage buffer %#llx + %llu runs past the end of its pool: bound from the pool it starts in (first case)", (unsigned long long)addr, (unsigned long long)len);
+        return 1;
+    }
+#endif
+    if (!g_sbuf_lost++) MLOG("[red] storage buffer %#llx + %llu is in no pool: the dummy buffer, its writes lost (first case)", (unsigned long long)addr, (unsigned long long)len);
+    return 0;
+}
 
 // ---------- Texture → MTLTexture ----------
 static int fmt_compressed(int f) { return (f >= 0x41 && f <= 0x50) || (f >= 0x79 && f <= 0x94); }
@@ -5922,7 +5938,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             const us_ent *sc = !rg_ && b->kind == NVN_RB_UBOP && u ? us_find(u->addr, u->size) : NULL;   // compute uniforms as of the submit call
             if (rg_) { slots[aid] = rg_; USE((__bridge id<MTLBuffer>)rb_, MTLResourceUsageRead); }
             else if (sc) { slots[aid] = sc->gpu + (u->addr - sc->lo); USE((__bridge id<MTLBuffer>)sc->buf, MTLResourceUsageRead); }
-            else if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { use_rec("buf", u->addr, u->size, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
+            else if (u && u->addr && (b->kind == NVN_RB_SBUFP ? sbuf_gpu_addr(u->addr, u->size, &mb, &mo, &gpu) : mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu))) { use_rec("buf", u->addr, u->size, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SBUFU) {   // B: a storage buffer the shader addresses from uniform slot r: {address u64, size u32} at byte off (the translator's cb slot r + 3)
@@ -5932,7 +5948,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             if (ok) { memcpy(&sa, rec, 8); memcpy(&sn, rec + 8, 4); }
             if (sa && b->rw) us_drop(sa, sn ? sn : 65536);   // the shader may write it (no size given: 64 KiB)
             void *mb; uint64_t mo, gpu;
-            if (sa && mtl_gpu_addr(sa, sn ? sn : 1, &mb, &mo, &gpu)) { use_rec("buf", sa, sn, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
+            if (sa && sbuf_gpu_addr(sa, sn, &mb, &mo, &gpu)) { use_rec("buf", sa, sn, 0, NULL); slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); }
             else { if (sa) RED_ONCE(78, "storage buffer address %#llx read from uniform slot %d +%#x is not in any memory pool (first case): dummy buffer", (unsigned long long)sa, reg, b->off);
                    slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufu ubo%d+%#x addr=%#llx size=%u %s", g_stat_pass, nvn_stage, reg, b->off, (unsigned long long)sa, sn, b->rw ? "rw" : "ro");

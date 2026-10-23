@@ -300,7 +300,7 @@ Not worth porting: nxnative's prebuilt .NET DLLs, Android / Vulkan and MoltenVK 
   controls, one of Apple's documentation): Tier 7, 181-193, and 113 reopened as 181.
 - 2026-10-22 afternoon refresh: Tier 8, 194-215.
 - 2026-10-23, seventh review (five reviewers from the markers of 10-22 afternoon) and a deep review of the new Tears of the Kingdom projects (five
-  reviewers, each project's own work layer by layer against ours): Tier 10, 231-258.
+  reviewers, each project's own work layer by layer against ours): Tier 10, 231-259.
 
 Evidence the open items rely on:
 - 94a: totk-mobile (`nvn_texture_rendered.inc`, `nvn_texture_writeback.inc`) writes back a GPU write after 30 frames without another, at the end of
@@ -1501,23 +1501,37 @@ the frame's timeline from `DM_NVN_TRACE`, Time Profiler on the Mac, three Metal 
 
 Tier 10, from the seventh review and the deep review of the new Tears of the Kingdom projects (2026-10-23; the user: A to E, in order, tested on the
 iPhone without asking; F, the features, later). All sources MIT unless said. Correctness:
-- [ ] 231 command memory (nxnative 0b3c7b1, its issue #61: Tears of the Kingdom 1.4.3 crashed in `mtl_exec` after 8-30 minutes on an M3 Pro, a JUMP's
-  target overwritten): keep 16 bytes after every record but the END, let the END take a segment's last bytes, link only recordings with records.
-  Ours keeps 24 after every record, the END included (`hle_nvn.c` `OP_RESERVE`), so a list measured at 496 bytes in a 512-byte slot puts its JUMP
-  across the slot's end. Check our slot + used model (t_nvn 5a(2)) against nxnative's fixed slots of the measured size first
+- [x] batch 80 · 231 command memory (nxnative 0b3c7b1, its issue #61: Tears of the Kingdom 1.4.3 crashed in `mtl_exec` after 8-30 minutes on an M3
+  Pro, a JUMP's target overwritten): 16 bytes kept after every record but the END (`OP_KEEP`), the END takes a segment's last bytes, and a
+  recording is linked only once it has its BEGIN. Ours kept 24 after every record, the END included, so a list of 496 bytes in a 512-byte window
+  put its JUMP at 488..504, past the measured size; the rule holds for our slot + used reading and nxnative's fixed slots alike. t_nvn 5a: (2) a
+  496-byte list has no JUMP and reports 496, (5) eight lists in slots of 496 bytes with 512-byte windows replay whole, (6) a recording whose BEGIN
+  does not fit leaves the next slot's list alone (the record walker checks JUMP targets and stops at 4,096 records); `DM_TEST_CMD_KEEP24` fails 4,
+  `DM_TEST_CMD_LINK_EMPTY` fails 1
 - [ ] 232 load-exclusives as acquire loads (nxport ce8f1c3: Apple cores reorder the reads after a plain `ldxr` that a spinlock protects; Breath of
   the Wild's double-run jobs and crashes gone, Tears of the Kingdom's walking speed the same): 17,079 plain load-exclusives in our main, 234 in sdk.
   A rewriter change (every product rebuilt)
-- [ ] 233 a storage binding that runs past its pool binds from the pool it starts in (nxport 79b736d); ours falls silently to the dummy buffer and
-  the GPU's writes are lost: a red line too
+- [x] batch 80 · 233 a storage binding that runs past its pool binds from the pool it starts in (nxport 79b736d; `sbuf_gpu_addr`), and one in no
+  pool still gets the dummy buffer; both are counted and given a red line the first time (before, silent: the GPU's writes lost).
+  `gfx/tests/t_sbufpast.m` (a kernel writes two words through a binding 64 bytes before its pool's end with 4096 bytes; 6 checks);
+  `DM_TEST_SBUF_WHOLE_RANGE` fails 3
 - [ ] 234 uniform reads at a computed index bounded by the bound size (nxport `msl_specialize.rs`: skinning indices going negative, a GPU hang in
   Wonder); ours guards c1 only (`c1_guard.py`), 7,023 shader files read c3-c19 at a computed index. A chain rebuild
-- [ ] 235 a Stencil8 view of a depth-stencil texture as `MTLPixelFormatX32_Stencil8` with every channel from red, and integer textures sampled as
-  such (blade2 a7dff99; the known gaps above list stencil views). Count Tears of the Kingdom's cases first
-- [ ] 236 the system fonts' `.bfttf` in both word orders (LASRecomp PR #330, b159129)
-- [ ] 237 socket Poll / Select wait out their timeout instead of failing at once (nxnative 65d4a4d: a network thread spun at 100 %)
-- [ ] 238 a cube view whose layer count is not a multiple of 6 counted as whole cubes, and CPU-written linear textures off the 256-byte row
-  alignment through the re-upload path (AnySwitch 6058d2e, 5e9fcc1); neither seen in our logs yet
+- [-] 235 a Stencil8 view of a depth-stencil texture as `MTLPixelFormatX32_Stencil8` with every channel from red, and integer textures sampled as
+  such (blade2 a7dff99; the known gaps above list stencil views): not seen in Tears of the Kingdom (no red line 72, "not a valid Metal view", or
+  11 in 66 Mac runs and the phone's sessions), and a stencil view samples right only from a shader typed for integers (a chain rebuild). Until a
+  game needs it
+- [x] batch 80 · 236 the system fonts' `.bfttf` in both word orders, told apart by the magic word (LASRecomp PR #330, b159129): ours read the order
+  of a firmware's font archives only; the byte-swapped console files of LASRecomp issue #48 were refused. `host/tests/t_bfttf.c` (a stand-in
+  font in both orders and a wrong magic, 3 checks); `DM_TEST_BFTTF_ONE_ORDER` fails 1
+- [-] 237 socket Poll / Select wait out their timeout instead of failing at once (nxnative 65d4a4d: a network thread spun at 100 %): Tears of the
+  Kingdom makes no socket, nifm or ssl call in the prologue (`DM_HLECOUNT`, 80 s: all 0). Until a game spins on them
+- [-] 238 a cube view whose layer count is not a multiple of 6 counted as whole cubes, and CPU-written linear textures off the 256-byte row
+  alignment through the re-upload path (AnySwitch 6058d2e, 5e9fcc1): neither line ("a cube view of", red line 82) in 66 Tears of the Kingdom logs.
+  Until a game needs it
+- [x] batch 80 · 259 the crash report's wait for a stderr lock another thread holds is measured, not counted in sleeps: on GitHub's macOS runner
+  its 100 sleeps of 10 ms took 5.4 s and failed CI (batch 79). `t_crash_stderr` gets a case whose sleeps take six times as long (13 checks);
+  `DM_TEST_CRASH_COUNTED_WAIT` fails 1 (6.1 s)
 
 GPU work a frame (230: less of it gives the CPU its clock back):
 - [ ] 239 early fragment tests for the fragment shaders whose control section sets them (+0x718 bit 0, the driver's EarlyZForce; MacNativeGames PR

@@ -61,16 +61,27 @@ static const uint8_t *jump_of(NVNcommandHandle h, const uint8_t **at) {
         p += x.size;
     }
 }
-// Whether the recording's BIND_UBO addresses, following JUMPs up to END, are exactly base + 0x100 * i for i = 0..n-1
+// A record can be read at p: inside 5a's pool or a host segment (a JUMP whose target was overwritten points anywhere)
+static int rec_readable(const uint8_t *p) {
+    const pool_t *pl = (const pool_t *)&g_tcpool; if (pl->mem && p >= pl->mem && p + 16 <= pl->mem + pl->size) return 1;
+    int ok = 0; pthread_mutex_lock(&g_hostseg_mu);
+    for (int i = 0; i < g_nhostseg && !ok; i++) ok = p >= g_hostseg[i].mem && p + 16 <= g_hostseg[i].mem + HOSTSEG_SZ;
+    pthread_mutex_unlock(&g_hostseg_mu); return ok;
+}
+// Whether the recording's BIND_UBO addresses, following JUMPs up to END, are exactly base + 0x100 * i for i = 0..n-1 (a JUMP to an unreadable
+// place or a walk of over 4,096 records: no)
 static int binds_are(NVNcommandHandle h, uint64_t base, int n) {
-    int k = 0;
-    for (const uint8_t *p = (const uint8_t *)(uintptr_t)h;;) {
+    int k = 0, steps = 0;
+    for (const uint8_t *p = (const uint8_t *)(uintptr_t)h; steps < 4096; steps++) {
+        if (!rec_readable(p)) return 0;
         op_hdr x; memcpy(&x, p, sizeof x);
         if (x.op == OP_JUMP) { memcpy(&p, p + 8, 8); continue; }
         if (x.op == OP_END) return k == n;
         if (x.op == OP_BIND_UBO) { p_bind_buf b; memcpy(&b, p + 8, sizeof b); if (k >= n || b.addr != base + 0x100 * (uint64_t)k) return 0; k++; }
+        if (x.size < 8) return 0;
         p += x.size;
     }
+    return 0;
 }
 // hle_nvn.c's verdict on the host segment starting at seg: 1 linked from a live JUMP, 0 not, -1 no such segment
 static int seg_a_linked(const uint8_t *seg) {
@@ -280,22 +291,22 @@ int main(void) {
 
     {   // 5a. Command memory the way Tears of the Kingdom uses it: callback off, one 512-byte window per recording at slot + used of the previous one,
         // windows reaching into the next slots' recordings. Records are BIND_UBO (32 bytes) with distinct addresses; BEGIN and END take 8 each.
-        static uint8_t cm[8192] __attribute__((aligned(4096))); NVNmemoryPoolBuilder cmb;
+        static uint8_t cm[16384] __attribute__((aligned(4096))); NVNmemoryPoolBuilder cmb;
         P(nvnMemoryPoolBuilderSetDefaults)(&cmb); P(nvnMemoryPoolBuilderSetStorage)(&cmb, cm, sizeof cm); P(nvnMemoryPoolInitialize)(&g_tcpool, &cmb);
         P(nvnCommandBufferInitialize)(&g_tc, &dev);
         ((void (*)(NVNcommandBuffer *, unsigned))proc("nvnCommandBufferSetCommandMemoryCallbackEnabled"))(&g_tc, 0);
         // (1) The game's NVN 55 inline wrappers store a byte at cmd + 0x10 before every call (main 0xba70): it must not shorten the segment.
-        //     8 + 14 x 32 + 8 = 464 bytes fit a 512-byte window with the 24 kept for a JUMP; as end's low byte (0x40 -> 0x01) it overflowed
+        //     8 + 14 x 32 + 8 = 464 bytes fit a 512-byte window with the 16 kept for a JUMP; as end's low byte (0x40 -> 0x01) it overflowed
         P(nvnCommandBufferAddCommandMemory)(&g_tc, &g_tcpool, 0x40, 512); ((uint8_t *)&g_tc)[0x10] = 1;
         NVNcommandHandle hd = rec_binds(-1, 14, 0x10000000ull);
         EXPECT("byte at cmd + 0x10: a 464-byte recording stays in its window", 1, !jump_of(hd, NULL) && binds_are(hd, 0x10000000ull, 14));
         EXPECT("... and GetCommandMemoryUsed reports 464", 464, P(nvnCommandBufferGetCommandMemoryUsed)(&g_tc));
-        // (2) Only END left for the next segment: 8 + 15 x 32 = 488 leaves 24 bytes, END needs 8 + 24, so the JUMP takes bytes 488..504. Used must
-        //     cover it: the game records the next slot at slot + used (496 before, and the next BEGIN overwrote the JUMP's target)
+        // (2) 8 + 15 x 32 = 488 leaves 24 bytes: the END takes 8 of them (it keeps none, plan item 231). With 24 kept after every record, the END
+        //     included, it went to a host segment and its JUMP took bytes 488..504, past the 496 a list of the same records measures
         const uint8_t *at = NULL;
         NVNcommandHandle hx = rec_binds(0x400, 15, 0x20000000ull);
-        EXPECT("only END in a host segment: the JUMP is at byte 488", 488, jump_of(hx, &at) ? (long long)(at - (const uint8_t *)(uintptr_t)hx) : -1);
-        EXPECT("... and used covers the JUMP (8 + 480 + 16 + 8)", 512, P(nvnCommandBufferGetCommandMemoryUsed)(&g_tc));
+        EXPECT("a 496-byte recording in a 512-byte window: no JUMP [-DDM_TEST_CMD_KEEP24: at byte 488]", -1, jump_of(hx, &at) ? (long long)(at - (const uint8_t *)(uintptr_t)hx) : -1);
+        EXPECT("... and used is 496 (8 + 480 + 8) [-DDM_TEST_CMD_KEEP24: 512]", 496, P(nvnCommandBufferGetCommandMemoryUsed)(&g_tc));
         // (3) A host segment stays while its JUMP does. A overflows at cm + 0x1200 (20 binds: 15 in the window, 5 and END in a host segment); B's window
         //     [cm + 0x1100, + 512) reaches into A but B writes 80 bytes; C overflows elsewhere and must not get A's segment (the window used to free it)
         NVNcommandHandle ha = rec_binds(0x1200, 20, 0x30000000ull);
@@ -310,6 +321,21 @@ int main(void) {
         EXPECT("A's segment is unlinked once D overwrote A's JUMP", 0, seg_a_linked(seg_a));
         NVNcommandHandle he = rec_binds(0x1a00, 20, 0x70000000ull);
         EXPECT("... and the next overflow reuses it", 1, jump_of(he, NULL) == seg_a && binds_are(he, 0x70000000ull, 20) && binds_are(hdd, 0x60000000ull, 18));
+        // (5) Slots of the measured size (nxnative 0b3c7b1, its issue #61: Tears of the Kingdom's prerecorded model lists at base + 496 k, each given
+        //     a 512-byte window): eight lists of 15 binds recorded in turn, each window reaching 16 bytes into the next slot. Every list must replay
+        //     whole; with the JUMP of (2) the next slot's BEGIN overwrote its target
+        NVNcommandHandle hs[8];
+        for (int k = 0; k < 8; k++) hs[k] = rec_binds(0x2000 + 496 * k, 15, 0x80000000ull + 0x1000000ull * (uint64_t)k);
+        int slots_ok = 1; for (int k = 0; k < 8; k++) slots_ok &= !jump_of(hs[k], NULL) && binds_are(hs[k], 0x80000000ull + 0x1000000ull * (uint64_t)k, 15);
+        EXPECT("eight lists in slots of 496 bytes with 512-byte windows: each whole, no JUMP [-DDM_TEST_CMD_KEEP24: JUMP targets overwritten]", 1, slots_ok);
+        // (6) A recording whose BEGIN does not fit is not linked: list F fills its window to 16 bytes short of the end (8 + 15 x 32 + 8 = 496 of 512),
+        //     G was recorded in the next slot (at F's window + 496) before; the next recording H starts with no new memory, so its BEGIN goes to a host
+        //     segment. A JUMP from F's write position (the bytes 496..512) would overwrite G's BEGIN
+        NVNcommandHandle hg = rec_binds(0x3000 + 496, 3, 0x90000000ull);
+        NVNcommandHandle hf = rec_binds(0x3000, 15, 0xa0000000ull);
+        NVNcommandHandle hh = rec_binds(-1, 2, 0xb0000000ull);
+        EXPECT("a recording started with no room: G in the next slot untouched [-DDM_TEST_CMD_LINK_EMPTY: G's BEGIN overwritten]", 1,
+               binds_are(hg, 0x90000000ull, 3) && binds_are(hf, 0xa0000000ull, 15) && binds_are(hh, 0xb0000000ull, 2));
         P(nvnCommandBufferFinalize)(&g_tc); P(nvnMemoryPoolFinalize)(&g_tcpool);
     }
 

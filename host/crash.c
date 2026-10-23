@@ -207,9 +207,15 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     // Another thread may hold the stderr lock (stuck, or stopped in the middle of a write): the fprintf below would then hang with it, the
     // process would neither exit nor say why, and the log would end mid-run with nothing. If the lock cannot be taken within 1 s, write a single
     // line with write() (pc / lr as module offsets) and exit. ftrylockfile succeeds when this thread holds the lock itself (file locks are
-    // recursive). (From seedds/nxnative 03e7cfc, MIT.)
-    for (int i = 0; ftrylockfile(stderr); i++) {
-        if (i < 100) { usleep(10000); continue; }
+    // recursive). (From seedds/nxnative 03e7cfc, MIT.) The second is measured, not counted in sleeps: on a busy machine a 10 ms sleep takes longer
+    // (GitHub's macOS runner: 100 of them took 5.4 s)
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); int tries = 0; (void)t0; (void)tries;
+    while (ftrylockfile(stderr)) {
+#ifndef DM_TEST_CRASH_COUNTED_WAIT   // negative control of t_crash_stderr only: 100 sleeps, as before
+        if (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0 < 1000000000ull) { usleep(10000); continue; }
+#else
+        if (tries++ < 100) { usleep(10000); continue; }
+#endif
         char b[256]; int n = snprintf(b, sizeof b, "[dm] CRASH sig=%d (stderr held by another thread for 1 s: no register dump)", sig);
         uint64_t at[2] = {uc->uc_mcontext->__ss.__pc, uc->uc_mcontext->__ss.__lr};
         for (int k = 0; k < 2; k++) { module_t *m = module_of((void *)at[k]);
