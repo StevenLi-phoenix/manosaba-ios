@@ -170,11 +170,18 @@ static inline uint64_t nvn_rt_comp_on_period(uint64_t fixed_ns, uint64_t declare
 typedef struct { double win[120]; int n; } nvn_rt_win;
 static inline int nvn_rt_dcmp(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
 // One frame's CPU time of the thread (ms); every 120 frames the computation to declare (ns) when 1.25 x their p90, clamped, differs from the
-// declared one by more than 15 %, else 0
-static inline uint64_t nvn_rt_sample(nvn_rt_win *w, double cpu_ms, double declared_ms, uint64_t period_ns) {
+// declared one by more than 15 %, else 0. peak (DM_RT_PEAK=1, plan item 248, after nxnative 65d4a4d, MIT): at least 1.1 x the window's longest
+// frame too (nxnative: frames past the declaration stalled 30-60 ms about once a second in Dark Souls Remastered, p99 63-127 → 21 ms)
+static inline uint64_t nvn_rt_sample(nvn_rt_win *w, double cpu_ms, double declared_ms, uint64_t period_ns, int peak) {
     w->win[w->n++] = cpu_ms;
     if (w->n < 120) return 0;
     double v[120]; memcpy(v, w->win, sizeof v); qsort(v, 120, sizeof *v, nvn_rt_dcmp); w->n = 0;
-    uint64_t c = nvn_rt_comp_clamp((uint64_t)(v[107] * 1.25 * 1e6), period_ns); double cm = c / 1e6;
+    double want = v[107] * 1.25;
+#ifndef DM_TEST_RT_NO_PEAK   // negative control of t_pace only: the p90 alone, as before
+    if (peak && v[119] * 1.1 > want) want = v[119] * 1.1;
+#else
+    (void)peak;
+#endif
+    uint64_t c = nvn_rt_comp_clamp((uint64_t)(want * 1e6), period_ns); double cm = c / 1e6;
     return cm > declared_ms * 1.15 || cm < declared_ms * 0.85 ? c : 0;
 }

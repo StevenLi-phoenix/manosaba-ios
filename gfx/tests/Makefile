@@ -95,6 +95,8 @@ t_vbelide: t_vbelide.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vbelide.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_sbufpast: t_sbufpast.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_sbufpast.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_psouser: t_psouser.m ../../host/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_psouser.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_uppool: t_uppool.m ../../host/crash.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_retire: t_retire.m ../../host/crash.c $(GFX) $(GFX_H)
@@ -248,6 +250,7 @@ run: \
 	t_esfilter \
 	t_vbelide \
 	t_sbufpast \
+	t_psouser \
 	t_extent \
 	t_findrain \
 	t_fmt_swz \
@@ -418,6 +421,11 @@ run: \
 	./t_linkfifo
 	python3 -I t_alpha_src.py 1 > t_alpha_1.metal && python3 -I t_alpha_src.py 0 > t_alpha_0.metal && ./t_alpha t_alpha_1.metal t_alpha_0.metal
 	DM_ROOT=$${DM_ROOT:-$(HOME)/dm-work} python3 -I t_xlate_ops.py
+	DM_ROOT=$${DM_ROOT:-$(HOME)/dm-work} python3 -I t_early_z.py
+	@status=0; DM_TEST_EARLY_Z_OFF=1 DM_ROOT=$${DM_ROOT:-$(HOME)/dm-work} python3 -I t_early_z.py > t_early_z_off.log 2>&1 || status=$$?; \
+	 if grep -q 'skipped' t_early_z_off.log; then echo 't_early_z_off: skipped (no translator)'; elif [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' t_early_z_off.log)" -ne 1 ]; then \
+	   cat t_early_z_off.log; echo "t_early_z_off: unexpected negative-control result ($$status)"; exit 1; \
+	 else echo 't_early_z_off: without the field no early fragment tests, as expected'; fi
 	MTL_DEBUG_LAYER=1 ./t_vfmt
 	DM_NVN_RENDER_STREAM=1 MTL_DEBUG_LAYER=1 ./t_rstream
 	DM_NVN_RENDER_STREAM=0 ./t_rstream --off
@@ -444,6 +452,7 @@ run: \
 	MTL_DEBUG_LAYER=1 ./t_esfilter
 	MTL_DEBUG_LAYER=1 ./t_vbelide
 	MTL_DEBUG_LAYER=1 ./t_sbufpast
+	./t_psouser
 	./t_uppool
 	./t_upwait
 	MTL_DEBUG_LAYER=1 ./t_restart

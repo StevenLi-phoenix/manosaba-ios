@@ -2,6 +2,7 @@
 // only in a slot with blending off become the same; a slot with blending on keeps its state, so keys that differ there stay apart; a second pass
 // changes nothing; a merged pass's slots follow the same bits. With a player's lists as arguments (pso_user.tsv), the distinct render keys of
 // this layout before and after are printed (Tears of the Kingdom's: 729 → 397). Every slot kept (-DDM_TEST_PSO_NO_CANON, as before): 3 fail.
+// The masks and blend bits of targets a normal pass lacks cleared too (plan item 253); kept (-DDM_TEST_PSO_NO_TARGET_CANON): 1 fails.
 #import <Foundation/Foundation.h>
 #include <stdlib.h>
 #include "../nvn/nvn_obj.h"
@@ -27,6 +28,13 @@ int main(int argc, char **argv) { @autoreleasepool {
     key(&a, 0x4, 20); a.lmap[0] = 2; a.lmap[1] = 0xff; key(&b, 0x4, 20); b.lmap[0] = 2; b.lmap[1] = 0xff; b.blend[0].src_rgb = 1;
     pso_key_blend_canon(&a); pso_key_blend_canon(&b);
     check("merged pass: logical slot 2 blends (kept), slot 0 does not (zeroed)", !memcmp(&a, &b, sizeof a) && a.blend[2].src_rgb == 22);
+    // Plan item 253: the write mask and blend bit of a target the pass does not have (slot 3 here: no format)
+    key(&a, 0x1, 30); key(&b, 0x1, 30); a.chmask = 0x0fff; b.chmask = 0xffff; b.blend_en = 0x9;
+    pso_key_blend_canon(&a); pso_key_blend_canon(&b); pso_key_target_canon(&a); pso_key_target_canon(&b);
+    check("a target the pass lacks: keys differing only in its mask and blend bit become one [-DDM_TEST_PSO_NO_TARGET_CANON: apart]", !memcmp(&a, &b, sizeof a));
+    key(&a, 0x1, 30); key(&b, 0x1, 30); a.chmask = 0x0fff; b.chmask = 0x0f0f;
+    pso_key_target_canon(&a); pso_key_target_canon(&b);
+    check("... a target it has keeps its mask: keys differing there stay apart", memcmp(&a, &b, sizeof a) != 0);
     for (int f = 1; f < argc; f++) {   // a player's list: distinct keys of this layout before and after
         NSString *txt = [NSString stringWithContentsOfFile:@(argv[f]) encoding:NSUTF8StringEncoding error:nil];
         NSMutableSet *before = [NSMutableSet set], *after = [NSMutableSet set]; int old = 0;
@@ -34,7 +42,7 @@ int main(int argc, char **argv) { @autoreleasepool {
             if (![line hasPrefix:@"R\t"]) continue;
             pso_skey sk; if (pso_skey_parse([line substringFromIndex:2].UTF8String, &sk)) { old++; continue; }
             char h[sizeof sk * 2 + 1]; pso_skey_hex(&sk, h); [before addObject:@(h)];
-            pso_key_blend_canon(&sk.k); pso_skey_hex(&sk, h); [after addObject:@(h)];
+            pso_key_blend_canon(&sk.k); if (!sk.merged) pso_key_target_canon(&sk.k); pso_skey_hex(&sk, h); [after addObject:@(h)];
         }
         printf("  %s: %lu render keys of this layout → %lu without the blend state of slots without blending (%d rows of earlier layouts)\n",
                argv[f], (unsigned long)before.count, (unsigned long)after.count, old);

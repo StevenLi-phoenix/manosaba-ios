@@ -196,8 +196,11 @@ int main(void) {
     // Time-constraint declarations (nvn_rt_*, plan item 61d): the cap's period; a new period keeps the computation declared (-DDM_TEST_RT_COMP_RESET,
     // 2 ms again on every change, fails 2); 1.25 x the p90 of 120 frames
     {   nvn_rt_win w = {0}, w2 = {0}; uint64_t got = 0, got2 = 0;
-        for (int i = 0; i < 120; i++) got = nvn_rt_sample(&w, i < 108 ? 8.0 : 30.0, 2.0, 16666666);
-        for (int i = 0; i < 120; i++) got2 = nvn_rt_sample(&w2, 8.0, 10.0, 16666666);
+        for (int i = 0; i < 120; i++) got = nvn_rt_sample(&w, i < 108 ? 8.0 : 30.0, 2.0, 16666666, 0);
+        for (int i = 0; i < 120; i++) got2 = nvn_rt_sample(&w2, 8.0, 10.0, 16666666, 0);
+        nvn_rt_win w3 = {0}, w4 = {0}; uint64_t got3 = 0, got4 = 0;   // DM_RT_PEAK (plan item 248): one frame of 12 ms in 120 of 8
+        for (int i = 0; i < 120; i++) got3 = nvn_rt_sample(&w3, i == 60 ? 12.0 : 8.0, 2.0, 33333333, 1);
+        for (int i = 0; i < 120; i++) got4 = nvn_rt_sample(&w4, i == 60 ? 12.0 : 8.0, 2.0, 33333333, 0);
         struct { int ok; const char *why; } f[] = {
             {nvn_rt_period_ns(60, 1) == 16666666, "the cap at 60 Hz: 16.67 ms (the game's own interval is not an input)"},
             {nvn_rt_period_ns(120, 4) == 33333333, "the app's hold of 4 at 120 Hz: 33.3 ms"},
@@ -207,8 +210,10 @@ int main(void) {
             {nvn_rt_comp_on_period(5000000, 10000000, 33333333) == 5000000, "DM_RT_COMP fixed: 5 ms"},
             {got == 10000000, "p90 of 120 frames (108 at 8 ms, 12 at 30 ms) x 1.25: 10 ms"},
             {got2 == 0, "within 15 % of the declared 10 ms: no new declaration"},
+            {got3 == 13200000, "DM_RT_PEAK: one 12 ms frame among 8 ms ones: 1.1 x 12 = 13.2 ms over 1.25 x 8 [-DDM_TEST_RT_NO_PEAK: 10 ms]"},
+            {got4 == 10000000, "... without it: 1.25 x the p90, 10 ms"},
         };
-        for (int i = 0; i < 8; i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
+        for (int i = 0; i < (int)(sizeof f / sizeof *f); i++) { n++; printf("%-72s %s\n", f[i].why, f[i].ok ? "✓" : "✗"); fail += !f[i].ok; } }
     printf("== %d checks, %d failed ==\n", n, fail);
     return fail != 0;
 }

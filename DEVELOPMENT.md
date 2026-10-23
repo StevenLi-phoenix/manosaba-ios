@@ -1534,17 +1534,26 @@ iPhone without asking; F, the features, later). All sources MIT unless said. Cor
   `DM_TEST_CRASH_COUNTED_WAIT` fails 1 (6.1 s)
 
 GPU work a frame (230: less of it gives the CPU its clock back):
-- [ ] 239 early fragment tests for the fragment shaders whose control section sets them (+0x718 bit 0, the driver's EarlyZForce; MacNativeGames PR
-  #222: 1,677 of 13,645 1.4.3 fragment shaders, the dotted stone lattice at the Great Sky Island start fixed on an M4 Max; nxport: -13 % GPU time in
-  play, but off by default because Tears of the Kingdom's tile classification "loses marks and most of the screen goes unlit (cause not found)").
-  Ours passes `earlyZForce` false (`dmsh_xlate/Program.cs`). A chain rebuild; judge the pictures (the lattice, the lighting) and the phone's pass
-  times
+- [x] batch 81 · 239 early fragment tests for the fragment shaders whose control section sets them (+0x718 bit 0, the driver's EarlyZForce; after
+  MacNativeGames PR #222 and nxport, MIT): `dmsh_build.py` passes the bit as the job's `early_z`, `dmsh_xlate/Program.cs` as `earlyZForce`, and the
+  translator's SPIR-V gets EarlyFragmentTests, which spirv-cross writes as `[[ early_fragment_tests ]]`: 1,677 of the capture's fragment shaders.
+  Metal otherwise tests depth after any fragment function that writes memory, so the occluded fragments of every material shader (each stores a
+  tile flag) were shaded and hidden surface removal was off for them. Chain ba19de4f1d15 → f9e7d3ecf49e. On the iPhone (Great Sky Island at
+  120 Hz, sustained after the first minute, the same code on both chains): 55.4 / 56.4 → 59.5 / 59.6 fps, GPU 13.7-13.9 → 12.9 ms a frame, the
+  translation thread 1.81-1.93 → 1.94-1.99 GHz, frames shown at 16.7 ms 86-87 → 97-98 %: the GPU's smaller share of the power budget went to the
+  CPU (230). The pictures the same (the prologue's cave and torch, the island; nxport's unlit tile classification on 1.1.2 not seen). The Mac's
+  island: GPU 6.93 → 6.80 ms at 60 Hz. `gfx/tests/t_early_z.py` (the translator with and without the field; the library: every pixel shader has
+  the attribute exactly when its control section asks); `DM_TEST_EARLY_Z_OFF=1` fails 1
 - [ ] 240 the scene size changed while the game runs (NativeTOTK 1723fed, a5bbceb: a veneer at main+0x580920 sends the frame through the game's own
   mode-change path, renderer+0xcd0 = -1, a latch at the present; sizes up to the boot reserve; measured on the Mac only), with render targets of a
   size the game left released (9a92046: GPU +640 → +295 MB after size switches). What it would allow: 190 (960x540 holds 59.6 fps on the island
   against 56.0). A rewriter change
-- [ ] 241 multiplies and adds fused in vertex stages, relaxed instead of safe math (nxport: ~12 % less GPU in Hateno; fusing fragment stages gave white
-  specks). Ours is safe everywhere since fast math broke a tile-light vertex shader. With 239's chain rebuild
+- [-] 241 multiplies and adds fused in vertex stages, relaxed instead of safe math (nxport: ~12 % less GPU in Hateno; fusing fragment stages gave white
+  specks): nothing to fuse here. nxport fuses the FMUL / FADD pairs Ryujinx marks NoContraction, written through spirv-cross's helpers; in chain
+  f9e7d3ecf49e none of the 16,099 vertex shaders has one (all 3,103 files with a helper are fragment shaders, 5,568 calls), and the offline compile
+  with `-fmetal-math-mode=safe` already fuses a plain a * b + c (a scratch kernel: its bits equal fma's for 65,536 triples whose fused and rounded
+  results all differ; with `#pragma clang fp contract(off)` they differ). t_fpcontract's note that safe math fuses nothing holds for a compile
+  at run time (MTLCompileOptions), not for the game's offline libraries
 - 217 (open) has nxport's small-pass kernels (`tiny_kernels.rs`) as a reference: a render pass ~40 µs against ~1 µs for a dispatch, and shader-write
   usage costs compression, so only small targets
 
@@ -1557,21 +1566,31 @@ CPU energy a frame:
   string per bind (`border_variant`)
 - [ ] 245 the Metal calls on a worker thread of their own (nxnative PR #62, `nvn_rec.h`: Breath of the Wild on an iPhone 17 Pro Max, submit thread 8 →
   3.3-4.5 ms; the same PR's phone still fell to 30). Ours moves render encoders only (`nvn_render_stream.h`, it lost on the M5)
-- [ ] 246 the pipeline list written off the translation thread (AnySwitch c483c04)
-- [ ] 247 `passdump` returns before reading the frame number when off (shh632058099 e460049)
+- [x] batch 81 · 246 the player's pipeline list written on a serial queue of its own (AnySwitch c483c04): the first new line read the seed and the
+  list (6,365 rows for Tears of the Kingdom) into a set, and every one flushed the file, on the submit / translation thread. `gfx/tests/t_psouser.m`
+  (with the queue held a recorded line is not in the file yet, then once; repeats left out; 200 lines from two threads; 4 checks);
+  `DM_TEST_PSO_USER_INLINE` fails 1
+- [x] batch 81 · 247 `passdump` returns before reading the frame number when off (shh632058099 e460049): the same answers, an atomic load less a few
+  times a draw; no test of its own (nothing to break that a test could see)
 
 Pacing and hitches:
-- [ ] 248 the real-time computation declared covers 1.1 × the 120-frame peak as well as 1.25 × the p90 (nxnative 65d4a4d: p99 63-127 → 21 ms in Dark
-  Souls Remastered)
-- [ ] 249 `DM_PRESENT_INTERVAL=display` measured with product60 at 120 Hz (MacNativeGames issue #136, an iPhone 17 Pro Max: the game switched its
-  interval 920 times in 18 minutes, 43-61 presents a second; one frame a tick held about 65)
-- [ ] 250 the frame step averages the intervals before its floor (MacNativeGames' Breath of the Wild path: clamping each made it run 6 % fast at
-  about 95 fps under 120 Hz); ours clamps each (`frame_step.c`)
+- [-] batch 81 · 248 the real-time computation declared covers 1.1 × the 120-frame peak as well as 1.25 × the p90 (nxnative 65d4a4d: p99 63-127 →
+  21 ms in Dark Souls Remastered): `DM_RT_PEAK=1` (`nvn_rt_sample`; t_pace +2, `DM_TEST_RT_NO_PEAK` fails 1). On the phone's island (239's chain)
+  58.4 fps, 94 % of the frames at 16.7 ms, against 59.6 and 98 % without it (the main thread's declaration went to 1.84 ms): not a default
+- [-] 249 `DM_PRESENT_INTERVAL=display` measured with product60 at 120 Hz (MacNativeGames issue #136, an iPhone 17 Pro Max: the game switched its
+  interval 920 times in 18 minutes, 43-61 presents a second; one frame a tick held about 65): on the iPhone 17 Pro's island (239's chain) 55.7 fps,
+  85 % of the frames at 16.7 ms, against 59.6 and 98 % in the game's own interval mode (it presented at 60 Hz). Not taken
+- [x] batch 81 · 250 the frame step averages the intervals before its floor (MacNativeGames' Breath of the Wild path: clamping each made it run 6 %
+  fast at about 95 fps under 120 Hz): `frame_step.c` takes the mean of the last five present intervals, then keeps it between 1/120 and 1/15 s
+  (presents 6 and 11 ms apart in turn: 9.0 ms, 9.9 before). `games/totk/tests/t_frame_step.c` +3 (53 checks); `DM_TEST_FSTEP_CLAMP_EACH` fails 3
 - [ ] 251 first-sight pipelines (totkrecomp bbf0fd4, an 8 ms budget a frame on the submitting thread, the rest in the background with their draws
   skipped: 8,024 → 84 skipped draws in the prologue). We never skip; measure our stalls against 184's walk before anything
-- [ ] 252 the frame step's trials leave out one-off hitches and want the late frames spread over the window (LASRecomp f99186b)
-- [ ] 253 pipeline keys with the write mask and blend bit of missing targets cleared (MacNativeGames f3e2f66), and prediction scans that stop after
-  one that kicked nothing, with a budget a frame (f134a7b)
+- [-] 252 the frame step's trials leave out one-off hitches and want the late frames spread over the window (LASRecomp f99186b): the host's frame
+  step (`DM_FRAME_STEP=vsync`, 133) is off by default in both games. With 133, if it becomes a default
+- [x] batch 81 · 253 pipeline keys with the write mask and blend bit of the colour targets a normal pass lacks cleared (MacNativeGames f3e2f66;
+  `pso_key_target_canon`, also on the warm-up's rows): the player's list from the phone 3,645 → 3,617 keys, the seed 3,411 → 3,383. t_pso_canon
+  +2 (7 checks); `DM_TEST_PSO_NO_TARGET_CANON` fails 1. MacNativeGames f134a7b's scan budget is not taken: its gain was in shader scans, which we
+  do not have
 
 Tools:
 - [ ] 254 one frame's submissions replayed K times, two settings alternating on the same frame (nxport `--replay=F:K[:M]`, `--replay-ab`): A/B runs
@@ -1579,9 +1598,13 @@ Tools:
 - [ ] 255 waits per kind with the wake-to-run latency and the core reacquire time (totkrecomp 65a9411), and system calls counted a frame by number
   (AnySwitch 477f749)
 - [ ] 256 pass GPU times every Nth submission, and a capture that waits out the first minute (shh632058099 9ecf169, GirlNet 9dc64f9)
-- [ ] 257 `DM_CLEAR_SHADER_CACHE`: start with an empty Metal shader cache, as after a fresh install (AnySwitch ec152a8)
-- [ ] 258 the address space a free-signed install gets (LASRecomp PR #238 8dd3116: 59 GB on an iPhone 15 Pro with the memory-limit entitlement;
-  previousdolphin: 6 GB above 0x70_0000_0000 without entitlements): read our "guest address space" line on such an install
+- [x] batch 81 · 257 `DM_CLEAR_SHADER_CACHE=1`: the iOS app starts with an empty Metal shader cache, as after a fresh install (AnySwitch ec152a8):
+  Library/Caches/<bundle id>/com.apple.metal, com.apple.gpuarchiver and com.apple.metalfe removed at boot (`host/shadercache.h`).
+  `host/tests/t_shadercache.c` (4 checks); `DM_TEST_SHADERCACHE_METAL_ONLY` fails 2
+- [x] batch 81 · 258 the address space a free-signed install gets (LASRecomp PR #238 8dd3116: 59 GB on an iPhone 15 Pro with the memory-limit
+  entitlement; previousdolphin: 6 GB above 0x70_0000_0000 without entitlements): the user's free-account install (the increased memory limit,
+  no extended virtual addressing) reserves the whole 6 GB on the iPhone 17 Pro, iOS 26.4 ("iOS reserved 6144 MB of 6144", 2026-10-23). The note in
+  `hle_svc.c` that 6 GB failed there dates from before the memory limit was signed in (65)
 
 Open:
 - [ ] 72 the blood moon crash: after 1, the stack logging of 40 and 47, dump the threads right at the skip; with 130's movie hold, the skip with the

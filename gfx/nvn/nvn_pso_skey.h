@@ -28,6 +28,17 @@ static inline void pso_key_blend_canon(pso_key *k) {
 #endif
 }
 
+// A normal pass's key without the write mask and blend bit of colour targets the pass does not have (plan item 253, after MacNativeGames f3e2f66,
+// MIT): the descriptor reads them only for a slot with a format, so keys that differ only there become one pipeline. Not for a merged pass, whose
+// slots reach the game's targets through lmap. Checked by gfx/tests/t_pso_canon.m
+static inline void pso_key_target_canon(pso_key *k) {
+#ifndef DM_TEST_PSO_NO_TARGET_CANON   // negative control of t_pso_canon only: the missing targets' bits kept, as before
+    for (int i = 0; i < 8; i++) if (!k->cfmt[i]) { k->chmask &= ~(0xfu << (4 * i)); k->blend_en &= ~(1u << i); memset(&k->blend[i], 0, sizeof k->blend[i]); }
+#else
+    (void)k;
+#endif
+}
+
 static inline void pso_skey_from(const pso_key *k, NvShader *vs, NvShader *fs, int merged, const pso_fz_desc *fz, pso_skey *out) {
     memset(out, 0, sizeof *out);
     memcpy(&out->k, k, sizeof out->k);

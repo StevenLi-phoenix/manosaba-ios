@@ -72,7 +72,9 @@ static void mem_init(void) {
     const char *e = getenv("DM_GUEST_AS_GB"); if (e && atoi(e) >= 6) g_reserve = (size_t)atoi(e) << 30;
 #if TARGET_OS_IPHONE
     // Without the extended virtual addressing entitlement (a free account cannot sign it) the largest single reservation varies by device and OS:
-    // 6 GB already fails on an iPhone 17 Pro (iOS 26.4). From 6 GB down by 256 MB to what the game needs, in the lowest free gap from 4 GB that ends
+    // 6 GB failed on an iPhone 17 Pro (iOS 26.4) before the increased memory limit was signed in (plan item 65); with it the whole 6 GB is reserved
+    // (2026-10-23, a free account: "iOS reserved 6144 MB of 6144"; LASRecomp PR #238 saw the address space follow that entitlement, plan item 258).
+    // From 6 GB down by 256 MB to what the game needs, in the lowest free gap from 4 GB that ends
     // below 2^39 (guest_as.h, plan item 62a; done at the top of main(), before UIKit and Metal map theirs: svc_reserve_early), the free gaps logged
     // when it is less than 6 GB; mmap's own choice if that fails. Everything except the 256 MB prefix, the 256 MB stack region and the profile's
     // heap (guest_heap_mb) goes to the alias region (manosaba on the Mac: a 90 s story run peaks at 1166 MB of alias used, highest offset 2460 MB),

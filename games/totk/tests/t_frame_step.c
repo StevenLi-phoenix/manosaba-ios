@@ -3,7 +3,7 @@
 // games/totk/check_frame_rate.py (clang -DFRAME_STEP_TEST -I host). The heap overlay's note ignored (-DDM_TEST_SCENE_NO_HEAP) fails 1; +8 not
 // written (-DDM_TEST_CLOTH_NO_SECONDS) fails 1. The output size at +24 / +32 (DM_OUTPUT_RES, plan item 63); the canvas left to the game
 // (-DDM_TEST_OUTPUT_NO_CANVAS) fails 3. DM_RENDER_HEIGHT at 16:9 when DM_RENDER_RES is unset (plan item 62l); ignored (-DDM_TEST_SCENE_NO_HEIGHT)
-// fails 3.
+// fails 3. The mean of the intervals before the 1/120 floor (plan item 250); each interval clamped first (-DDM_TEST_FSTEP_CLAMP_EACH) fails 3.
 #include <stdio.h>
 #include <math.h>
 #define FRAME_STEP_TEST 1
@@ -24,11 +24,18 @@ int main(void) {
     s = frame_mean_add(&m, t += 16666667);
     expect("one 60 fps interval after them: mean of the last five", (4 / 30.0 + 1 / 60.0) / 5, s, 1e-6);
     s = frame_mean_add(&m, t += 5000000);                                           // 200 fps
-    expect("an interval below 1/120 s counts as 1/120", (3 / 30.0 + 1 / 60.0 + 1 / 120.0) / 5, s, 1e-6);
+    expect("an interval below 1/120 s counts as it is in the mean (plan item 250)", (3 / 30.0 + 1 / 60.0 + 0.005) / 5, s, 1e-6);
     s = frame_mean_add(&m, t += 200000000);                                         // 5 fps, below 0.25 s
-    expect("an interval above 1/15 s counts as 1/15", (2 / 30.0 + 1 / 60.0 + 1 / 120.0 + 1 / 15.0) / 5, s, 1e-6);
+    expect("... and one above 1/15 s too", (2 / 30.0 + 1 / 60.0 + 0.005 + 0.2) / 5, s, 1e-6);
     expect("a pause above 0.25 s keeps the step", 0, frame_mean_add(&m, t += 400000000), 0);
     expect("... and restarts the mean", 1.0 / 60, frame_mean_add(&m, t += 16666667), 1e-6);
+    {   frame_mean a = {0}; uint64_t u = 1000000000ull; double st = 0; frame_mean_add(&a, u);   // presents 6 and 11 ms apart in turn, 8.5 on average
+        for (int i = 0; i < 10; i++) st = frame_mean_add(&a, u += i & 1 ? 11000000 : 6000000);
+        expect("6 and 11 ms in turn: the mean of the last five, 9.0 ms [-DDM_TEST_FSTEP_CLAMP_EACH: 9.9]", (3 * 0.011 + 2 * 0.006) / 5, st, 1e-6);
+        frame_mean b = {0}; u = 1000000000ull; frame_mean_add(&b, u); for (int i = 0; i < 6; i++) st = frame_mean_add(&b, u += 5000000);
+        expect("five at 5 ms: the mean kept at 1/120 s", 1.0 / 120, st, 1e-6);
+        frame_mean c = {0}; u = 1000000000ull; frame_mean_add(&c, u); for (int i = 0; i < 6; i++) st = frame_mean_add(&c, u += 100000000);
+        expect("five at 100 ms: the mean kept at 1/15 s", 1.0 / 15, st, 1e-6); }
     _Atomic uint64_t page[2] = {0}; frame_step_store(page, 1.0 / 90);
     uint64_t bits = atomic_load(&page[0]), b2 = atomic_load(&page[1]); float v[3]; memcpy(v, &bits, 8); memcpy(&v[2], &b2, 4);
     expect("page +0: ratio = seconds x 30", 1.0 / 3, v[0], 1e-6);

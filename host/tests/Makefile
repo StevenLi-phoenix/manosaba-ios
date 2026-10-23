@@ -116,6 +116,8 @@ run: \
 	$(B)/t_rng_font_rev \
 	$(B)/t_bfttf \
 	$(B)/t_bfttf_one \
+	$(B)/t_shadercache \
+	$(B)/t_shadercache_metal \
 	$(B)/t_rtld_order \
 	$(B)/t_rtld_ours \
 	$(B)/t_coolstart_onelook \
@@ -464,6 +466,11 @@ run: \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_bfttf_one.log)" -ne 1 ]; then \
 	   cat $(B)/t_bfttf_one.log; echo "t_bfttf_one: unexpected negative-control result ($$status)"; exit 1; \
 	 fi; echo "t_bfttf_one: with one word order the byte-swapped fonts are refused, as expected"
+	TMPDIR="$(abspath $(B))" $(B)/t_shadercache
+	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_shadercache_metal > $(B)/t_shadercache_metal.log 2>&1 || status=$$?; \
+	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_shadercache_metal.log)" -ne 2 ]; then \
+	   cat $(B)/t_shadercache_metal.log; echo "t_shadercache_metal: unexpected negative-control result ($$status)"; exit 1; \
+	 fi; echo "t_shadercache_metal: with com.apple.metal alone the archiver and front-end caches stay, as expected"
 	@status=0; TMPDIR="$(abspath $(B))" $(B)/t_survey_cols > $(B)/t_survey_cols.log 2>/dev/null || status=$$?; \
 	 if [ "$$status" -ne 1 ] || [ "$$(grep -c '✗' $(B)/t_survey_cols.log)" -ne 1 ] || ! grep -q "the rotation's rows.*✗" $(B)/t_survey_cols.log; then \
 	   cat $(B)/t_survey_cols.log; echo "t_survey_cols: unexpected negative-control result ($$status)"; exit 1; \
@@ -923,6 +930,10 @@ $(B)/t_bfttf: t_bfttf.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_bfttf.c
 $(B)/t_bfttf_one: t_bfttf.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_BFTTF_ONE_ORDER -o $@ t_bfttf.c
+$(B)/t_shadercache: t_shadercache.c ../shadercache.h | $(B)
+	clang -O1 -Wall -I.. -o $@ t_shadercache.c
+$(B)/t_shadercache_metal: t_shadercache.c ../shadercache.h | $(B)
+	clang -O1 -Wall -I.. -DDM_TEST_SHADERCACHE_METAL_ONLY -o $@ t_shadercache.c
 $(B)/t_coolstart: t_coolstart.c ../coolstart.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_coolstart.c
 $(B)/t_coolstart_onelook: t_coolstart.c ../coolstart.h | $(B)

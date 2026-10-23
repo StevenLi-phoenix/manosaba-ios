@@ -3134,7 +3134,8 @@ static int passdump(void) {
     long a0 = atomic_load(&g_pd_a0);
     if (a0 == -2) { const char *e = getenv("DM_NVN_PASSDUMP"); long b0 = e ? atol(e) : -1, b1 = e && strchr(e, '-') ? atol(strchr(e, '-') + 1) : b0;
         long exp = -2; if (atomic_compare_exchange_strong(&g_pd_a0, &exp, b0)) atomic_store(&g_pd_a1, b1); a0 = atomic_load(&g_pd_a0); }
-    long f = (long)atomic_load(&g_cur_frame); return a0 >= 0 && f >= a0 && f <= atomic_load(&g_pd_a1);
+    if (a0 < 0) return 0;   // off: no read of the frame number (plan item 247, after shh632058099 e460049; called a few times a draw)
+    long f = (long)atomic_load(&g_cur_frame); return f >= a0 && f <= atomic_load(&g_pd_a1);
 }
 void mtl_passdump_next(long n) {
     long f = (long)atomic_load(&g_cur_frame); atomic_store(&g_pd_a0, -1); atomic_store(&g_pd_a1, f + n); atomic_store(&g_pd_a0, f + 1);
@@ -4259,10 +4260,27 @@ static FILE *pso_user_file(void) {
     if (path) g_pso_user = fopen(path.fileSystemRepresentation, "a");
     return g_pso_user;
 }
+// The line is written on a serial queue of its own (plan item 246, after AnySwitch c483c04, MIT): the first one read the seed and the player's list
+// (6,365 rows for Tears of the Kingdom) into a set, and every new one flushed the file, on the submit / translation thread
+static dispatch_queue_t pso_user_queue(void) {
+    static dispatch_queue_t q; static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("dm.pso_user", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)); });
+    return q;
+}
+void mtl_pso_user_sync(void) { dispatch_sync(pso_user_queue(), ^{}); }   // (tests: the lines queued so far are written)
+static void pso_user_write(const char *line);
 static void pso_user_record(const char *fmt, ...) {
+    char line[8192]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
+#ifndef DM_TEST_PSO_USER_INLINE   // negative control of t_psouser only: written on the calling thread, as before
+    char *copy = strdup(line); if (!copy) return;
+    dispatch_async(pso_user_queue(), ^{ pso_user_write(copy); free(copy); });
+#else
+    pso_user_write(line);
+#endif
+}
+static void pso_user_write(const char *line) {
     FILE *f = pso_user_file();
     if (!f) return;
-    char line[8192]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
     if (!g_pso_user_seen) {
         g_pso_user_seen = [NSMutableSet set];
         NSString *seed = g_shmap_path ? [g_shmap_path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"] : nil;
@@ -5088,6 +5106,7 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     }
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
     pso_key_blend_canon(k);   // zeros where blending is off (nvn_pso_skey.h)
+    if (!lmap) pso_key_target_canon(k);   // and for the colour targets the pass does not have
     const nvn_refl *rf = &vs->rf;
     for (int v = 0; v < rf->nv; v++) { int a = rf->v[v].nvn; if (a < 16 && a < S.nattr) { k->attr[a] = S.attr[a]; int st = S.attr[a].stream; if (st < 16) k->stream[st] = S.stream[st]; } }
 }
@@ -5387,6 +5406,7 @@ static void warm_worker(NSArray<NSString *> *paths) {
                 } else if ([c[0] isEqualToString:@"R"] && c.count >= 2) {
                     pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) { g_warm_old_rows++; continue; }   // a key of an earlier layout
                     pso_key_blend_canon(&sk.k);   // a row written before item 115 carries the blend state of slots whose blending is off: as the draws' keys are now
+                    if (!sk.merged) pso_key_target_canon(&sk.k);   // ... and before item 253 the masks of targets the pass did not have
                     { char ch[sizeof sk * 2 + 1]; pso_skey_hex(&sk, ch); NSString *cs = @(ch); if ([canon containsObject:cs]) { g_warm_folded++; continue; } [canon addObject:cs]; }
                     NSString *vkey = warm_key(sk.vs, sizeof sk.vs), *fkey = warm_key(sk.fs, sizeof sk.fs);
                     NvShader *vs = vkey.length ? warm_shader(dict, vkey, sk.vs_stage) : nil;

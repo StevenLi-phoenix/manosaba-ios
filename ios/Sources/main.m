@@ -16,6 +16,7 @@
 #include "envfile.h"
 #include "logstamp.h"
 #include "rundiag.h"
+#include "shadercache.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <mach/mach.h>
@@ -506,6 +507,10 @@ int main(int argc, char *argv[]) {
       int nb = dm_env_file_apply(b.fileSystemRepresentation, env_said), nd = dm_env_file_apply(d.fileSystemRepresentation, env_said);
       if (nb >= 0 || nd >= 0) plog("boot: env.txt: %d switch(es) from the bundle, %d from Documents", nb > 0 ? nb : 0, nd > 0 ? nd : 0); }
     logstamp_stderr();   // UTC milliseconds on every line from here on (after env.txt, which can say DM_LOG_TIME=0)
+    if (getenv("DM_CLEAR_SHADER_CACHE") && atoi(getenv("DM_CLEAR_SHADER_CACHE"))) {   // a fresh install's empty Metal shader cache (host/shadercache.h, plan item 257)
+        NSString *c = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:NSBundle.mainBundle.bundleIdentifier];
+        int r = shader_cache_clear(c.fileSystemRepresentation); plog("%sboot: DM_CLEAR_SHADER_CACHE: %d Metal cache directories removed%s", r < 0 ? "[red] " : "", r < 0 ? 0 : r, r < 0 ? " (one could not be)" : "");
+    }
     // The guest address space before UIKit and Metal map theirs (plan item 62a: the largest free gap shrinks once they have; after env.txt, which can
     // say DM_GUEST_AS_GB)
     { void svc_reserve_early(void); svc_reserve_early(); }

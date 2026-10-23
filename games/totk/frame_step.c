@@ -33,16 +33,21 @@ int dm_opmode(void);   // hle_oe.c
 int dm_overlay_file(const char *rel, char *out, size_t n);   // hle_fs.c: the file in the RomFS overlay layers
 
 typedef struct { uint64_t last_ns; double dt[5]; unsigned n, next; } frame_mean;
-// Feeds one present time; returns the step in seconds, or 0 when the step stays as it is
+// Feeds one present time; returns the step in seconds, or 0 when the step stays as it is. The mean of the last five intervals, then kept between
+// 1/120 and 1/15 s (plan item 250, after MacNativeGames' Breath of the Wild path, MIT): each interval clamped first made a run of short and long
+// ones (6 and 11 ms, 8.5 on average) count 9.7 ms, and the game ran fast (MacNativeGames: 6 % at about 95 fps under a 120 Hz clock)
 static double frame_mean_add(frame_mean *m, uint64_t now_ns) {
     if (!m->last_ns || now_ns <= m->last_ns) { m->last_ns = now_ns; return 0; }
     double dt = (now_ns - m->last_ns) * 1e-9; m->last_ns = now_ns;
     if (dt > 0.25 || dt < 0.001) { m->n = m->next = 0; return 0; }
+#ifdef DM_TEST_FSTEP_CLAMP_EACH   // negative control of t_frame_step only: each interval clamped, as before
     if (dt < 1.0 / 120) dt = 1.0 / 120;
     if (dt > 1.0 / 15) dt = 1.0 / 15;
+#endif
     m->dt[m->next++ % 5] = dt; if (m->n < 5) m->n++;
     double sum = 0; for (unsigned i = 0; i < m->n; i++) sum += m->dt[i];
-    return sum / m->n;
+    double mean = sum / m->n;
+    return mean < 1.0 / 120 ? 1.0 / 120 : mean > 1.0 / 15 ? 1.0 / 15 : mean;
 }
 // The size asked for: DM_RENDER_RES as it is, else DM_RENDER_HEIGHT's lines at 16:9 (width rounded to even) written into buf, else NULL
 static const char *scene_env(const char *res, const char *height, char *buf, size_t n) {

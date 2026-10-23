@@ -1523,6 +1523,7 @@ static int xlat_on(void) {
     if (g_xlat < 0) { const char *e = getenv("DM_NVN_XLAT"); g_xlat = e && atoi(e) > 0; if (g_xlat) LOG("[nvn] DM_NVN_XLAT=1: submissions and presents replayed in order on a translation thread"); }
     return g_xlat;
 }
+static int rt_peak(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_RT_PEAK"); v = e && !strcmp(e, "1"); if (v) LOG("[nvn] DM_RT_PEAK=1: real-time computations declared to cover 1.1 x each 120-frame window's longest frame too"); } return v; }   // (plan item 248)
 static int rt_old(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_RT_DECL"); v = e && !strcmp(e, "old"); if (v) LOG("[nvn] DM_RT_DECL=old: time constraints declared as before 2026-10-22"); } return v; }   // (nvn_pace.h nvn_rt_*)
 static void xlat_rt(uint64_t period_ns) {   // the translation thread's time constraint (61d's switch), once a frame: the cap's period, 1.25 x the p90 of its CPU a frame (nvn_pace.h)
     static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_XLAT_RT"); on = !(e && !strcmp(e, "0")); }
@@ -1530,7 +1531,7 @@ static void xlat_rt(uint64_t period_ns) {   // the translation thread's time con
     static uint64_t set, comp, last; static nvn_rt_win w;
     uint64_t c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), want = comp;
     if (rt_old()) want = period_ns / 2;
-    else { uint64_t v = last ? nvn_rt_sample(&w, (double)(c - last) / 1e6, comp / 1e6, period_ns) : 0; if (v) want = v; else if (set != period_ns) want = nvn_rt_comp_on_period(0, comp, period_ns); }
+    else { uint64_t v = last ? nvn_rt_sample(&w, (double)(c - last) / 1e6, comp / 1e6, period_ns, rt_peak()) : 0; if (v) want = v; else if (set != period_ns) want = nvn_rt_comp_on_period(0, comp, period_ns); }
     last = c;
     if (set == period_ns && want == comp) return;
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
@@ -2086,7 +2087,7 @@ static void rt_comp_tick(uint64_t period_ns) {
     if (rt_comp_fixed_ms() > 0 || !period_ns || !g_rt_comp_ms) return;
     static uint64_t last; static nvn_rt_win w;
     uint64_t c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID); if (!last) { last = c; return; }
-    uint64_t v = nvn_rt_sample(&w, (double)(c - last) / 1e6, g_rt_comp_ms, period_ns); last = c;
+    uint64_t v = nvn_rt_sample(&w, (double)(c - last) / 1e6, g_rt_comp_ms, period_ns, rt_peak()); last = c;
     if (v) set_time_constraint_comp(period_ns, v);
 }
 static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic clock

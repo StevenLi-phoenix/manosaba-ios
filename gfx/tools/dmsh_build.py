@@ -247,6 +247,9 @@ def job_for(key, rec, w):
     local = list(struct.unpack_from('<3I', rec, ci + 0x748)) if stage == 'cs' else None
     if local is not None: j['local'] = local
     if stage == 'ps': j['alpha_output'] = bool(struct.unpack_from('<I', code, 18 * 4)[0] & 8)   # SPH word 18 (OmapTargets) bit 3: colour 0's alpha is exported
+    # Control section +0x718 bit 0: the game asks for early fragment tests (the NVN driver's EarlyZForce; plan item 239, after MacNativeGames PR #222
+    # and nxport, MIT): Metal otherwise tests depth after any fragment function that writes memory, which also stops hidden surface removal for it
+    if stage == 'ps': j['early_z'] = bool(rec[ci + 0x718] & 1)
     j['pc_missing'] = True   # texture / attribute / output type queries are answered with the translator's defaults
     return j, c1
 
