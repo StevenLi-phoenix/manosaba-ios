@@ -4,11 +4,10 @@
 // unbound); unbinding every stage gives NULL; a program without keys replaces the whole.
 // The whole program replaced, the stages outside the mask unbound (-DDM_TEST_PROG_BIND_WHOLE, the broken variant): 6 fail.
 #include "../nvn/core/prog.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <string.h>
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-96s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 static prog_t one(int id, int stage) { prog_t p = {0}; p.nstage = 1; p.kstage[0] = (uint8_t)stage; p.key[0][0] = (uint8_t)id; p.serial = 500 + (uint64_t)id; return p; }
 static int key_at(const prog_t *p, int stage) { if (!p) return -1; for (unsigned i = 0; i < p->nstage; i++) if (p->kstage[i] == stage) return p->key[i][0]; return 0; }   // the shader id at a stage, 0 none
 

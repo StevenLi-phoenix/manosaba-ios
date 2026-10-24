@@ -4,13 +4,12 @@
 // the same address takes its fence; a thousand addresses all kept through the table's growth.
 // A result still on the GPU taken as complete (-DDM_TEST_COND_PENDING_DONE, the broken variant): 4 fail.
 #include "../nvn/core/cond.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <string.h>
 
 static uint64_t g_done;
 uint64_t nvn_be_done_fence(void) { return g_done; }
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-104s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 static uint64_t ctr[2][4] __attribute__((aligned(16)));   // two counter pairs: values at +0 and +16
 static int off_after(int mode, int pair) { p_render_enable r = {mode, pair < 0 ? 0 : (uint64_t)(uintptr_t)ctr[pair]}; cond_render_enable(&r); return g_render_off; }
 

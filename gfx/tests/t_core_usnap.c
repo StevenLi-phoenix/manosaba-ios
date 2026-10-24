@@ -9,6 +9,7 @@
 // DM_NVN_UBO_SNAPSHOT=0 copies nothing, yet the walk still reads deferred handles.
 // The last copy found taken whatever the range (-DDM_TEST_US_LAST_UNCHECKED, t_usnap's broken variant): 7 fail.
 #include "../nvn/core/usnap.h"
+#include "core_test.h"
 #include "../../host/dm.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,13 +17,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-module_t g_mod[MAX_MOD];
-int g_nmod;
-module_t *module_of(const void *p) { (void)p; return NULL; }
 void crash_install(void);
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 
 // ---- the backend, faked ----
 enum { POOL = 1 << 20 };

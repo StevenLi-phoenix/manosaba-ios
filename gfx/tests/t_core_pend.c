@@ -4,11 +4,10 @@
 // nested deeper than four read as unknown.
 // A copy reading its source as it is now (-DDM_TEST_PEND_COPY_NOW, the broken variant): 2 fail.
 #include "../nvn/core/pend.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <string.h>
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 static uint32_t mem[64];   // guest memory: words 0, 8, 16, 24 are A, B, C, D
 static uint64_t W(int i) { return (uint64_t)(uintptr_t)&mem[i]; }
 static uint32_t rd(uint64_t a, int *ok) { uint32_t v = 0; *ok = pend_read_x(a, &v, 4, g_pend.n, 0); return v; }

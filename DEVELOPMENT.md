@@ -214,8 +214,8 @@ decide):
   102), the backend's private header with the first part a translation unit of its own (batch 103), three more (batch 104); next the other
   parts outside the draw's path as translation units of their own (the draw's path stays one for inlining): the rest use the encoder layer,
   the texture registry or the draw's state, which want headers of their own first. `hle_nvn.c` in parts by its sections (batch 105); next
-  `host/` in directories (batch 106); next the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a
-  clean base first).
+  `host/` in directories (batch 106), the core tests' shared fakes (batch 107). The Vulkan backend later (the user, 2026-10-24: no Android
+  for now, a clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -493,3 +493,11 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   tests as before. The batch's Metal 3 suite first ran with the batch script's own flags, which lacked the new include path (106 builds
   could not find `dm.h`); the script takes the Makefile's flags now, as `make run-m3` does, and the suite ran again: 148 commands, the
   same results as batch 105. Both IPAs built. Smoke: the same red lines and frames.
+- [x] batch 107 · the core tests' shared fakes: `gfx/tests/core_fakes.c` holds every hook gfx/nvn/core asks of a backend (the modules' "The
+  backend provides" and `nvn_backend.h`) as a weak default, with the host's empty module table and present-link switch; `gfx/tests/core_test.h`
+  holds `check` (and `check_x`, in hexadecimal, for t_core_state). The 16 core tests drop the copies that matched the defaults (they keep the
+  ones that differ); each links all the modules, the fakes and the host's crash handler through `CORE_C` / `CORE_DEP`, so a new module or test
+  needs no list of its own. The 16 tests' results as before, and their 19 documented broken variants fail by their documented counts.
+  `make run-m3` copies the tests' headers too (core_test.h): without it the batch's Metal 3 suite found no recipe and the batch script took
+  that for no failure (it fails on it now); the suite ran again, 148 commands, the same results as batch 106. Smoke: the same red lines and
+  frames.

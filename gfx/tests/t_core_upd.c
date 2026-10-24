@@ -8,21 +8,15 @@
 #include "../nvn/core/upd.h"
 #include "../nvn/core/usnap.h"
 #include "../nvn/core/pend.h"
+#include "core_test.h"
 #include "../../host/dm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-module_t g_mod[MAX_MOD];
-int g_nmod;
-module_t *module_of(const void *p) { (void)p; return NULL; }
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 int nvn_be_pool_span(uint64_t lo, uint64_t len) { (void)lo; (void)len; return 1; }
 static uint8_t g_arena[1 << 16] __attribute__((aligned(256))); static size_t g_arena_off;   // 256-aligned blocks, as the backend's arena
 void nvn_be_arena(size_t len, uint8_t **cpu, uint64_t *gpu, void **buf) { g_arena_off = (g_arena_off + 255) & ~(size_t)255; if (g_arena_off + len > sizeof g_arena) g_arena_off = 0; *cpu = g_arena + g_arena_off; *gpu = (uint64_t)(uintptr_t)*cpu; *buf = g_arena; g_arena_off += len; }
-void nvn_be_parallel(int cnt, void (*fn)(void *ctx, size_t i), void *ctx) { for (int i = 0; i < cnt; i++) fn(ctx, (size_t)i); }
-uint64_t nvn_be_done_fence(void) { return 0; }
 
 static uint8_t mem[1024] __attribute__((aligned(256))), snap[1024];
 static uint64_t M(uint64_t off) { return (uint64_t)(uintptr_t)mem + off; }

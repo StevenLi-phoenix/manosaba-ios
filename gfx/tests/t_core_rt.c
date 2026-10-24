@@ -5,19 +5,11 @@
 // Colour targets compared by texture alone (-DDM_TEST_RT_SAME_NO_VIEW, t_rt_continue's broken variant): 1 fails.
 #include "../nvn/core/rt.h"
 #include "../nvn/core/state.h"
+#include "core_test.h"
 #include "../../host/dm.h"
 #include <stdio.h>
 #include <string.h>
 
-module_t g_mod[MAX_MOD];   // the draw state's links (state.c: programs, deferred binding records), faked as in t_core_state.c
-int g_nmod;
-module_t *module_of(const void *p) { (void)p; return NULL; }
-int nvn_be_pool_span(uint64_t lo, uint64_t len) { (void)lo; (void)len; return 0; }
-void nvn_be_arena(size_t len, uint8_t **cpu, uint64_t *gpu, void **buf) { (void)len; *cpu = NULL; *gpu = 0; *buf = NULL; }
-void nvn_be_parallel(int cnt, void (*fn)(void *ctx, size_t i), void *ctx) { for (int i = 0; i < cnt; i++) fn(ctx, (size_t)i); }
-uint64_t nvn_be_done_fence(void) { return 0; }
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-104s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 static tex_t A, B, D;
 static p_set_rt rt_of(const tex_t *c0, const tex_t *ds) { p_set_rt r = {0}; r.n = c0 ? 1 : 0; r.color[0] = c0; r.depth = ds; return r; }
 

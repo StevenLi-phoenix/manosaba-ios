@@ -10,15 +10,12 @@
 // A full clear of another level counting (-DDM_TEST_XV_ANY_LEVEL, the broken variant): 1 fails.
 #include "../nvn/core/tbdr.h"
 #include "../nvn/core/store_index.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
-int nvn_be_prog_refl(const prog_t *p, const nvn_refl *rf[6], int stage[6]) { (void)p; (void)rf; (void)stage; return 0; }   // not known: every bound texture is read
-void nvn_be_bind_sers(const p_bind_handles *b, int nh, uint64_t *ser) { for (int k = 0; k < nh; k++) ser[k] = b->h[k]; }
 
 static void env(const char *k, const char *v) { if (v) setenv(k, v, 1); else unsetenv(k); }
 static void reread(void) { g_tbdr = g_tbdr_off = -1; g_ruler_truth = -1; }

@@ -9,18 +9,12 @@
 #include "../nvn/core/fuse.h"
 #include "../nvn/core/pass.h"
 #include "../nvn/core/store_index.h"
+#include "core_test.h"
 #include "../../host/dm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-module_t g_mod[MAX_MOD];
-int g_nmod;
-module_t *module_of(const void *p) { (void)p; return NULL; }
-int nvn_be_pool_span(uint64_t lo, uint64_t len) { (void)lo; (void)len; return 0; }
-void nvn_be_arena(size_t len, uint8_t **cpu, uint64_t *gpu, void **buf) { (void)len; *cpu = NULL; *gpu = 0; *buf = NULL; }
-void nvn_be_parallel(int cnt, void (*fn)(void *ctx, size_t i), void *ctx) { for (int i = 0; i < cnt; i++) fn(ctx, (size_t)i); }
-uint64_t nvn_be_done_fence(void) { return 0; }
 static prog_t g_p1, g_p2;                  // P's program (samples nothing); the later pass's (samples texture slot 0 at a vertex attribute's coordinate)
 static nvn_refl g_rf_v, g_rf_f1, g_rf_f2;
 int nvn_be_prog_refl(const prog_t *p, const nvn_refl *rf[6], int stage[6]) {
@@ -28,12 +22,8 @@ int nvn_be_prog_refl(const prog_t *p, const nvn_refl *rf[6], int stage[6]) {
     for (int st = 0; st < 6; st++) { rf[st] = NULL; stage[st] = -1; }
     rf[0] = &g_rf_v; stage[0] = 0; rf[1] = p == &g_p1 ? &g_rf_f1 : &g_rf_f2; stage[1] = 1; return 1;
 }
-void nvn_be_bind_sers(const p_bind_handles *b, int nh, uint64_t *ser) { for (int k = 0; k < nh; k++) ser[k] = b->h[k]; }   // a handle is the texture serial
-uint64_t nvn_be_handle_ser(uint64_t h) { return h; }
 static int g_cover_calls;
 void nvn_be_fuse_cover(const p_set_rt *r2, const uint8_t *first, const int8_t *p2map, const uint8_t *clr, int n1, int n) { (void)r2; (void)first; (void)p2map; (void)clr; (void)n; g_cover_calls++; g_fz.cov2[n1] = 1; }
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-104s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 
 // ---- command streams ----
 static uint8_t g_mem[1 << 14] __attribute__((aligned(8))); static size_t g_len;

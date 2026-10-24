@@ -11,11 +11,10 @@
 // An attachment set before the render pass ended counting as set again after it (-DDM_TEST_SDX_ANY_RTSEQ, the broken variant): 2 fail.
 #include "../nvn/core/store_index.h"
 #include "../nvn/core/prog.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <string.h>
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-104s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 
 // ---- the backend's two lookups, faked ----
 static nvn_refl g_rf[8];                 // shader id (key byte 0) -> reflection

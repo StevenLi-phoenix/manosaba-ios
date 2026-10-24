@@ -5,13 +5,12 @@
 // draws only in that phase; the present intervals are counted by band from frame 45 of a phase. DM_BOOTPROF read; the boot clock runs forward.
 // The plain sum (-DDM_TEST_GIV_SUM, the broken variant): 3 fail.
 #include "../nvn/core/frame.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 int g_dm_present_link;   // the host's switch that DM_NVN_UB's table registers
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 
 int main(void) {
     uint64_t b0 = bp_now(); check("the boot clock: process start before now", 1, g_bp.t0 && g_bp.t0 <= b0);

@@ -5,11 +5,10 @@
 // a released one is freed at its due submission, in due order, and a later copy of the serial is a new one.
 // The texture living there followed whatever its shape (-DDM_TEST_LIVE_ANY_SHAPE, the broken variant): 1 fails.
 #include "../nvn/core/live.h"
+#include "core_test.h"
 #include <stdio.h>
 #include <string.h>
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 static uint8_t store[4][4096];
 static tex_t tex(uint64_t ser, int s, int fmt) { tex_t t = {0}; t.d.target = 1; t.d.width = t.d.height = 32; t.d.levels = 1; t.d.format = fmt; t.size = 4096; t.mem = store[s]; t.serial = ser; return t; }
 

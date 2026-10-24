@@ -6,24 +6,19 @@
 // reads memory; the test hook sees the bytes at a watched address.
 // Only the writes still running at the replay counting (-DDM_TEST_XLAT_CAP_STALE, t_xlat's broken variant): 1 fails.
 #include "../nvn/core/capture.h"
+#include "core_test.h"
 #include "../../host/dm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-module_t g_mod[MAX_MOD];
-int g_nmod;
-module_t *module_of(const void *p) { (void)p; return NULL; }
 void crash_install(void);
 
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-100s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 enum { POOL = 1 << 16 };
 static uint8_t *g_pool;
 int nvn_be_pool_span(uint64_t lo, uint64_t len) { uint64_t a = (uint64_t)(uintptr_t)g_pool; return lo >= a && lo + len <= a + POOL; }
 static uint8_t g_arena[1 << 20]; static size_t g_arena_off;
 void nvn_be_arena(size_t len, uint8_t **cpu, uint64_t *gpu, void **buf) { g_arena_off = (g_arena_off + 255) & ~(size_t)255; if (g_arena_off + len > sizeof g_arena) g_arena_off = 0; *cpu = g_arena + g_arena_off; *gpu = (uint64_t)(uintptr_t)*cpu; *buf = g_arena; g_arena_off += len; }
-void nvn_be_parallel(int cnt, void (*fn)(void *ctx, size_t i), void *ctx) { for (int i = 0; i < cnt; i++) fn(ctx, (size_t)i); }
 static uint64_t g_done;
 uint64_t nvn_be_done_fence(void) { return g_done; }
 

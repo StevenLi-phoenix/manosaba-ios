@@ -21,40 +21,43 @@ t_tex_auto: t_tex_auto.c ../nvn/nvn_tex.c ../nvn/nvn_tex.h ../tex/nvn_deswizzle.
 	clang -O1 -Wall -o $@ t_tex_auto.c ../nvn/nvn_tex.c ../tex/nvn_deswizzle.c
 t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_d16clear.m -framework Metal -framework Foundation
-# gfx/nvn/core: the replay's decisions in plain C (plan item 264), each with a test that needs no GPU
+# gfx/nvn/core: the replay's decisions in plain C (plan item 264), each with a test that needs no GPU. Every test links all the modules, the
+# backend's hooks as weak defaults it overrides where it needs to (core_fakes.c) and the host's crash handler; its checks: core_test.h
 CORE_H=$(wildcard ../nvn/core/*.h)
-t_core_rt: t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_state: t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
-	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
-t_core_tbdr: t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
-	clang $(CFLAGS) -Werror -o $@ t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
-t_core_fuse: t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_live: t_core_live.c ../nvn/core/live.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
-	clang $(CFLAGS) -Werror -o $@ t_core_live.c ../nvn/core/live.c ../nvn/core/core.c
-t_core_pend: t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c $(CORE_H)
-	clang $(CFLAGS) -Werror -o $@ t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c
-t_core_capture: t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_cond: t_core_cond.c ../nvn/core/cond.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h
-	clang $(CFLAGS) -Werror -o $@ t_core_cond.c ../nvn/core/cond.c ../nvn/core/core.c
-t_core_defer: t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_exec: t_core_exec.c ../nvn/core/exec.c ../nvn/core/cond.c ../nvn/core/pass.c ../nvn/core/defer.c ../nvn/core/fuse.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/capture.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_backend.h ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_exec.c ../nvn/core/exec.c ../nvn/core/cond.c ../nvn/core/pass.c ../nvn/core/defer.c ../nvn/core/fuse.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/capture.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_frame: t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c $(CORE_H)
-	clang $(CFLAGS) -Werror -o $@ t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c
-t_core_upd: t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_pass: t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
-t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
-	clang $(CFLAGS) -Werror -o $@ t_core_prog.c ../nvn/core/prog.c
+CORE_C=$(sort $(wildcard ../nvn/core/*.c)) core_fakes.c ../../host/runtime/crash.c
+CORE_DEP=$(CORE_C) $(CORE_H) core_test.h ../nvn/nvn_obj.h ../nvn/nvn_backend.h ../nvn/nvn_refl.h ../../host/dm.h
+t_core_capture: t_core_capture.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_capture.c $(CORE_C)
+t_core_cond: t_core_cond.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_cond.c $(CORE_C)
+t_core_defer: t_core_defer.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_defer.c $(CORE_C)
+t_core_exec: t_core_exec.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_exec.c $(CORE_C)
+t_core_frame: t_core_frame.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_frame.c $(CORE_C)
+t_core_fuse: t_core_fuse.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_fuse.c $(CORE_C)
+t_core_live: t_core_live.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_live.c $(CORE_C)
+t_core_pass: t_core_pass.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_pass.c $(CORE_C)
+t_core_pend: t_core_pend.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_pend.c $(CORE_C)
+t_core_prog: t_core_prog.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_prog.c $(CORE_C)
+t_core_rt: t_core_rt.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_rt.c $(CORE_C)
+t_core_state: t_core_state.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_state.c $(CORE_C)
+t_core_store_index: t_core_store_index.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c $(CORE_C)
+t_core_tbdr: t_core_tbdr.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_tbdr.c $(CORE_C)
+t_core_upd: t_core_upd.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_upd.c $(CORE_C)
+t_core_usnap: t_core_usnap.c $(CORE_DEP)
+	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c $(CORE_C)
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
 	clang -O1 -Wall -o $@ t_hmap.c
 t_cover: t_cover.c ../nvn/nvn_cover.h
@@ -538,5 +541,5 @@ run: \
 .PHONY: run
 # The older-API build (DM_NVN_M3=1, macOS 15.0): the same tests built and run in a sibling tests_m3 directory
 run-m3:
-	mkdir -p ../tests_m3 && rsync -a Makefile *.c *.m *.py t_fpcontract.metal ../tests_m3/   # with their times: make rebuilds only what changed
+	mkdir -p ../tests_m3 && rsync -a Makefile *.c *.h *.m *.py t_fpcontract.metal ../tests_m3/   # with their times: make rebuilds only what changed
 	$(MAKE) -C ../tests_m3 run CFLAGS="$(CFLAGS) -DDM_NVN_M3=1 -mmacosx-version-min=15.0"

@@ -20,23 +20,12 @@
 #include "../nvn/core/pass.h"
 #include "../nvn/core/state.h"
 #include "../nvn/core/store_index.h"
+#include "core_test.h"
 #include "../../host/dm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-module_t g_mod[MAX_MOD];
-int g_nmod;
-module_t *module_of(const void *p) { (void)p; return NULL; }
-int nvn_be_pool_span(uint64_t lo, uint64_t len) { (void)lo; (void)len; return 0; }
-void nvn_be_arena(size_t len, uint8_t **cpu, uint64_t *gpu, void **buf) { (void)len; *cpu = NULL; *gpu = 0; *buf = NULL; }
-void nvn_be_parallel(int cnt, void (*fn)(void *ctx, size_t i), void *ctx) { for (int i = 0; i < cnt; i++) fn(ctx, (size_t)i); }
-uint64_t nvn_be_done_fence(void) { return 0; }
-int nvn_be_prog_refl(const prog_t *p, const nvn_refl *rf[6], int stage[6]) { (void)p; (void)rf; (void)stage; return 0; }
-void nvn_be_bind_sers(const p_bind_handles *b, int nh, uint64_t *ser) { for (int k = 0; k < nh; k++) ser[k] = b->h[k]; }
-uint64_t nvn_be_handle_ser(uint64_t h) { return h; }
-int nvn_be_handle_view(uint64_t h, uint64_t *ser, view_t *v, int *has_v) { (void)h; (void)ser; (void)v; (void)has_v; return 0; }
-void nvn_be_fuse_cover(const p_set_rt *r2, const uint8_t *first, const int8_t *p2map, const uint8_t *clr, int n1, int n) { (void)r2; (void)first; (void)p2map; (void)clr; (void)n1; (void)n; }
 
 // ---- the backend, recording ----
 static char g_log[64][24]; static int g_nlog; static int g_resets, g_last_c;
@@ -66,8 +55,6 @@ void nvn_be_report_counter(const uint8_t *p, const void *a) { (void)p; (void)a; 
 void nvn_be_reset_counter(const uint8_t *p, const void *a) { (void)p; (void)a; lg("reset"); }
 void nvn_be_barrier(const uint8_t *p, const void *a) { (void)p; (void)a; lg("barrier"); }
 void nvn_be_set_pool(const uint8_t *p, const void *a) { (void)p; (void)a; lg("set_pool"); }
-static int n, fail;
-static void check(const char *name, long long want, long long got) { n++; int ok = want == got; fail += !ok; printf("%-104s %lld (want %lld) %s\n", name, got, want, ok ? "✓" : "✗"); }
 static const char *joined(void) { static char s[512]; s[0] = 0; for (int i = 0; i < g_nlog; i++) { if (i) strcat(s, " "); strcat(s, g_log[i]); } return s; }
 static void reset_log(void) { g_nlog = 0; g_ndraw = 0; g_sub_work = 0; }
 

@@ -182,7 +182,9 @@ make -C gfx/tex/tests run
 
 The tests compile the production sources in directly and read no game data. `t_nvn` drives the interface layer the way a game does, from
 `nvnBootstrapLoader` to presentation; the `.m` tests compile the replay layer and check its pass optimizations (`t_reorder_chain`, `t_defer_chain`,
-`t_fuse_check`, `t_zskip`, `t_xv`, `t_view_levels`, …), presentation cropping, mip extents, sRGB views and GPU deswizzling.
+`t_fuse_check`, `t_zskip`, `t_xv`, `t_view_levels`, …), presentation cropping, mip extents, sRGB views and GPU deswizzling. The `t_core_*.c`
+tests check `nvn/core/` without a GPU: each links all its modules, the backend's hooks as weak defaults it overrides where it needs to
+(`tests/core_fakes.c`) and the shared checks (`tests/core_test.h`).
 
 ## Run-time switches
 
