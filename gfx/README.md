@@ -22,7 +22,8 @@ them anyway): they are translated offline, once, into Metal libraries.
 
 ### Record and replay
 
-- **Interface layer `nvn/hle_nvn.c`**: object implementations, and recording of command buffer calls into the command memory the game provides.
+- **Interface layer `nvn/hle_nvn.c`** with its parts in `nvn/hle/`: object implementations, and recording of command buffer calls into the command
+  memory the game provides.
 - **Replay layer `nvn/nvn_mtl.m`** with its parts in `nvn/mtl/`: replays the records as Metal commands at submit time.
   - The decisions that need no Metal are moving to `nvn/core/` (plan item 264): plain C modules, each its own translation unit with a header,
     for a second backend (Vulkan) to share. What a module needs of the backend its header declares ("The backend provides"). The replay
@@ -39,7 +40,7 @@ them anyway): they are translated offline, once, into Metal libraries.
 
 A game's shaders are Maxwell (Tegra X1) machine code. Each one is identified by a **key**: the first 16 hex digits of the sha256 of its 0x880-byte
 control section followed by its code area (the length at control +0x704). At run time the game passes both to `nvnProgramSetShaders`, and the
-replay layer computes the same key (`shader_key` in `nvn/hle_nvn.c`; the same definition as nxnative's). The control section alone is not
+replay layer computes the same key (`shader_key` in `nvn/hle/programs.inc`; the same definition as nxnative's). The control section alone is not
 enough: it holds sizes and resource counts but no hash of the code, and in Tears of the Kingdom 807 of 3667 shaders share their control section
 with another shader (313 sections), so a key without the code ran one shader's code for all of them.
 
@@ -80,7 +81,24 @@ Binding conventions used by the translation:
 
 | Location | Contents |
 |---|---|
-| `nvn/hle_nvn.c` | Interface layer: NVN takeover, objects, command recording, presentation pacing, `DM_SHDUMP` capture |
+| `nvn/hle_nvn.c` | Interface layer: NVN takeover, then the parts below, included in this order (one translation unit) |
+| `nvn/hle/slots.inc` | The slot table, thunks and unimplemented stubs; boolean parameters |
+| `nvn/hle/device.inc` | The device |
+| `nvn/hle/pools.inc` | Memory pools, buffers, descriptor pools |
+| `nvn/hle/textures.inc` | Textures |
+| `nvn/hle/samplers.inc` | Samplers |
+| `nvn/hle/programs.inc` | Programs (`shader_key`, `DM_SHDUMP` capture) |
+| `nvn/hle/sync.inc` | Sync objects and events |
+| `nvn/hle/queue.inc` | The queue |
+| `nvn/hle/cmdbuf.inc` | Command buffers: recording into the game's command memory, CPU-visible side effects at submit |
+| `nvn/hle/render_cmds.inc` | Render commands, recorded in the payload format of `nvn_obj.h` |
+| `nvn/hle/state_objs.inc` | State objects, packed in place |
+| `nvn/hle/lifecycle.inc` | Suspend and resume (`dm_gfx_suspend`) |
+| `nvn/hle/xlat.inc` | The translation thread (plan item 61, `DM_NVN_XLAT=1`) and `nvnQueueSubmitCommands` |
+| `nvn/hle/nops.inc` | Commands with nothing to do here (counted), depth bounds, the no-op list (`g_nops`) |
+| `nvn/hle/window.inc` | Windows: building them, their crop and present interval, acquiring their images |
+| `nvn/hle/timing.inc` | Timing instrumentation: `DM_NVN_TSV`, the fps / GPU line, thermal attribution, the summaries every 300 frames |
+| `nvn/hle/pacing.inc` | Frame pacing and `nvnQueuePresentTexture`: dropped frames, the real-time thread's declaration, the present rate, frame-rate trials |
 | `nvn/nvn_mtl.m`, `nvn/nvn_mtl.h` | Replay layer: the Metal device, queues, residency and deferred releases, then the `.inc` parts below, included in this order (one translation unit, plan item 261) |
 | `nvn/mtl/mtl.h` | The Metal backend's private header: its includes, the Metal 4 / Metal 3 macros, and what its translation units share (plan item 264) |
 | `nvn/mtl/pools.inc` | Memory pools: the pool table, GPU addresses of guest memory and the buffers behind them |
@@ -227,5 +245,5 @@ All are environment variables. The Mac host fills `DM_NVN_SHMAP` and `DM_MSL_DIR
 Paths that are not implemented log a red line once when reached (`RED_ONCE`, `nvn/core/core.h`): clears in the middle of a render pass and color
 clears with a partial mask or scissor; indexed quads and 8-bit indices; some texture-to-texture copies and texture clears.
 
-The functions in `g_nops` (`nvn/hle_nvn.c`), such as `MultiDraw*IndirectCount`, `DispatchComputeIndirect`, `SetDepthBounds` and
+The functions in `g_nops` (`nvn/hle/nops.inc`), such as `MultiDraw*IndirectCount`, `DispatchComputeIndirect`, `SetDepthBounds` and
 `DownsampleTextureView`, do nothing and log nothing.

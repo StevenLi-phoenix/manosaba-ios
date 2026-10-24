@@ -212,7 +212,8 @@ decide):
   hoist's plan and the deferral's decisions (batch 98), the tile merge's plan (batch 99), the execution interface (`nvn_backend.h`) with the
   replay loop in `core/exec.c` (batch 100), SetRenderTargets, the clears and conditional rendering (batch 101), `mtl/draw.inc` split (batch
   102), the backend's private header with the first part a translation unit of its own (batch 103), three more (batch 104); next the other
-  parts outside the draw's path as translation units of their own (the draw's path stays one for inlining); then `hle_nvn.c` by its sections,
+  parts outside the draw's path as translation units of their own (the draw's path stays one for inlining): the rest use the encoder layer,
+  the texture registry or the draw's state, which want headers of their own first. `hle_nvn.c` in parts by its sections (batch 105); next
   `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
@@ -471,3 +472,12 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   iOS build puts them in one directory). The backend's warnings as before, the three new units none; the pass dumps of 15 gfx tests line for
   line as before but `t_rstream`'s `bind_ub` lines, whose count varies from run to run (4719-4753 on the previous commit, 4707-4734 now; its
   other lines the same). Smoke: the same red lines and frames; the submit path's instructions per frame within the spread.
+- [x] batch 105 · the interface layer in parts: `gfx/nvn/hle_nvn.c` (220 KB) keeps its includes and includes, in order, 17 parts in
+  `gfx/nvn/hle/` (one translation unit, as nvn_mtl.m's parts): the slot table, the device, pools, textures, samplers, programs, sync objects,
+  the queue, command buffers, render commands, state objects, suspend and resume, the translation thread with `nvnQueueSubmitCommands`, the
+  commands with nothing to do (`g_nops`), windows, timing instrumentation, and frame pacing with `nvnQueuePresentTexture`. Cut where the
+  content changes, which is not always at the old section titles (the translation thread's section went on into the no-op commands, the
+  timing section into pacing and the present). The preprocessed file is the same but one empty line at its end (`clang -E -P`, Metal 4 and
+  Metal 3); the two quoted includes inside a part look one directory up. Both Makefiles rebuild on `hle/*.inc`; `tools/hle_args.py` reads
+  the parts (477 functions checked, as before); `gfx/README.md` lists the parts and points `shader_key` and `g_nops` to theirs. Smoke: the
+  same red lines and frames.

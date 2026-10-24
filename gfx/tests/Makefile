@@ -3,7 +3,7 @@
 # write-protect tests use the production fault hook
 CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include
 GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../nvn/mtl/*.m ../nvn/core/*.c ../tex/*.c ../tex/*.m)))
-GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/mtl/*.inc ../nvn/mtl/*.h ../nvn/core/*.h ../nvn/include/*.h ../tex/*.h)
+GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/mtl/*.inc ../nvn/mtl/*.h ../nvn/hle/*.inc ../nvn/core/*.h ../nvn/include/*.h ../tex/*.h)
 FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 # HSTACK: the NVN trampolines end in the host stack switch (host/hstack.S)
 HSTACK=../../host/hstack.S ../../host/hstack.c

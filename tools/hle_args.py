@@ -97,6 +97,7 @@ def check_source(path, src):
 def main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     paths = argv[1:] or sorted(set(glob.glob(f'{root}/host/*.[cm]') + glob.glob(f'{root}/gfx/*.[cm]') + glob.glob(f'{root}/gfx/nvn/*.[cm]') +
+                                   glob.glob(f'{root}/gfx/nvn/hle/*.inc') +   # hle_nvn.c's parts
                                    glob.glob(f'{root}/games/*/*.c')))
     total, problems = 0, []
     for p in paths:
