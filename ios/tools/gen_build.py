@@ -28,7 +28,7 @@ for s in srcs:
     if d not in dirs: dirs.append(d)
     b = os.path.basename(s)
     if os.path.splitext(b)[0].endswith('_mac'): continue   # Mac-only sources (front_mac.m, app_mac.m); ios/Sources implements front.h
-    if s == os.path.join(host, 'main.c'): os.symlink(s, f'{gen}/main/main.c'); continue
+    if s == os.path.join(host, 'runtime', 'main.c'): os.symlink(s, f'{gen}/main/main.c'); continue
     flat = os.path.relpath(s, os.path.dirname(host)).replace('/', '__').replace('..', '_')   # same names in different directories do not collide
     os.symlink(s, f'{gen}/src/{flat}')
 print('HEADER_SEARCH_PATHS = $(inherited) ' + ' '.join(f'"{d}"' for d in incs + dirs) + ' $(DM_VPX_INC)')   # DM_VPX_INC: ios/run.sh (the iOS libvpx, plan item 62b)

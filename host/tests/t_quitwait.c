@@ -1,7 +1,7 @@
 // Quit waits for the game (hle_lifecycle.c quit_wait): nothing pending returns at once; inside the exit-request section (hle_oe.c, entered twice,
 // left twice from another thread 200 ms later) it waits until the game leaves it; a section never left is waited for until the limit and reported;
 // a pending save and the section both held are waited for until the later ends. The old wait, the save alone (-DDM_TEST_QUIT_NO_SECTION), fails 3.
-#include "../hle_lifecycle.c"
+#include "../hle/hle_lifecycle.c"
 #include <pthread.h>
 #include <stdio.h>
 module_t g_mod[MAX_MOD]; int g_nmod;

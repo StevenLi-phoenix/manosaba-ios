@@ -1,7 +1,7 @@
 #!/bin/bash
 # Package the Mac host as a double-clickable app: mac_app.sh [output directory] → <output>/<game title>.app (default $DM_ROOT/out/macapp).
 # The game is DM_GAME (games/<id>/game.json, default manosaba); its workspace paths (relative to DM_ROOT) give the product, the shader stage map,
-# the Mac shaders and the shared fonts. The RomFS is not packaged: the player chooses it on first launch (host/app_mac.m).
+# the Mac shaders and the shared fonts. The RomFS is not packaged: the player chooses it on first launch (host/front/app_mac.m).
 # DM_MAC_LINK=1 (default): the package holds only the host and the shader stage map, and Resources/paths.txt points at the product, shaders and fonts
 #   on this machine — everything derived from the game stays out of the package, which then runs only here. DM_MAC_LINK=0 copies them in.
 # DM_MAC_M3=1: older-API build (no Metal 4, minimum macOS = MACOS_MIN_M3 of host/Makefile); its shaders are recompiled for that system.

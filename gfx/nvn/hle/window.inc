@@ -60,7 +60,7 @@ extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the
 static int g_display_mode;   // present_cfg (tentative definition: the variable is defined with the present rate further down)
 static int g_uncapped;       // present_cfg: our own clock paces the game (nvn_uncapped_hz), not the display link
 static int g_hz;             // present_cfg: the present rate (tentative definition, as g_display_mode)
-// The frame-rate hold (plan item 130): host/hle_oe.c holds the game at a rate while it extends the user inactivity time (Tears of the Kingdom's
+// The frame-rate hold (plan item 130): host/hle/hle_oe.c holds the game at a rate while it extends the user inactivity time (Tears of the Kingdom's
 // pre-rendered movies at 30 fps); every pacing interval goes through nvn_hold_interval (gfx/nvn/nvn_pace.h). 0 = no hold
 static _Atomic int g_fps_hold;
 void nvn_fps_hold(int fps) {

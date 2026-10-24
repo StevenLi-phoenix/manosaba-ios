@@ -6,7 +6,7 @@
 # (59 s and 38 s into every cycle), log.txt.
 # Usage: reload_loop.sh [--stay] <run dir> <save dir> <cycles> [host binary] [VAR=value ...]
 #   <save dir>  a save directory of the game (the one that holds Saves_v1); it is copied, never written
-#   <cycles>    at most 18, 48 with --stay: DM_KEYS takes at most 256 items (host/hle_hid.c KMAX)
+#   <cycles>    at most 18, 48 with --stay: DM_KEYS takes at most 256 items (host/hle/hle_hid.c KMAX)
 #   host binary default host/dmhost (host/dmhost_m3 for the older-API build); copy it elsewhere first if you will rebuild the host meanwhile
 #   VAR=value   passed to the host, e.g. DM_HEAP_CENSUS=… or DM_GUEST_ENV="GC_PRINT_STATS=1" DM_DBG=1
 # The taps are normalized screen positions in manosaba 2.0.4b: title Load (0.1, 0.9), Auto tab (0.71, 0.94), slot A1 (0.18, 0.22), confirm

@@ -1,10 +1,10 @@
 // RomFS parts (plan item 62e): a tree packed by tools/romfs_parts.py with 4 KiB parts (a 5,000-byte file a part by itself) and unpacked by
-// host/romfs_parts.c: the same files with the same bytes, the parts, the index and the .partial folder gone; an older tree in the place replaced
+// host/runtime/romfs_parts.c: the same files with the same bytes, the parts, the index and the .partial folder gone; an older tree in the place replaced
 // (its extra file gone); a part with one byte changed refused before anything is written; a part missing refused; carried on after a launch cut
 // short (the first part unpacked and deleted, the folder still .partial); a part whose record path is "../evil" (with a matching index) refused and
 // nothing written outside; no index: -1. The digest not checked (-DDM_TEST_PARTS_NO_SHA): 2 fail; paths taken as they are
 // (-DDM_TEST_PARTS_ANY_PATH): 1 fails.
-#include "../romfs_parts.c"
+#include "../runtime/romfs_parts.c"
 #include <spawn.h>
 #include <sys/wait.h>
 extern char **environ;

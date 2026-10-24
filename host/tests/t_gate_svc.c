@@ -1,7 +1,7 @@
 // The svc gate hands svc_dispatch the svc instruction's address (hle.c gate_dispatch, plan item 125): a gate registered for an svc at offset
 // 0x100 of a module returns there + 4; svc_dispatch must see the module's base + 0x100, so its log lines can name the module (the offset alone,
 // as before, is in no module: every red SVC line and Break said "?"). The offset alone (-DDM_TEST_GATE_ORIG_REL): 2 fail.
-#include "../loader.c"
+#include "../runtime/loader.c"
 struct dm_flags g_flag;
 uint64_t unimpl_stubs[4096];
 void *hlecount_wrap(const char *kind, const char *name, void *function) { (void)kind; (void)name; return function; }

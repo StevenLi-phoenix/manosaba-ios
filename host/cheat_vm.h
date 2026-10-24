@@ -1,4 +1,4 @@
-// Atmosphère's cheat programs and their virtual machine (plan item 150b): host/cheat_vm.c has the format and the encodings.
+// Atmosphère's cheat programs and their virtual machine (plan item 150b): host/game/cheat_vm.c has the format and the encodings.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>

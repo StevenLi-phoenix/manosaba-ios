@@ -1,4 +1,4 @@
-// A Switch Pro Controller's own reports (plan item 67b; host/procon_mac.m reads and writes them over IOHID on the Mac). Pure functions, tested by
+// A Switch Pro Controller's own reports (plan item 67b; host/front/procon_mac.m reads and writes them over IOHID on the Mac). Pure functions, tested by
 // host/tests/t_procon.c.
 //   IMU: the standard input report 0x30 (49 bytes and more) carries three samples at 13, 25 and 37, each acceleration then gyro as three int16;
 //   ±8 G = 4096 LSB per G, ±2000 degrees a second = 16.384 LSB per degree a second. Raw axes x forward (towards the shoulder buttons), y left, z up,

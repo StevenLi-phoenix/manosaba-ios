@@ -4,7 +4,7 @@
 // with room for one only the earlier, with none none; 02:30 on 2026-03-08, skipped, gives none; February 30 gives none with success (the SDK's
 // documented result; acnh-mobile refuses it). Standard time only (-DDM_TEST_TOPOSIX_ONE: an hour repeated gives one, summer instants do not come back): 4 fail. The user clock context
 // (plan item 158): Horizon's layout, kept while both clocks move together, made again on a jump; the old layout (-DDM_TEST_CTX_OLD): 2 fail.
-#include "../hle_time.c"
+#include "../hle/hle_time.c"
 #include <stdio.h>
 struct dm_flags g_flag; uint64_t g_t0_ns;
 module_t g_mod[MAX_MOD]; int g_nmod;

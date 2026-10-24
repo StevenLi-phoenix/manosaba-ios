@@ -3,7 +3,7 @@
 // The notification event set and cleared under the queue lock (plan item 157); cleared after unlocking (-DDM_TEST_OE_EVENT_UNLOCKED): 1 fails.
 // The starting mode (plan item 62d); the profile's iOS mode not read (-DDM_TEST_OPMODE_NO_IOS): 1 fails.
 #ifndef HLE_OE_SOURCE
-#define HLE_OE_SOURCE "../hle_oe.c"
+#define HLE_OE_SOURCE "../hle/hle_oe.c"
 #endif
 #include HLE_OE_SOURCE
 #include <signal.h>
@@ -17,7 +17,7 @@ void *guest_sym(const char *name) { return !strcmp(name, "_ZN2nn2os16ClearSystem
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 void hle_signal_system_event(void *g) { (void)g; atomic_store(&g_ev, 1); }
 module_t *module_of(const void *p) { (void)p; return NULL; }
-char dm_hcall_ret[4];   // host/hstack.S in the host (DM_GUEST_RA compares with it)
+char dm_hcall_ret[4];   // host/runtime/hstack.S in the host (DM_GUEST_RA compares with it)
 static int g_hold = -1, g_hook_rate = 30, g_hook_on = -1; static uint64_t g_hook_ra;
 void nvn_fps_hold(int fps) { g_hold = fps; }   // gfx/nvn/hle_nvn.c in the host
 int dm_game_inactivity_fps(int on, uint64_t ra) { g_hook_on = on; g_hook_ra = ra; return on ? g_hook_rate : 0; }   // the game's (games/totk/movie_fps.c)

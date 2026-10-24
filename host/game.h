@@ -26,7 +26,7 @@ typedef struct {
     int virtual_cores;                        // 1: guest threads hold one of three virtual cores while running guest code (game.json virtual_cores; hle_thread.c): the game
                                               //    keeps per-core data without locks (Tears of the Kingdom)
     int ios_handheld;                         // 1: on iOS the operation mode starts handheld (game.json ios_mode "handheld", hle_oe.c; default "console")
-    int touch_pad;                            // 1: on iOS the touchscreen is on-screen controls (game.json touch "pad", host/touchpad.c) for a game steered with a
+    int touch_pad;                            // 1: on iOS the touchscreen is on-screen controls (game.json touch "pad", host/front/touchpad.c) for a game steered with a
                                               //    controller; default "screen": touches go to the game's touchscreen
     uint32_t npdm_sysres;                     // the NPDM's SystemResourceSize (game.json npdm.system_resource_size; GetInfo 16; 0 = the host's 32 MiB)
     uint8_t npdm_prio_hi, npdm_prio_lo;       // its ThreadInfo capability's highest / lowest thread priority (game.json npdm.thread_priority; GetInfo 1)
@@ -59,10 +59,10 @@ void dm_game_save_precommit(const char *workdir);
 // the host): once per game frame
 void dm_game_present(void);
 int dm_game_realtime_step(void);            // 1: the game's step follows the measured frame time now (uncapped pacing may pace it, gfx/nvn/nvn_pace.h)
-// nn::oe::SetUserInactivityDetectionTimeExtended(on) from the guest return address ra (host/hle_oe.c): the frame rate to hold until the next call,
+// nn::oe::SetUserInactivityDetectionTimeExtended(on) from the guest return address ra (host/hle/hle_oe.c): the frame rate to hold until the next call,
 // 0 = none (weak default: 0). Tears of the Kingdom holds its pre-rendered movies at 30 (games/totk/movie_fps.c, plan item 130)
 int dm_game_inactivity_fps(int on, uint64_t ra);
-// A command channel line the host does not know (host/cmdchan.c): 0 not the game's, 1 the game's (run = 0: only checked when the line is read;
+// A command channel line the host does not know (host/front/cmdchan.c): 0 not the game's, 1 the game's (run = 0: only checked when the line is read;
 // run = 1: run, the game logs the outcome). Tears of the Kingdom's survey (games/totk/survey.c, plan item 167)
 int dm_game_command(const char *line, int run);
 // On the game's thread right after it waited for its window image (nvnSyncWait on the sync of the last nvnWindowAcquireTexture, gfx/nvn/hle_nvn.c,

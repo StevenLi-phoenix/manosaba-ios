@@ -24,7 +24,7 @@ static NSView *g_view;
 static double g_aspect = 16.0 / 9;   // game picture aspect ratio, from the profile's screen size
 
 // Where the game picture sits in the view: fitted by its aspect ratio (the whole view when they match, black bars otherwise); with the wide picture
-// on (host/aspect.c, plan item 154) by the wide ratio, over which the present pass stretches the game's picture
+// on (host/game/aspect.c, plan item 154) by the wide ratio, over which the present pass stretches the game's picture
 static NSRect game_rect(void) {
     NSSize b = g_view.bounds.size; CGFloat w = b.width, h = b.height;
     double wide = dm_aspect_now(), asp = wide > 0 ? wide : g_aspect;

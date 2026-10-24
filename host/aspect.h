@@ -1,5 +1,5 @@
 // The wide picture (plan item 154, after MacNativeGames' aspect_patch.h, MIT, written anew): a game whose rules can widen its cameras' aspect
-// ratio (Tears of the Kingdom's option aspect, games/totk/rules.py) offers it; host/aspect.c keeps the ratio in force, which the game hands its
+// ratio (Tears of the Kingdom's option aspect, games/totk/rules.py) offers it; host/game/aspect.c keeps the ratio in force, which the game hands its
 // code (games/totk/frame_step.c), the Mac front end lays the game picture out at (front_mac.m) and the present pass stretches the picture over
 // (gfx/nvn/nvn_mtl.m mtl_present_stretch). Pure parts here, tested by host/tests/t_aspect.c.
 #pragma once
@@ -21,7 +21,7 @@ static inline int dm_aspect_parse(const char *e, double *out) {
 // The factor on a camera's ratio for the wide ratio `wide` over the game's own `game`: wide / game; 0 (the cave's "off") when wide is 0
 static inline float dm_aspect_factor(double wide, double game) { return wide > 0 && game > 0 ? (float)(wide / game) : 0; }
 
-// host/aspect.c
+// host/game/aspect.c
 void dm_aspect_init(void);                 // a game that can widen, at boot (DM_ASPECT)
 float dm_aspect_now(void);                 // the ratio in force, 0 = the game's own
 int dm_aspect_available(void);

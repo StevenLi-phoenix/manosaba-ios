@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The files of a product the app carries beside its embedded code (ios/run.sh copies them into Gen/dm/): per module the loader's fixups and
-gates (host/loader.c), and the code option list when the product has one (host/options.c dm_options_embedded reads it to know which options the
+gates (host/runtime/loader.c), and the code option list when the product has one (host/runtime/options.c dm_options_embedded reads it to know which options the
 embedded image holds). Without that list a product60 build ran its options' code with the host taking them as off: the scene size at the host
 page +16 was never written and Tears of the Kingdom drew its scene at 8x8, blurred in blocks on the iPhone (plan item 62l).
 Usage: product_files.py <product dir> <module...>: the paths, one a line; exit 1 when a module's fixups or gates are missing."""

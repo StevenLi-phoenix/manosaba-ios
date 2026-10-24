@@ -23,8 +23,8 @@ static uint64_t g_cnt_report[32], g_cnt_reset[32];       // Report / reset count
 static int g_cnt_on = -1;
 static uint64_t g_cnt_self, g_cnt_self_ov, g_cnt_self_dep, g_cnt_ts, g_cnt_ts_multi, g_cnt_cleartex, g_cnt_nodraw, g_cnt_pass_d0, g_cnt_bar_at, g_cnt_first_ts; static int g_cnt_sub_ts;
 static uint64_t g_cnt_rp, g_cnt_rp_sub, g_cnt_rp_px, g_cnt_rp_out, g_cnt_rp_subc, g_cnt_rp_outc; static uint32_t g_cnt_ext_x, g_cnt_ext_y; static int g_cnt_ext_clr;   // item 46: the part of a pass its draws reach
-__attribute__((weak)) void dm_watch_load(uint64_t addr, uint64_t len) { (void)addr; (void)len; }   // host/diag.c (Mac)
-__attribute__((weak)) void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n) {   // host/hle_svc.c
+__attribute__((weak)) void dm_watch_load(uint64_t addr, uint64_t len) { (void)addr; (void)len; }   // host/diag/diag.c (Mac)
+__attribute__((weak)) void svc_guest_layout(uint8_t **alias, size_t *alias_n, uint8_t **stack, size_t *stack_n, uint8_t **heap, size_t *heap_n) {   // host/hle/hle_svc.c
     *alias = *stack = *heap = NULL; *alias_n = *stack_n = *heap_n = 0; }
 static char g_cnt_why[200];   // the first overlap of the draw being counted
 static int counts_on(void) { if (g_cnt_on < 0) g_cnt_on = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0"); return g_cnt_on; }

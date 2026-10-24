@@ -1,4 +1,4 @@
-// Atmosphère's cheat programs (host/cheat_vm.c, plan item 150b), on four regions of a test buffer (main, heap, alias, ASLR, 64 KiB each); every
+// Atmosphère's cheat programs (host/game/cheat_vm.c, plan item 150b), on four regions of a test buffer (main, heap, alias, ASLR, 64 KiB each); every
 // program written here by hand from Atmosphère's documented encodings:
 //   the file format: [name] and {master} sections, words of 8 hex digits; a bad word or words before any section refused
 //   0: a 4-byte and an 8-byte store; 1 / 2: if-else-end on a heap value, both ways, and a nested conditional skipped whole; 3: a loop of 4 adding 3
@@ -7,7 +7,7 @@
 //   register read, the program's written and kept to the next run; C4 r 0: once while held, again after a release
 //   a read outside the regions stops the program (0) before its next store; an unknown opcode stops it
 // The conditional's skip ignoring nesting (-DDM_TEST_CHEAT_FLAT_SKIP): 1 fails.
-#include "../cheat_vm.c"
+#include "../game/cheat_vm.c"
 static int n, fail;
 static void check(const char *what, int ok) { n++; fail += !ok; printf("%-100s %s\n", what, ok ? "✓" : "✗"); }
 static uint8_t mem[4][0x10000];

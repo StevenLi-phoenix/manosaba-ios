@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One trip to the background and back, judged from the host's log (plan item 51; the criteria of upstream d2r-mobile's ios/tools/lifecycle.sh,
-MIT, for this host's log lines). The log is a Mac run with DM_TEST_BG=<s>,<len> (host/front_mac.m) or an iPhone's Documents/boot.txt (scene events
+MIT, for this host's log lines). The log is a Mac run with DM_TEST_BG=<s>,<len> (host/front/front_mac.m) or an iPhone's Documents/boot.txt (scene events
 or DM_TEST_BG, ios/Sources/front_ios.m); both write the same lines.
 
   lifecycle_check.py <log> [--after N]

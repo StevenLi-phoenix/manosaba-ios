@@ -1,20 +1,20 @@
 # Graphics unit tests, seconds: make run (make run-m3 for the older-API build)
 # Sources by wildcard, as GFX in host/Makefile (hle_nvn.c is #included by t_nvn.c, so it is left out); the host's crash.c is linked in so the
 # write-protect tests use the production fault hook
-CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include
+CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include -I../../host   # (the host's headers, for its sources the tests link: runtime/crash.c, runtime/hstack.c)
 GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../nvn/mtl/*.m ../nvn/core/*.c ../tex/*.c ../tex/*.m)))
 GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/mtl/*.inc ../nvn/mtl/*.h ../nvn/hle/*.inc ../nvn/core/*.h ../nvn/include/*.h ../tex/*.h)
 FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
-# HSTACK: the NVN trampolines end in the host stack switch (host/hstack.S)
-HSTACK=../../host/hstack.S ../../host/hstack.c
-t_nvn: t_nvn.c ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(FW)
-t_dirty_slots: t_dirty_slots.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h
-	clang $(CFLAGS) -o $@ t_dirty_slots.c ../../host/crash.c ../nvn/nvn_dirty.c
-t_dirty_shared: t_dirty_shared.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h
-	clang $(CFLAGS) -o $@ t_dirty_shared.c ../../host/crash.c ../nvn/nvn_dirty.c
-t_dirty_race: t_dirty_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h
-	clang $(CFLAGS) -o $@ t_dirty_race.c ../../host/crash.c
+# HSTACK: the NVN trampolines end in the host stack switch (host/runtime/hstack.S)
+HSTACK=../../host/runtime/hstack.S ../../host/runtime/hstack.c
+t_nvn: t_nvn.c ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(FW)
+t_dirty_slots: t_dirty_slots.c ../nvn/nvn_dirty.c ../../host/runtime/crash.c ../nvn/nvn_dirty.h
+	clang $(CFLAGS) -o $@ t_dirty_slots.c ../../host/runtime/crash.c ../nvn/nvn_dirty.c
+t_dirty_shared: t_dirty_shared.c ../nvn/nvn_dirty.c ../../host/runtime/crash.c ../nvn/nvn_dirty.h
+	clang $(CFLAGS) -o $@ t_dirty_shared.c ../../host/runtime/crash.c ../nvn/nvn_dirty.c
+t_dirty_race: t_dirty_race.c ../nvn/nvn_dirty.c ../../host/runtime/crash.c ../nvn/nvn_dirty.h
+	clang $(CFLAGS) -o $@ t_dirty_race.c ../../host/runtime/crash.c
 t_deswz_gpu: t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../tex/nvn_deswizzle.h ../tex/nvn_deswizzle_gpu.h ../nvn/nvn_tex.c ../nvn/nvn_tex.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../nvn/nvn_tex.c -framework Metal -framework Foundation
 t_tex_auto: t_tex_auto.c ../nvn/nvn_tex.c ../nvn/nvn_tex.h ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle.h
@@ -23,36 +23,36 @@ t_d16clear: t_d16clear.m ../nvn/nvn_depth_clear.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_d16clear.m -framework Metal -framework Foundation
 # gfx/nvn/core: the replay's decisions in plain C (plan item 264), each with a test that needs no GPU
 CORE_H=$(wildcard ../nvn/core/*.h)
-t_core_rt: t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
-t_core_state: t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
+t_core_rt: t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_rt.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
+t_core_state: t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_state.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
 t_core_store_index: t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
 	clang $(CFLAGS) -Werror -o $@ t_core_store_index.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
 t_core_tbdr: t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_refl.h
 	clang $(CFLAGS) -Werror -o $@ t_core_tbdr.c ../nvn/core/tbdr.c ../nvn/core/store_index.c ../nvn/core/prog.c ../nvn/core/core.c
-t_core_fuse: t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
+t_core_fuse: t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_fuse.c ../nvn/core/fuse.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
 t_core_live: t_core_live.c ../nvn/core/live.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
 	clang $(CFLAGS) -Werror -o $@ t_core_live.c ../nvn/core/live.c ../nvn/core/core.c
 t_core_pend: t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_pend.c ../nvn/core/pend.c ../nvn/core/core.c
-t_core_capture: t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
+t_core_capture: t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_capture.c ../nvn/core/capture.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
 t_core_cond: t_core_cond.c ../nvn/core/cond.c ../nvn/core/core.c $(CORE_H) ../nvn/nvn_obj.h
 	clang $(CFLAGS) -Werror -o $@ t_core_cond.c ../nvn/core/cond.c ../nvn/core/core.c
-t_core_defer: t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
-t_core_exec: t_core_exec.c ../nvn/core/exec.c ../nvn/core/cond.c ../nvn/core/pass.c ../nvn/core/defer.c ../nvn/core/fuse.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/capture.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_backend.h ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_exec.c ../nvn/core/exec.c ../nvn/core/cond.c ../nvn/core/pass.c ../nvn/core/defer.c ../nvn/core/fuse.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/capture.c ../nvn/core/core.c ../../host/crash.c
+t_core_defer: t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_defer.c ../nvn/core/defer.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
+t_core_exec: t_core_exec.c ../nvn/core/exec.c ../nvn/core/cond.c ../nvn/core/pass.c ../nvn/core/defer.c ../nvn/core/fuse.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/capture.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_backend.h ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_exec.c ../nvn/core/exec.c ../nvn/core/cond.c ../nvn/core/pass.c ../nvn/core/defer.c ../nvn/core/fuse.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/capture.c ../nvn/core/core.c ../../host/runtime/crash.c
 t_core_frame: t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c $(CORE_H)
 	clang $(CFLAGS) -Werror -o $@ t_core_frame.c ../nvn/core/frame.c ../nvn/core/core.c
-t_core_upd: t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
-t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/crash.c
-t_core_pass: t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
-	clang $(CFLAGS) -Werror -o $@ t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/crash.c
+t_core_upd: t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_upd.c ../nvn/core/upd.c ../nvn/core/usnap.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
+t_core_usnap: t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_usnap.c ../nvn/core/usnap.c ../nvn/core/core.c ../../host/runtime/crash.c
+t_core_pass: t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c $(CORE_H) ../nvn/nvn_obj.h ../../host/dm.h
+	clang $(CFLAGS) -Werror -o $@ t_core_pass.c ../nvn/core/pass.c ../nvn/core/rt.c ../nvn/core/state.c ../nvn/core/prog.c ../nvn/core/usnap.c ../nvn/core/store_index.c ../nvn/core/tbdr.c ../nvn/core/upd.c ../nvn/core/pend.c ../nvn/core/core.c ../../host/runtime/crash.c
 t_core_prog: t_core_prog.c ../nvn/core/prog.c $(CORE_H) ../nvn/nvn_obj.h ../nvn/nvn_hmap.h
 	clang $(CFLAGS) -Werror -o $@ t_core_prog.c ../nvn/core/prog.c
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
@@ -91,172 +91,172 @@ t_sync_order: t_sync_order.c ../nvn/nvn_obj.h
 	clang -O1 -Wall -Werror -I../nvn/include -o $@ t_sync_order.c
 t_tex_fit: t_tex_fit.m ../nvn/nvn_tex_fit.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_tex_fit.m -framework Metal -framework Foundation
-t_fuse_check: t_fuse_check.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_rt_srgb_view: t_rt_srgb_view.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_srgb_view.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_present_fx: t_present_fx.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_present_fx.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_present_crop.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_reorder_chain: t_reorder_chain.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_reorder_chain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_defer_chain: t_defer_chain.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_defer_chain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_zskip: t_zskip.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_zskip.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_xv: t_xv.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_ub: t_ub.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_drvseg: t_drvseg.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_drvseg.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_restart: t_restart.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_restart.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_live: t_live.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_live.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_wb: t_wb.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_wb.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_pend: t_pend.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_pend.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_keepalive: t_keepalive.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_keepalive.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_chunk: t_chunk.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_chunk.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_esfilter: t_esfilter.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_esfilter.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_vbelide: t_vbelide.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_vbelide.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_sbufpast: t_sbufpast.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_sbufpast.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_psouser: t_psouser.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_psouser.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_uppool: t_uppool.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_retire: t_retire.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_retire.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_ppred: t_ppred.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_ppred.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_present_res: t_present_res.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_bc1astc: t_bc1astc.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_bc1astc.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_clearquad: t_clearquad.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_clearquad.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_bcd: t_bcd.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_bcd.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_fmt_swz: t_fmt_swz.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_writetexels: t_writetexels.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_writetexels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_flushtexels: t_flushtexels.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_flushtexels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_vfetch: t_vfetch.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_vfetch.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_cubearr: t_cubearr.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_cubearr.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_libcopy: t_libcopy.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_libcopy.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_findrain: t_findrain.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_texcheck: t_texcheck.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_fuse_check: t_fuse_check.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_rt_srgb_view: t_rt_srgb_view.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_srgb_view.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_present_fx: t_present_fx.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_fx.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_crop.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_reorder_chain: t_reorder_chain.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_reorder_chain.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_defer_chain: t_defer_chain.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_defer_chain.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_zskip: t_zskip.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_zskip.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_xv: t_xv.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ub: t_ub.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_drvseg: t_drvseg.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_drvseg.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_restart: t_restart.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_restart.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_live: t_live.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_live.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_wb: t_wb.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_wb.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_pend: t_pend.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pend.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_keepalive: t_keepalive.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_keepalive.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_chunk: t_chunk.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_chunk.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_esfilter: t_esfilter.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_esfilter.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_vbelide: t_vbelide.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vbelide.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_sbufpast: t_sbufpast.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sbufpast.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_psouser: t_psouser.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_psouser.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_uppool: t_uppool.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_uppool.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_retire: t_retire.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_retire.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ppred: t_ppred.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ppred.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_present_res: t_present_res.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_res.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_bc1astc: t_bc1astc.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bc1astc.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_clearquad: t_clearquad.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_clearquad.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_bcd: t_bcd.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bcd.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_fmt_swz: t_fmt_swz.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_fmt_swz.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_writetexels: t_writetexels.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_writetexels.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_flushtexels: t_flushtexels.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_flushtexels.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_vfetch: t_vfetch.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vfetch.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_cubearr: t_cubearr.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_cubearr.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_libcopy: t_libcopy.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_libcopy.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_findrain: t_findrain.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_findrain.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_texcheck: t_texcheck.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_texcheck.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_trace: t_trace.c ../nvn/nvn_trace.c ../nvn/nvn_trace.h
 	clang $(CFLAGS) -o $@ t_trace.c ../nvn/nvn_trace.c
-t_nvn64a: t_nvn64a.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64a.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_copycmd: t_copycmd.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_copycmd.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_dbounds: t_dbounds.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_dbounds.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_nvn64d: t_nvn64d.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64d.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_pools: t_pools.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_pools.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_blkunp: t_blkunp.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_blkunp.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_fxp: t_fxp.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_fxp.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_xlat: t_xlat.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_xlat.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_mtlguard: t_mtlguard.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_mtlguard.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_bindfreeze: t_bindfreeze.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_bindfreeze.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_rqueue: t_rqueue.c ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rqueue.c ../../host/crash.c $(HSTACK) $(GFX) $(FW)
-t_rt_continue: t_rt_continue.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_continue.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_upsoak: t_upsoak.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_upsoak.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_ubren: t_ubren.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_ubren.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_linkfifo: t_linkfifo.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_linkfifo.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_rtheap: t_rtheap.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rtheap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_present_vp: t_present_vp.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_present_vp.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_feedback_pool: t_feedback_pool.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback_pool.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_border: t_border.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_border.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_fout: t_fout.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_fout.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_pluma: t_pluma.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_pluma.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_pairs: t_pairs.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_pairs.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_alpha: t_alpha.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_alpha.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_ussort: t_ussort.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_ussort.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_rstream: t_rstream.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_rstream.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_layer: t_layer.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_layer.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_stor: t_stor.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_stor.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_poolcheck: t_poolcheck.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_poolcheck.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_snapreap: t_snapreap.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_snapreap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_usnap: t_usnap.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_usnap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_fbx: t_fbx.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_fbx.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_shmap: t_shmap.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_shmap.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_cmdalloc: t_cmdalloc.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_cmdalloc.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_extent: t_extent.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_extent.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_passgpu: t_passgpu.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_passgpu.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_visibility: t_visibility.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_visibility.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c $(HSTACK) $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
-t_view_levels: t_view_levels.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_view_levels.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_nvn64a: t_nvn64a.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64a.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_copycmd: t_copycmd.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_copycmd.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_dbounds: t_dbounds.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_dbounds.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_nvn64d: t_nvn64d.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn64d.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_pools: t_pools.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pools.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_blkunp: t_blkunp.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_blkunp.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_fxp: t_fxp.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_fxp.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_xlat: t_xlat.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_xlat.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_mtlguard: t_mtlguard.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_mtlguard.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_bindfreeze: t_bindfreeze.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bindfreeze.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_rqueue: t_rqueue.c ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rqueue.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(FW)
+t_rt_continue: t_rt_continue.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_continue.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_upsoak: t_upsoak.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upsoak.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ubren: t_ubren.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ubren.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_linkfifo: t_linkfifo.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_linkfifo.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_rtheap: t_rtheap.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rtheap.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_present_vp: t_present_vp.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_vp.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_feedback_pool: t_feedback_pool.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback_pool.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_border: t_border.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_border.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_fout: t_fout.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_fout.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_pluma: t_pluma.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pluma.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_pairs: t_pairs.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pairs.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_alpha: t_alpha.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_alpha.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_ussort: t_ussort.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_ussort.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_rstream: t_rstream.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_rstream.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_layer: t_layer.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_layer.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_stor: t_stor.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_stor.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_poolcheck: t_poolcheck.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_poolcheck.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_snapreap: t_snapreap.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_snapreap.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_usnap: t_usnap.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_usnap.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_fbx: t_fbx.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_fbx.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_shmap: t_shmap.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_shmap.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_cmdalloc: t_cmdalloc.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_cmdalloc.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_extent: t_extent.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_extent.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_passgpu: t_passgpu.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_passgpu.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_visibility: t_visibility.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_visibility.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/runtime/crash.c $(HSTACK) $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/runtime/crash.c $(HSTACK) $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_view_levels: t_view_levels.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_view_levels.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_skey.m -framework Foundation
 t_pso_canon: t_pso_canon.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_canon.m -framework Foundation
 t_refl: t_refl.m ../nvn/nvn_refl.m ../nvn/nvn_refl.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_refl.m ../nvn/nvn_refl.m -framework Metal -framework Foundation
-t_gputime: t_gputime.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_gputime.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_vfmt: t_vfmt.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_vfmt.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_upwait: t_upwait.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_upwait.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_poolcache: t_poolcache.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_poolcache.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_samp: t_samp.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_samp.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
-t_pfv: t_pfv.m ../../host/crash.c $(GFX) $(GFX_H)
-	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_gputime: t_gputime.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_gputime.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_vfmt: t_vfmt.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vfmt.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_upwait: t_upwait.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upwait.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_poolcache: t_poolcache.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_poolcache.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_samp: t_samp.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_samp.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
+t_pfv: t_pfv.m ../../host/runtime/crash.c $(GFX) $(GFX_H)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pfv.m ../../host/runtime/crash.c $(filter-out ../nvn/nvn_mtl.m ../nvn/nvn_entry.S ../nvn/nvn_thunks.S,$(GFX)) $(FW)
 run: \
 	t_alpha \
 	t_aniso \

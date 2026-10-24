@@ -7,7 +7,7 @@
 # Code options (plan item 136): iOS maps the signed executable's code, which the loader cannot change, so the options the app is built with
 # (DM_OPTIONS at build time, else the product's options.default; "none" for none) are written here into a copy of the image (<output dir>/<module>
 # .embedded.bin), each option's original bytes checked first and all of its rows written or the build stops; the loader reads them back from the
-# image (host/options.c dm_options_embedded). A module without one of them is included as the product has it. Checked by tools/tests/t_gen_embed.py.
+# image (host/runtime/options.c dm_options_embedded). A module without one of them is included as the product has it. Checked by tools/tests/t_gen_embed.py.
 # Usage: gen_embed.py <build output dir> <output .S> <module name...>; link flags are printed to stdout (-segprot for the W segment)
 import os, re, sys
 out, dst, names = sys.argv[1], sys.argv[2], sys.argv[3:]

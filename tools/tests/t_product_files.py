@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ios/tools/product_files.py (plan item 62l): the app carries each module's fixups and gates, and its code option list when the product has
-one (product60), so host/options.c knows the options built into the image; a module's missing fixups or gates are reported. The option lists
+one (product60), so host/runtime/options.c knows the options built into the image; a module's missing fixups or gates are reported. The option lists
 left out (T_PRODUCT_FILES_NO_OPTIONS=1, the broken variant: as ios/run.sh copied before): 2 fail, 3 with the workspace's product60."""
 import os, sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')

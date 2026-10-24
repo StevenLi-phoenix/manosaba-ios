@@ -64,11 +64,11 @@ targets:
         com.apple.developer.kernel.increased-memory-limit: true
         com.apple.developer.kernel.extended-virtual-addressing: true
         com.apple.developer.sustained-execution: true
-        com.apple.developer.icloud-container-identifiers: ["iCloud.${DM_BUNDLE_ID}"]   # iCloud save sync (host/cloud.m)
+        com.apple.developer.icloud-container-identifiers: ["iCloud.${DM_BUNDLE_ID}"]   # iCloud save sync (host/cloud/cloud.m)
         com.apple.developer.icloud-services: [CloudDocuments]
         com.apple.developer.ubiquity-container-identifiers: ["iCloud.${DM_BUNDLE_ID}"]
     dependencies:
-      - sdk: Network.framework   # iCloud first sync checks the network (host/cloud.m first_listing_ok)
+      - sdk: Network.framework   # iCloud first sync checks the network (host/cloud/cloud.m first_listing_ok)
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

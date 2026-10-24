@@ -4,7 +4,7 @@
 // 2026-11-01 twice gives both instants in order, with room for one the earlier; 02:30 on 2026-03-08, skipped, none; February 30 none with success;
 // an unknown name converts as UTC; GetDeviceLocationName "UTC" under DM_FIXED_TIME. The rule ignored for the device zone (-DDM_TEST_TZRULE_DEVICE):
 // 7 fail (every zone but UTC).
-#include "../hle_time.c"
+#include "../hle/hle_time.c"
 #include <stdio.h>
 struct dm_flags g_flag; uint64_t g_t0_ns;
 module_t g_mod[MAX_MOD]; int g_nmod;

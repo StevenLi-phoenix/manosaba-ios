@@ -17,7 +17,7 @@ static int64_t fixed_time(void) {
 }
 HLE_FORCE("_ZN2nn4time10InitializeEv", "connects to the time service; clocks come from the host system time", Result, h_time_Initialize, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn4time13IsInitializedEv", "the time service is taken over: always initialized", int, h_time_IsInitialized, void) { return 1; }
-// DM_TEST_SDK_TIME_SKEW=1: the negative control of host/sdktest.c's time checks only: the user clock an hour ahead
+// DM_TEST_SDK_TIME_SKEW=1: the negative control of host/diag/sdktest.c's time checks only: the user clock an hour ahead
 static int64_t skew(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_TEST_SDK_TIME_SKEW"); v = e && !strcmp(e, "1"); if (v) LOG("DM_TEST_SDK_TIME_SKEW=1: the user clock an hour ahead (a test)"); } return v ? 3600 : 0; }
 HLE_FORCE("_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", "user clock → host time()", Result, h_time_GetCurrentTime, int64_t *out) {
     int64_t ft = fixed_time(); *out = (ft >= 0 ? ft : time(NULL)) + skew(); return RES_OK;

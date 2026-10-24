@@ -3,7 +3,7 @@
 // that must be refused whole, each in a child (a refused table leaves word 2 as it was; "touches nothing"): a bitmap first, an address past the
 // module, one at UINT64_MAX - 1, an unaligned one (12), a valid address followed by a bitmap reaching past the end, and a table outside the module.
 // Without the checks (-DDM_TEST_RELR_UNCHECKED, as before) 5 fail, one of them a child that dies writing far away.
-#include "../loader.c"
+#include "../runtime/loader.c"
 #include <sys/wait.h>
 struct dm_flags g_flag;
 uint64_t unimpl_stubs[4096];

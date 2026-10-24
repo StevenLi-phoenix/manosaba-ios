@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Screens judged by TypeSafe's Jev model drive a running host to a goal (plan item 180; the d2r-mobile author's method: which key to press on each
-screen). The host runs with DM_CMD=<file> (host/cmdchan.c) and DM_NVN_SHOT_OUT=960x540 (Jev takes 280..1568 px a side); this tool appends
+screen). The host runs with DM_CMD=<file> (host/front/cmdchan.c) and DM_NVN_SHOT_OUT=960x540 (Jev takes 280..1568 px a side); this tool appends
 `shot <png>`, asks the goal's questions about the frame, and appends the key its rules choose, until the goal's done condition holds on
 done_streak frames in a row (exit 0) or the time runs out (exit 1). Fixed key scripts (DM_KEYS) stay the fallback: without a key the tool says so
 and exits 2.

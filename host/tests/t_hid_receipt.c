@@ -1,6 +1,6 @@
 // The actual dm_input_set -> GetNpadState return takes the sample; the fake clock only fixes the timestamp and does not replace the input/return layout.
 #ifndef HLE_HID_SOURCE
-#define HLE_HID_SOURCE "../hle_hid.c"
+#define HLE_HID_SOURCE "../hle/hle_hid.c"
 #endif
 #include HLE_HID_SOURCE
 module_t g_mod[MAX_MOD]; int g_nmod;

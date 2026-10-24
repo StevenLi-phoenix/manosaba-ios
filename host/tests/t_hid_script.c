@@ -2,7 +2,7 @@
 // and the real GetNpadState path. Expectations are written by hand from the rules in hle_hid.c. Sticks per axis, not onto the circle
 // (-DDM_TEST_HID_NO_CIRCLE), fail 4. The right stick pseudo-keys (RSL / RSR / RSU / RSD) parsed but not applied (-DDM_TEST_HID_NO_RSTICK): 2 fail.
 #ifndef HLE_HID_SOURCE
-#define HLE_HID_SOURCE "../hle_hid.c"
+#define HLE_HID_SOURCE "../hle/hle_hid.c"
 #endif
 #include <signal.h>
 #include <sys/wait.h>

@@ -2,8 +2,8 @@
 // (TrueType version 0x00010000 first) encoded the way of the files we had (words XORed with 0x06186249, magic 0x18029a7f) and the way of the
 // console files of LASRecomp issue #48 (words byte-swapped, XORed with 0x49621806, magic 0x7f9a0218) decodes to the same bytes; a wrong magic is
 // refused. The first order alone (-DDM_TEST_BFTTF_ONE_ORDER): 1 fails.
-#include "../hle_os.c"
-#include "../hle_pl.c"
+#include "../hle/hle_os.c"
+#include "../hle/hle_pl.c"
 void crash_watch_frame(void) {}
 void dm_guest_clock_advanced(void) {}
 static int n, fail;

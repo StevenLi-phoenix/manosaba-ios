@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host functions the guest calls must take every argument in a register: they run on the thread's host stack (host/hstack.S), so an
+"""Host functions the guest calls must take every argument in a register: they run on the thread's host stack (host/runtime/hstack.S), so an
 argument the guest put on its stack would be read from the wrong place, and Apple's arm64 passes variadic arguments on the stack where
 Switch code passes them in registers. Checks the HLE / HLE_FORCE / HLE_FORCE_OPT / NVN_NOPROTO definitions and the host vtables handed to
 the guest (static void *const g_*_vt[] = {...}, their functions' definitions): at most 8 integer and 8 floating-point parameters, no
@@ -96,7 +96,8 @@ def check_source(path, src):
 
 def main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    paths = argv[1:] or sorted(set(glob.glob(f'{root}/host/*.[cm]') + glob.glob(f'{root}/gfx/*.[cm]') + glob.glob(f'{root}/gfx/nvn/*.[cm]') +
+    paths = argv[1:] or sorted(set([p for p in glob.glob(f'{root}/host/*/*.[cm]') if '/host/tests/' not in p] +   # host/*/: by role
+                                   glob.glob(f'{root}/gfx/*.[cm]') + glob.glob(f'{root}/gfx/nvn/*.[cm]') +
                                    glob.glob(f'{root}/gfx/nvn/hle/*.inc') +   # hle_nvn.c's parts
                                    glob.glob(f'{root}/games/*/*.c')))
     total, problems = 0, []

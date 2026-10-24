@@ -38,7 +38,7 @@ asset (a JSON string in `global-metadata.dat`, from the generated `*Actions` cla
 
 - **Graphics**: Unity binds vertex and fragment shaders as separate single-stage programs and copies NVN objects by value; the graphics layer
   handles both (see `gfx/nvn/nvn_obj.h` for the object sizes checked against Unity).
-- **Video**: `VideoPlayer` uses the Nintendo movie library in `subsdk0`; the host implements it on AVFoundation (`host/hle_movie.c`).
+- **Video**: `VideoPlayer` uses the Nintendo movie library in `subsdk0`; the host implements it on AVFoundation (`host/hle/hle_movie.c`).
 - **IL2CPP**: code is in `main`, metadata in `Data/Managed/Metadata/global-metadata.dat`. For manosaba (metadata v31) Il2CppInspectorRedux
   produced a usable C# dump with method addresses (`main` offsets); Cpp2IL did not load this NSO.
 - **RomFS check**: `tools/new_game.py` picks the standard Unity files (`globalgamemanagers`, `level0`, `resources.assets`,

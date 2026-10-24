@@ -1,5 +1,5 @@
 // The game's vibration values (hle_motion.c, nn::hid::VibrationValue: {amplitude low, frequency low, amplitude high, frequency high}) as the
-// host's haptics play them (plan item 67c; host/gamepad.m). Pure functions, tested by host/tests/t_haptics.c.
+// host's haptics play them (plan item 67c; host/front/gamepad.m). Pure functions, tested by host/tests/t_haptics.c.
 //   A controller's CoreHaptics continuous event: CoreHaptics has no two-band control (dr3-mobile's notes, MIT): intensity from the larger band's
 //   amplitude through (a + sqrt(a)) / 2, atone/nxnative's lift for weak values (MIT; the Switch's actuators make 0.1 a firm landing, plain
 //   CoreHaptics players hardly at all), sharpness from the amplitude-weighted frequencies' place between the HD rumble bands' ends (40.875 and

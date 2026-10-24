@@ -2,7 +2,7 @@
 // GLOB_DAT relocations and an exporter that defines one of the names. An absent weak import stays 0 (the guest checks it and skips the call), a weak
 // import the exporter defines resolves to it, one the host defines (HLE) resolves to the host function, an unresolved strong import gets a stub,
 // and a later weak lookup of that strong name does not pick up its stub. From upstream's test of b84657b (d2r-mobile #66).
-#include "../loader.c"
+#include "../runtime/loader.c"
 
 struct dm_flags g_flag;
 uint64_t unimpl_stubs[4096];

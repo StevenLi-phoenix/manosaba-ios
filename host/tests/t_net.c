@@ -1,7 +1,7 @@
 // Offline socket errno (hle_net.c): a failed socket call, a failed name lookup and an unsupported address family report nn::socket's own values
 // (the SDK's nn::socket::Errno: ENetDown 100, EAfNoSupport 97), through both the C++ and the C API. The FreeBSD numbers used before (50 = the
 // SDK's ENoCsi, 47) fail it (-DDM_TEST_NET_BSD_ERRNO).
-#include "../hle_net.c"
+#include "../hle/hle_net.c"
 #include <stdio.h>
 module_t g_mod[MAX_MOD]; int g_nmod;
 static int checks, fails;

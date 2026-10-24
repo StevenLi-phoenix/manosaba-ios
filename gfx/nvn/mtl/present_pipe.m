@@ -82,7 +82,7 @@ int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src0, id<MTLTexture> 
     [en endEncoding];
     return 1;
 }
-// The wide picture (plan item 154, host/aspect.c): the game widened its cameras and the front end shaped the target to the wide ratio, so the
+// The wide picture (plan item 154, host/game/aspect.c): the game widened its cameras and the front end shaped the target to the wide ratio, so the
 // picture, which holds the wider view squeezed into the game's canvas, is stretched over the whole target. Any thread (the front end's)
 static _Atomic int g_present_stretch;
 void mtl_present_stretch(int on) {

@@ -45,7 +45,7 @@ void mtl_counts(uint64_t out[13]);
 void mtl_pkg_age(uint64_t out[5]);
 void mtl_fbx_stats(uint64_t out[3]); void mtl_fbx_split_stats(uint64_t out[2]); void mtl_fbx_fetch_stats(uint64_t out[1]);
 void mtl_pp_stats(uint64_t out[9]);
-__attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle.c; the graphics unit tests link without it
+__attribute__((weak)) void dm_gate_counts(uint64_t out[4]) { memset(out, 0, 4 * sizeof *out); }   // host/hle/hle.c; the graphics unit tests link without it
 static void power_line(uint64_t frame) {
     static uint64_t pt, pe, pcpu, pp, piw, pf, pld, pst, pfu, pudc, prep, prst, pfold, pc[13], pg[4], pfx[3], pff[1], psp[2], psw[3], ppr[9]; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     static int counts = -1; if (counts < 0) counts = getenv("DM_NVN_COUNTS") && strcmp(getenv("DM_NVN_COUNTS"), "0");

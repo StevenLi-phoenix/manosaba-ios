@@ -15,44 +15,45 @@ CFLAGS = -O1 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
 # The rewriter stamp this host expects of a product (tools/rewriter_stamp.py: patch_nso.py + the game's rules.py; loader.c compares)
 REWRITER_STAMP := $(shell python3 ../tools/rewriter_stamp.py $(wildcard $(GAMEDIR)/rules.py))
 CFLAGS += -DDM_REWRITER_STAMP=0x$(REWRITER_STAMP)ull
-# Host sources, one per line in alphabetical order; the hle_*.c service files are taken by wildcard
+# Host sources, one per line in alphabetical order of file name, in directories by role (hle/ the services, runtime/ loading and threads, front/ the Mac
+# front end and input, media/, diag/, game/ what changes the game, cloud/); the hle/hle_*.c service files are taken by wildcard; the headers stay here
 SRC = \
-	app_mac.m \
-	aspect.c \
-	cloud.m \
-	cloudsync.c \
-	cheat_vm.c \
-	cheats.c \
-	cmdchan.c \
-	crash.c \
-	diag.c \
-	entry.S \
-	front_mac.m \
-	game.c \
-	game_slot.c \
-	gamepad.m \
+	front/app_mac.m \
+	game/aspect.c \
+	cloud/cloud.m \
+	cloud/cloudsync.c \
+	game/cheat_vm.c \
+	game/cheats.c \
+	front/cmdchan.c \
+	runtime/crash.c \
+	diag/diag.c \
+	runtime/entry.S \
+	front/front_mac.m \
+	game/game.c \
+	game/game_slot.c \
+	front/gamepad.m \
 	$(PROFILE) \
-	hle.c \
-	hstack.S \
-	hstack.c \
-	loader.c \
-	main.c \
-	memsnap.c \
-	memstat.m \
-	mods.c \
-	movie_av.m \
-	movie_webm.c \
-	options.c \
-	pchtxt.c \
-	procon_mac.m \
-	romfs_parts.c \
-	romfs_validate.c \
-	sdktest.c \
-	sead.c \
-	thermal.m \
-	thread.c \
-	touchpad.c \
-	$(sort $(wildcard hle_*.c)) \
+	hle/hle.c \
+	runtime/hstack.S \
+	runtime/hstack.c \
+	runtime/loader.c \
+	runtime/main.c \
+	diag/memsnap.c \
+	diag/memstat.m \
+	game/mods.c \
+	media/movie_av.m \
+	media/movie_webm.c \
+	runtime/options.c \
+	game/pchtxt.c \
+	front/procon_mac.m \
+	runtime/romfs_parts.c \
+	runtime/romfs_validate.c \
+	diag/sdktest.c \
+	diag/sead.c \
+	diag/thermal.m \
+	runtime/thread.c \
+	front/touchpad.c \
+	$(sort $(wildcard hle/hle_*.c)) \
 	$(sort $(wildcard $(GAMEDIR)/*.c $(GAMEDIR)/*.m))
 # NVN → Metal and nn::vi (gfx/): sources under gfx, gfx/nvn and gfx/tex by wildcard (tests/ and metal/ are not part of the host)
 GFX = $(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/nvn/mtl/*.m ../gfx/nvn/core/*.c ../gfx/tex/*.c ../gfx/tex/*.m))   # nvn/core: the replay's decisions in plain C; nvn/mtl/*.m: Metal backend translation units of their own (plan item 264)

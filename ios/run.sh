@@ -49,7 +49,7 @@ if [ "$CMD" = build ] || [ "$CMD" = ipa ] || [ "$CMD" = sim-build ]; then
   # Host sources, header paths and frameworks from host/Makefile; the game's modules as embedded code
   python3 tools/gen_build.py ../host Gen "$GAME" > Gen/dm.xcconfig || { t "[red] gen_build failed"; exit 1; }
   F=$(python3 tools/gen_embed.py "$OUT" Gen/embed.S $MODS) || { t "[red] gen_embed failed ($OUT)"; exit 1; }
-  # VP8 / VP9 movies (plan item 62b): the iOS libvpx when it has been built (tools/build_libvpx.sh), checked first; host/hle_movie.c finds its headers
+  # VP8 / VP9 movies (plan item 62b): the iOS libvpx when it has been built (tools/build_libvpx.sh), checked first; host/hle/hle_movie.c finds its headers
   VPX=$ROOT/build/ios/libvpx; VPXL=; VPXI=
   if [ "$CMD" = sim-build ]; then t "Simulator: no libvpx (the iOS one is built for the device): VP8 / VP9 movies will not play"
   elif [ -f "$VPX/lib/libvpx.a" ]; then python3 tools/vpx_check.py "$VPX/lib/libvpx.a" 18.0 || exit 1; VPXL="\"$VPX/lib/libvpx.a\""; VPXI="\"$VPX/include\""

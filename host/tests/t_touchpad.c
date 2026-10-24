@@ -13,7 +13,7 @@
 // control inside its safe area, none overlapping, the left column below the iPadOS window controls; a controller connected leaves the controls, a key
 // hides them, a touch or the last controller gone shows them. The window controls ignored (-DDM_TEST_TP_NO_WINDOW): 3 fail (the iPads that have
 // them); hidden on connect, as before (-DDM_TEST_TP_CTL_ON_CONNECT): 1 fails.
-#include "../touchpad.c"
+#include "../front/touchpad.c"
 #include <stdio.h>
 uint64_t g_t0_ns;
 static uint64_t clock_ns = 1000000000ull;

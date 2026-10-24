@@ -17,7 +17,7 @@ static DIR *count_opendir(const char *p) { g_opendir_n++; return opendir(p); }
 static ssize_t count_getxattr(const char *p, const char *n, void *v, size_t s, u_int32_t pos, int o) { g_getxattr_n++; return getxattr(p, n, v, s, pos, o); }
 #define opendir count_opendir
 #define getxattr count_getxattr
-#include "../hle_fs.c"
+#include "../hle/hle_fs.c"
 #undef opendir
 #undef getxattr
 

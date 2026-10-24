@@ -106,7 +106,7 @@ static uint64_t rt_cap_period(const win_t *o) {   // the period the time-constra
 int (*g_nvn_loadscreen_up)(void);   // optional game hook: is a loading screen up right now (waits for the pipeline warm-up there; marks long frames hidden behind it)
 __attribute__((weak)) void dm_movie_tick(void) {}   // host hle_movie.c: hands paced movie frames over, one per game frame; none in the graphics unit tests
 __attribute__((weak)) void dm_game_present(void) {}   // game hook (host/game.h): every present, on the game's thread; none in the graphics unit tests
-__attribute__((weak)) void dm_sdk_test_present(uint64_t frame) { (void)frame; }   // host/sdktest.c (DM_SDK_TEST); none in the graphics unit tests
+__attribute__((weak)) void dm_sdk_test_present(uint64_t frame) { (void)frame; }   // host/diag/sdktest.c (DM_SDK_TEST); none in the graphics unit tests
 __attribute__((weak)) int dm_game_realtime_step(void) { return 0; }   // game hook (host/game.h): the game's step follows the measured frame time
 // Frame-rate trials (plan item 216, nvn_fptrial.h): with the player's target at 60 and nothing holding the rate, a game that picks its own interval
 // from the GPU time it reads (Tears of the Kingdom's controller, rules.py fps60) and sits at interval 2 or 3 reads shorter GPU times for a while,
@@ -177,7 +177,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     { static long ha = -1, hb; static int hf;   // DM_TEST_FPS_HOLD=<from>:<to>:<fps>: the frame-rate hold of plan item 130 between two frames, without a movie
       if (ha < 0) { const char *e = getenv("DM_TEST_FPS_HOLD"); ha = 0; if (e && sscanf(e, "%ld:%ld:%d", &ha, &hb, &hf) != 3) ha = 0; }
       if (ha > 0 && g_frame == (uint64_t)ha) nvn_fps_hold(hf);
-      if (ha > 0 && g_frame == (uint64_t)hb) nvn_fps_hold(0); }   // a freeze on purpose (host/crash.c's frames-stopped watch)
+      if (ha > 0 && g_frame == (uint64_t)hb) nvn_fps_hold(0); }   // a freeze on purpose (host/runtime/crash.c's frames-stopped watch)
     gfx_enter();
     uint64_t t0 = now_ns();
     if (xlat_on()) {   // a job after the frame's submissions (plan item 61): ticket[idx] holds the job, rfence[idx] the token of the frame's last submission

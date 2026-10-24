@@ -22,7 +22,7 @@ SHA-256 of the overlay, SHA-256 of the original). Game data stays in the ignored
 archive): the same change made to the mod's copy, with the same checks (the capture keys must be hidden at 0, shown at 1,
 and only the two animations may change; the game over flow must be the analysed file), written to
 <out>/-merged/<SHA-256 of the mod's copy>/<path>, <out> being the mods folder (DM_MODS): the host then serves it in place
-of the mod's copy (host/mods.c). A copy these checks refuse stays the mod's, without the change.
+of the mod's copy (host/game/mods.c). A copy these checks refuse stays the mod's, without the change.
 """
 import argparse, hashlib, json, os, struct, sys
 from pathlib import Path

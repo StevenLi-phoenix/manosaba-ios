@@ -1,4 +1,4 @@
-// On-screen controls for a game steered with a controller (host/touchpad.c; game.json "touch": "pad"). Positions in points of the view the front
+// On-screen controls for a game steered with a controller (host/front/touchpad.c; game.json "touch": "pad"). Positions in points of the view the front
 // end lays the controls out in. The front end calls tp_layout / tp_touch / tp_enable on its main thread and draws tp_draw(); hle_hid.c reads the
 // controller they make at every read of the game (dm_touchpad_read).
 #pragma once

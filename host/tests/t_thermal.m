@@ -1,4 +1,4 @@
-// host/thermal.m (plan item 193): dm_thermal_now is NSProcessInfo's thermal state (0-3), not the weak default -1 the iOS app had. Without
+// host/diag/thermal.m (plan item 193): dm_thermal_now is NSProcessInfo's thermal state (0-3), not the weak default -1 the iOS app had. Without
 // thermal.m (-DDM_TEST_THERMAL_WEAK_ONLY: the weak default alone, as hle_nvn.c's): 1 fails.
 #import <Foundation/Foundation.h>
 #include <stdio.h>

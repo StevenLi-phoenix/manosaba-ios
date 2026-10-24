@@ -1,5 +1,5 @@
 // The world survey (plan item 167, after MacNativeGames' games/totk/runtime/world_survey.c, ly05010419/MacNativeGames d164868, MIT: its 1.4.3
-// addresses, the actor layout and the bounds as data, written anew for this host). Command channel lines (DM_CMD, host/cmdchan.c) read Link's
+// addresses, the actor layout and the bounds as data, written anew for this host). Command channel lines (DM_CMD, host/front/cmdchan.c) read Link's
 // place and move him through the game's own forceSetMatrix, so a soak can stand at a fixed place and a run can visit the world for shaders:
 //   survey pos <tag>                    "[survey] tag=<tag> status=position frame=<n> xyz=<x>,<y>,<z>"
 //   survey move <tag> X Y Z <frames>    Link set at X Y Z, his rotation kept, at each of the next <frames> frames (1-600), then status=move_done
@@ -36,7 +36,7 @@ static unsigned g_hold_left; static float g_hold_xyz[3]; static char g_hold_tag[
 
 static int rd(uintptr_t a, void *out, size_t n) {
     if (!a || a > UINTPTR_MAX - n) return 0;
-    vm_size_t got = 0;   // vm_read_overwrite, as host/crash.c: the iOS SDK's mach_vm.h is an #error
+    vm_size_t got = 0;   // vm_read_overwrite, as host/runtime/crash.c: the iOS SDK's mach_vm.h is an #error
     return vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS && got == n;
 }
 static uintptr_t rdp(uintptr_t a) { uintptr_t p = 0; return rd(a, &p, sizeof p) ? p : 0; }

@@ -1,10 +1,10 @@
-// The wide picture's parsing and state (host/aspect.h, host/aspect.c, plan item 154):
+// The wide picture's parsing and state (host/aspect.h, host/game/aspect.c, plan item 154):
 //   DM_ASPECT: 21:9, 3440x1440, 2.39 and "window" taken; 0 / unset off; 16:0, 0.5, 5, "wide" and "21:9x" refused
 //   the factor on a 16:9 camera: 21:9 → 1.3125, 32:9 → 2, off → 0
 //   no game offering it: the switch does nothing; DM_ASPECT=21:9 at boot: on at 21:9, the front end told once; the switch: off, then on again
 //   DM_ASPECT=window: on at the window's shape, following a resize while on, not while off (and on again at the new shape)
 // "window" keeping the shape it started with (-DDM_TEST_ASPECT_NO_FOLLOW): 1 fails.
-#include "../aspect.c"
+#include "../game/aspect.c"
 #include <math.h>
 #include <stdlib.h>
 static int n, fail;

@@ -214,7 +214,8 @@ decide):
   102), the backend's private header with the first part a translation unit of its own (batch 103), three more (batch 104); next the other
   parts outside the draw's path as translation units of their own (the draw's path stays one for inlining): the rest use the encoder layer,
   the texture registry or the draw's state, which want headers of their own first. `hle_nvn.c` in parts by its sections (batch 105); next
-  `host/` in directories, the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a clean base first).
+  `host/` in directories (batch 106); next the tests' shared fakes. The Vulkan backend later (the user, 2026-10-24: no Android for now, a
+  clean base first).
 
 The iPhone's frame rate (the current focus; the power split above decides what helps):
 - 190 a scene size driven by dropped frames, now that the scene size can change while the game runs (240; 960x540 holds 59.6 fps on the island
@@ -481,3 +482,14 @@ Finished items from 260 on, in the archive's form (`[x] batch N` is the commit w
   Metal 3); the two quoted includes inside a part look one directory up. Both Makefiles rebuild on `hle/*.inc`; `tools/hle_args.py` reads
   the parts (477 functions checked, as before); `gfx/README.md` lists the parts and points `shader_key` and `g_nops` to theirs. Smoke: the
   same red lines and frames.
+- [x] batch 106 · `host/` in directories: its 62 sources move (`git mv`, history kept) into `hle/` (`hle.c` and the 28 `hle_*.c`),
+  `runtime/` (loader, main, entry, host stack, threads, crashes, options, RomFS parts and validation), `front/` (the Mac front end, controllers,
+  the touch pad, the command channel), `media/` (the movie decoders), `diag/` (diagnostics, memory snapshots and readouts, the SDK checks,
+  thermal state, sead heaps), `game/` (the default hooks, one game at a time, mods, pchtxt patches, cheats, the wide picture) and `cloud/`; the
+  headers stay in `host/`, found through `-I.`. Paths follow: `host/Makefile`'s list, the host tests' Makefile and the sources they include,
+  the graphics tests (`-I../../host` for the host sources they link), `ios/tools/gen_build.py` (where `main.c` is), `tools/hle_args.py`
+  (still 477 functions; `host/tests` left out) and `tools/hle_inventory.py` (still 239 entries), and every `host/<file>` named in the code and
+  the current documents (this file's history and the plan archive keep the old names). Both hosts, the 173 host test commands and the tool
+  tests as before. The batch's Metal 3 suite first ran with the batch script's own flags, which lacked the new include path (106 builds
+  could not find `dm.h`); the script takes the Makefile's flags now, as `make run-m3` does, and the suite ran again: 148 commands, the
+  same results as batch 105. Both IPAs built. Smoke: the same red lines and frames.

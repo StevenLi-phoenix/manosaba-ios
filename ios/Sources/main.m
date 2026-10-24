@@ -7,7 +7,7 @@
 //   romfs_overlay (served when made from this RomFS). Checked against the game profile (romfs_validate.c); when missing, a page says what is
 //   missing and where it goes.
 //   The host starts only when the scene comes to the foreground: a launch by the system in the background never starts it.
-//   Mods (host/mods.c): Documents/mods when it exists (Files app; one folder per mod, or an SD card's atmosphere folder).
+//   Mods (host/game/mods.c): Documents/mods when it exists (Files app; one folder per mod, or an SD card's atmosphere folder).
 //   Run diagnostics (plan item 106): log lines carry UTC milliseconds (host/logstamp.h; DM_LOG_TIME=0 in env.txt turns it off); Documents/boot.running
 //   marks a session in the foreground, so a launch knows when the last one ended there without an orderly exit and keeps its log as
 //   boot.interrupted.txt (host/rundiag.h); the home screen quick action Export Diagnostics shares the logs with the device's details (diag_export.m).
@@ -37,7 +37,7 @@
 #include "coolstart.h"
 #include "nvn_pace.h"   // nvn_fps_policy (plan item 135)
 
-int dm_main(int argc, char **argv);   // host/main.c, compiled with -Dmain=dm_main
+int dm_main(int argc, char **argv);   // host/runtime/main.c, compiled with -Dmain=dm_main
 UIView *front_ios_view(CGRect frame, CGFloat scale);   // scale = the screen's native scale
 void front_ios_lifecycle_install(void);
 void front_ios_focus_event(int ev);
@@ -156,7 +156,7 @@ static void run_mark(int on) {
     if (g_log >= 0 && fcntl(g_log, F_GETPATH, lp) == 0) { const char *b = strrchr(lp, '/'); name = b ? b + 1 : lp; }
     if (rundiag_mark(g_docs, name)) plog("[red] boot: could not write the run marker: %s", strerror(errno));
 }
-void dm_exit_note(void) { run_mark(0); }   // host/hle_lifecycle.c dm_host_shutdown: an orderly exit (the scene, SIGTERM, a quit command)
+void dm_exit_note(void) { run_mark(0); }   // host/hle/hle_lifecycle.c dm_host_shutdown: an orderly exit (the scene, SIGTERM, a quit command)
 
 // ---------- Game data ----------
 static NSString *support_dir(void) { return NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0]; }
@@ -170,7 +170,7 @@ static void parts_line(const char *s) {
 }
 static NSString *romfs_locate(char *why, size_t n) {
     // RomFS parts copied into Documents (plan item 62e, tools/romfs_parts.py: a few 1 GiB files instead of tens of thousands): unpacked into
-    // Application Support/romfs first, each part checked, then deleted (host/romfs_parts.c)
+    // Application Support/romfs first, each part checked, then deleted (host/runtime/romfs_parts.c)
     { char pw[512]; [NSFileManager.defaultManager createDirectoryAtPath:support_dir() withIntermediateDirectories:YES attributes:nil error:nil];
       int pr = dm_romfs_parts_unpack(docs_dir().fileSystemRepresentation, [support_dir() stringByAppendingPathComponent:@"romfs"].fileSystemRepresentation, pw, sizeof pw, parts_line);
       if (pr >= 0) plog("%sboot: RomFS parts: %s", pr ? "" : "[red] ", pw); }
@@ -234,7 +234,7 @@ static void boot_prepare(NSString *romfs) {
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
     NSString *font = sysfont_locate(); if (font) setenv("DM_SYSFONT", font.fileSystemRepresentation, 0);
     exclude_from_backup(romfs); exclude_from_backup(font);
-    overlay_locate(romfs);   // before the host starts: host/mods.c puts the mods' layers in front of it
+    overlay_locate(romfs);   // before the host starts: host/game/mods.c puts the mods' layers in front of it
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     // The game's cache storage (Tears of the Kingdom; hle_fs.c): in Library/Caches, which the system may empty while the app is not running, as a

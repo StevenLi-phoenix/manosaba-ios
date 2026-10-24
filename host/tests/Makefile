@@ -645,28 +645,28 @@ $(U)/t_ubsan_on_ub: t_ubsan_on.c | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -DDM_TEST_UB -o $@ t_ubsan_on.c
 $(U)/t_envfile: t_envfile.c ../envfile.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_envfile.c
-$(U)/t_cmdchan: t_cmdchan.c ../cmdchan.c ../dm.h | $(U)
+$(U)/t_cmdchan: t_cmdchan.c ../front/cmdchan.c ../dm.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_cmdchan.c
-$(U)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(U)
-	clang -O1 -Wno-unused-function $(UBSAN) -I.. -o $@ t_hid_script.c ../touchpad.c
-$(U)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(U)
+$(U)/t_hid_script: t_hid_script.c ../hle/hle_hid.c ../front/touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(U)
+	clang -O1 -Wno-unused-function $(UBSAN) -I.. -o $@ t_hid_script.c ../front/touchpad.c
+$(U)/t_mods: t_mods.c ../game/mods.c ../dm.h ../game.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_mods.c
-$(U)/t_options: t_options.c ../options.c ../dm.h | $(U)
+$(U)/t_options: t_options.c ../runtime/options.c ../dm.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_options.c
-$(U)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c | $(U)
-	clang -O1 -Wall -Wno-unused-function $(UBSAN) -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
+$(U)/t_romfs_validate: t_romfs_validate.c ../runtime/romfs_validate.c | $(U)
+	clang -O1 -Wall -Wno-unused-function $(UBSAN) -I.. -o $@ t_romfs_validate.c ../runtime/romfs_validate.c
 $(U)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_padmap.c
-$(U)/t_swkbd: t_swkbd.c ../hle_swkbd.c | $(U)
-	clang -O1 -Wno-unused-function $(UBSAN) -I.. -o $@ t_swkbd.c ../hle_swkbd.c
+$(U)/t_swkbd: t_swkbd.c ../hle/hle_swkbd.c | $(U)
+	clang -O1 -Wno-unused-function $(UBSAN) -I.. -o $@ t_swkbd.c ../hle/hle_swkbd.c
 $(U)/t_rundiag: t_rundiag.c ../rundiag.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_rundiag.c
 $(U)/t_logstamp: t_logstamp.c ../logstamp.h | $(U)
 	clang -O1 -Wall -Werror $(UBSAN) -I.. -o $@ t_logstamp.c
 
-$(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../crash.c
-$(B)/t_audio: t_audio.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_altstack: t_altstack.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_altstack.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_audio: t_audio.c ../hle/hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
 $(B)/t_audren_pace: t_audren_pace.c ../audren_pace.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_audren_pace.c
@@ -674,180 +674,180 @@ $(B)/t_audren_pace_out: t_audren_pace.c ../audren_pace.h | $(B)
 	clang -O1 -Wall -DDM_TEST_AUDREN_PACE_OUTPUT -I.. -o $@ t_audren_pace.c
 $(B)/t_audren_pace_sink: t_audren_pace.c ../audren_pace.h | $(B)
 	clang -O1 -Wall -DDM_TEST_SINK_NO_RESYNC -I.. -o $@ t_audren_pace.c
-$(B)/t_audren: t_audren.c ../hle_audren.c ../audren_pace.h ../hle.h ../dm.h | $(B)
+$(B)/t_audren: t_audren.c ../hle/hle_audren.c ../audren_pace.h ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audren.c
-$(B)/t_audio_extras: t_audio_extras.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_extras: t_audio_extras.c ../hle/hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_audio_extras.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
-$(B)/t_audio_extras_vol: t_audio_extras.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_extras_vol: t_audio_extras.c ../hle/hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_AUDIO_VOLUME_IGNORED -o $@ t_audio_extras.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
-$(B)/t_audio_extras_kept: t_audio_extras.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_extras_kept: t_audio_extras.c ../hle/hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_AUDIO_PLAYED_KEPT -o $@ t_audio_extras.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
-$(B)/t_audio_spsc: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_spsc: t_audio_spsc.c ../hle/hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
-$(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle.h ../dm.h | $(B)
+$(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle/hle_audio.c ../hle.h ../dm.h | $(B)
 	clang -O1 -g -fsanitize=thread -Wno-unused-function -I.. -o $@ t_audio_spsc.c -framework AudioToolbox -framework CoreAudio -framework CoreFoundation
-$(B)/t_cloudlist: t_cloudlist.m ../cloud.m ../cloudsync.c ../cloud.h ../game.c $(GEN) ../hle.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -fobjc-arc -o $@ t_cloudlist.m ../cloudsync.c ../game.c $(GEN) -framework Foundation -framework Network
-$(B)/t_cloudlist_old: t_cloudlist.m ../cloud.m ../cloudsync.c ../cloud.h ../game.c $(GEN) ../hle.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CLOUD_ALWAYS_DISPATCH -I.. -fobjc-arc -o $@ t_cloudlist.m ../cloudsync.c ../game.c $(GEN) -framework Foundation -framework Network
-$(B)/t_cloudsync: t_cloudsync.c ../cloudsync.c ../cloud.h ../dm.h | $(B)
-	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../cloudsync.c
-$(B)/t_cmdchan: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
+$(B)/t_cloudlist: t_cloudlist.m ../cloud/cloud.m ../cloud/cloudsync.c ../cloud.h ../game/game.c $(GEN) ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -fobjc-arc -o $@ t_cloudlist.m ../cloud/cloudsync.c ../game/game.c $(GEN) -framework Foundation -framework Network
+$(B)/t_cloudlist_old: t_cloudlist.m ../cloud/cloud.m ../cloud/cloudsync.c ../cloud.h ../game/game.c $(GEN) ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CLOUD_ALWAYS_DISPATCH -I.. -fobjc-arc -o $@ t_cloudlist.m ../cloud/cloudsync.c ../game/game.c $(GEN) -framework Foundation -framework Network
+$(B)/t_cloudsync: t_cloudsync.c ../cloud/cloudsync.c ../cloud.h ../dm.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_cloudsync.c ../cloud/cloudsync.c
+$(B)/t_cmdchan: t_cmdchan.c ../front/cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_cmdchan.c
-$(B)/t_cmdchan_noreopen: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
+$(B)/t_cmdchan_noreopen: t_cmdchan.c ../front/cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_CMD_NO_REOPEN -I.. -o $@ t_cmdchan.c
-$(B)/t_cmdchan_partial: t_cmdchan.c ../cmdchan.c ../dm.h | $(B)
+$(B)/t_cmdchan_partial: t_cmdchan.c ../front/cmdchan.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_CMD_PARTIAL -I.. -o $@ t_cmdchan.c
-$(B)/t_freeze: t_freeze.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_freeze.c t_altstack_stub.c ../crash.c
-$(B)/t_freeze_none: t_freeze.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_FREEZE_NONE -I.. -o $@ t_freeze.c t_altstack_stub.c ../crash.c
-$(B)/t_threaddump: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_threaddump_suspended: t_threaddump.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_BT_PRINT_SUSPENDED -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_il2cpp_obj: t_il2cpp_obj.c t_altstack_stub.c ../crash.c ../il2cpp_obj.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_il2cpp_obj.c t_altstack_stub.c ../crash.c
-$(B)/t_il2cpp_obj_nocheck: t_il2cpp_obj.c t_altstack_stub.c ../crash.c ../il2cpp_obj.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_IL2CPP_NO_CHECK -I.. -o $@ t_il2cpp_obj.c t_altstack_stub.c ../crash.c
-$(B)/t_crash_bt: t_crash_bt.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../crash.c
-$(B)/t_crash_bt_unguarded: t_crash_bt.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_BT_UNGUARDED -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../crash.c
-$(B)/t_gate_svc: t_gate_svc.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_gate_svc.c ../hle.c ../options.c
-$(B)/t_gate_svc_rel: t_gate_svc.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -DDM_TEST_GATE_ORIG_REL -I.. -Wl,-dead_strip -o $@ t_gate_svc.c ../hle.c ../options.c
+$(B)/t_freeze: t_freeze.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_freeze.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_freeze_none: t_freeze.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_FREEZE_NONE -I.. -o $@ t_freeze.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_threaddump: t_threaddump.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_threaddump_suspended: t_threaddump.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_BT_PRINT_SUSPENDED -I.. -o $@ t_threaddump.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_il2cpp_obj: t_il2cpp_obj.c t_altstack_stub.c ../runtime/crash.c ../il2cpp_obj.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_il2cpp_obj.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_il2cpp_obj_nocheck: t_il2cpp_obj.c t_altstack_stub.c ../runtime/crash.c ../il2cpp_obj.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_IL2CPP_NO_CHECK -I.. -o $@ t_il2cpp_obj.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_crash_bt: t_crash_bt.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_crash_bt_unguarded: t_crash_bt.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_BT_UNGUARDED -I.. -o $@ t_crash_bt.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_gate_svc: t_gate_svc.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_gate_svc.c ../hle/hle.c ../runtime/options.c
+$(B)/t_gate_svc_rel: t_gate_svc.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -DDM_TEST_GATE_ORIG_REL -I.. -Wl,-dead_strip -o $@ t_gate_svc.c ../hle/hle.c ../runtime/options.c
 $(B)/t_mouse_route: t_mouse_route.c ../mouse_route.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mouse_route.c
 $(B)/t_mouse_route_swallow: t_mouse_route.c ../mouse_route.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MOUSE_SWALLOW_TITLE -I.. -o $@ t_mouse_route.c
-$(B)/t_relr: t_relr.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
+$(B)/t_relr: t_relr.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -I.. -Wl,-dead_strip -o $@ t_relr.c
-$(B)/t_relr_unchecked: t_relr.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h | $(B)
+$(B)/t_relr_unchecked: t_relr.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h | $(B)
 	clang -O1 -Wno-deprecated-declarations -Wno-unused-function -DDM_TEST_RELR_UNCHECKED -I.. -Wl,-dead_strip -o $@ t_relr.c
-$(B)/t_tzrule: t_tzrule.c ../hle_time.c ../hle.h ../dm.h | $(B)
+$(B)/t_tzrule: t_tzrule.c ../hle/hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_tzrule.c -framework CoreFoundation
-$(B)/t_tzrule_dev: t_tzrule.c ../hle_time.c ../hle.h ../dm.h | $(B)
+$(B)/t_tzrule_dev: t_tzrule.c ../hle/hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_TZRULE_DEVICE -I.. -o $@ t_tzrule.c -framework CoreFoundation
-$(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
+$(B)/t_time: t_time.c ../hle/hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_time.c -framework CoreFoundation
-$(B)/t_time_one: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
+$(B)/t_time_one: t_time.c ../hle/hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_TOPOSIX_ONE -I.. -o $@ t_time.c -framework CoreFoundation
-$(B)/t_time_ctxold: t_time.c ../hle_time.c ../hle.h ../dm.h | $(B)
+$(B)/t_time_ctxold: t_time.c ../hle/hle_time.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_CTX_OLD -I.. -o $@ t_time.c -framework CoreFoundation
-$(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
-$(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_WATCH_NO_BG -I.. -o $@ t_watchdog.c t_altstack_stub.c ../crash.c
-$(B)/t_crash_stderr: t_crash_stderr.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../crash.c
-$(B)/t_crash_stderr_counted: t_crash_stderr.c t_altstack_stub.c ../crash.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CRASH_COUNTED_WAIT -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../crash.c
-$(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_arbiter.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_watchdog: t_watchdog.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_watchdog.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_watchdog_nobg: t_watchdog.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_WATCH_NO_BG -I.. -o $@ t_watchdog.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_crash_stderr: t_crash_stderr.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_crash_stderr_counted: t_crash_stderr.c t_altstack_stub.c ../runtime/crash.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CRASH_COUNTED_WAIT -I.. -o $@ t_crash_stderr.c t_altstack_stub.c ../runtime/crash.c
+$(B)/t_arbiter: t_arbiter.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_arbiter.c t_condvar_stub.c ../hle/hle_thread.c
 $(B)/t_padmap: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_padmap.c
-$(B)/t_pchtxt: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
+$(B)/t_pchtxt: t_pchtxt.c ../game/pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_pchtxt.c
-$(B)/t_pchtxt_nocheck: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
+$(B)/t_pchtxt_nocheck: t_pchtxt.c ../game/pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_NO_CHECK -I.. -o $@ t_pchtxt.c
-$(B)/t_pchtxt_oldflags: t_pchtxt.c ../pchtxt.c ../dm.h | $(B)
+$(B)/t_pchtxt_oldflags: t_pchtxt.c ../game/pchtxt.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_PCHTXT_OLD_FLAGS -I.. -o $@ t_pchtxt.c
 $(B)/t_ns_text: t_ns_text.m ../ns_text.h | $(B)
 	clang -O1 -Wall -fobjc-arc -I.. -o $@ t_ns_text.m -framework Foundation
 $(B)/t_ns_text_default: t_ns_text.m ../ns_text.h | $(B)
 	clang -O1 -Wall -fobjc-arc -DDM_TEST_NS_TEXT_DEFAULT_ENCODING -I.. -o $@ t_ns_text.m -framework Foundation
-$(B)/t_cheat_vm: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
+$(B)/t_cheat_vm: t_cheat_vm.c ../game/cheat_vm.c ../cheat_vm.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_cheat_vm.c
-$(B)/t_cheat_vm_flat: t_cheat_vm.c ../cheat_vm.c ../cheat_vm.h | $(B)
+$(B)/t_cheat_vm_flat: t_cheat_vm.c ../game/cheat_vm.c ../cheat_vm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CHEAT_FLAT_SKIP -I.. -o $@ t_cheat_vm.c
-$(B)/t_cheats: t_cheats.c ../cheats.c ../cheat_vm.c ../cheat_vm.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_cheats.c ../cheat_vm.c
-$(B)/t_cheats_norw: t_cheats.c ../cheats.c ../cheat_vm.c ../cheat_vm.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CHEATS_NO_REWRITE_CHECK -I.. -o $@ t_cheats.c ../cheat_vm.c
+$(B)/t_cheats: t_cheats.c ../game/cheats.c ../game/cheat_vm.c ../cheat_vm.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_cheats.c ../game/cheat_vm.c
+$(B)/t_cheats_norw: t_cheats.c ../game/cheats.c ../game/cheat_vm.c ../cheat_vm.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CHEATS_NO_REWRITE_CHECK -I.. -o $@ t_cheats.c ../game/cheat_vm.c
 $(B)/t_padmap_posall: t_padmap.c ../gamepad_map.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_FACE_POS_ALL -I.. -o $@ t_padmap.c
-$(B)/t_sead: t_sead.c ../sead.c ../dm.h | $(B)
+$(B)/t_sead: t_sead.c ../diag/sead.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_sead.c
-$(B)/t_sead_broken: t_sead.c ../sead.c ../dm.h | $(B)
+$(B)/t_sead_broken: t_sead.c ../diag/sead.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_SEAD_BROKEN -I.. -o $@ t_sead.c
-$(B)/t_sleep: t_sleep.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_sleep.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_sleep: t_sleep.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_sleep.c t_condvar_stub.c ../hle/hle_thread.c
 $(B)/t_envfile: t_envfile.c ../envfile.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_envfile.c
-$(B)/t_gameslot: t_gameslot.c ../game_slot.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_gameslot.c ../game_slot.c
-$(B)/t_ktrace: t_ktrace.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_ktrace.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_loader_weak: t_loader_weak.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle.c ../options.c
-$(B)/t_rtld: t_rtld.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_rtld.c ../hle.c ../options.c
-$(B)/t_rtld_ours: t_rtld.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -DDM_TEST_RTLD_DEFAULT_OURS -o $@ t_rtld.c ../hle.c ../options.c
-$(B)/t_rtld_order: t_rtld.c ../loader.c ../hle.c ../options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
-	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -DDM_TEST_RTLD_LOAD_ORDER -o $@ t_rtld.c ../hle.c ../options.c
-$(B)/t_mods: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
+$(B)/t_gameslot: t_gameslot.c ../game/game_slot.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_gameslot.c ../game/game_slot.c
+$(B)/t_ktrace: t_ktrace.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_ktrace.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_loader_weak: t_loader_weak.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_loader_weak.c ../hle/hle.c ../runtime/options.c
+$(B)/t_rtld: t_rtld.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -o $@ t_rtld.c ../hle/hle.c ../runtime/options.c
+$(B)/t_rtld_ours: t_rtld.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -DDM_TEST_RTLD_DEFAULT_OURS -o $@ t_rtld.c ../hle/hle.c ../runtime/options.c
+$(B)/t_rtld_order: t_rtld.c ../runtime/loader.c ../hle/hle.c ../runtime/options.c ../dm.h ../hle.h ../rodata_seal.h | $(B)
+	clang -O1 -Wno-deprecated-declarations -I.. -Wl,-dead_strip -DDM_TEST_RTLD_LOAD_ORDER -o $@ t_rtld.c ../hle/hle.c ../runtime/options.c
+$(B)/t_mods: t_mods.c ../game/mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_mods.c
-$(B)/t_mods_case: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
+$(B)/t_mods_case: t_mods.c ../game/mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MODS_CASE -I.. -o $@ t_mods.c
-$(B)/t_mods_nopin: t_mods.c ../mods.c ../dm.h ../game.h | $(B)
+$(B)/t_mods_nopin: t_mods.c ../game/mods.c ../dm.h ../game.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_MODS_NO_PIN -I.. -o $@ t_mods.c
-$(B)/t_thermal: t_thermal.m ../thermal.m | $(B)
-	clang -O1 -Wall -fobjc-arc -o $@ t_thermal.m ../thermal.m -framework Foundation
+$(B)/t_thermal: t_thermal.m ../diag/thermal.m | $(B)
+	clang -O1 -Wall -fobjc-arc -o $@ t_thermal.m ../diag/thermal.m -framework Foundation
 $(B)/t_thermal_weak: t_thermal.m | $(B)
 	clang -O1 -Wall -fobjc-arc -DDM_TEST_THERMAL_WEAK_ONLY -o $@ t_thermal.m -framework Foundation
 $(B)/t_logstamp: t_logstamp.c ../logstamp.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_logstamp.c
 $(B)/t_logstamp_every: t_logstamp.c ../logstamp.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_LOGSTAMP_EVERY_WRITE -I.. -o $@ t_logstamp.c
-$(B)/t_memsnap: t_memsnap.c ../memsnap.c ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_memsnap.c ../memsnap.c
-$(B)/t_sysevent: t_sysevent.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DT_OWN_GUEST_SYM -I.. -o $@ t_sysevent.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_threadcpu: t_threadcpu.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threadcpu.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_waitsync: t_waitsync.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_waitsync.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_strict: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_PATH_STRICT=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_saveyes: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_SAVE_ALWAYS=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_nopin: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_ROM_NO_PIN=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_noreprep: t_fs.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_FS_NO_REPREP=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_kill: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_kill_inplace: t_fs_kill.c t_fs_stub.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_FS_COMMIT_INPLACE -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game.c $(GEN)
-$(B)/t_fs_index: t_fs_index.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_index.c ../game.c $(GEN)
-$(B)/t_fs_case: t_fs_case.c ../hle_fs.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../game.c $(GEN)
-$(B)/t_guest_mem: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
-$(B)/t_guest_mem_getinfoold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_GETINFO_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
-$(B)/t_guest_mem_heapold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HEAP_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
-$(B)/t_guest_mem_physold: t_guest_mem.c ../hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_PHYS_OLD -I.. -o $@ t_guest_mem.c ../game.c $(GEN)
-$(B)/t_coremask: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_mainqos: t_mainqos.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_mainqos.c t_condvar_stub.c ../hle_thread.c
-$(B)/t_mainqos_ignored: t_mainqos.c t_condvar_stub.c ../hle_thread.c ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_MAIN_QOS_IGNORED -I.. -o $@ t_mainqos.c t_condvar_stub.c ../hle_thread.c
+$(B)/t_memsnap: t_memsnap.c ../diag/memsnap.c ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-result -I.. -o $@ t_memsnap.c ../diag/memsnap.c
+$(B)/t_sysevent: t_sysevent.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DT_OWN_GUEST_SYM -I.. -o $@ t_sysevent.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_threadcpu: t_threadcpu.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_threadcpu.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_waitsync: t_waitsync.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_waitsync.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_condvar_old: t_condvar.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CV_OLD_ORDER -I.. -o $@ t_condvar.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_fs: t_fs.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_fs.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_strict: t_fs.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_PATH_STRICT=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_saveyes: t_fs.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_SAVE_ALWAYS=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_nopin: t_fs.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_ROM_NO_PIN=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_noreprep: t_fs.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_FS_NO_REPREP=1 -I.. -o $@ t_fs.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_kill: t_fs_kill.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_kill_inplace: t_fs_kill.c t_fs_stub.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_FS_COMMIT_INPLACE -I.. -o $@ t_fs_kill.c t_fs_stub.c ../game/game.c $(GEN)
+$(B)/t_fs_index: t_fs_index.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_index.c ../game/game.c $(GEN)
+$(B)/t_fs_case: t_fs_case.c ../hle/hle_fs.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_fs_case.c ../game/game.c $(GEN)
+$(B)/t_guest_mem: t_guest_mem.c ../hle/hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_guest_mem.c ../game/game.c $(GEN)
+$(B)/t_guest_mem_getinfoold: t_guest_mem.c ../hle/hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_GETINFO_OLD -I.. -o $@ t_guest_mem.c ../game/game.c $(GEN)
+$(B)/t_guest_mem_heapold: t_guest_mem.c ../hle/hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HEAP_OLD -I.. -o $@ t_guest_mem.c ../game/game.c $(GEN)
+$(B)/t_guest_mem_physold: t_guest_mem.c ../hle/hle_svc.c ../rodata_seal.h ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_PHYS_OLD -I.. -o $@ t_guest_mem.c ../game/game.c $(GEN)
+$(B)/t_coremask: t_coremask.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_coremask_noproc: t_coremask.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_CORE_NO_PROCMASK -I.. -o $@ t_coremask.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_mainqos: t_mainqos.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_mainqos.c t_condvar_stub.c ../hle/hle_thread.c
+$(B)/t_mainqos_ignored: t_mainqos.c t_condvar_stub.c ../hle/hle_thread.c ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_MAIN_QOS_IGNORED -I.. -o $@ t_mainqos.c t_condvar_stub.c ../hle/hle_thread.c
 $(B)/t_totk_defaults: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_totk_defaults.c
 $(B)/t_totk_defaults_noxlat: t_totk_defaults.c ../../games/totk/defaults.c ../game.h | $(B)
@@ -864,11 +864,11 @@ $(B)/t_procon: t_procon.c ../procon.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_procon.c
 $(B)/t_procon_raw: t_procon.c ../procon.h | $(B)
 	clang -O1 -Wall -I.. -DDM_TEST_PROCON_RAW_AXES -o $@ t_procon.c
-$(B)/t_aspect: t_aspect.c ../aspect.c ../aspect.h ../dm.h | $(B)
+$(B)/t_aspect: t_aspect.c ../game/aspect.c ../aspect.h ../dm.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_aspect.c
-$(B)/t_aspect_nofollow: t_aspect.c ../aspect.c ../aspect.h ../dm.h | $(B)
+$(B)/t_aspect_nofollow: t_aspect.c ../game/aspect.c ../aspect.h ../dm.h | $(B)
 	clang -O1 -Wall -I.. -DDM_TEST_ASPECT_NO_FOLLOW -o $@ t_aspect.c
-MOTION_DEPS = t_motion.c ../hle_hid.c ../hle_motion.c ../hle.h ../dm.h ../dm_input.h ../front.h
+MOTION_DEPS = t_motion.c ../hle/hle_hid.c ../hle/hle_motion.c ../hle.h ../dm.h ../dm_input.h ../front.h
 $(B)/t_motion: $(MOTION_DEPS) | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_motion.c
 $(B)/t_motion_allstyles: $(MOTION_DEPS) | $(B)
@@ -879,63 +879,63 @@ $(B)/t_motion_nograv: $(MOTION_DEPS) | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_SIX_NO_GRAVITY -I.. -o $@ t_motion.c
 $(B)/t_motion_nopeak: $(MOTION_DEPS) | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_VIB_NO_PEAK -I.. -o $@ t_motion.c
-$(B)/t_hid_applet: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+$(B)/t_hid_applet: t_hid_applet.c ../hle/hle_hid.c ../hle/hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_hid_applet.c
-$(B)/t_hid_applet_silent: t_hid_applet.c ../hle_hid.c ../hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+$(B)/t_hid_applet_silent: t_hid_applet.c ../hle/hle_hid.c ../hle/hle_account.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_CTLSUPPORT_SILENT -I.. -o $@ t_hid_applet.c
-$(B)/t_hid_receipt: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+$(B)/t_hid_receipt: t_hid_receipt.c ../hle/hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_receipt.c
-$(B)/t_hid_receipt_oneslot: t_hid_receipt.c ../hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+$(B)/t_hid_receipt_oneslot: t_hid_receipt.c ../hle/hle_hid.c ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
 	clang -O1 -Wno-unused-function -DDM_TEST_RECEIPT_ONE_SLOT -I.. -o $@ t_hid_receipt.c
-$(B)/t_hid_script: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c ../touchpad.c
-$(B)/t_hid_script_nocircle: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_CIRCLE -I.. -o $@ t_hid_script.c ../touchpad.c
-$(B)/t_hid_script_norstick: t_hid_script.c ../hle_hid.c ../touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_RSTICK -I.. -o $@ t_hid_script.c ../touchpad.c
+$(B)/t_hid_script: t_hid_script.c ../hle/hle_hid.c ../front/touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_hid_script.c ../front/touchpad.c
+$(B)/t_hid_script_nocircle: t_hid_script.c ../hle/hle_hid.c ../front/touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_CIRCLE -I.. -o $@ t_hid_script.c ../front/touchpad.c
+$(B)/t_hid_script_norstick: t_hid_script.c ../hle/hle_hid.c ../front/touchpad.c ../touchpad.h ../hle.h ../dm.h ../dm_input.h ../front.h | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HID_NO_RSTICK -I.. -o $@ t_hid_script.c ../front/touchpad.c
 # VP9 movies need libvpx (brew install libvpx), as the host build does (host/Makefile VPX)
 VPX ?= /opt/homebrew/opt/libvpx
-$(B)/t_movie: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -o $@ t_movie.c ../movie_av.m ../movie_webm.c ../hstack.S ../hstack.c $(VPX)/lib/libvpx.a \
+$(B)/t_movie: t_movie.c ../hle/hle_movie.c ../runtime/hstack.S ../runtime/hstack.c ../media/movie_av.m ../movie_av.h ../media/movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -o $@ t_movie.c ../media/movie_av.m ../media/movie_webm.c ../runtime/hstack.S ../runtime/hstack.c $(VPX)/lib/libvpx.a \
 		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
-$(B)/t_movie_evcopy: t_movie.c ../hle_movie.c ../hstack.S ../hstack.c ../movie_av.m ../movie_av.h ../movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -DDM_TEST_EVENTS_COPIED -o $@ t_movie.c ../movie_av.m ../movie_webm.c ../hstack.S ../hstack.c $(VPX)/lib/libvpx.a \
+$(B)/t_movie_evcopy: t_movie.c ../hle/hle_movie.c ../runtime/hstack.S ../runtime/hstack.c ../media/movie_av.m ../movie_av.h ../media/movie_webm.c ../movie_webm.h ../hle.h ../dm.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -isystem $(VPX)/include -fobjc-arc -DDM_TEST_EVENTS_COPIED -o $@ t_movie.c ../media/movie_av.m ../media/movie_webm.c ../runtime/hstack.S ../runtime/hstack.c $(VPX)/lib/libvpx.a \
 		-framework Foundation -framework AVFoundation -framework CoreMedia -framework CoreVideo
-$(B)/t_touchpad: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+$(B)/t_touchpad: t_touchpad.c ../front/touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad.c
-$(B)/t_touchpad_rehit: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+$(B)/t_touchpad_rehit: t_touchpad.c ../front/touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_REHIT -I.. -o $@ t_touchpad.c
-$(B)/t_touchpad_sensafter: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+$(B)/t_touchpad_sensafter: t_touchpad.c ../front/touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_SENS_AFTER -I.. -o $@ t_touchpad.c
-$(B)/t_touchpad_custom: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+$(B)/t_touchpad_custom: t_touchpad.c ../front/touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_CUSTOM_IGNORED -I.. -o $@ t_touchpad.c
-$(B)/t_touchpad_nowin: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+$(B)/t_touchpad_nowin: t_touchpad.c ../front/touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_NO_WINDOW -I.. -o $@ t_touchpad.c
-$(B)/t_touchpad_ctlconnect: t_touchpad.c ../touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
+$(B)/t_touchpad_ctlconnect: t_touchpad.c ../front/touchpad.c ../touchpad.h ../dm.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_TP_CTL_ON_CONNECT -I.. -o $@ t_touchpad.c
-$(B)/t_options: t_options.c ../options.c ../dm.h | $(B)
+$(B)/t_options: t_options.c ../runtime/options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_options.c
-$(B)/t_options_nocheck: t_options.c ../options.c ../dm.h | $(B)
+$(B)/t_options_nocheck: t_options.c ../runtime/options.c ../dm.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_OPTIONS_NO_CHECK -I.. -o $@ t_options.c
-$(B)/t_net: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
+$(B)/t_net: t_net.c ../hle/hle_net.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_net.c
-$(B)/t_net_bsd: t_net.c ../hle_net.c ../hle.h ../dm.h | $(B)
+$(B)/t_net_bsd: t_net.c ../hle/hle_net.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_NET_BSD_ERRNO -I.. -o $@ t_net.c
-$(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_oe.c ../game.c $(GEN)
-$(B)/t_oe_unlocked: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OE_EVENT_UNLOCKED -I.. -o $@ t_oe.c ../game.c $(GEN)
-$(B)/t_oe_noios: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OPMODE_NO_IOS -I.. -o $@ t_oe.c ../game.c $(GEN)
-$(B)/t_oe_noop: t_oe.c ../hle_oe.c ../hle.h ../dm.h ../game.c $(GEN) | $(B)
-	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game.c $(GEN)
-$(B)/t_rng_font: t_rng_font.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
+$(B)/t_oe: t_oe.c ../hle/hle_oe.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. -o $@ t_oe.c ../game/game.c $(GEN)
+$(B)/t_oe_unlocked: t_oe.c ../hle/hle_oe.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OE_EVENT_UNLOCKED -I.. -o $@ t_oe.c ../game/game.c $(GEN)
+$(B)/t_oe_noios: t_oe.c ../hle/hle_oe.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_OPMODE_NO_IOS -I.. -o $@ t_oe.c ../game/game.c $(GEN)
+$(B)/t_oe_noop: t_oe.c ../hle/hle_oe.c ../hle.h ../dm.h ../game/game.c $(GEN) | $(B)
+	clang -O1 -Wno-unused-function -DDM_TEST_HOOKS -DDM_TEST_INACTIVITY_NOOP -I.. -o $@ t_oe.c ../game/game.c $(GEN)
+$(B)/t_rng_font: t_rng_font.c ../hle/hle_os.c ../hle/hle_pl.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_rng_font.c
-$(B)/t_rng_font_rev: t_rng_font.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
+$(B)/t_rng_font_rev: t_rng_font.c ../hle/hle_os.c ../hle/hle_pl.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_FONT_REVERSED -o $@ t_rng_font.c
-$(B)/t_bfttf: t_bfttf.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
+$(B)/t_bfttf: t_bfttf.c ../hle/hle_os.c ../hle/hle_pl.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_bfttf.c
-$(B)/t_bfttf_one: t_bfttf.c ../hle_os.c ../hle_pl.c ../hle.h ../dm.h | $(B)
+$(B)/t_bfttf_one: t_bfttf.c ../hle/hle_os.c ../hle/hle_pl.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -DDM_TEST_BFTTF_ONE_ORDER -o $@ t_bfttf.c
 $(B)/t_shadercache: t_shadercache.c ../shadercache.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_shadercache.c
@@ -949,11 +949,11 @@ $(B)/t_coolstart: t_coolstart.c ../coolstart.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_coolstart.c
 $(B)/t_coolstart_onelook: t_coolstart.c ../coolstart.h | $(B)
 	clang -O1 -Wall -Werror -I.. -DDM_TEST_COOL_ONE_LOOK -o $@ t_coolstart.c
-$(B)/t_romfs_parts: t_romfs_parts.c ../romfs_parts.c ../romfs_parts.h ../../tools/romfs_parts.py | $(B)
+$(B)/t_romfs_parts: t_romfs_parts.c ../runtime/romfs_parts.c ../romfs_parts.h ../../tools/romfs_parts.py | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_romfs_parts.c
-$(B)/t_romfs_parts_nosha: t_romfs_parts.c ../romfs_parts.c ../romfs_parts.h | $(B)
+$(B)/t_romfs_parts_nosha: t_romfs_parts.c ../runtime/romfs_parts.c ../romfs_parts.h | $(B)
 	clang -O1 -Wall -Werror -I.. -DDM_TEST_PARTS_NO_SHA -o $@ t_romfs_parts.c
-$(B)/t_romfs_parts_anypath: t_romfs_parts.c ../romfs_parts.c ../romfs_parts.h | $(B)
+$(B)/t_romfs_parts_anypath: t_romfs_parts.c ../runtime/romfs_parts.c ../romfs_parts.h | $(B)
 	clang -O1 -Wall -Werror -I.. -DDM_TEST_PARTS_ANY_PATH -o $@ t_romfs_parts.c
 $(B)/t_guest_as: t_guest_as.c ../guest_as.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_guest_as.c
@@ -977,16 +977,16 @@ $(B)/t_optref: ../../games/totk/tests/t_optref.c ../../games/totk/optref.c ../dm
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ ../../games/totk/tests/t_optref.c
 $(B)/t_optref_one: ../../games/totk/tests/t_optref.c ../../games/totk/optref.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_OPTREF_ONE_VALUE -I.. -o $@ ../../games/totk/tests/t_optref.c
-$(B)/t_quitwait: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
+$(B)/t_quitwait: t_quitwait.c ../hle/hle_lifecycle.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_quitwait.c
-$(B)/t_quitwait_old: t_quitwait.c ../hle_lifecycle.c ../hle.h ../dm.h | $(B)
+$(B)/t_quitwait_old: t_quitwait.c ../hle/hle_lifecycle.c ../hle.h ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -DDM_TEST_QUIT_NO_SECTION -I.. -o $@ t_quitwait.c
-$(B)/t_romfs_validate: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
-$(B)/t_romfs_validate_nokeys: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_ROMFS_MARKER_NO_KEYS -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
-$(B)/t_romfs_validate_anyorig: t_romfs_validate.c ../romfs_validate.c ../romfs_validate.h | $(B)
-	clang -O1 -Wall -Wno-unused-function -DDM_TEST_OVERLAY_ANY_ORIGINAL -I.. -o $@ t_romfs_validate.c ../romfs_validate.c
+$(B)/t_romfs_validate: t_romfs_validate.c ../runtime/romfs_validate.c ../romfs_validate.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_romfs_validate.c ../runtime/romfs_validate.c
+$(B)/t_romfs_validate_nokeys: t_romfs_validate.c ../runtime/romfs_validate.c ../romfs_validate.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_ROMFS_MARKER_NO_KEYS -I.. -o $@ t_romfs_validate.c ../runtime/romfs_validate.c
+$(B)/t_romfs_validate_anyorig: t_romfs_validate.c ../runtime/romfs_validate.c ../romfs_validate.h | $(B)
+	clang -O1 -Wall -Wno-unused-function -DDM_TEST_OVERLAY_ANY_ORIGINAL -I.. -o $@ t_romfs_validate.c ../runtime/romfs_validate.c
 $(B)/t_rundiag: t_rundiag.c ../rundiag.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_rundiag.c
 $(B)/t_rundiag_nokeep: t_rundiag.c ../rundiag.h | $(B)
@@ -999,11 +999,11 @@ $(B)/t_stickdir: t_stickdir.c ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_stickdir.c
 $(B)/t_stickdir_none: t_stickdir.c ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -DDM_TEST_STICK_NO_DIRS -I.. -o $@ t_stickdir.c
-$(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_swkbd.c ../hle_swkbd.c
-T_THREAD_EXIT_SRC = t_thread_exit.c t_thread_exit_guest.S ../hle_thread.c ../thread.c ../entry.S ../hstack.S ../hstack.c
+$(B)/t_swkbd: t_swkbd.c ../hle/hle_swkbd.c ../hle.h ../dm.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_swkbd.c ../hle/hle_swkbd.c
+T_THREAD_EXIT_SRC = t_thread_exit.c t_thread_exit_guest.S ../hle/hle_thread.c ../runtime/thread.c ../runtime/entry.S ../runtime/hstack.S ../runtime/hstack.c
 # The pre-fix exit only reaches the guest stack with host calls on it: t_thread_exit_old runs with DM_HSTACK=0
-T_HSTACK_SRC = t_hstack.c t_hstack_guest.S ../hle_thread.c ../thread.c ../entry.S ../hstack.S ../hstack.c ../hle_table.c
+T_HSTACK_SRC = t_hstack.c t_hstack_guest.S ../hle/hle_thread.c ../runtime/thread.c ../runtime/entry.S ../runtime/hstack.S ../runtime/hstack.c ../hle/hle_table.c
 $(B)/t_hstack: $(T_HSTACK_SRC) ../dm.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -I.. -o $@ $(T_HSTACK_SRC)
 $(B)/t_hstack_old: $(T_HSTACK_SRC) ../dm.h | $(B)
@@ -1014,10 +1014,10 @@ $(B)/t_thread_exit: $(T_THREAD_EXIT_SRC) ../dm.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -I.. -o $@ $(T_THREAD_EXIT_SRC)
 $(B)/t_thread_exit_old: $(T_THREAD_EXIT_SRC) ../dm.h | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -DDM_TEST_EXIT_ON_GUEST_STACK -I.. -o $@ $(T_THREAD_EXIT_SRC)
-$(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h | $(B)
+$(B)/t_thread_leak: t_thread_leak.c ../runtime/thread.c ../dm.h | $(B)
 	clang -O1 -Wall -Wno-unused-function -I.. -o $@ t_thread_leak.c
-$(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h ../game.h | $(B)
-	clang -O1 -Wno-unused-function -I.. -o $@ t_touch.c ../hle_touch.c
+$(B)/t_touch: t_touch.c ../hle/hle_touch.c ../front.h ../dm.h ../game.h | $(B)
+	clang -O1 -Wno-unused-function -I.. -o $@ t_touch.c ../hle/hle_touch.c
 
 $(B)/t_pwrspec: t_pwrspec.c ../pwrspec.h | $(B)
 	clang -O1 -Wall -I.. -o $@ t_pwrspec.c

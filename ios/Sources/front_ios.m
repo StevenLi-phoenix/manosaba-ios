@@ -1,5 +1,5 @@
 // iOS front end (implements front.h): the Metal view the game presents to, letterboxed to the game picture's aspect ratio; touches → dm_touch_set,
-// or on-screen controls for a game steered with a controller (game.json touch "pad", host/touchpad.c); game controllers; the software keyboard
+// or on-screen controls for a game steered with a controller (game.json touch "pad", host/front/touchpad.c); game controllers; the software keyboard
 // dialog; scene lifecycle, audio session and thermal logging. main.m builds the window and forwards the scene events to front_ios_focus_event.
 #import <UIKit/UIKit.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>   // DmAnyTouch sets its own state
@@ -88,7 +88,7 @@ static __weak DmMetalView *g_view;
 - (void)layoutSubviews { [super layoutSubviews]; if (self.bounds.size.width > 0 && self.bounds.size.height > 0) self.game.frame = letterbox_rect(self.bounds); }
 @end
 
-// ---------- On-screen controls (host/touchpad.c) ----------
+// ---------- On-screen controls (host/front/touchpad.c) ----------
 // Over the whole screen (the letterbox bars too), for a game with game.json touch "pad" (DM_TOUCH=pad / screen overrides it): the controls are laid
 // out inside the safe area, every finger goes to tp_touch, drawn from tp_draw after each touch. Off while a game controller with an extended
 // profile is connected (BotWRecomp's automatic mode): the view is hidden and touches reach the game view. The eye's choice is kept in the user

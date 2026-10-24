@@ -35,7 +35,7 @@ extern _Atomic uint64_t g_cur_frame;
 extern uint64_t g_stat_draw, g_stat_pass;
 // DM_NVN_PASSDUMP: records pass attachments / samples / presents one by one (textures by serial) for offline data-flow analysis; the pass numbers of P / D / R / S lines agree (= g_stat_pass after the pass is opened)
 // DM_NVN_PASSDUMP=frame number, or start-end (inclusive at both ends)
-// The command channel's "passdump <n>" (host/cmdchan.c) sets the range to the next n frames while the game runs
+// The command channel's "passdump <n>" (host/front/cmdchan.c) sets the range to the next n frames while the game runs
 extern _Atomic long g_pd_a0, g_pd_a1;
 long passdump_read(void);   // The first call: DM_NVN_PASSDUMP; returns the range's start (-1 off)
 static inline int passdump(void) {

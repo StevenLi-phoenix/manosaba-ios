@@ -3,7 +3,7 @@
 // until three frames are presented; a malformed line and an over-long line are skipped and the lines after them run; "quit" ends the loop.
 // Negative controls: -DDM_TEST_CMD_PARTIAL (a line run as far as it was written, as a reader with fgets at the end of the file would) fails the
 // line written in two parts; -DDM_TEST_CMD_NO_REOPEN (the first file followed for good) misses the replaced file's lines.
-#include "../cmdchan.c"
+#include "../front/cmdchan.c"
 #include <stdatomic.h>
 static int n, fail;
 #define CHECK(c, ...) do { n++; if (c) printf("  ✓ "); else { fail++; printf("  ✗ "); } printf(__VA_ARGS__); printf("\n"); } while (0)

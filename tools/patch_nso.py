@@ -43,7 +43,7 @@ IMG.extend(bytes(0x4000))
 #            ('ldr_s', t, n, byte offset) = ldr st, [xn, #byte offset]. They become cuts (asserted, listed in cuts.tsv, checked as cuts); a module with
 #            HOSTREFS gets the page and HOST_PAGE_OFF in its fixups header, the others keep their layout
 #   OPTIONS  {build ID: {option name: [entries as in CUTS, or as in HOSTREFS when the third item is a (kind, ...) form]}}: changes the host applies
-#            at load to the options DM_OPTIONS or the product's options.default names (host/loader.c, plan item 57: one product for 30 and 60 fps).
+#            at load to the options DM_OPTIONS or the product's options.default names (host/runtime/loader.c, plan item 57: one product for 30 and 60 fps).
 #            Asserted against the original here but not written into the image; listed in <name>.options.tsv with their final bytes. They must not
 #            overlap a cut and must stay outside the rewritten code (asserted after the rewrite: the host writes them where the original still is).
 #            A host page form gives the module the page as HOSTREFS does
@@ -920,7 +920,7 @@ with open(P('acq.tsv'), 'w') as f:   # load-exclusives turned into acquire loads
 with open(P('cuts.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, ob, nb, why in cuts: f.write(f'{off:#x}\t{ob}\t{nb}\t{why}\n')   # columns: offset, original bytes, new bytes, reason
-with open(P('options.tsv'), 'w') as f:   # columns: option, offset, original bytes, new bytes, reason (host/loader.c)
+with open(P('options.tsv'), 'w') as f:   # columns: option, offset, original bytes, new bytes, reason (host/runtime/loader.c)
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for name, off, ob, nb, why in opts: f.write(f'{name}\t{off:#x}\t{ob}\t{nb}\t{why}\n')
 with open(P('params.tsv'), 'w') as f:

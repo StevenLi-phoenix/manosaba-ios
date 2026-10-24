@@ -4,7 +4,7 @@
 // (its first row not written either). Negative control: -DDM_TEST_OPTIONS_NO_CHECK (written without checking) writes c's first row.
 // Embedded (iOS, plan item 136): an image with a's new bytes, b's originals and c half written: a on, b and c off (c reported), b asked for and
 // missing reported; the embedded options not taken as on (-DDM_TEST_OPTIONS_EMBED_IGNORED) fails 1.
-#include "../options.c"
+#include "../runtime/options.c"
 #include <stdlib.h>
 #include <unistd.h>
 static int n, fail;

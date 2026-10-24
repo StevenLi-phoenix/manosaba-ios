@@ -21,7 +21,7 @@
 // swapchain 1920x1080 (the game's constant) and the canvas 0, which the cave leaves as the game laid it out, so the game looks as before.
 // +48 / +56: a live scene size (plan item 240, scene_latch_step below): the renderer the game picked a size for, and the flags asking for a pick.
 // +40: the factor on the cameras' aspect ratio (rules.py option aspect, plan item 154: four code caves multiply by it, by 1 while it is 0):
-// the wide picture's ratio (host/aspect.c: DM_ASPECT, the Mac's View → Wide Picture) over the game's 16:9 while it is on, 0 off; written at
+// the wide picture's ratio (host/game/aspect.c: DM_ASPECT, the Mac's View → Wide Picture) over the game's 16:9 while it is on, 0 off; written at
 // every present, so a switch reaches the next frame's cameras.
 #include <stdatomic.h>
 #include <stdio.h>

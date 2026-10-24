@@ -20,13 +20,13 @@ def feat(b):
     if re.search(r'LOG\(|die\(', s): f.append('has-log/abort')
     if len(s) < 60: f.append('very-short')
     return ','.join(f)
-for fn in sorted(glob.glob(os.path.join(H, 'hle_*.c'))):
+for fn in sorted(glob.glob(os.path.join(H, 'hle', 'hle_*.c'))):
     src = open(fn, encoding='utf-8').read()
     for m in re.finditer(r'\bHLE_FORCE\(\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*([^,]+),\s*(\w+)', src):
         b = body_of(src, m.end()); rows.append(('FORCE', os.path.basename(fn), src[:m.start()].count('\n') + 1, m.group(1), m.group(4), m.group(2), b.count('\n') + 1, feat(b)))
     for m in re.finditer(r'(?<![_A-Z])HLE\(\s*"([^"]+)"\s*,\s*([^,]+),\s*(\w+)', src):
         b = body_of(src, m.end()); rows.append(('HLE', os.path.basename(fn), src[:m.start()].count('\n') + 1, m.group(1), m.group(3), '', b.count('\n') + 1, feat(b)))
-src = open(os.path.join(H, 'hle_table.c'), encoding='utf-8').read()
+src = open(os.path.join(H, 'hle', 'hle_table.c'), encoding='utf-8').read()
 for n in re.findall(r'\bL\((\w+)\)', src): rows.append(('LIBC', 'hle_table.c', 0, n, n, 'libc passthrough', 0, ''))
 out = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdout'
 with open(out, 'w', encoding='utf-8') as f:

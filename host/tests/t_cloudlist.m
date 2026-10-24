@@ -3,7 +3,7 @@
 // needed: an unsigned process's query fails to start or gathers nothing, and either way it has started (here it answered in 0.07 s; the time is
 // printed, not checked, as a query nobody answers runs to the limit). Sent to the main queue from the main thread (-DDM_TEST_CLOUD_ALWAYS_DISPATCH)
 // it never starts and the call waits the whole limit: 1 fails.
-#include "../cloud.m"
+#include "../cloud/cloud.m"
 #include <stdio.h>
 module_t g_mod[MAX_MOD]; int g_nmod;
 uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC); }

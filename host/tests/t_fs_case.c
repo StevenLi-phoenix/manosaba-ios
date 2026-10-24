@@ -1,7 +1,7 @@
 // Horizon path case unit test: expectations are hand-written; runs real file operations on the default case-insensitive APFS.
 // Names differing only in case must coexist, all path components match exactly, directory listing still gives the guest names, and Commit/remount preserve names and content.
 #ifndef HLE_FS_SOURCE
-#define HLE_FS_SOURCE "../hle_fs.c"
+#define HLE_FS_SOURCE "../hle/hle_fs.c"
 #endif
 #include <sys/xattr.h>
 #include <errno.h>

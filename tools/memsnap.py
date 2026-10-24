@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reads the memory snapshots of DM_MEMSNAP (host/memsnap.c has the file format). Run with the workspace Python (numpy).
+"""Reads the memory snapshots of DM_MEMSNAP (host/diag/memsnap.c has the file format). Run with the workspace Python (numpy).
   memsnap.py summary A.bin             resident bytes per named range (prefix, alias, stack, heap, <module>.data)
   memsnap.py diff A.bin B.bin          per range: pages only in B (new), only in A (gone), in both with other bytes (changed); the largest new runs
   memsnap.py refs A.bin ADDR [LEN]     every 8-byte aligned word whose value lies in [ADDR, ADDR + LEN) (default LEN 8): who points into an object

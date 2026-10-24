@@ -37,7 +37,7 @@ void dm_gamepad_reset(void);
 void dm_gamepad_inject(int n, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 void dm_gamepad_unplug(int n);
 uint64_t dm_input_samples(void);   // how many times the game has read a controller (a front end can tell whether a press was seen)
-// The connected controller's six-axis sensor and vibration (host/hle_motion.c, plan item 67). Motion samples in nn::hid's frame: acceleration in G,
+// The connected controller's six-axis sensor and vibration (host/hle/hle_motion.c, plan item 67). Motion samples in nn::hid's frame: acceleration in G,
 // angular velocity in revolutions a second (360 degrees a second = 1), t_ns the sample's time (now_ns's clock); dm_motion_lost when the source goes away
 void dm_motion_set(const float acc[3], const float gyro[3], uint64_t t_ns);
 void dm_motion_lost(void);

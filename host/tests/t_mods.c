@@ -9,7 +9,7 @@
 // Files the game's own overlay changes (dm_mods_pin_overlay, plan item 164), in a second mods folder with an overlay whose manifest.tsv lists four:
 // a mod's copy that is the game's own file unchanged → the overlay's file; a changed copy with -merged/<its SHA-256>/<path> → that merge; a changed
 // copy without one → the mod's (no pin); a file no mod has → nothing. Negative control: -DDM_TEST_MODS_NO_PIN (the mod's copy always) fails 3.
-#include "../mods.c"
+#include "../game/mods.c"
 #include <stdlib.h>
 const dm_game_profile dm_game = { .id = "test", .program_id = 0x0100F2C0115B6000ull };
 int dm_overlay_file(const char *rel, char *out, size_t n);   // hle_fs.c's lookup, here as in hle_fs.c

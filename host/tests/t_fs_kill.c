@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-#include "../hle_fs.c"
+#include "../hle/hle_fs.c"
 struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; } void dm_prof_mark(const char *s) { (void)s; }
 void dm_prof_add(int id, uint64_t ns, uint64_t b) { (void)id; (void)ns; (void)b; } void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
 enum { NFILES = 64, TRIALS = 60 };

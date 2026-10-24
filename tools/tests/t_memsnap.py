@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/memsnap.py on two synthetic snapshots in host/memsnap.c's format (16 KB pages; heap at 0x100000000, main.data at 0x200000000):
+"""tools/memsnap.py on two synthetic snapshots in host/diag/memsnap.c's format (16 KB pages; heap at 0x100000000, main.data at 0x200000000):
 A has heap pages 0-2 and data page 0; B keeps heap page 0, changes page 1, drops page 2, adds pages 5-7 and data page 1. Summary bytes per range,
 diff's new / gone / changed / same per range and its largest new run, and refs: aligned words pointing into [0x100004000, +0x40) found (the bound
 excluded), an unaligned one not. IL2CPP class names on a third snapshot (plan item 141): objects named by their class record, a binary name and

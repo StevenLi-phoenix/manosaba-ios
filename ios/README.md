@@ -73,7 +73,7 @@ signer's profile decides the entitlements. AltStore reads the entitlements in th
 to decide which App ID features to turn on: without the ad hoc signature it turned on none, and the app kept the default memory limit
 (LNPANDY/nxnative-romfs-archive c3bccb5: about 3,375 MB on a 12 GB iPhone). The packaging line gives the IPA's size, with a note above 4 GiB:
 iOS refused a 16.6 GB IPA that held a whole Tears of the Kingdom RomFS (LNPANDY 13d9191). Without iCloud
-entitlements there is no save sync (`host/cloud.m` asks for the default container at run time); everything else works as in a free-account
+entitlements there is no save sync (`host/cloud/cloud.m` asks for the default container at run time); everything else works as in a free-account
 build. Tools that change the bundle ID are fine: nothing in the app depends on it. Tried on 2026-10-16 with LCSign on an iPad Pro (iOS 18.5):
 it signed with every entitlement of its profile (increased memory limit included, `get-task-allow` false), and the app ran.
 
@@ -93,21 +93,21 @@ it signed with every entitlement of its profile (increased memory limit included
   (Tears of the Kingdom: 304,243 files, about 17 GB) is quicker and safer to carry as parts: `tools/romfs_parts.py pack <RomFS> <out>` writes
   `romfs.000.dmrp` … and `romfs.dmri`; copy them into `Documents` (Files app or Finder), and the next launch checks each part's SHA-256,
   unpacks it into `Library/Application Support/romfs` and deletes it (16 parts in about 4.5 minutes on an iPhone 17 Pro; a launch cut short
-  carries on at the next; `host/romfs_parts.c`).
+  carries on at the next; `host/runtime/romfs_parts.c`).
 - **RomFS overlay** (Tears of the Kingdom's quick-menu backgrounds and game over flow at 60 fps and up, `games/totk/romfs_overlay.py`):
   `romfs_overlay` in the same three places (`push-data overlay` copies the workspace's `build/<game>/romfs_overlay`), served when its
-  `manifest.tsv` says it was made from the RomFS beside it (`host/romfs_validate.c`); `DM_ROMFS_OVERLAY` in env.txt names another, empty turns
+  `manifest.tsv` says it was made from the RomFS beside it (`host/runtime/romfs_validate.c`); `DM_ROMFS_OVERLAY` in env.txt names another, empty turns
   it off. Without it the 60 fps build draws the ability wheel (hold L) over black.
 - **Mods**: `Documents/mods` (Files app), one folder per mod (`<mod>/romfs`, or as shipped for Atmosphère), or an SD card's `atmosphere`
-  folder copied as is; earlier names win, a name starting with `-` turns a mod off; code mods are not applied (`host/mods.c`).
+  folder copied as is; earlier names win, a name starting with `-` turns a mod off; code mods are not applied (`host/game/mods.c`).
 - **On-screen controls** (games with game.json `touch` "pad": Tears of the Kingdom; `DM_TOUCH=pad` / `screen` overrides the profile, e.g.
-  to try them with manosaba): BotWRecomp's layout (`host/touchpad.c`): a floating stick on the left half, D-pad, ABXY, L / R / ZL / ZR, - / +,
+  to try them with manosaba): BotWRecomp's layout (`host/front/touchpad.c`): a floating stick on the left half, D-pad, ABXY, L / R / ZL / ZR, - / +,
   L3 / R3, and the right half outside the buttons turns the camera by the finger's speed. The eye button collapses them to itself (kept across
   launches); a connected game controller turns them off. Settings app → this app → Touch Camera: the camera swipe's sensitivity (0.25-3×,
   applied before the turn speed saturates) and inverted axes (`DM_TOUCH_LOOK=<sensitivity>[,x][,y]` at launch). `DM_TEST_TOUCHPAD=check:<s>`
   runs the input checks on the device and logs the result.
 - **Saves**: `Documents/save` (transactional, committed atomically). With iCloud entitlements the profile's `save_sync` files are synced
-  (`host/cloud.m`).
+  (`host/cloud/cloud.m`).
 - **Log**: `Documents/boot.txt` (the last foreground session; the one before is `boot.previous.txt`). Settings app → this app → "Show log on
   screen" draws the last lines over the game while playing ("Only [red] lines", "Lines": 8 / 14 / 24; touches pass through). Launched with
   `DM_LOG_PORT=<port>`, the app also serves its log over USB: `iproxy <local> <port>`, then `tools/logport.py tail <local>`.
@@ -138,7 +138,7 @@ the code option `scene`: `games/totk/frame_step.c`, that many lines at 16:9; rea
 | File | What it does |
 |---|---|
 | `Sources/main.m` | App and scene delegates, log, finding the game data, graphics settings, starting the host |
-| `Sources/front_ios.m` | The front end (`host/front.h`): Metal layer, touches, on-screen controls (`host/touchpad.c`), controllers, lifecycle |
+| `Sources/front_ios.m` | The front end (`host/front.h`): Metal layer, touches, on-screen controls (`host/front/touchpad.c`), controllers, lifecycle |
 | `Sources/log_overlay.m`, `Settings.bundle` | On-screen log and frame rate line; the Settings app page (graphics settings and the log switches) |
 | `Sources/diag_export.m` | Diagnostics export (the Export Diagnostics quick action) |
 | `project.yml` | xcodegen spec; `tools/project_free.py` / `tools/project_m3.py` derive the free-account and iOS 18 variants |

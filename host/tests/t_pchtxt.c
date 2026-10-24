@@ -1,4 +1,4 @@
-// pchtxt patches at load (host/pchtxt.c, plan item 150a), on a synthetic product (main of build 0123…cdef: a rewritten word at 0x100, a window
+// pchtxt patches at load (host/game/pchtxt.c, plan item 150a), on a synthetic product (main of build 0123…cdef: a rewritten word at 0x100, a window
 // 0x200-0x220, a region with pieces 0x300-0x310 and 0x340-0x344, a code cave at 0x400, an option row at 0x500-0x504; sdk of another build):
 //   a file for main (its @nsobid in upper case, 40 digits): its @enabled lines written, a @disabled section's and those after @stop not, comments
 //   ignored; returns 1
@@ -9,7 +9,7 @@
 //   later offset_shift applies to the lines after it; "#" lines are information; print_values taken; another flag, or an offset before the image
 //   (offset + shift < 0x100), refuses the file
 // Written over the rewritten code (-DDM_TEST_PCHTXT_NO_CHECK): 5 fail. Every @flag skipped and "#" not special (-DDM_TEST_PCHTXT_OLD_FLAGS): 5 fail.
-#include "../pchtxt.c"
+#include "../game/pchtxt.c"
 #include <sys/stat.h>
 #include <unistd.h>
 static int n, fail;

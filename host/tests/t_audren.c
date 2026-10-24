@@ -2,7 +2,7 @@
 // before the SDK's CloseAudioRenderer runs, even when a round takes 30 ms. The close used to give the thread 20 ms: the SDK tore the renderer down
 // under a round still running, and the output was never closed (it kept its sink and one of the AudioOut slots). SDK functions, guest threads and the
 // PCM output are stand-ins here.
-#include "../hle_audren.c"
+#include "../hle/hle_audren.c"
 #include <pthread.h>
 struct dm_flags g_flag;
 void hle_bind_system_event(void *ev, int autoclear) { (void)ev; (void)autoclear; }

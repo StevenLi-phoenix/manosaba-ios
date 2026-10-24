@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../hle_svc.c"
+#include "../hle/hle_svc.c"
 #include "../rodata_seal.h"
 
 struct dm_flags g_flag; uint64_t g_t0_ns; module_t g_mod[MAX_MOD]; int g_nmod;

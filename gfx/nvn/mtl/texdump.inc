@@ -3,7 +3,7 @@
 // Diagnostic: before the first render pass of the next frame is opened, wait for the GPU to finish, then draw each one (the mip level used by that frame) by full-screen sampling into RGBA8 and save as PNG (float formats are clamped to [0,1])
 static long g_td_frame = -2; static const char *g_td_path; static NSMutableArray *g_td_list; static int g_td_done;
 static void td_dump(void);
-void mtl_texdump_next(const char *path) {   // the command channel's "texdump <path>" (host/cmdchan.c): the next frame's colour targets, as DM_NVN_TEXDUMP
+void mtl_texdump_next(const char *path) {   // the command channel's "texdump <path>" (host/front/cmdchan.c): the next frame's colour targets, as DM_NVN_TEXDUMP
     static char p[4][1024]; static int k; snprintf(p[k], sizeof p[k], "%s", path);
     if (!g_td_list) g_td_list = [NSMutableArray array];
     g_td_path = p[k]; k = (k + 1) & 3; g_td_done = 0;

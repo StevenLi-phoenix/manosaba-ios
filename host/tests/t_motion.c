@@ -1,4 +1,4 @@
-// The six-axis sensor and the vibration devices of the connected controller (host/hle_motion.c, plan item 67):
+// The six-axis sensor and the vibration devices of the connected controller (host/hle/hle_motion.c, plan item 67):
 //   handles as Tears of the Kingdom's sdk makes them (vibration: full key {3, 0x10003}, handheld 0x20 {0x2004, 0x12004}, Joy-Con pair, left, right;
 //   six-axis: full key {0x20003}, handheld {0x22004}, pair two, left, right; another style or Npad none)
 //   vibration: only the connected controller's devices reach the front end (docked: full key; a handheld device's values go nowhere); queued values
@@ -13,8 +13,8 @@
 //   handheld: the handheld sensor connected, the full key one not
 // Every style's values forwarded (-DDM_TEST_VIB_ALL_STYLES): 1 fails; no peak hold (-DDM_TEST_VIB_NO_PEAK): 1 fails; the zero point never learned
 // (-DDM_TEST_SIX_NO_BIAS): 1 fails; the gyro alone, no gravity (-DDM_TEST_SIX_NO_GRAVITY): 1 fails.
-#include "../hle_hid.c"
-#include "../hle_motion.c"
+#include "../hle/hle_hid.c"
+#include "../hle/hle_motion.c"
 module_t g_mod[MAX_MOD]; int g_nmod;
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 uint64_t now_ns(void) { return 1000000000ull; }

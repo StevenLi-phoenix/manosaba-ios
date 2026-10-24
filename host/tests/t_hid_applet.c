@@ -2,8 +2,8 @@
 // operation mode connects (No.1, 0, docked; handheld, 0x20, in handheld mode), at +0 and +4 of ControllerSupportResultInfo (SDK reference), the
 // padding left alone; the variant without a result succeeds. OpenPreselectedUser (the Result variant) opens the same user as TryOpenPreselectedUser.
 // Nothing written, as the stub (-DDM_TEST_CTLSUPPORT_SILENT): 2 fail.
-#include "../hle_hid.c"
-#include "../hle_account.c"
+#include "../hle/hle_hid.c"
+#include "../hle/hle_account.c"
 module_t g_mod[MAX_MOD]; int g_nmod;
 void hle_bind_system_event(void *g, int autoclear) { (void)g; (void)autoclear; }
 void hle_signal_system_event(void *g) { (void)g; }

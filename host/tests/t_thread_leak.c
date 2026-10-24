@@ -14,7 +14,7 @@ static _Atomic long g_freed_req;   // number of frees
 static void t_free(void *p) { if (!p) return; atomic_fetch_sub(&g_live_blocks, 1); atomic_fetch_add(&g_freed_req, 1); free(p); }
 #define calloc t_calloc
 #define free t_free
-#include "../thread.c"
+#include "../runtime/thread.c"
 #undef calloc
 #undef free
 

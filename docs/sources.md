@@ -130,8 +130,8 @@ The items: [plan-archive.md](plan-archive.md); the open ones: [DEVELOPMENT.md](.
   MixWithOthers 46b63f4; the RomFS overlay 601258f; pending writes across submissions, acquire sync, keep-alive, chunked commits, uniform
   snapshot and rename, the render-state filter, one compute encoder, upload staging, identical registrations, the dirty-tracking cost, layered
   passes. The encode stage was implemented and left off that day (on by default on iOS since batch 82).
-- From the early plan list: the AudioRenderer and deferred texture binds (a267ec1), VP9 movies (a8c3ff1, `host/movie_webm.c`), small guest
-  stacks (40, `host/hstack.S`), the BAHS shader split (`engines/bnsh/shader_extract.py`, 70cb843, 17766ae, 36), a texture at two colour slots
+- From the early plan list: the AudioRenderer and deferred texture binds (a267ec1), VP9 movies (a8c3ff1, `host/media/movie_webm.c`), small guest
+  stacks (40, `host/runtime/hstack.S`), the BAHS shader split (`engines/bnsh/shader_extract.py`, 70cb843, 17766ae, 36), a texture at two colour slots
   (`rt_dup_slot`, through tomodachi-native's variant), face buttons by printed glyph (2; Kamisorara 8429dc1 was the earlier, wrong variant).
 
 ## Port when a game needs it
@@ -141,7 +141,7 @@ The items: [plan-archive.md](plan-archive.md); the open ones: [DEVELOPMENT.md](.
   with `DM_NVN_MAGSCAN` (20cba12c4299d77f05b6bbfd3dfa42d6c6035da4, `nvn_mtl.m`); the submission handed to the GPU every 64 draws for games that
   wait for the GPU every frame (`DM_NVN_CUT`, ff74840…).
 - Diagnostics: `DM_NVN_KEYDUMP` and sampler / swizzle output in PASSDUMP (734a286328d18404fd5a67785a1e05d2149c5986).
-- nn::ro .nro modules: nx-port `dm/host/hle_ro.c` and loader changes (3e6366b…), with `R_AARCH64_TLSDESC` and symbol precedence.
+- nn::ro .nro modules: nx-port `dm/host/hle/hle_ro.c` and loader changes (3e6366b…), with `R_AARCH64_TLSDESC` and symbol precedence.
 - Older Unity bundles: nxnative `dm/gfx/tools/unityfs.py` (e3cd2ff8ff0eb84a62280ef70e90c60753e546e6).
 - Tools, nxnative: nso_syms.py (aa8cc5c0cd8bd5d09bcacb019f7832df3a164452); nso_fnmap.py, carrying cuts to a new build of `main`
   (b5507f2aac7e1d1f5512de750f5810a550162b04, also for a manosaba update); build_ipa_from_nsp.py (0d763ec864344610cc41548a2ad01cd55def3182); DLC

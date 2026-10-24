@@ -76,7 +76,7 @@ def relocs(img):
     return out
 
 def product_image(out_dir, mod, options=None):
-    """<mod>.patched.bin of a product with its code options applied as the host's loader does (host/options.c): those named (a list), or all the
+    """<mod>.patched.bin of a product with its code options applied as the host's loader does (host/runtime/options.c): those named (a list), or all the
     product's <mod>.options.tsv lists (None); each row's original bytes checked first."""
     import os
     img = bytearray(open(os.path.join(out_dir, f'{mod}.patched.bin'), 'rb').read())

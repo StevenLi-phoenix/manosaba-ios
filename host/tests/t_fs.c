@@ -19,7 +19,7 @@
 #include <unistd.h>
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
 #define pwrite fake_pwrite
-#include "../hle_fs.c"
+#include "../hle/hle_fs.c"
 #undef pwrite
 ssize_t pwrite(int, const void *, size_t, off_t);
 

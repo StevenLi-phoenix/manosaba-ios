@@ -13,7 +13,7 @@
 // stopped behind the host's back (as iOS does when Siri, an alarm or a call takes the session) → within 0.5 s the silent sink plays on (blocks
 // keep being released) and about a second later the unit is started again; without the watchdog (-DDM_TEST_AUDIO_NO_WATCHDOG) that fails.
 // A device that does not take blocks by itself first (a CI runner's virtual one: none in 0.3 s, then the watchdog stepping in) is not checked.
-#include "../hle_audio.c"
+#include "../hle/hle_audio.c"
 #include <fcntl.h>
 #include <signal.h>
 #include <time.h>

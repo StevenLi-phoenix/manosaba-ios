@@ -6,7 +6,7 @@
 //   subsdk0 refers to baz, local in main and global in sdk: ours main's, rtld's sdk's (local definitions are not found)
 // Three bound otherwise, counted; rtld's taken by default (DM_RTLD unset) and with DM_RTLD=1. The profile's order kept
 // (-DDM_TEST_RTLD_LOAD_ORDER): 3 fail; ours the default (-DDM_TEST_RTLD_DEFAULT_OURS): 1 fails.
-#include "../loader.c"
+#include "../runtime/loader.c"
 
 struct dm_flags g_flag;
 uint64_t unimpl_stubs[4096];

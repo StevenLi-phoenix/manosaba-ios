@@ -8,7 +8,7 @@
 //   FlushAudioOutBuffers stopped: false, nothing moved; started: true, the third (part played) released unplayed after the two played, the count 0
 //   started again with nothing queued: played 0 (since this StartAudioOut)
 // Volume not applied (-DDM_TEST_AUDIO_VOLUME_IGNORED): 3 fail; the played count not started again (-DDM_TEST_AUDIO_PLAYED_KEPT): 1 fails.
-#include "../hle_audio.c"
+#include "../hle/hle_audio.c"
 #include <time.h>
 uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
 static struct { const void *k; void *v; } om[8];

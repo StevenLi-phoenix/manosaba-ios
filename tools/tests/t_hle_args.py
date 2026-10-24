@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/hle_args.py: host functions the guest calls take every argument in a register (host/hstack.S runs them on the host stack). Synthetic
+"""tools/hle_args.py: host functions the guest calls take every argument in a register (host/runtime/hstack.S runs them on the host stack). Synthetic
 sources: 8 integer + 8 floating-point parameters pass; a 9th of either, "...", a struct passed by value and a vtable slot with 9 parameters are
 found, also with a comment inside the vtable; a commented-out definition is not counted; this repository's sources have no finding."""
 import os, sys

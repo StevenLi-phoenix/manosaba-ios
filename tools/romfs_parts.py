@@ -2,7 +2,7 @@
 """A RomFS tree as parts of at most 1 GiB with an index, to carry to the iOS app (plan item 62e; the idea from totk-mobile and acnh-mobile, which
 move their game data as a few large files: Tears of the Kingdom's RomFS is tens of thousands of files, 17 GB, slow and fragile to copy one by
 one). The app unpacks them into Application Support/romfs at its next launch, checking each part's SHA-256 first and deleting each part once its
-files are written (host/romfs_parts.c; an unpacking cut short goes on at the next launch), then validates the tree as before (plan item 175).
+files are written (host/runtime/romfs_parts.c; an unpacking cut short goes on at the next launch), then validates the tree as before (plan item 175).
 
   romfs_parts.py pack <tree> <out dir> [--part-mb N]   writes romfs.000.dmrp ... and romfs.dmri (N: 1024 by default; --part-bytes N for tests)
   romfs_parts.py check <out dir>                       the parts against the index

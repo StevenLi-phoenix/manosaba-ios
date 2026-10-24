@@ -5,7 +5,7 @@
 // with where, and counted as broken because A's class has whole lists while D's garbage is not. A list with a null next is found, and
 // DM_LIST_WATCH=heap+<offset> dumps the threads once when a list breaks while it watches.
 // Negative control: -DDM_TEST_SEAD_BROKEN (a heap taken whether or not it reaches the address) fails "past A's end".
-#include "../sead.c"
+#include "../diag/sead.c"
 #include <stdatomic.h>
 #include <sys/mman.h>
 static int n, fail;

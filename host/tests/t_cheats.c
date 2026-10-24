@@ -1,8 +1,8 @@
-// Which cheats are written into main's code at load (host/cheats.c code_cheat, plan item 150b), with main's text ending at 0x10000 and a word the
+// Which cheats are written into main's code at load (host/game/cheats.c code_cheat, plan item 150b), with main's text ending at 0x10000 and a word the
 // rewriter changed at 0x2000: stores only into the code, 4 and 8 bytes aligned: written (1); one over the changed word, a 2-byte or a misaligned
 // one: refused (-1); stores only into data, or a program that starts otherwise: run on the thread (0); stores into the code and elsewhere, or code
 // stores then another instruction: refused (-1). The rewriter's words not checked (-DDM_TEST_CHEATS_NO_REWRITE_CHECK): 1 fails.
-#include "../cheats.c"
+#include "../game/cheats.c"
 module_t g_mod[MAX_MOD]; int g_nmod;
 int dm_rewrite_touches(const char *dir, const char *module, uint64_t lo, uint64_t hi) { (void)dir; (void)module; return lo < 0x2004 && 0x2000 < hi; }
 int hle_hid_last(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) { *b = 0; *lx = *ly = *rx = *ry = 0; return 0; }

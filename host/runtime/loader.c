@@ -168,7 +168,7 @@ static void force_init(void) {
         for (unsigned j = i + 1; j < g_nforce; j++)
             if (!strcmp(g_force[i].name, g_force[j].name)) die("forced takeover listed twice: %s", g_force[i].name);
 }
-// What the game's references to name are bound to (host/sdktest.c): the host function when it is taken over (HLE_FORCE), else the module's own
+// What the game's references to name are bound to (host/diag/sdktest.c): the host function when it is taken over (HLE_FORCE), else the module's own
 // definition. guest_sym gives the definition even when the game's calls go to the host
 void *dm_sym_bound(const char *name) {
     for (unsigned i = 0; i < g_nforce; i++) if (!strcmp(g_force[i].name, name)) return g_force[i].fn;

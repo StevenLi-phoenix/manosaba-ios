@@ -2,10 +2,10 @@
 // sdk); the crypto and os random bytes from the same stream: with DM_DETCLOCK the stream's own values in order (getentropy, then crypto, then os).
 // GetSharedFont over six plain TTF files in a temporary DM_SYSFONT: six fonts, each SharedFontData (24 bytes) with its type, the address GetSharedFontAddress gives and its size; a smaller array takes the first entries, the count still six. Fonts left out by
 // type order (-DDM_TEST_FONT_REVERSED): 2 fail.
-#include "../hle_os.c"
-#include "../hle_pl.c"
+#include "../hle/hle_os.c"
+#include "../hle/hle_pl.c"
 #include <unistd.h>
-void crash_watch_frame(void) {}   // host/crash.c in the host
+void crash_watch_frame(void) {}   // host/runtime/crash.c in the host
 void dm_guest_clock_advanced(void) {}
 
 static int n, fail;

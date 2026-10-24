@@ -1,7 +1,7 @@
 // Atmosphère's cheat programs (plan item 150b): the file format the Switch scene, Yuzu and Ryujinx use ("[Name]" sections of 32-bit hex words,
 // "{Master}" sections that always run) and its virtual machine, written from Atmosphère's documentation of the opcodes (docs/features/cheats.md:
 // the encodings and their fields; facts only, Atmosphère's code is GPL) after MacNativeGames PR #22's split of a game-independent VM from the host's
-// glue (MIT, open; written anew). Game-independent: host/cheats.c gives the regions' bases, guarded memory access and the held buttons. Checked by
+// glue (MIT, open; written anew). Game-independent: host/game/cheats.c gives the regions' bases, guarded memory access and the held buttons. Checked by
 // host/tests/t_cheat_vm.c.
 //   Encodings (nibbles from the top of the first word; parentheses: a second value word when T = 8):
 //   0TMR00AA AAAAAAAA VVVVVVVV (VVVVVVVV)   store V (T bytes) at region M + register R + A

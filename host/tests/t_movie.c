@@ -3,7 +3,7 @@
 // an unknown-sized Cluster that ends where the next Cluster begins, then read through the Extractor and decoded through the Decoder (NV12 values,
 // events, end of stream, output format, pacing and dropping late frames). Expected values come from the encoder input, not from the code under test.
 // t_movie <file.webm>: probe a real movie instead (every frame through the same path; decode errors, timing, three frames as PPM in $TMPDIR).
-#include "../hle_movie.c"
+#include "../hle/hle_movie.c"
 #include <vpx/vp8cx.h>
 #include <vpx/vpx_encoder.h>
 #include <time.h>
