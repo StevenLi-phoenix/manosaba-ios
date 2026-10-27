@@ -8,7 +8,7 @@ typedef NS_ENUM(NSInteger, ManosabaSyncMode) {
     ManosabaSyncModePushOnly,  // while the game runs: never touch local files
 };
 
-// Syncs every *.nson file (save slots, quick/auto saves, GlobalSave) between `local` and `cloud`.
+// Syncs every *.nson file (save slots, quick/auto saves, GlobalSave) and Settings.json between `local` and `cloud`.
 // The manifest remembers each file's hash at the last sync, so a change on one side is copied
 // over and a deletion is propagated; when both sides changed, the newer modification date wins.
 // `cloudReady` says whether a cloud file's contents are on this device (iCloud may still be
@@ -20,3 +20,6 @@ NSDictionary<NSString*, NSNumber*>* ManosabaSyncSaves(NSURL* local, NSURL* cloud
                                                      ManosabaSyncMode mode, NSTimeInterval settle,
                                                      BOOL (^cloudReady)(NSURL* url),
                                                      BOOL (^allowLocalWrites)(void));
+
+// Whether a file in the save folder takes part in the sync.
+extern "C" BOOL ManosabaIsSyncedName(NSString* name);

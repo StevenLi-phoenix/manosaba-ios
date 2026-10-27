@@ -106,7 +106,7 @@ To share saves between your iPhone and iPad:
 2. Attach it to the App ID (App ID → iCloud → Configure).
 3. Patch with `ICLOUD_CONTAINER=iCloud.<bundle id> ruby tools/patch_xcode.rb build/xcode build/gen` and build as above.
 
-At launch the app pulls the other device's saves before the game reads them. It pushes its own saves when it goes to the background. To switch devices, send the game to the background on one device, then start it fresh on the other. Look for `[icloud]` in the device console.
+At launch the app pulls the other device's saves before the game reads them. It pushes its own saves and the game's settings when it goes to the background. To switch devices, send the game to the background on one device, then start it fresh on the other. Look for `[icloud]` in the device console.
 
 ## Install without a cable
 

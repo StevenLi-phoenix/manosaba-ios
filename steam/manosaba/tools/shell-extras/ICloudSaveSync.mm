@@ -1,6 +1,6 @@
 // Manosaba: keep the game's saves in step across the user's devices through iCloud.
 // Local saves live in Documents/Saves_v1 (Application.persistentDataPath); the shared copy lives
-// in the app's iCloud container under Saves_v1. Settings.json stays per device.
+// in the app's iCloud container under Saves_v1, together with the game's Settings.json.
 //   * launch, before Unity starts and the game reads its saves: full two-way sync (<= 6 s)
 //   * background / every 2 min / terminate: push local changes only
 // Without the iCloud entitlement (or with iCloud Drive off) every step is a logged no-op.
@@ -43,7 +43,7 @@ static void ManosabaDownloadCloudSaves(CFAbsoluteTime deadline)
         for (NSString* f in [fm contentsOfDirectoryAtPath:sCloud.path error:nil])
         {
             NSString* name = [f hasPrefix:@"."] && [f hasSuffix:@".icloud"] ? [[f substringFromIndex:1] stringByDeletingPathExtension] : f;
-            if (![name.pathExtension isEqualToString:@"nson"]) continue;
+            if (!ManosabaIsSyncedName(name)) continue;
             if (!ManosabaCloudReady([sCloud URLByAppendingPathComponent:name])) pending++;
         }
         if (pending == 0 || CFAbsoluteTimeGetCurrent() > deadline)

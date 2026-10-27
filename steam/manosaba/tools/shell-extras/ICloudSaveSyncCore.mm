@@ -18,19 +18,26 @@ static NSDate* ManosabaModDate(NSURL* url)
     return date ?: [NSDate distantPast];
 }
 
-// Save files in a folder. iCloud placeholders (".Name.nson.icloud") count as present but unreadable.
+// What is synced: every save (*.nson: slots, quick/auto saves, GlobalSave) and the game's settings.
+extern "C" BOOL ManosabaIsSyncedName(NSString* name)
+{
+    return ![name hasPrefix:@"."] && ([name.pathExtension isEqualToString:@"nson"] || [name isEqualToString:@"Settings.json"]);
+}
+
+// Synced files in a folder. iCloud placeholders (".Name.icloud") count as present but unreadable.
 static NSSet<NSString*>* ManosabaSaveNames(NSURL* dir, NSMutableSet<NSString*>* placeholders)
 {
     NSMutableSet* names = [NSMutableSet set];
     for (NSString* f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir.path error:nil])
     {
-        if ([f hasPrefix:@"."] && [f hasSuffix:@".nson.icloud"])
+        if ([f hasPrefix:@"."] && [f hasSuffix:@".icloud"])
         {
             NSString* name = [[f substringFromIndex:1] stringByDeletingPathExtension];
+            if (!ManosabaIsSyncedName(name)) continue;
             [names addObject:name];
             [placeholders addObject:name];
         }
-        else if (![f hasPrefix:@"."] && [f.pathExtension isEqualToString:@"nson"])
+        else if (ManosabaIsSyncedName(f))
             [names addObject:f];
     }
     return names;

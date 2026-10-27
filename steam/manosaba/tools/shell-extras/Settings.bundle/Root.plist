@@ -39,7 +39,7 @@
 		<dict>
 			<key>Type</key><string>PSGroupSpecifier</string>
 			<key>Title</key><string>存档</string>
-			<key>FooterText</key><string>在登录同一 Apple ID 的 iPhone 和 iPad 之间同步存档（游戏设置不同步）。换设备时先把游戏切到后台，再在另一台设备上重新打开。下次启动游戏时生效。</string>
+			<key>FooterText</key><string>在登录同一 Apple ID 的 iPhone 和 iPad 之间同步存档和游戏设置（音量、文字速度等）。换设备时先把游戏切到后台，再在另一台设备上重新打开。下次启动游戏时生效。</string>
 		</dict>
 		<dict>
 			<key>Type</key><string>PSToggleSwitchSpecifier</string>

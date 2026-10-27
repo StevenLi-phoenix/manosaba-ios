@@ -383,7 +383,7 @@ def test_icloud_save_sync_scenarios(tmp_path: Path) -> None:
     run = subprocess.run([str(exe), str(tmp_path / "work")], capture_output=True, text=True)
     print(run.stdout)
     assert run.returncode == 0, run.stdout
-    assert run.stdout.count("\nok ") + run.stdout.startswith("ok ") == 12
+    assert run.stdout.count("\nok ") + run.stdout.startswith("ok ") == 13
 
 
 import transcode_textures as tt  # noqa: E402

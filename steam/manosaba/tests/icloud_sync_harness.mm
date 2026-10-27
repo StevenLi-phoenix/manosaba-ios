@@ -42,10 +42,12 @@ static void FirstSyncUploadsEverything(void)
     Put(gLocal, @"GameSave001.nson", @"a", 100);
     Put(gLocal, @"GlobalSave.nson", @"g", 100);
     Put(gLocal, @"Settings.json", @"per-device", 100);
+    Put(gLocal, @"steam_autocloud.vdf", @"not a save", 100);
     NSDictionary* s = Sync(ManosabaSyncModeFull);
-    CHECK([s[@"pushed"] intValue] == 2);
+    CHECK([s[@"pushed"] intValue] == 3);
     CHECK([Get(gCloud, @"GameSave001.nson") isEqualToString:@"a"]);
-    CHECK(Get(gCloud, @"Settings.json") == nil);  // settings stay per device
+    CHECK([Get(gCloud, @"Settings.json") isEqualToString:@"per-device"]);  // game settings sync too
+    CHECK(Get(gCloud, @"steam_autocloud.vdf") == nil);                      // other files do not
     s = Sync(ManosabaSyncModeFull);
     CHECK([s[@"pushed"] intValue] == 0 && [s[@"pulled"] intValue] == 0);
 }
@@ -139,6 +141,19 @@ static void FirstSyncOnNewDevicePrefersCloud(void)
     CHECK([Get(gCloud, @"GameAutoSave261026185037218.nson") isEqualToString:@"test-auto"]);  // new names still upload
 }
 
+static void NewerSettingsWinAcrossDevices(void)
+{
+    FirstSyncUploadsEverything();
+    Put(gCloud, @"Settings.json", @"volume from the iPad", 5);   // changed on the other device
+    NSDictionary* s = Sync(ManosabaSyncModeFull);
+    CHECK([s[@"pulled"] intValue] == 1);
+    CHECK([Get(gLocal, @"Settings.json") isEqualToString:@"volume from the iPad"]);
+    Put(gCloud, @".Settings.json.icloud", @"placeholder", 5);    // not downloaded yet on this device
+    [[NSFileManager defaultManager] removeItemAtURL:[gCloud URLByAppendingPathComponent:@"Settings.json"] error:nil];
+    s = Sync(ManosabaSyncModeFull);
+    CHECK([s[@"skipped"] intValue] == 1 && [s[@"deletedLocal"] intValue] == 0);
+}
+
 static void EmptiedCloudIsRefilledNotMirrored(void)
 {
     FirstSyncUploadsEverything();
@@ -146,7 +161,7 @@ static void EmptiedCloudIsRefilledNotMirrored(void)
     [fm removeItemAtURL:gCloud error:nil];
     NSDictionary* s = Sync(ManosabaSyncModeFull);
     CHECK([s[@"deletedLocal"] intValue] == 0);
-    CHECK([s[@"pushed"] intValue] == 2);
+    CHECK([s[@"pushed"] intValue] == 3);
     CHECK([Get(gLocal, @"GameSave001.nson") isEqualToString:@"a"]);
 }
 
@@ -194,6 +209,7 @@ int main(int argc, char** argv)
             {"conflict_newer_edit_wins", ConflictNewerEditWins},
             {"conflict_loser_is_kept_in_trash", ConflictLoserIsKeptInTrash},
             {"first_sync_on_new_device_prefers_cloud", FirstSyncOnNewDevicePrefersCloud},
+            {"newer_settings_win_across_devices", NewerSettingsWinAcrossDevices},
             {"emptied_cloud_is_refilled_not_mirrored", EmptiedCloudIsRefilledNotMirrored},
             {"placeholder_is_skipped", PlaceholderIsSkipped},
             {"file_being_written_is_skipped", FileBeingWrittenIsSkipped},

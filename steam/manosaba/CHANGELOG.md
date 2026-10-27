@@ -40,7 +40,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - When the app goes to the background, every 2 minutes, and on exit, local changes are pushed.
   - Save files are compared by hash against the last sync. When both sides changed, the newer edit wins.
   - A save deleted on the other device is moved to a local trash folder, not removed. An emptied iCloud folder is refilled from the local copy instead of being mirrored.
-  - `Settings.json` stays per device.
+  - The game's `Settings.json` (volume, text speed, auto-play delay, font) syncs as well; the newer change wins.
 
 ### Added (settings)
 - A manosaba page in the iOS Settings app (`Settings.bundle`, read by `ManosabaSettings.mm`):
