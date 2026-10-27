@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Local-network install page for the iPad: UDID capture (Profile Service) + OTA install.
+"""Local-network install page: UDID capture (Profile Service) and over-the-air install of two packages.
 
-Run behind `tailscale serve --https=8443 http://127.0.0.1:8765`.
-  GET  /                  landing page (Chinese), shows captured UDID and the install button
-  GET  /udid.mobileconfig Profile Service payload asking the device for its UDID
-  POST /udid              device callback (CMS-signed plist) -> logs/ipad-udid.json
-  GET  /manifest.plist    itms-services manifest (when build/ota/manosaba.ipa exists)
-  GET  /manosaba.ipa      the IPA, with HTTP Range support
+  placeholderunlockdev.ipa  tools/devunlock, a ~100 KB placeholder of our own with the game's bundle id.
+                            A development-signed app makes the Developer Mode switch appear on a device
+                            that has never been connected to Xcode.
+  manosaba.ipa              your own build of the game from your own Steam install; it replaces the
+                            placeholder in place (same bundle id), later builds upgrade it and keep the saves.
+
+Both live in build/ota/. Serve the page over HTTPS with a certificate iOS trusts, e.g.
+`tailscale serve --https=8443 http://127.0.0.1:8765`.
+  GET  /                          landing page (Chinese): UDID, both install buttons
+  GET  /udid.mobileconfig         Profile Service payload asking the device for its UDID
+  POST /udid                      device callback (CMS-signed plist) -> logs/ipad-udid.json
+  GET  /unlock.plist, /manifest.plist   itms-services manifests (placeholder, game) when the file exists
+  GET  /placeholderunlockdev.ipa, /manosaba.ipa   the packages, with HTTP Range support
 """
 from __future__ import annotations
 
@@ -24,7 +31,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # The HTTPS origin the device reaches, e.g. the `tailscale serve --https=8443` URL of this Mac.
 BASE = os.environ.get("OTA_BASE", "https://your-mac.example:8443")
-IPA = ROOT / "build/ota/manosaba.ipa"
+OTA_DIR = ROOT / "build/ota"
+# key: (file in OTA_DIR, manifest path, title on the device, bundle version)
+PACKAGES = {
+    "unlock": ("placeholderunlockdev.ipa", "/unlock.plist", "manosaba（开发者模式占位）", "0.0.1"),
+    "game": ("manosaba.ipa", "/manifest.plist", "manosaba", "1.1.2"),
+}
 UDID_FILE = ROOT / "logs/ipad-udid.json"
 BUNDLE_ID = os.environ.get("MANOSABA_BUNDLE_ID", "com.example.manosaba")
 
@@ -50,10 +62,12 @@ code{{background:#2b2240;padding:2px 8px;border-radius:6px;font-size:15px;word-b
 <p>点按钮 → 允许下载描述文件 → 打开「设置」顶部的「已下载描述文件」→ 安装。装完会自动回到这里。</p>
 <a class="btn" href="/udid.mobileconfig">读取 UDID</a>
 <p style="margin-top:14px">{udid}</p></div>
-<div class="step"><h2>② 安装游戏</h2><p>{ipa_note}</p>
-<a class="btn {ipa_cls}" href="itms-services://?action=download-manifest&amp;url={base}/manifest.plist">{ipa_label}</a></div>
-<div class="step"><h2>③ 打开开发者模式</h2>
-<p>装好后：设置 → 隐私与安全性 → 开发者模式 → 打开，按提示重启。重启后再点主屏幕上的 manosaba。</p></div>
+<div class="step"><h2>② 打开开发者模式（已开过就跳过）</h2>
+<p>开发者模式的开关只在装过开发签名的 App 后才出现。还没开过的话，先装这个约 100 KB 的占位 App，到 设置 → 隐私与安全性 → 开发者模式 打开并重启，确认它能打开，再下载几 GB 的游戏，免得下载完才发现进不去。{unlock_note}</p>
+<a class="btn {unlock_cls}" href="itms-services://?action=download-manifest&amp;url={base}/unlock.plist">{unlock_label}</a></div>
+<div class="step"><h2>③ 安装游戏</h2>
+<p>你用自己的 Steam 版构建的 manosaba，会原地替换占位 App；以后的新版本覆盖升级，存档保留。{game_note}</p>
+<a class="btn {game_cls}" href="itms-services://?action=download-manifest&amp;url={base}/manifest.plist">{game_label}</a></div>
 </main></body></html>"""
 
 
@@ -73,11 +87,27 @@ def mobileconfig() -> bytes:
     })
 
 
-def manifest() -> bytes:
+def manifest(kind: str = "game") -> bytes:
+    file, _, title, version = PACKAGES[kind]
     return plistlib.dumps({"items": [{
-        "assets": [{"kind": "software-package", "url": f"{BASE}/manosaba.ipa"}],
-        "metadata": {"bundle-identifier": BUNDLE_ID, "bundle-version": "1.1.2", "kind": "software", "title": "manosaba"},
+        "assets": [{"kind": "software-package", "url": f"{BASE}/{file}"}],
+        "metadata": {"bundle-identifier": BUNDLE_ID, "bundle-version": version, "kind": "software", "title": title},
     }]})
+
+
+def package(kind: str) -> Path | None:
+    p = OTA_DIR / PACKAGES[kind][0]
+    return p if p.is_file() else None
+
+
+def button(kind: str, verb: str) -> tuple[str, str, str]:
+    """(css class, label, note) for a package's install button."""
+    p = package(kind)
+    if not p:
+        return "off", verb, f"（还没有 build/ota/{PACKAGES[kind][0]}，按 README 生成后刷新本页。）"
+    size = p.stat().st_size
+    shown = f"{size / 2**30:.1f} GB" if size > 2**30 else f"{max(1, size // 2**20)} MB"
+    return "", f"{verb}（{shown}）", ""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -103,18 +133,17 @@ class Handler(BaseHTTPRequestHandler):
             if UDID_FILE.exists():
                 d = json.loads(UDID_FILE.read_text())
                 udid = f'<span class="ok">已读取：</span><code>{html.escape(d.get("UDID", ""))}</code>（{html.escape(d.get("PRODUCT", ""))}，iPadOS {html.escape(d.get("VERSION", ""))}）'
-            ready = IPA.exists()
-            size = IPA.stat().st_size if ready else 0
-            label = f"安装（{size / 2**30:.1f} GB）" if size > 2**30 else f"安装（{max(1, size // 2**20)} MB）"
-            body = PAGE.format(udid=udid, base=BASE, ipa_cls="" if ready else "off", ipa_label=label,
-                               ipa_note="安装包已就绪，点按钮开始安装。" if ready else "安装包准备中，登记好 UDID 后这里会变成可点击。刷新页面查看。")
+            unlock_cls, unlock_label, unlock_note = button("unlock", "安装占位 App")
+            game_cls, game_label, game_note = button("game", "安装游戏")
+            body = PAGE.format(udid=udid, base=BASE, unlock_cls=unlock_cls, unlock_label=unlock_label, unlock_note=unlock_note,
+                               game_cls=game_cls, game_label=game_label, game_note=game_note)
             self._send(200, body.encode(), "text/html; charset=utf-8", {"Cache-Control": "no-store"})
         elif path == "/udid.mobileconfig":
             self._send(200, mobileconfig(), "application/x-apple-aspen-config")
-        elif path == "/manifest.plist" and IPA.exists():
-            self._send(200, manifest(), "text/xml")
-        elif path == "/manosaba.ipa" and IPA.exists():
-            self._send_file(IPA)
+        elif (kind := next((k for k, v in PACKAGES.items() if path == v[1]), None)) and package(kind):
+            self._send(200, manifest(kind), "text/xml")
+        elif (kind := next((k for k, v in PACKAGES.items() if path == "/" + v[0]), None)) and package(kind):
+            self._send_file(package(kind))
         else:
             self._send(404, b"not found", "text/plain")
 

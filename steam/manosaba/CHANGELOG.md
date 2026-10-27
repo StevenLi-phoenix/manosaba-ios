@@ -31,7 +31,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added (device)
 - Cable-free install: `tools/ota/server.py` is a local-network install page, published over HTTPS (for example with `tailscale serve`). It captures the UDID through a Profile Service mobileconfig and installs over the air via `itms-services`, with Range support for multi-GB IPAs.
-- `tools/devunlock`: tiny placeholder app with the game's bundle id. Installing it makes the Developer Mode switch appear on a device that has never been connected to Xcode.
+- `tools/devunlock`: tiny placeholder app with the game's bundle id, served by the install page as `placeholderunlockdev.ipa`, separately from your game build (`manosaba.ipa`). Installing it makes the Developer Mode switch appear on a device that has never been connected to Xcode.
 - Memory telemetry: `MemoryLogger.mm` logs footprint, graphics and headroom. `MetalAllocLogger.mm` logs every Metal allocation ≥ 16 MB.
 - The device build requests `com.apple.developer.kernel.increased-memory-limit`.
 - App icon: `tools/make_app_icon.py` builds the iPhone/iPad/App Store icon set from the game's `PlayerIcon.icns`, replacing Unity's default. It crops the macOS template's margin and shadow, fills the rounded corners from the artwork, and drops alpha.

@@ -134,16 +134,18 @@ tailscale serve --https=8443 http://127.0.0.1:8765
 ```
 
 1. **UDID.** Open `$OTA_BASE/` in Safari on the iPad and tap 读取 UDID. Install the downloaded profile. It posts the UDID back to `logs/ipad-udid.json`. Register that UDID in your developer account, then rebuild with `-allowProvisioningUpdates` so the profile includes the iPad.
-2. **Developer Mode.** The switch only appears once a development-signed app is on the device. Build `tools/devunlock` and serve it as `build/ota/manosaba.ipa`. It's a placeholder with the game's bundle id, about 100 KB. Install it, then turn on 设置 → 隐私与安全性 → 开发者模式 and reboot.
+2. **Developer Mode (skip if it is already on).** The switch only appears once a development-signed app is on the device. If it isn't on yet, install the placeholder first, so you find out before downloading a game of several GB. It is a shortcut, not a gate: the game button works either way. Build `tools/devunlock` and package it as `build/ota/placeholderunlockdev.ipa`. It's a placeholder of our own with the game's bundle id, about 100 KB, and contains nothing from the game. Tap 安装占位 App on the page, then turn on 设置 → 隐私与安全性 → 开发者模式 and reboot.
 
    ```sh
    (cd tools/devunlock && xcodegen generate)
    xcodebuild -project tools/devunlock/DevUnlock.xcodeproj -scheme DevUnlock -configuration Release \
      -destination 'generic/platform=iOS' -derivedDataPath build/dd-unlock \
      -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<team> build
+   mkdir -p build/ota/unlock/Payload && /bin/cp -R build/dd-unlock/Build/Products/Release-iphoneos/manosaba.app build/ota/unlock/Payload/
+   (cd build/ota/unlock && zip -q -r -y ../placeholderunlockdev.ipa Payload)
    ```
 
-3. **Game.** Package the real app as `build/ota/manosaba.ipa` (`Payload/manosaba.app`, stored uncompressed) and tap 安装 on the page. It replaces the placeholder. Later builds upgrade it in place and keep the save data.
+3. **Game.** Package your own build of the game as `build/ota/manosaba.ipa` (`Payload/manosaba.app`, stored uncompressed) and tap 安装游戏 on the page. It replaces the placeholder. Later builds upgrade it in place and keep the save data.
 
    ```sh
    mkdir -p build/ota/Payload && /bin/cp -cR build/dd/Build/Products/Release-iphoneos/manosaba.app build/ota/Payload/

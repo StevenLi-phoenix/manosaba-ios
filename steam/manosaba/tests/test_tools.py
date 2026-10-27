@@ -166,10 +166,10 @@ def _ota_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import server as ota
 
     (tmp_path / "logs").mkdir()
-    ipa = tmp_path / "manosaba.ipa"
-    ipa.write_bytes(bytes(range(16)))
+    (tmp_path / "ota").mkdir()
+    (tmp_path / "ota" / "manosaba.ipa").write_bytes(bytes(range(16)))  # your own build; no placeholder yet
     monkeypatch.setattr(ota, "ROOT", tmp_path)
-    monkeypatch.setattr(ota, "IPA", ipa)
+    monkeypatch.setattr(ota, "OTA_DIR", tmp_path / "ota")
     monkeypatch.setattr(ota, "UDID_FILE", tmp_path / "logs/ipad-udid.json")
     srv = ThreadingHTTPServer(("127.0.0.1", 0), ota.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -177,7 +177,7 @@ def _ota_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.unit
-def test_ota_profile_and_manifest_point_at_base() -> None:
+def test_ota_profile_and_manifests_point_at_base() -> None:
     import plistlib
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "ota"))
@@ -186,13 +186,16 @@ def test_ota_profile_and_manifest_point_at_base() -> None:
     cfg = plistlib.loads(ota.mobileconfig())
     assert cfg["PayloadType"] == "Profile Service"
     assert cfg["PayloadContent"]["URL"] == f"{ota.BASE}/udid"
-    item = plistlib.loads(ota.manifest())["items"][0]
-    assert item["assets"][0]["url"] == f"{ota.BASE}/manosaba.ipa"
-    assert item["metadata"]["bundle-identifier"] == ota.BUNDLE_ID
+    game = plistlib.loads(ota.manifest("game"))["items"][0]
+    unlock = plistlib.loads(ota.manifest("unlock"))["items"][0]
+    assert game["assets"][0]["url"] == f"{ota.BASE}/manosaba.ipa"
+    assert unlock["assets"][0]["url"] == f"{ota.BASE}/placeholderunlockdev.ipa"
+    # Same bundle id: installing your game build replaces the placeholder in place.
+    assert game["metadata"]["bundle-identifier"] == unlock["metadata"]["bundle-identifier"] == ota.BUNDLE_ID
 
 
 @pytest.mark.unit
-def test_ota_ipa_range_and_udid_callback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ota_packages_range_and_udid_callback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
     import plistlib
     import urllib.error
@@ -217,7 +220,21 @@ def test_ota_ipa_range_and_udid_callback(tmp_path: Path, monkeypatch: pytest.Mon
         assert json.loads(ota.UDID_FILE.read_text()) == attrs
         with urllib.request.urlopen(f"{url}/") as r:
             page = r.read().decode()
-        assert "00008027-TEST" in page and "安装（1 MB）" in page
+        assert "00008027-TEST" in page and "安装游戏（1 MB）" in page
+        assert 'class="btn off"' in page  # the placeholder is not built yet
+        # ... but the game is never gated on it: Developer Mode may already be on.
+        assert f'<a class="btn " href="itms-services://?action=download-manifest&amp;url={ota.BASE}/manifest.plist">' in page
+
+        try:
+            urllib.request.urlopen(f"{url}/placeholderunlockdev.ipa")
+            raise AssertionError("a missing package must 404")
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+        (ota.OTA_DIR / "placeholderunlockdev.ipa").write_bytes(b"PK-placeholder")
+        with urllib.request.urlopen(f"{url}/unlock.plist") as r:
+            assert plistlib.loads(r.read())["items"][0]["assets"][0]["url"].endswith("/placeholderunlockdev.ipa")
+        with urllib.request.urlopen(f"{url}/placeholderunlockdev.ipa") as r:
+            assert r.read() == b"PK-placeholder"
     finally:
         srv.shutdown()
 
