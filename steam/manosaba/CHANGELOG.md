@@ -30,7 +30,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `tools/sim_run.sh` (build, install, launch, screenshots) and `tools/drive.sh` + `tools/uitest` (XCUITest driver: rotate, tap, screenshot), since Xcode 27.1 ships no Simulator.app.
 
 ### Added (device)
-- Cable-free install: `tools/ota/server.py` is a tailnet-only install page, published with `tailscale serve`. It captures the UDID through a Profile Service mobileconfig and installs over the air via `itms-services`, with Range support for multi-GB IPAs.
+- Cable-free install: `tools/ota/server.py` is a local-network install page, published over HTTPS (for example with `tailscale serve`). It captures the UDID through a Profile Service mobileconfig and installs over the air via `itms-services`, with Range support for multi-GB IPAs.
 - `tools/devunlock`: tiny placeholder app with the game's bundle id. Installing it makes the Developer Mode switch appear on a device that has never been connected to Xcode.
 - Memory telemetry: `MemoryLogger.mm` logs footprint, graphics and headroom. `MetalAllocLogger.mm` logs every Metal allocation ≥ 16 MB.
 - The device build requests `com.apple.developer.kernel.increased-memory-limit`.

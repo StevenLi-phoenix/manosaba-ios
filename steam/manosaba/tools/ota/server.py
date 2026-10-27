@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tailnet-only install page for the iPad: UDID capture (Profile Service) + OTA install.
+"""Local-network install page for the iPad: UDID capture (Profile Service) + OTA install.
 
 Run behind `tailscale serve --https=8443 http://127.0.0.1:8765`.
   GET  /                  landing page (Chinese), shows captured UDID and the install button
@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 # The HTTPS origin the device reaches, e.g. the `tailscale serve --https=8443` URL of this Mac.
-BASE = os.environ.get("OTA_BASE", "https://your-mac.your-tailnet.ts.net:8443")
+BASE = os.environ.get("OTA_BASE", "https://your-mac.example:8443")
 IPA = ROOT / "build/ota/manosaba.ipa"
 UDID_FILE = ROOT / "logs/ipad-udid.json"
 BUNDLE_ID = os.environ.get("MANOSABA_BUNDLE_ID", "com.example.manosaba")
@@ -45,7 +45,7 @@ padding:12px 22px;border-radius:12px}} a.btn.off{{background:#3a2f4d;color:var(-
 code{{background:#2b2240;padding:2px 8px;border-radius:6px;font-size:15px;word-break:break-all}}
 .ok{{color:#8ef0b0}}
 </style></head><body><main>
-<h1>魔法少女ノ魔女裁判</h1><p class="sub">把你的 Steam 版装到这台 iPad · 只在 tailnet 内可访问</p>
+<h1>魔法少女ノ魔女裁判</h1><p class="sub">把你的 Steam 版装到这台 iPad · 只在局域网内可访问</p>
 <div class="step"><h2>① 读取这台 iPad 的 UDID</h2>
 <p>点按钮 → 允许下载描述文件 → 打开「设置」顶部的「已下载描述文件」→ 安装。装完会自动回到这里。</p>
 <a class="btn" href="/udid.mobileconfig">读取 UDID</a>

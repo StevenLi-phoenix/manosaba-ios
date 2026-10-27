@@ -125,15 +125,15 @@ At launch the app pulls the other device's saves before the game reads them. It 
 
 ## Install without a cable
 
-If the iPad has never been paired over USB, Xcode can't install to it wirelessly (the first pairing needs a cable). The OTA path below works over Wi-Fi alone, and serves the files only inside your tailnet:
+If the iPad has never been paired over USB, Xcode can't install to it wirelessly (the first pairing needs a cable). The OTA path below only needs the Mac and the device on the same local network, such as home Wi-Fi or a phone hotspot. Nothing is exposed to the internet. iOS installs over the air only from HTTPS with a certificate it trusts; the example gets one from `tailscale serve`, but any HTTPS reverse proxy with a trusted certificate works. Set `OTA_BASE` to its origin.
 
 ```sh
-# 1. Install page (127.0.0.1:8765), published on the tailnet over HTTPS.
+# 1. Install page (127.0.0.1:8765), published over HTTPS (here: tailscale serve).
 python3 -I tools/ota/server.py &
 tailscale serve --https=8443 http://127.0.0.1:8765
 ```
 
-1. **UDID.** Open `https://<mac>.<tailnet>.ts.net:8443/` in Safari on the iPad and tap 读取 UDID. Install the downloaded profile. It posts the UDID back to `logs/ipad-udid.json`. Register that UDID in your developer account, then rebuild with `-allowProvisioningUpdates` so the profile includes the iPad.
+1. **UDID.** Open `$OTA_BASE/` in Safari on the iPad and tap 读取 UDID. Install the downloaded profile. It posts the UDID back to `logs/ipad-udid.json`. Register that UDID in your developer account, then rebuild with `-allowProvisioningUpdates` so the profile includes the iPad.
 2. **Developer Mode.** The switch only appears once a development-signed app is on the device. Build `tools/devunlock` and serve it as `build/ota/manosaba.ipa`. It's a placeholder with the game's bundle id, about 100 KB. Install it, then turn on 设置 → 隐私与安全性 → 开发者模式 and reboot.
 
    ```sh
@@ -150,6 +150,6 @@ tailscale serve --https=8443 http://127.0.0.1:8765
    (cd build/ota && zip -0 -r -q -y manosaba.ipa Payload)
    ```
 
-   Without voice files the package is 3.4 GB instead of 8.2 GB. To build it, delete `Data/Raw/aa/StandaloneOSX/general-voice-*` from the copied app and re-sign it with its own entitlements. Do this on a slow link.
+   After `transcode_audio.py` the full app with voice is about 3.3 GB (the Steam data is 8.2 GB), so install the full build. `SKIP_VOICE=1` in `stage_data.sh` is still there for quick smoke tests.
 
 Stop both processes when done. `tailscale serve status` should then print `No serve config`.

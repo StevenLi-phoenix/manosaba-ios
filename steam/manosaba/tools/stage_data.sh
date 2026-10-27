@@ -31,7 +31,7 @@ done
 /bin/cp -cR "$keep/mono" "$dst/Managed/mono"
 # iOS serves StreamingAssets from Data/Raw; Addressables paths keep their StandaloneOSX folder.
 /bin/cp -cR "$src/StreamingAssets" "$dst/Raw"
-# SKIP_VOICE=1: drop the ~4.3 GB of voice bundles for quick smoke-test installs.
+# SKIP_VOICE=1: drop the voice bundles (4.3 GB as shipped, ~1.1 GB after transcode_audio.py) for quick smoke tests.
 if [[ "${SKIP_VOICE:-0}" == 1 ]]; then
   rm -f "$dst"/Raw/aa/StandaloneOSX/general-voice-*
   echo "[stage_data] SKIP_VOICE=1: voice bundles omitted"
