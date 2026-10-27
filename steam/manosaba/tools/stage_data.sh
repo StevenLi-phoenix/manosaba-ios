@@ -4,8 +4,10 @@
 # Usage: stage_data.sh <manosaba.app> <xcode-dir>
 set -euo pipefail
 
-app=$1
-xcode=$2
+app=${1:?usage: stage_data.sh <manosaba.app> <Unity-generated Xcode project dir>}
+xcode=${2:?usage: stage_data.sh <manosaba.app> <Unity-generated Xcode project dir>}
+# "$xcode/Data" is deleted below: only ever inside a Unity-generated iOS Xcode project.
+[[ -d "$xcode/Unity-iPhone.xcodeproj" ]] || { echo "not a Unity-generated Xcode project (no Unity-iPhone.xcodeproj): $xcode" >&2; exit 1; }
 src="$app/Contents/Resources/Data"
 dst="$xcode/Data"
 keep=$(mktemp -d)

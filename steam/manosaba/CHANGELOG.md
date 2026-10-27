@@ -15,6 +15,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Tests for the tooling (`tests/test_tools.py`).
 
 ### Fixed
+- Recursive deletes now have explicit guards instead of being saved by luck. Each case has a test that fails without its guard and that really deleted a decoy folder.
+  - `stage_data.sh` deletes `<xcode-dir>/Data` only inside a Unity-generated Xcode project. An empty argument made it `/Data`, and a wrong folder put that folder's `Data` at risk.
+  - `drive.sh` takes only a plain folder name as its tag. A tag such as `../../../x` deleted a folder next to the repository.
+  - The iCloud sync ignores manifest entries that are not plain save file names.
 - iOS 27 launch assert (UIScene life cycle required): the app's main executable records SDK 26.0 before signing.
 - Crash in `-[UnityAppController startUnity:]`: the iOS player invoked `AudioSettings.Mobile` callbacks that only exist in the mobile managed assemblies; the proxies now return 0.
 - iOS player has no software BC decoder: `tools/transcode_textures.py` re-encodes all 630 BC/crunched textures to ASTC 4x4 / 6x6 (BC4 -> R8), min PSNR 32.7 dB.

@@ -5,6 +5,8 @@
 set -euo pipefail
 
 tag=${1:?tag}
+# logs/drive/<tag> is deleted and recreated below, so the tag must be a plain folder name.
+[[ $tag =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] || { echo "drive.sh: tag must be a plain name (letters, digits, . _ -): $tag" >&2; exit 2; }
 steps=${2:?steps}
 launch=${3:-1}
 sim=${4:-${MANOSABA_SIM:?pass a device/simulator UDID or set MANOSABA_SIM}}

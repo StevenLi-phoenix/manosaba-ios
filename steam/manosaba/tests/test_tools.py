@@ -400,7 +400,7 @@ def test_icloud_save_sync_scenarios(tmp_path: Path) -> None:
     run = subprocess.run([str(exe), str(tmp_path / "work")], capture_output=True, text=True)
     print(run.stdout)
     assert run.returncode == 0, run.stdout
-    assert run.stdout.count("\nok ") + run.stdout.startswith("ok ") == 13
+    assert run.stdout.count("\nok ") + run.stdout.startswith("ok ") == 14
 
 
 import transcode_textures as tt  # noqa: E402
@@ -1071,3 +1071,40 @@ def test_settings_bundle_defaults_match_the_registered_defaults() -> None:
     for f in extras.glob("*.mm"):
         used |= set(re.findall(r'ManosabaSetting(?:Bool|Int)\(@"(manosaba_\w+)"\)', f.read_text()))
     assert used <= set(plist_defaults)
+
+
+@pytest.mark.integration
+def test_drive_refuses_a_tag_that_leaves_its_log_folder(tmp_path: Path) -> None:
+    import os
+
+    root = Path(__file__).resolve().parents[1]
+    script = root / "tools" / "drive.sh"
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "precious.txt").write_text("keep me")
+    escape = os.path.relpath(victim, root / "logs" / "drive")  # ../../../..../victim: no trailing "..", rm takes it
+    for tag in (escape, "../..", "..", "a/b", ""):
+        run = subprocess.run([str(script), tag, "shot:x"], capture_output=True, text=True,
+                             env={"PATH": "/usr/bin:/bin", "MANOSABA_SIM": "none"}, timeout=30)
+        assert run.returncode != 0, tag
+        assert (victim / "precious.txt").read_text() == "keep me", tag
+
+
+@pytest.mark.integration
+def test_stage_data_refuses_a_folder_that_is_not_the_unity_project(tmp_path: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "tools" / "stage_data.sh"
+    app = tmp_path / "fake.app"
+    (app / "Contents/Resources/Data").mkdir(parents=True)
+    (app / "Contents/Resources/Data/globalgamemanagers").write_bytes(b"x")
+    # A folder that looks enough like staged data that the copies before the delete succeed.
+    victim = tmp_path / "home"
+    (victim / "Data/Resources").mkdir(parents=True)
+    (victim / "Data/Managed/mono").mkdir(parents=True)
+    (victim / "Data/Resources/unity default resources").write_bytes(b"x")
+    (victim / "Data" / "precious.txt").write_text("keep me")
+    run = subprocess.run([str(script), str(app), str(victim)], capture_output=True, text=True, timeout=30)
+    assert run.returncode != 0
+    assert (victim / "Data" / "precious.txt").read_text() == "keep me"
+    for bad in ("", "/"):
+        run = subprocess.run([str(script), str(app), bad], capture_output=True, text=True, timeout=30)
+        assert run.returncode != 0 and "Unity" in run.stderr, bad

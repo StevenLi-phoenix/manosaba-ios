@@ -21,7 +21,10 @@ static NSDate* ManosabaModDate(NSURL* url)
 // What is synced: every save (*.nson: slots, quick/auto saves, GlobalSave) and the game's settings.
 extern "C" BOOL ManosabaIsSyncedName(NSString* name)
 {
-    return ![name hasPrefix:@"."] && ([name.pathExtension isEqualToString:@"nson"] || [name isEqualToString:@"Settings.json"]);
+    // A plain file name only: names also come back from the manifest, and a path there must
+    // never let the sync read, overwrite or move anything outside the two save folders.
+    if (name.length == 0 || [name hasPrefix:@"."] || [name containsString:@"/"]) return NO;
+    return [name.pathExtension isEqualToString:@"nson"] || [name isEqualToString:@"Settings.json"];
 }
 
 // Synced files in a folder. iCloud placeholders (".Name.icloud") count as present but unreadable.
@@ -118,7 +121,8 @@ NSDictionary<NSString*, NSNumber*>* ManosabaSyncSaves(NSURL* local, NSURL* cloud
     }
     NSMutableSet<NSString*>* names = [NSMutableSet setWithSet:ManosabaSaveNames(local, nil)];
     [names unionSet:cloudNames];
-    [names addObjectsFromArray:manifest.allKeys];
+    for (NSString* name in manifest.allKeys)
+        if (ManosabaIsSyncedName(name)) [names addObject:name];
     // Saves deleted on the other device are moved here instead of being removed outright.
     NSURL* trash = [manifestURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"manosaba-icloud-trash" isDirectory:YES];
     BOOL (^toTrash)(NSURL*, NSString*, NSError**) = ^BOOL(NSURL* file, NSString* name, NSError** err) {

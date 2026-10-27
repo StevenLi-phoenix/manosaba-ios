@@ -3,8 +3,8 @@
 # Usage: [PLATFORM=ios|iossim] make_game_framework.sh <GameAssembly.dylib> <out-dir>
 set -euo pipefail
 
-src=$1
-out=$2
+src=${1:?usage: make_game_framework.sh <GameAssembly.dylib> <out-dir>}
+out=${2:?usage: make_game_framework.sh <GameAssembly.dylib> <out-dir>}
 name=ManosabaGame
 platform=${PLATFORM:-ios}   # ios = device (2), iossim = simulator (7)
 case $platform in ios) bundle_platform=iPhoneOS;; iossim) bundle_platform=iPhoneSimulator;; *) echo "bad PLATFORM $platform" >&2; exit 2;; esac

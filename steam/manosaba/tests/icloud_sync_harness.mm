@@ -154,6 +154,20 @@ static void NewerSettingsWinAcrossDevices(void)
     CHECK([s[@"skipped"] intValue] == 1 && [s[@"deletedLocal"] intValue] == 0);
 }
 
+static void ManifestCannotReachOutsideTheSaveFolder(void)
+{
+    FirstSyncUploadsEverything();
+    // A corrupted manifest naming a path outside Saves_v1 must not make the sync touch it.
+    NSURL* outside = [gLocal.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"outside.nson"];
+    [@"precious" writeToURL:outside atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSMutableDictionary* m = [[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:gManifest] options:0 error:nil] mutableCopy];
+    m[@"../outside.nson"] = @"0000";
+    [[NSJSONSerialization dataWithJSONObject:m options:0 error:nil] writeToURL:gManifest atomically:YES];
+    Sync(ManosabaSyncModeFull);
+    CHECK([[NSString stringWithContentsOfURL:outside encoding:NSUTF8StringEncoding error:nil] isEqualToString:@"precious"]);
+    CHECK(Trash().count == 0);
+}
+
 static void EmptiedCloudIsRefilledNotMirrored(void)
 {
     FirstSyncUploadsEverything();
@@ -210,6 +224,7 @@ int main(int argc, char** argv)
             {"conflict_loser_is_kept_in_trash", ConflictLoserIsKeptInTrash},
             {"first_sync_on_new_device_prefers_cloud", FirstSyncOnNewDevicePrefersCloud},
             {"newer_settings_win_across_devices", NewerSettingsWinAcrossDevices},
+            {"manifest_cannot_reach_outside_the_save_folder", ManifestCannotReachOutsideTheSaveFolder},
             {"emptied_cloud_is_refilled_not_mirrored", EmptiedCloudIsRefilledNotMirrored},
             {"placeholder_is_skipped", PlaceholderIsSkipped},
             {"file_being_written_is_skipped", FileBeingWrittenIsSkipped},
