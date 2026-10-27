@@ -57,6 +57,21 @@ Not verified: every chapter and the movies. Memory peaks at about 2.5 GB, so the
 
 Verified so far: data layouts of every engine manager match between the macOS and iOS players of 6000.0.48f1 (byte-for-byte sizes); every symbol the iOS player needs from GameAssembly is exported; the app links.
 
+## Resolution
+
+Measured from the Metal allocations on the devices (`[mtl]` lines of `MetalAllocLogger.mm`):
+
+| Layer | iPad Pro 11" (2nd gen) | iPhone 15 Plus |
+|---|---|---|
+| Output (drawable, native panel) | 2388×1668 | 2796×1290 |
+| Game scene, highest in-game level | 1920×1080, 2× MSAA, scaled to the screen | same |
+| Each character (layered render target) | 1125×2250 (75 PPU; the PC build uses 1500×3000) | same |
+| Backgrounds / character atlases | 4096×2048 / up to 8192×16384, ASTC | same |
+
+On iOS the game takes its mobile branch, which scales a 1920×1080 reference by `ResolutionCoefficientsForMobile`. `tools/patch_game_config.py` fills that table with 1.0 … 0.5, following the PC levels. So the in-game resolution option gives 1920×1080, 1680×945, 1440×810, 1200×675, 1080×608, 1024×576 and 960×540. Only the top level was measured. On PC the top level is 2560×1440.
+
+A coefficient above 1.0 would render the scene at the iPad's native width (2388×1343), but that is about 55% more pixels, and busy scenes are already GPU-bound on an A12Z.
+
 ## Configuration
 
 Everything that identifies you comes from the environment; nothing personal is in the repository.
